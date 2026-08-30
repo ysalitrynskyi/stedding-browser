@@ -17,8 +17,9 @@ What is measured, precisely:
   startup-warm   The same measurement against a profile that has already been used and
                  is restoring the ten-site list.
 
-  memory         Resident set size summed across every process belonging to the app
-                 bundle, after loading the ten-site list and idling, per QUALITY.md.
+  memory         Physical footprint summed across the launched browser process and
+                 all of its descendants, after loading the ten-site list and idling,
+                 per QUALITY.md. Not RSS: see the note above phys_footprint below.
 
 Anything requiring Stedding features that do not exist yet (sidebar tab switching,
 command bar) is deliberately absent rather than stubbed.
@@ -32,6 +33,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import ctypes
 import json
 import os
 import platform
@@ -55,6 +57,8 @@ SITES_FILE = HERE / "sites.txt"
 RUN_TIMEOUT_S = 90
 # QUALITY.md: "after loading a fixed 10-site list and idling 60 s".
 IDLE_SECONDS = 60
+# Time allowed for the ten tabs to finish loading before the idle period starts.
+LOAD_SECONDS = 30
 
 
 # --------------------------------------------------------------------- local server
@@ -159,35 +163,70 @@ def wait_for_exit(proc: subprocess.Popen, timeout: float = 20.0) -> None:
         proc.wait(timeout=10)
 
 
-def app_processes(app: Path) -> list[int]:
-    """PIDs of every process running out of this app bundle."""
-    out = subprocess.run(
-        ["ps", "-Ao", "pid=,comm="], capture_output=True, text=True, check=True
-    ).stdout
-    prefix = str(app.resolve())
-    pids = []
+# macOS reports several different "memory used" numbers and they disagree by a factor
+# of three. Summing `ps` RSS across a browser's processes counts every shared page
+# once per process: measured here at 9599 MB for a three-tab session whose real cost
+# was 3104 MB. phys_footprint is the metric Activity Monitor shows and the one Apple
+# treats as a process's memory cost; it is read here through proc_pid_rusage, which
+# agrees with `vmmap --summary` exactly while costing 0.4 ms per process instead of
+# roughly a second.
+_libc = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
+_RUSAGE_INFO_V2 = 2
+# rusage_info_v2: a 16-byte uuid, then seven uint64 fields, then ri_phys_footprint.
+_PHYS_FOOTPRINT_OFFSET = 16 + 7 * 8
+
+
+def phys_footprint(pid: int) -> int | None:
+    """Bytes of physical memory attributed to this process, or None if it is gone."""
+    buf = ctypes.create_string_buffer(512)
+    rc = _libc.proc_pid_rusage(ctypes.c_int(pid), ctypes.c_int(_RUSAGE_INFO_V2),
+                               ctypes.byref(buf))
+    if rc != 0:
+        return None
+    off = _PHYS_FOOTPRINT_OFFSET
+    return int.from_bytes(buf.raw[off:off + 8], sys.byteorder)
+
+
+def process_tree(root_pid: int) -> list[int]:
+    """The launched process and every descendant of it.
+
+    Deliberately not "every process whose executable lives in this app bundle": on a
+    machine where anything else is driving a copy of the same browser — a test runner,
+    another agent, a second measurement — that matches their processes too. Observed
+    while validating this harness: 93 processes matched by bundle path where the tree
+    held 69.
+    """
+    out = subprocess.run(["ps", "-Ao", "pid=,ppid="],
+                         capture_output=True, text=True, check=True).stdout
+    children: dict[int, list[int]] = {}
     for line in out.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        pid_s, _, comm = line.partition(" ")
-        if comm.strip().startswith(prefix):
+        parts = line.split()
+        if len(parts) == 2:
             try:
-                pids.append(int(pid_s))
+                children.setdefault(int(parts[1]), []).append(int(parts[0]))
             except ValueError:
-                pass
-    return pids
+                continue
+    seen: list[int] = []
+    stack = [root_pid]
+    while stack:
+        pid = stack.pop()
+        if pid in seen:
+            continue
+        seen.append(pid)
+        stack.extend(children.get(pid, []))
+    return seen
 
 
-def total_rss_bytes(pids: list[int]) -> int:
-    if not pids:
-        return 0
-    out = subprocess.run(
-        ["ps", "-o", "rss=", "-p", ",".join(str(p) for p in pids)],
-        capture_output=True, text=True, check=False,
-    ).stdout
-    # ps reports RSS in kilobytes on macOS.
-    return sum(int(v) * 1024 for v in out.split() if v.isdigit())
+def tree_footprint_bytes(root_pid: int) -> tuple[int, int]:
+    """(total phys_footprint bytes, number of processes counted)."""
+    total = 0
+    counted = 0
+    for pid in process_tree(root_pid):
+        value = phys_footprint(pid)
+        if value is not None:
+            total += value
+            counted += 1
+    return total, counted
 
 
 def read_sites() -> list[str]:
@@ -286,19 +325,18 @@ def _report(i: int, runs: int, value: float | None) -> None:
 
 # ------------------------------------------------------------------------- memory
 
-def measure_memory_once(app: Path) -> int | None:
+def measure_memory_once(app: Path) -> tuple[int, int] | None:
     sites = read_sites()
     with tempfile.TemporaryDirectory(prefix="stedding-mem-") as tmp:
         argv = [str(app_executable(app)), *base_flags(Path(tmp)), *sites]
         proc = subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         try:
-            # Give the ten tabs time to load, then idle exactly as QUALITY.md says.
-            time.sleep(30)
-            time.sleep(IDLE_SECONDS)
-            pids = app_processes(app)
-            if not pids:
+            time.sleep(LOAD_SECONDS)   # let ten tabs finish loading
+            time.sleep(IDLE_SECONDS)   # then idle, exactly as QUALITY.md specifies
+            total, counted = tree_footprint_bytes(proc.pid)
+            if counted == 0:
                 return None
-            return total_rss_bytes(pids)
+            return total, counted
         finally:
             proc.terminate()
             wait_for_exit(proc)
@@ -307,16 +345,24 @@ def measure_memory_once(app: Path) -> int | None:
 
 def measure_memory(app: Path, runs: int) -> dict:
     samples: list[float] = []
+    process_counts: list[int] = []
     failures = 0
     for i in range(runs):
-        value = measure_memory_once(app)
-        if value:
-            samples.append(value / (1024 * 1024))
-            print(f"  run {i + 1:>2}/{runs}: {value / (1024 * 1024):8.1f} MB", file=sys.stderr)
-        else:
+        result = measure_memory_once(app)
+        if result is None:
             failures += 1
             print(f"  run {i + 1:>2}/{runs}:    failed", file=sys.stderr)
-    return _summarise(samples, failures, unit="MB")
+            continue
+        total, counted = result
+        mb = total / (1024 * 1024)
+        samples.append(mb)
+        process_counts.append(counted)
+        print(f"  run {i + 1:>2}/{runs}: {mb:8.1f} MB across {counted} processes",
+              file=sys.stderr)
+    summary = _summarise(samples, failures, unit="MB")
+    if process_counts:
+        summary["processes_median"] = int(statistics.median(process_counts))
+    return summary
 
 
 # ------------------------------------------------------------------------ reporting

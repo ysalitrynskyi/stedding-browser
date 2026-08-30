@@ -27,8 +27,11 @@ Scope:
 - Document every step — prerequisites, disk/RAM requirements, full command sequence,
   expected build time range on reference hardware, and known failure modes — in the
   build section of `docs/ARCHITECTURE.md`.
-- Record the vanilla performance baselines defined in `docs/QUALITY.md` (they become
-  final at M1, when re-measured against the same pinned version).
+- Verify the result with `tooling/verify-build`, which is what checks the "launches,
+  browses, plays video and WebGL" criterion below.
+- Record the vanilla performance baselines defined in `docs/QUALITY.md` with
+  `tooling/measure/harness.py`. These are the *vanilla* numbers; they become the
+  baseline proper at M1, when Stedding is measured against them at the same pin.
 
 Acceptance criteria:
 
@@ -74,7 +77,9 @@ horizontal tab strip. First build we publish for strangers to try.
 Scope:
 
 - Sidebar with vertical tabs: create, close, reorder (drag), pin, favicons, titles,
-  audio indicator, tab previews on hover.
+  audio indicator, and the `Space` preview specified in `docs/PRODUCT.md`. Hover
+  previews are deliberately not listed: they are not in the product spec, and adding
+  scope here rather than there is how a phantom requirement gets built.
 - Collapse/expand the sidebar; toggle shortcut; state persists across restarts.
 - Horizontal tab strip removed: the sidebar fully replaces it, as specified in
   `docs/PRODUCT.md`; the already-specified decision is recorded in an ADR.
@@ -138,14 +143,17 @@ Acceptance criteria:
 
 ## M5 — Split view
 
-**Goal:** two or more pages side by side in one window.
+**Goal:** two pages side by side in one window.
 
 Scope:
 
-- Split a window into two panes (design may allow more; minimum is two): create from
-  sidebar, command bar, and drag.
+- Split a window into exactly two panes: create from sidebar, command bar, and drag.
+  Three or more panes and grids are post-1.0 in `docs/PRODUCT.md` and are out of scope
+  here; shipping them early would put an unspecified feature through the UX
+  completeness gate.
 - Resize divider; swap panes; close one pane back to single view; clear focused-pane
-  indication (keyboard input, shortcuts, and the address bar target the focused pane).
+  indication (keyboard input, shortcuts, and the command bar / compact sidebar URL
+  target the focused pane — there is no always-visible address bar after M4).
 - Split state persists per workspace across restarts.
 
 Acceptance criteria:

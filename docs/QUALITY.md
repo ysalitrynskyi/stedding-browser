@@ -14,9 +14,11 @@ Stedding is Chromium plus patches, so performance is measured as **overhead rela
 vanilla Chromium at the same pinned version, same build configuration, same hardware**.
 Absolute numbers depend on hardware and are not promised; the overhead budgets are.
 
-Baselines: measured at M1 on the reference configuration and committed to the repo
-(machine model, OS version, Chromium version, method, and raw numbers). Until then the
-baseline values are **TBD**. Re-measured whenever the Chromium base version changes and
+Baselines land in two steps. At **M0** the *vanilla* Chromium numbers are measured on
+the reference configuration and committed (machine model, OS version, Chromium version,
+method, and raw numbers) — that is the "compared to what?". At **M1** Stedding is
+measured against them at the same pin, and the overhead figures those budgets are
+actually written against become real. Until each step happens its values are **TBD**. Re-measured whenever the Chromium base version changes and
 on each new platform (M8, M9).
 
 | Metric | Method | Budget vs. vanilla |

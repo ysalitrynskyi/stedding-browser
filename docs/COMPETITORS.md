@@ -26,8 +26,8 @@ can take the product away.
 
 AI-centric browser and the successor product to Arc. Closed source; as of this
 writing available only on macOS 14+ with Apple Silicon. Dia's core interaction is
-chatting with an AI about your tabs, not Arc's workflow model — most of Arc's
-signature features are absent or simplified. Under Atlassian, its roadmap points at
+chatting with an AI about your tabs, not Arc's workflow model, though it does ship
+tab groups, profiles and end-to-end encrypted sync. Under Atlassian, its roadmap points at
 work/enterprise use. Different lane: Dia bets on AI as the interface; we bet on the
 workflow UI Arc abandoned.
 
@@ -49,10 +49,11 @@ Open-source (GPL-3.0) Chromium-based browser by imput, with Google service
 dependencies removed, built-in ad/tracker blocking, and a deliberately minimal
 interface. In beta on macOS, Windows, and Linux; no native sync. Helium validates
 our technical approach — a small, maintained patch set on Chromium with the Google
-services stripped — and we study it for that reason. But Helium's product thesis is
-minimalism: it intentionally does not build the sidebar/workspaces/command-bar
-workflow layer that is Stedding's whole point. Also copyleft (GPL) where we are
-permissive (BSD).
+services stripped — and we study it for that reason. Helium's product thesis is
+minimalism, but the gap is narrower than it was: it now ships vertical tabs, split
+view and tab groups. What it does not ship is the layer above those — workspaces and
+a command bar — which is where Stedding's differentiation actually sits. Also copyleft
+(GPL) where we are permissive (BSD).
 
 ### Thorium
 
@@ -65,7 +66,7 @@ audience (users willing to run a niche Chromium fork).
 
 ### Brave
 
-The largest privacy-positioned Chromium browser. Open source (MPL-2.0), full
+The most prominent privacy-positioned Chromium browser. Open source (MPL-2.0), full
 Chrome extension support, ad/tracker blocking on by default, solid engineering,
 long track record of tracking Chromium stable. Brave's business model is the
 friction point for our audience: opt-in Brave Rewards paying users in BAT
@@ -78,8 +79,9 @@ Brave's privacy without the crypto/ads surface area are a core Stedding audience
 ### Vivaldi
 
 Power-user Chromium browser: tab stacks, tiling/split view, workspaces, notes,
-built-in mail and calendar, deep customization. Full extension support, no ad-based
-business model. The blocker for us and our users: Vivaldi's UI layer is proprietary
+built-in mail and calendar, deep customization. Full extension support; revenue
+comes from search deals and partner placements rather than from an ad product of its
+own. The blocker for us and our users: Vivaldi's UI layer is proprietary
 and closed source (Vivaldi has publicly explained why it won't open it), and the
 browser sends a documented user-counting ping with an installation identifier. A
 feature-rich browser you cannot audit or fork is not in our lane.
@@ -94,9 +96,11 @@ Arc-shaped design. Adjacent, not competing.
 ### SigmaOS
 
 Closed-source, Mac-only, WebKit-based browser aimed at task-based work browsing
-(pages as todo items, spaces, AI features), on a freemium model. WebKit means no
-Chrome extension support, and macOS-only by design. Interesting interaction ideas;
-different engine, different openness, different audience breadth.
+(pages as todo items, spaces, AI features), on a freemium model. macOS-only by
+design. Notably it does support Chromium extensions despite the engine — the vendor
+calls it "the first Webkit browser to support Chrome extensions" — so the engine
+choice does not cost users their extensions the way it normally would. Interesting
+interaction ideas; different engine, different openness, different audience breadth.
 
 ### Horse Browser
 
@@ -114,14 +118,18 @@ much distribution a solo closed product can't get.
 | Arc | Chromium | Yes (defined it) | No | — | Yes | Maintenance mode |
 | Dia | Chromium | No (AI-first) | No | — | Partial | Active (Atlassian) |
 | Zen | Gecko | Yes | Yes | MPL-2.0 | No (Firefox add-ons) | Active |
-| Helium | Chromium | No (minimal) | Yes | GPL-3.0 | Yes | Beta, active |
+| Helium | Chromium | Partial (tabs, split) | Yes | GPL-3.0 | Yes | Beta, active |
 | Thorium | Chromium | No (stock UI) | Yes | BSD-3-Clause | Yes | Active |
 | Brave | Chromium | No | Yes | MPL-2.0 | Yes | Active |
 | Vivaldi | Chromium | Partial (power UI) | UI closed | Proprietary UI | Yes | Active |
 | Floorp | Gecko | Partial | Yes | MPL-2.0 | No (Firefox add-ons) | Active |
-| SigmaOS | WebKit | Partial (tasks) | No | — | No | Active |
+| SigmaOS | WebKit | Partial (tasks) | No | — | Yes (vendor claim) | Active |
 | Horse | Chromium | No (Trails) | No | — | Yes (recent) | Active, paid |
 | **Stedding** | Chromium | Yes (goal) | Yes | BSD-3-Clause | Yes (hard req.) | M0, no installer |
+
+Competitor claims in this document were fact-checked against vendor sources on
+2026-08-30. Rival products move; treat anything here as needing a re-check before it
+is quoted, and prefer the vendor's own site over this table.
 
 ## The gap we occupy
 
@@ -129,8 +137,9 @@ Every cell combination above is taken except one. Users today can have:
 
 - Arc's workflow UI, open source — **only on Gecko** (Zen, Floorp): lose Chrome
   extensions and Chromium web compatibility.
-- Open-source, de-Googled Chromium — **only without the workflow UI** (Helium,
-  Thorium), or **with a crypto/ads business model attached** (Brave).
+- Open-source, de-Googled Chromium — **only with a partial workflow UI** (Helium has
+  vertical tabs and split view but no workspaces or command bar; Thorium keeps stock
+  Chrome UI), or **with a crypto/ads business model attached** (Brave).
 - The workflow UI on Chromium — **only closed source** (Arc, now unmaintained;
   Vivaldi's closed UI layer).
 

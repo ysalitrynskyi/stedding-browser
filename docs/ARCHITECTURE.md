@@ -71,8 +71,10 @@ remote execution backends (RBE/reclient) are not available to us, so every build
 local; `use_remoteexec = false` is set in all of our gn args files.
 
 Everything below is driven by scripts in `tooling/`, so that the documented procedure
-and the executed procedure cannot drift apart. Running the commands by hand is a
-supported fallback, not the normal path.
+and the executed procedure cannot drift apart. The scripts are also the reference for
+what the underlying `gclient` and `gn` invocations are: they are short, commented, and
+meant to be read. There is no separate list of hand-run commands, because a second
+copy of the procedure is a second copy to go stale.
 
 ### Layout
 
@@ -94,9 +96,18 @@ Policy for moving the pin: `decisions/0007-chromium-version-pin.md`.
 
 ### Prerequisites (macOS arm64)
 
-- **Full Xcode** — not just the Command Line Tools. `xcode-select -p` must point inside
-  `Xcode.app`; the licence must be accepted (`sudo xcodebuild -license accept`).
-- **Command Line Tools** installed alongside it.
+- **Full Xcode** — not just the Command Line Tools. Install it from the App Store (or
+  from Apple's developer downloads), launch it once so it installs its additional
+  components, and accept the licence:
+
+  ```bash
+  sudo xcodebuild -license accept
+  sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
+  ```
+
+  That last line matters: installing the Command Line Tools points `xcode-select` at
+  `/Library/Developer/CommandLineTools`, and Chromium will not build against that.
+  `xcode-select -p` must print a path inside `Xcode.app`.
 - **Python 3** and **git** on `PATH` (depot_tools brings its own copies of both for the
   build itself, but the bootstrap needs a system pair).
 - **Disk:** `tooling/sync-chromium` refuses to start below 150 GB free on the volume
@@ -106,8 +117,11 @@ Policy for moving the pin: `decisions/0007-chromium-version-pin.md`.
   stray `node_modules` in your home directory leaks its `@types` into the build. The
   tooling checks for this before it does anything expensive; see "Known failure
   modes".
-- **RAM:** 16 GB is the practical floor; linking is the memory-hungry step. Not
-  checked by any script — a recommendation, not a gate.
+- **RAM:** 16 GB is the practical floor. Compilation parallelism is what consumes it,
+  and the failure is not a clean error — the machine swaps and the build slows by an
+  order of magnitude, or the OOM killer takes a compiler process and ninja reports a
+  confusing failure. If you have less, cap parallelism rather than hoping:
+  `autoninja -j4`. Not checked by any script; a recommendation, not a gate.
 
 These are checked in two places, and each fails with the exact remedy rather than
 letting a build die hours later:
@@ -129,24 +143,41 @@ normative — it is the answer to "compared to what?":
 | OS | macOS 26.5.2, arm64 |
 | Xcode | 26.5 (17F42) |
 | Command Line Tools | 26.6.0.0.1781586589 |
-| depot_tools | `f70835271105ca56d2cd5382a0118152bc2bdeea` (2026-08-27) |
+| depot_tools | `f70835271105ca56d2cd5382a0118152bc2bdeea` (2026-08-27) — observed, **not a pin**: `bootstrap-depot-tools` tracks upstream `main` |
 | Chromium | `153.0.8010.12` (M153 stable) |
 
 ### The build, end to end
 
+Every command is run **from the root of this repository**, not from the Chromium tree.
+
 ```bash
-# 1. Install depot_tools and verify the host toolchain. Idempotent.
+# 1. Install depot_tools and verify the host toolchain. Idempotent. Seconds.
 tooling/bootstrap-depot-tools
 
 # 2. Check out Chromium at the pinned version and resolve its dependencies.
 #    Long: downloads tens of GB. Safe to re-run; moves an existing tree to the pin.
+#    Measured on the reference machine, from nothing: ~25 min to bootstrap the git
+#    cache, then ~19 min for the dependencies and hooks. It prints little during the
+#    cache download — that is normal, see "Known failure modes".
 tooling/sync-chromium
 
 # 3. Build. Config is one of release (default), debug, official.
 tooling/build-chromium release
 
-# 4. Run it.
+# 4. Check that what you built actually works. This is M0's acceptance criterion,
+#    not step 5's eyeball test.
+tooling/verify-build --app ~/chromium/src/out/release/Chromium.app
+
+# 5. Run it.
 open ~/chromium/src/out/release/Chromium.app
+```
+
+To put the checkout somewhere other than `~/chromium`, set `CHROMIUM_ROOT` on the
+sync — you only need it once, because sync records the location in `.stedding-local`
+and every later command reads it back:
+
+```bash
+CHROMIUM_ROOT=/Users/Shared/chromium tooling/sync-chromium
 ```
 
 ### Why everything goes through the git cache
@@ -252,9 +283,18 @@ Recorded as they were actually hit on the reference machine, not imagined.
   or `i/o timeout`.** Google's infrastructure advertises AAAA records; on a host with
   degraded IPv6 reachability the client works through a 1s→2s→4s→8s→16s backoff before
   falling back to IPv4. It does succeed, but the first sync is noticeably slower and
-  it looks exactly like a hang. Confirm the host is healthy by timing an ordinary
-  download from `dl.google.com` before concluding anything is wrong: a 404 response
-  reports a meaningless transfer rate, which is an easy way to misdiagnose this.
+  it looks exactly like a hang. To tell "backing off, wait" from "the network is
+  down, stop", time a real download of a real file — note the `200`, which is the
+  point, since a 404 returns an error page in milliseconds and reports a transfer
+  rate that means nothing:
+
+  ```bash
+  curl -s -o /dev/null -w 'http=%{http_code} speed=%{speed_download} B/s\n' \
+    --max-time 20 https://dl.google.com/go/go1.22.0.darwin-arm64.tar.gz
+  ```
+
+  Several MB/s with `http=200` means the host is fine and cipd will get there. Near
+  zero means it will not.
 
 - **Moving a checkout breaks it quietly.** gclient clones every dependency from the
   git cache and records the cache location as an *absolute* path, in each

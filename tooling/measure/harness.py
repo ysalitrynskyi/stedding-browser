@@ -242,12 +242,14 @@ def read_sites() -> list[str]:
 
 # ----------------------------------------------------------------------- startup
 
-def measure_startup_once(app: Path, profile: Path, extra_urls: list[str]) -> float | None:
+def measure_startup_once(app: Path, profile: Path, extra_urls: list[str],
+                         extra_flags: list[str] | None = None) -> float | None:
     """One launch. Returns seconds from exec to first painted frame, or None."""
     server, port = start_probe_server()
     try:
         probe_url = f"http://127.0.0.1:{port}/start"
-        argv = [str(app_executable(app)), *base_flags(profile), *extra_urls, probe_url]
+        argv = [str(app_executable(app)), *base_flags(profile),
+                *(extra_flags or []), *extra_urls, probe_url]
 
         # Drain anything stale before timing.
         while not server.painted.empty():
@@ -299,15 +301,25 @@ def measure_startup(app: Path, mode: str, runs: int) -> dict:
         sites = read_sites()
         with tempfile.TemporaryDirectory(prefix="stedding-warm-") as tmp:
             profile = Path(tmp)
-            # Prime the profile: one run that opens the ten sites, so subsequent
-            # launches restore a realistic session and a populated disk cache.
+            # Prime the profile: open the ten sites so the session to be restored
+            # actually contains them and the disk cache is populated. This launch is
+            # not timed and deliberately carries no probe page — with ten tabs open
+            # the probe would land in the background, where requestAnimationFrame
+            # does not run, and report a failure that means nothing.
             print("  priming profile with the ten-site list ...", file=sys.stderr)
-            prime = measure_startup_once(app, profile, sites)
-            if prime is None:
-                print("  priming run did not report a painted frame", file=sys.stderr)
+            prime_argv = [str(app_executable(app)), *base_flags(profile), *sites]
+            prime_proc = subprocess.Popen(prime_argv, stdout=subprocess.DEVNULL,
+                                          stderr=subprocess.DEVNULL)
+            time.sleep(LOAD_SECONDS)
+            prime_proc.terminate()
+            wait_for_exit(prime_proc)
             time.sleep(3)
             for i in range(runs):
-                value = measure_startup_once(app, profile, [])
+                # QUALITY.md specifies "existing profile with 10 restored tabs", so the
+                # session must actually be restored. Without this flag the browser
+                # opens empty and the measurement is a cold start against a warm cache.
+                value = measure_startup_once(app, profile, [],
+                                             extra_flags=["--restore-last-session"])
                 _report(i, runs, value)
                 if value is None:
                     failures += 1
@@ -382,6 +394,14 @@ def _summarise(samples: list[float], failures: int, unit: str) -> dict:
     }
 
 
+def _int_or_zero(value: str) -> int:
+    """sysctl returns "unknown" when it fails; a baseline should not die over that."""
+    try:
+        return int(value.strip())
+    except (ValueError, AttributeError):
+        return 0
+
+
 def environment(app: Path) -> dict:
     def sh(*cmd: str) -> str:
         try:
@@ -394,7 +414,7 @@ def environment(app: Path) -> dict:
         "app_version": app_version(app),
         "machine": sh("sysctl", "-n", "machdep.cpu.brand_string"),
         "cpu_count": os.cpu_count(),
-        "memory_bytes": int(sh("sysctl", "-n", "hw.memsize") or 0),
+        "memory_bytes": _int_or_zero(sh("sysctl", "-n", "hw.memsize")),
         "os": f"{platform.system()} {sh('sw_vers', '-productVersion')} {platform.machine()}",
         "measured_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
@@ -440,9 +460,19 @@ def main() -> int:
     else:
         print(text)
 
-    incomplete = [k for k, v in results["measurements"].items() if v.get("median") is None]
-    if incomplete:
-        print(f"\nno usable samples for: {', '.join(incomplete)}", file=sys.stderr)
+    problems = []
+    for name, m in results["measurements"].items():
+        if m.get("median") is None:
+            problems.append(f"{name}: no usable samples")
+        elif m.get("failures"):
+            # A median taken over the runs that happened to survive is not the median
+            # the budget is defined against. Publishing it would be worse than failing.
+            problems.append(f"{name}: {m['failures']} of "
+                            f"{m['runs'] + m['failures']} runs failed")
+    if problems:
+        print("\nmeasurement is not trustworthy:", file=sys.stderr)
+        for p in problems:
+            print(f"  {p}", file=sys.stderr)
         return 1
     return 0
 

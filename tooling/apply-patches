@@ -4,6 +4,7 @@
 # Usage:
 #   tooling/apply-patches            # reset to the pin, then apply the whole series
 #   tooling/apply-patches --check    # verify the series applies; leave the tree as found
+#   tooling/apply-patches --force    # rebuild the branch even if it holds unexported work
 #
 # docs/ARCHITECTURE.md: "Applying patches by hand is a bug in the tooling." This is
 # the only supported way to get a patched tree.
@@ -20,9 +21,11 @@
 add_depot_tools_to_path
 
 CHECK_ONLY=0
+FORCE=0
 for arg in "$@"; do
   case "$arg" in
     --check)   CHECK_ONLY=1 ;;
+    --force)   FORCE=1 ;;
     -h|--help) sed -n '2,8p' "$0"; exit 0 ;;
     *)         die "unknown argument: $arg" ;;
   esac
@@ -44,24 +47,42 @@ while IFS= read -r p; do
   PATCHES+=("$p")
 done < <(find "$PATCH_DIR" -maxdepth 1 -name '[0-9][0-9][0-9][0-9]-*.patch' 2>/dev/null | sort)
 
-if [ "${#PATCHES[@]}" -eq 0 ]; then
+PATCH_COUNT=${#PATCHES[@]}
+if [ "$PATCH_COUNT" -eq 0 ]; then
   log "no patches in $PATCH_DIR — a vanilla tree is the whole series"
-  [ "$CHECK_ONLY" -eq 1 ] && exit 0
+  # An empty series is a valid series: --check passes, and applying it means putting
+  # the tree on the pin and stopping there. Note that bash 3.2 with `set -u` treats
+  # "${empty[@]}" as an unbound variable, so no expansion below may be unguarded.
 fi
 
 if [ "$CHECK_ONLY" -eq 1 ]; then
-  # Dry run against the pin without touching the working tree or current branch.
-  log "checking ${#PATCHES[@]} patch(es) against $CHROMIUM_TAG"
+  log "checking $PATCH_COUNT patch(es) against $CHROMIUM_TAG"
+  [ "$PATCH_COUNT" -eq 0 ] && { log "series applies cleanly"; exit 0; }
+
+  # The series is cumulative: patch 3 may depend on patch 2, and may conflict with it.
+  # Checking each one against the bare pin answers the wrong question in both
+  # directions. So apply them in order into a temporary index — `git apply --cached`
+  # never touches the working tree, so this is safe to run while a build is using the
+  # checkout, and costs nothing compared to a second worktree.
+  tmp_index="$(mktemp -t stedding-index.XXXXXX)"
+  rm -f "$tmp_index"
+  # shellcheck disable=SC2064  # expand $tmp_index now, not at trap time
+  trap "rm -f '$tmp_index'" EXIT
+
+  GIT_INDEX_FILE="$tmp_index" git read-tree "refs/tags/$CHROMIUM_TAG^{tree}" \
+    || die "cannot read the tree for $CHROMIUM_TAG"
+
   failed=0
   for p in "${PATCHES[@]}"; do
-    if git apply --check --3way "$p" 2>/dev/null; then
+    if GIT_INDEX_FILE="$tmp_index" git apply --cached "$p" 2>/dev/null; then
       printf '  ok   %s\n' "$(basename "$p")"
     else
       printf '  FAIL %s\n' "$(basename "$p")"
       failed=$(( failed + 1 ))
+      # Keep going: reporting every broken patch beats reporting the first one.
     fi
   done
-  [ "$failed" -eq 0 ] || die "$failed patch(es) do not apply cleanly"
+  [ "$failed" -eq 0 ] || die "$failed patch(es) do not apply cleanly onto $CHROMIUM_TAG"
   log "series applies cleanly"
   exit 0
 fi
@@ -71,11 +92,28 @@ if ! git diff-index --quiet HEAD -- 2>/dev/null; then
      $WORK_BRANCH and run tooling/update-patches, or discard them, before re-applying."
 fi
 
+# Applying the series recreates $WORK_BRANCH from scratch. If the existing branch
+# holds commits that are not in patches/, that is somebody's unexported work and
+# deleting it silently is not acceptable.
+if git rev-parse -q --verify "refs/heads/$WORK_BRANCH" >/dev/null; then
+  existing="$(git rev-list --count "refs/tags/$CHROMIUM_TAG..refs/heads/$WORK_BRANCH" 2>/dev/null || echo 0)"
+  if [ "$existing" -gt "$PATCH_COUNT" ] && [ "$FORCE" -eq 0 ]; then
+    die "$WORK_BRANCH has $existing commit(s) above the pin but patches/ holds only
+     $PATCH_COUNT. Those extra commits have not been exported and would be lost.
+
+     Export them first:   tooling/update-patches
+     Or discard them:     tooling/apply-patches --force"
+  fi
+fi
+
 log "resetting to $CHROMIUM_TAG on branch $WORK_BRANCH"
 git checkout -q --detach "refs/tags/$CHROMIUM_TAG"
 git branch -qD "$WORK_BRANCH" 2>/dev/null || true
 git checkout -q -b "$WORK_BRANCH"
 
+# Guarded by count: bash 3.2 under `set -u` errors on "${empty[@]}", and $PATCH_COUNT
+# being the string "0" is not empty, so ${var:+...} does not help here.
+if [ "$PATCH_COUNT" -gt 0 ]; then
 for p in "${PATCHES[@]}"; do
   name="$(basename "$p")"
   log "applying $name"
@@ -86,6 +124,7 @@ for p in "${PATCHES[@]}"; do
      the change as a commit, then run tooling/update-patches."
   fi
 done
+fi
 
-log "applied ${#PATCHES[@]} patch(es) onto $CHROMIUM_TAG"
+log "applied $PATCH_COUNT patch(es) onto $CHROMIUM_TAG"
 log "branch: $WORK_BRANCH at $(git rev-parse --short HEAD)"

@@ -2,12 +2,17 @@
 # Materialise the Chromium source tree at the pinned version in tooling/chromium-version.
 #
 # Usage:
-#   tooling/sync-chromium                 # shallow checkout (default, smaller/faster)
-#   tooling/sync-chromium --full-history  # full git history (wanted for patch archaeology)
+#   tooling/sync-chromium                 # checkout + dependencies at the pin
 #   tooling/sync-chromium --nohooks       # skip runhooks (toolchain/binary downloads)
+#   tooling/sync-chromium --all-tags      # fetch every upstream tag (slow; rarely needed)
 #
 # Idempotent: re-running moves an existing checkout to the pinned version.
 # The tree is created at $CHROMIUM_ROOT (default ~/chromium) — outside this repo.
+#
+# Everything goes through depot_tools' git cache. That is not a speed optimisation:
+# a plain `git clone` of chromium/src stalls in the server-side ref advertisement,
+# while the cache bootstraps from a prepackaged bundle over HTTP. See the "Known
+# failure modes" section of docs/ARCHITECTURE.md.
 
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=./lib.sh
@@ -16,54 +21,68 @@
 require_macos_arm64
 add_depot_tools_to_path
 
-FULL_HISTORY=0
 RUN_HOOKS=1
+ALL_TAGS=0
 for arg in "$@"; do
   case "$arg" in
-    --full-history) FULL_HISTORY=1 ;;
-    --nohooks)      RUN_HOOKS=0 ;;
-    -h|--help)      sed -n '2,12p' "$0"; exit 0 ;;
-    *)              die "unknown argument: $arg" ;;
+    --nohooks)  RUN_HOOKS=0 ;;
+    --all-tags) ALL_TAGS=1 ;;
+    -h|--help)  sed -n '2,10p' "$0"; exit 0 ;;
+    *)          die "unknown argument: $arg" ;;
   esac
 done
 
 # Measured on macOS arm64 at the pinned version; numbers in docs/ARCHITECTURE.md.
-# The floor below covers checkout + dependencies + one release build with headroom.
+# The floor below covers cache + checkout + dependencies + one release build.
 require_free_gb "$CHROMIUM_ROOT" 150
-
-HISTORY_ARGS=(--no-history)
-[ "$FULL_HISTORY" -eq 1 ] && HISTORY_ARGS=()
 
 log "pinned version: $CHROMIUM_TAG (M$CHROMIUM_MILESTONE, $CHROMIUM_CHANNEL, pinned $CHROMIUM_PIN_DATE)"
 log "checkout root:  $CHROMIUM_ROOT"
+log "git cache:      $GIT_CACHE_PATH"
 
-mkdir -p "$CHROMIUM_ROOT"
+mkdir -p "$CHROMIUM_ROOT" "$GIT_CACHE_PATH"
 cd "$CHROMIUM_ROOT" || die "cannot enter $CHROMIUM_ROOT"
 
-# 1. Create the gclient solution if this is a fresh checkout.
+# 1. Populate the git cache for chromium/src.
+#
+#    --no-fetch-tags matters. chromium/src carries on the order of a hundred thousand
+#    tags, and advertising them is most of the cost of talking to the server at all.
+#    We ask for the one tag we actually build instead.
+CACHE_ARGS=(populate -v --cache-dir "$GIT_CACHE_PATH")
+if [ "$ALL_TAGS" -eq 0 ]; then
+  CACHE_ARGS+=(--no-fetch-tags --ref "refs/tags/$CHROMIUM_TAG")
+fi
+log "populating git cache for chromium/src (bootstraps from Google Storage; tens of GB)"
+git cache "${CACHE_ARGS[@]}" "$CHROMIUM_URL"
+
+CACHE_DIR="$(git_cache_dir "$CHROMIUM_URL")"
+[ -n "$CACHE_DIR" ] && [ -d "$CACHE_DIR" ] \
+  || die "git cache reports no directory for $CHROMIUM_URL after populate"
+log "cache: $CACHE_DIR ($(du -sh "$CACHE_DIR" 2>/dev/null | cut -f1))"
+
+# 2. Create the gclient solution if this is a fresh checkout.
 #    --unmanaged: gclient must not move src/ behind our back. We pin src ourselves
-#    with an explicit git checkout below, and gclient only resolves DEPS from it.
+#    with an explicit checkout below, and gclient only resolves DEPS from it.
 if [ ! -f .gclient ]; then
   log "creating gclient solution (unmanaged src)"
-  gclient config --name src --unmanaged \
-    https://chromium.googlesource.com/chromium/src.git
+  gclient config --name src --unmanaged "$CHROMIUM_URL"
 fi
 
-# 2. Clone src if absent.
+# 3. Clone src from the local cache. Same filesystem, so git hardlinks the objects
+#    instead of copying them and this costs almost nothing in time or disk.
 if [ ! -d "$CHROMIUM_SRC/.git" ]; then
-  log "cloning chromium/src (this downloads several GB and takes a while)"
-  if [ "$FULL_HISTORY" -eq 1 ]; then
-    git clone https://chromium.googlesource.com/chromium/src.git "$CHROMIUM_SRC"
-  else
-    git clone --filter=blob:none --no-checkout \
-      https://chromium.googlesource.com/chromium/src.git "$CHROMIUM_SRC"
-  fi
+  log "cloning src from the local cache"
+  git clone --no-checkout "$CACHE_DIR" "$CHROMIUM_SRC"
+  git -C "$CHROMIUM_SRC" remote set-url origin "$CHROMIUM_URL"
 fi
 
-# 3. Move src to the pinned tag.
+# 4. Move src to the pinned tag.
 log "checking out src at tag $CHROMIUM_TAG"
-git -C "$CHROMIUM_SRC" fetch --tags origin "refs/tags/$CHROMIUM_TAG:refs/tags/$CHROMIUM_TAG" \
-  || git -C "$CHROMIUM_SRC" fetch --tags origin
+if ! git -C "$CHROMIUM_SRC" rev-parse -q --verify "refs/tags/$CHROMIUM_TAG^{commit}" >/dev/null; then
+  # The tag is in the cache but not yet in this clone (cache refreshed since cloning).
+  git -C "$CHROMIUM_SRC" fetch --no-tags "$CACHE_DIR" \
+    "+refs/tags/$CHROMIUM_TAG:refs/tags/$CHROMIUM_TAG"
+fi
 git -C "$CHROMIUM_SRC" checkout -f "refs/tags/$CHROMIUM_TAG"
 
 actual_commit="$(git -C "$CHROMIUM_SRC" rev-parse HEAD)"
@@ -74,9 +93,10 @@ if [ "$actual_commit" != "$CHROMIUM_COMMIT" ]; then
 fi
 log "src at $actual_commit"
 
-# 4. Resolve DEPS. This is the long pole: tens of GB of dependencies.
+# 5. Resolve DEPS. gclient reads GIT_CACHE_PATH from the environment (set in lib.sh)
+#    and routes every dependency through the same cache.
 log "gclient sync (dependencies for $CHROMIUM_TAG)"
-SYNC_ARGS=(--force --reset --delete_unversioned_trees --with_tags "${HISTORY_ARGS[@]}")
+SYNC_ARGS=(--force --reset --delete_unversioned_trees --with_tags)
 [ "$RUN_HOOKS" -eq 0 ] && SYNC_ARGS+=(--nohooks)
 gclient sync "${SYNC_ARGS[@]}"
 
@@ -86,6 +106,6 @@ if [ "$RUN_HOOKS" -eq 1 ]; then
 fi
 
 log "checkout complete"
-log "src:  $CHROMIUM_SRC @ $CHROMIUM_TAG ($actual_commit)"
-log "size: $(du -sh "$CHROMIUM_ROOT" 2>/dev/null | cut -f1)"
-log "next: tooling/build-chromium"
+log "src:   $CHROMIUM_SRC @ $CHROMIUM_TAG ($actual_commit)"
+log "sizes: src=$(du -sh "$CHROMIUM_SRC" 2>/dev/null | cut -f1) cache=$(du -sh "$GIT_CACHE_PATH" 2>/dev/null | cut -f1)"
+log "next:  tooling/build-chromium"

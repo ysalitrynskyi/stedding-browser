@@ -76,6 +76,7 @@ The Chromium tree lives **outside** this repository and is never committed here.
 | depot_tools | `~/depot_tools` | `$DEPOT_TOOLS_DIR` |
 | gclient checkout root | `~/chromium` | `$CHROMIUM_ROOT` |
 | Chromium source | `~/chromium/src` | `$CHROMIUM_SRC` |
+| depot_tools git cache | `~/chromium/.git-cache` | `$GIT_CACHE_PATH` |
 
 ### The pinned version
 
@@ -127,6 +128,26 @@ tooling/build-chromium release
 open ~/chromium/out/release/Chromium.app
 ```
 
+### Why everything goes through the git cache
+
+`tooling/sync-chromium` does not clone `chromium/src` from the server. It populates
+depot_tools' **git cache** and clones from that instead. This is not a speed
+optimisation; on the reference machine it is the difference between working and not
+working. A direct `git clone` of `chromium/src` — plain, shallow, or partial alike —
+stalls in the server-side ref advertisement, because the repository carries on the
+order of a hundred thousand tags and advertising them dominates the exchange. The
+cache bootstraps from a prepackaged bundle on Google Storage over ordinary HTTP, which
+saturates the link.
+
+Two consequences worth knowing:
+
+- We fetch the one tag we build (`--no-fetch-tags --ref refs/tags/<pin>`) rather than
+  all of them. `tooling/sync-chromium --all-tags` overrides this when tag archaeology
+  is genuinely needed.
+- `gclient` reads `GIT_CACHE_PATH` from the environment, so every dependency is routed
+  through the same cache. The cache survives pin changes, which is what makes moving
+  the pin cheap — and moving the pin often is the entire premise of ADR 0003.
+
 `tooling/build-chromium` copies `tooling/args/<config>.gn` verbatim into the output
 directory as `args.gn`, so the configuration of any build is recoverable from the build
 itself. It also refuses to build a tree that is not sitting on the pin — a binary whose
@@ -173,128 +194,28 @@ Filled in when M0 completes. Nothing here is an estimate.
 
 ### Known failure modes
 
-Recorded as they are actually hit, not imagined.
+Recorded as they were actually hit on the reference machine, not imagined.
 
-- **`gclient` appears to hang for minutes with no output on a fresh machine.** It is
-  bootstrapping `cipd` and `vpython`, which download a Python distribution and wheels
-  before any Chromium code is fetched. First run only.
+- **`git clone` of `chromium/src` hangs with no output.** The connection is
+  established and a few megabytes arrive, then nothing, indefinitely. This is the
+  ref advertisement, not a network fault: the repository has an enormous number of
+  tags. Observed identically with a plain clone, `--depth 1 --branch <tag>`, and
+  `--filter=blob:none`. The fix is not to clone from the server at all — see "Why
+  everything goes through the git cache" above. Any instructions elsewhere on the
+  internet that begin with `git clone https://chromium.googlesource.com/chromium/src`
+  will appear to hang for the same reason.
+
+- **`gclient` appears to hang for minutes on a fresh machine.** It is bootstrapping
+  `cipd` and `vpython`, which download a Python distribution and wheels before any
+  Chromium code is fetched. First run only, and it does finish.
+
 - **`cipd` retries with `dial tcp [2607:f8b0:...]:443: connect: bad file descriptor`
   or `i/o timeout`.** Google's infrastructure advertises AAAA records; on a host with
-  degraded IPv6 reachability the client burns through a 1s→2s→4s→8s→16s backoff before
-  falling back to IPv4. It does succeed. Observed on the reference machine; it makes
-  the first sync noticeably slower and looks exactly like a hang.
+  degraded IPv6 reachability the client works through a 1s→2s→4s→8s→16s backoff before
+  falling back to IPv4. It does succeed, but the first sync is noticeably slower and
+  it looks exactly like a hang. Confirm the host is healthy by timing an ordinary
+  download from `dl.google.com` before concluding anything is wrong: a 404 response
+  reports a meaningless transfer rate, which is an easy way to misdiagnose this.
 
-## De-Googling stance
-
-Policy lives in `PRIVACY.md`; this section covers the mechanics and the honest
-tradeoffs. The principle: **no request leaves the machine to Google (or anyone) unless
-the user asked for something that requires it** — but we do not sacrifice safety
-features that users expect from a real product just to make a purity claim.
-
-- **Google API keys: not shipped.** Consequence: Google account sign-in, Chrome Sync,
-  and Google geolocation are absent. Chrome Sync against Google servers is not our
-  product anyway; a future sync story is its own project.
-- **Telemetry, crash reporting to Google, field trials (Finch), RLZ, promo/brand
-  pings: removed or disabled.** Features are controlled by build flags and our own
-  defaults, never by server-side experiments. Opt-in crash reporting to *our*
-  infrastructure may come later (per `PRIVACY.md`).
-- **Safe Browsing: kept, hash-prefix variant.** Dropping it silently makes users
-  less safe; keeping Google's real-time endpoints leaks browsing signals. The
-  decision is recorded in `PRIVACY.md`: standard hash-prefix Safe Browsing on by
-  default, real-time "Enhanced" modes never shipped.
-- **Component updater: kept, pointed at infrastructure we control where feasible.**
-  Some components matter for security and site compatibility (certificate revocation
-  lists, Widevine for DRM playback). Each shipped component is enumerated in
-  `PRIVACY.md` with its endpoint.
-- **Default search, suggestions, spellcheck, translate, DNS/preconnect defaults:**
-  privacy-preserving defaults per `PRIVACY.md`; nothing phones home out of the box.
-
-Ungoogled-Chromium is prior art we learn from, but our bar is different: it optimizes
-for maximal removal and accepts breakage; we optimize for a polished product with
-honest, documented network behavior.
-
-## Branding
-
-Chromium branding is scattered but well-known: `chrome/app/theme/` (icons, logos),
-grit/grd string resources (product name strings), `chrome/installer/` and macOS bundle
-metadata (bundle id, app name), plus the user agent and version strings. We build with
-Chromium (not Chrome) branding, then apply ours on top.
-
-Approach, patch-light in this order: build-time **asset replacement** from `branding/`
-(a script copies our icons/strings over the checkout before `gn gen` — zero patches),
-then **gn args** where upstream exposes branding knobs, and only last actual patches
-for names baked into code. Renaming every internal occurrence of "Chromium" is
-explicitly a non-goal; user-visible surfaces (app name, menus, About, installer,
-settings) are the bar. The user agent stays Chrome-compatible per site-compat norms —
-we do not advertise a novel UA token by default.
-
-## Updates and distribution
-
-macOS distribution for real users requires an Apple Developer ID, **code signing, and
-notarization** — without them, Gatekeeper blocks the app. Per `ROADMAP.md`,
-signing/notarization lands at M7. Builds before that — including M2, the first public
-pre-alpha — ship unsigned, with the Gatekeeper bypass documented alongside each
-release.
-
-Auto-update engine is an **open decision needing an ADR** before the first
-auto-updating release (M7): **Sparkle** (standard, well-understood on macOS, appcast + EdDSA signatures)
-vs **Chromium's own open-source updater** (`chrome/updater`, cross-platform, heavier
-to operate). Evaluation criteria: patch cost, operational burden of the update server,
-Windows/Linux story, delta-update support. Full-size updates first; **delta updates
-are a later optimization** (a Chromium app is large, so deltas matter, but correctness
-and signature verification come first).
-
-## Upstream tracking
-
-- **Policy: follow Chromium stable.** Every upstream stable release, including
-  security point releases, gets evaluated the day it ships.
-- **Security bumps are rebased, rebuilt, and shipped within days**, not weeks. This is
-  the strongest argument for the minimal-patch-series design: a browser that lags
-  upstream security fixes is worse than no browser.
-- **A minor rebase must usually be zero-touch.** The pin moves, `apply-patches` runs
-  clean, CI builds, release ships. If a routine point release regularly causes manual
-  conflict resolution, the offending patches are in the wrong layer — fix the patch,
-  not the process.
-- Major-version rebases (new stable milestone) are scheduled, budgeted work with a
-  checklist, performed on a branch and merged only when the full series applies and
-  the browser passes the release checklist in `QUALITY.md`.
-
-## CI reality
-
-GitHub-hosted runners cannot practically build Chromium: default runners have tens of
-GB of disk and modest CPU against a checkout+build that needs roughly an order of
-magnitude more disk and hours of compute. Even a bare source checkout exceeds the
-default runner disk. Pretending otherwise produces a CI that is always red or always
-skipped.
-
-Plan: **self-hosted or cloud macOS builders** (own Apple-silicon hardware, or a Mac
-cloud provider) for real builds — provider and topology are an open decision, ADR
-before M1. Until then, hosted CI still earns its keep with what it *can* do:
-
-- Lint and test the tooling scripts (shellcheck, dry runs against fixtures).
-- Docs checks: markdown lint, internal link validation, ADR format.
-- Patch hygiene: series is contiguous, numbered, each patch has a header.
-- Patch-apply dry runs against the pinned source — requires a cached partial checkout
-  or runs on the self-hosted builder; mechanism TBD with the builder ADR.
-
-## Rejected alternatives
-
-**Electron/CEF wrapper.** A browser-shaped app on Electron or CEF cannot deliver full
-Chrome extension compatibility — extension APIs are implemented in Chrome's browser
-layer, not in the embedding APIs — and it inherits a permanent performance and
-memory penalty plus a second-class multi-process model. Our hard requirement (real
-extension support) rules this out on its own; the rest just makes it worse.
-
-**Firefox base.** Gecko is a credible engine, but Chrome extension compatibility
-would mean WebExtensions-only with real gaps, and the users we target live in the
-Chrome extension ecosystem. Zen Browser already executes the Arc-style-UI-on-Firefox
-idea well; competing there means fighting for the smaller lane against an incumbent.
-Our differentiation depends on Chromium compatibility with none of Chrome's strings
-attached.
-
-**Hard fork of Chromium.** Diverging from upstream (own engine changes, own release
-cadence) means absorbing Chromium's full security-response burden with a team of
-approximately one. Chromium ships security fixes continuously; a hard fork falls
-behind within months and becomes dangerous to recommend. The minimal patch series
-keeps upstream doing the engine work while we do the product work — that asymmetry is
-the entire strategy.
+- **`gsutil` warns that `~/.boto` authentication is deprecated.** Harmless; the
+  bootstrap download proceeds anyway.

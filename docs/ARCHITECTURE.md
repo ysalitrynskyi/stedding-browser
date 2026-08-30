@@ -245,6 +245,22 @@ Recorded as they were actually hit on the reference machine, not imagined.
   download from `dl.google.com` before concluding anything is wrong: a 404 response
   reports a meaningless transfer rate, which is an easy way to misdiagnose this.
 
+- **Moving a checkout breaks it quietly.** gclient clones every dependency from the
+  git cache and records the cache location as an *absolute* path, in each
+  dependency's `.git/objects/info/alternates` and `.git/config` — 298 files on the
+  reference checkout. Move or rename the tree and all of them go stale at once. Git
+  then reports `unable to normalize alternate object path` and `fatal: bad object
+  HEAD`, but the build largely carries on, because the working trees still hold real
+  files. That is the dangerous part: version stamping gets it wrong rather than
+  stopping. `tooling/repair-checkout` rewrites the paths (`--check` reports without
+  writing), and it verifies the repair by making real dependencies resolve their own
+  HEAD rather than assuming.
+
+- **`mapfile: command not found`.** macOS ships bash 3.2, and `#!/usr/bin/env bash`
+  resolves to it. Anything needing bash 4 works on a machine with Homebrew bash and
+  fails on a stock one — which is the machine a new contributor has. `tooling/check-repo
+  shell` rejects bash-4-only constructs so this cannot come back.
+
 - **`gsutil` warns that `~/.boto` authentication is deprecated.** Harmless; the
   bootstrap download proceeds anyway.
 

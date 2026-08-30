@@ -18,7 +18,10 @@ its configuration from `chromium-version` — never from a value typed twice.
 | `build-chromium` | `gn gen` + `autoninja` for a named configuration. |
 | `apply-patches` | Replays the patch series onto the pin as commits on `stedding-work`. |
 | `update-patches` | Turns those commits back into `../patches/`. |
-| `check-repo` | Repository hygiene: links, ADRs, patch series, the pin, no machine paths. |
+| `repair-checkout` | Rewrites git cache paths after a checkout is moved. |
+| `check-repo` | Repository hygiene: shell portability, links, ADRs, patch series, the pin, no machine paths. |
+| `verify-build` | Runs a built browser and checks it renders, does WebGL, and decodes video. |
+| `measure/` | Performance harness and the fixed ten-site list for the QUALITY.md budgets. |
 | `args/` | `gn` argument files, one per build configuration, with the reasoning per flag. |
 
 ## Normal use

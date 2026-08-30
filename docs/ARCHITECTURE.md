@@ -33,8 +33,11 @@ time. The pin is updated deliberately, never implicitly — see
 
 - **One logical change per patch.** A patch does one thing: adds one flag, reroutes one
   service, brands one surface. Never a grab-bag.
-- **Every patch carries a header**: what it does, why it exists, which upstream files
-  it touches, and what would let us delete it (e.g. an upstream flag landing).
+- **Every patch carries a header**: what it does, why it exists, and what would let
+  us delete it (e.g. an upstream flag landing) — as `Why:` and `Removable when:` in
+  the commit message, which `tooling/update-patches` refuses to export without. Which
+  upstream files a patch touches is answered by the diffstat `git format-patch` writes
+  under the message, so it is not restated by hand where it could drift.
 - **Script-driven, not manual.** `tooling/apply-patches` applies the series onto a
   clean checkout at the pinned version; `tooling/update-patches` regenerates the series
   from a working branch after a rebase. Applying patches by hand is a bug in the tooling.
@@ -103,14 +106,22 @@ Policy for moving the pin: `decisions/0007-chromium-version-pin.md`.
   stray `node_modules` in your home directory leaks its `@types` into the build. The
   tooling checks for this before it does anything expensive; see "Known failure
   modes".
-- **RAM:** 16 GB is the practical floor; linking is the memory-hungry step.
+- **RAM:** 16 GB is the practical floor; linking is the memory-hungry step. Not
+  checked by any script — a recommendation, not a gate.
 
-`tooling/bootstrap-depot-tools` checks all of the above and fails with the exact
-remedy rather than a build error hours later.
+These are checked in two places, and each fails with the exact remedy rather than
+letting a build die hours later:
+
+| Check | Where |
+|---|---|
+| Full Xcode, accepted licence, `git`, `python3`, arm64 macOS | `tooling/bootstrap-depot-tools` |
+| 150 GB free disk, no ancestor `node_modules` | `tooling/sync-chromium` |
+| Tree is on the pin, no ancestor `node_modules` | `tooling/build-chromium` |
 
 ### Reference hardware
 
-Measurements in this document were taken on:
+The machine every measured number in this document was taken on. Nothing here is
+normative — it is the answer to "compared to what?":
 
 | | |
 |---|---|
@@ -135,7 +146,7 @@ tooling/sync-chromium
 tooling/build-chromium release
 
 # 4. Run it.
-open ~/chromium/out/release/Chromium.app
+open ~/chromium/src/out/release/Chromium.app
 ```
 
 ### Why everything goes through the git cache
@@ -268,3 +279,118 @@ Recorded as they were actually hit on the reference machine, not imagined.
   upstream. Hit at M0 with `enable_nacl`, which is inert now that Native Client has
   been removed from Chromium. Delete the argument rather than silencing the warning:
   a gn arg that does nothing is a comment pretending to be configuration.
+
+## De-Googling stance
+
+Policy lives in `PRIVACY.md`; this section covers the mechanics and the honest
+tradeoffs. The principle: **no request leaves the machine to Google (or anyone) unless
+the user asked for something that requires it** — but we do not sacrifice safety
+features that users expect from a real product just to make a purity claim.
+
+- **Google API keys: not shipped.** Consequence: Google account sign-in, Chrome Sync,
+  and Google geolocation are absent. Chrome Sync against Google servers is not our
+  product anyway; a future sync story is its own project.
+- **Telemetry, crash reporting to Google, field trials (Finch), RLZ, promo/brand
+  pings: removed or disabled.** Features are controlled by build flags and our own
+  defaults, never by server-side experiments. Opt-in crash reporting to *our*
+  infrastructure may come later (per `PRIVACY.md`).
+- **Safe Browsing: kept, hash-prefix variant.** Dropping it silently makes users
+  less safe; keeping Google's real-time endpoints leaks browsing signals. The
+  decision is recorded in `PRIVACY.md`: standard hash-prefix Safe Browsing on by
+  default, real-time "Enhanced" modes never shipped.
+- **Component updater: kept, pointed at infrastructure we control where feasible.**
+  Some components matter for security and site compatibility (certificate revocation
+  lists, Widevine for DRM playback). Each shipped component is enumerated in
+  `PRIVACY.md` with its endpoint.
+- **Default search, suggestions, spellcheck, translate, DNS/preconnect defaults:**
+  privacy-preserving defaults per `PRIVACY.md`; nothing phones home out of the box.
+
+Ungoogled-Chromium is prior art we learn from, but our bar is different: it optimizes
+for maximal removal and accepts breakage; we optimize for a polished product with
+honest, documented network behavior.
+
+## Branding
+
+Chromium branding is scattered but well-known: `chrome/app/theme/` (icons, logos),
+grit/grd string resources (product name strings), `chrome/installer/` and macOS bundle
+metadata (bundle id, app name), plus the user agent and version strings. We build with
+Chromium (not Chrome) branding, then apply ours on top.
+
+Approach, patch-light in this order: build-time **asset replacement** from `branding/`
+(a script copies our icons/strings over the checkout before `gn gen` — zero patches),
+then **gn args** where upstream exposes branding knobs, and only last actual patches
+for names baked into code. Renaming every internal occurrence of "Chromium" is
+explicitly a non-goal; user-visible surfaces (app name, menus, About, installer,
+settings) are the bar. The user agent stays Chrome-compatible per site-compat norms —
+we do not advertise a novel UA token by default.
+
+## Updates and distribution
+
+macOS distribution for real users requires an Apple Developer ID, **code signing, and
+notarization** — without them, Gatekeeper blocks the app. Per `ROADMAP.md`,
+signing/notarization lands at M7. Builds before that — including M2, the first public
+pre-alpha — ship unsigned, with the Gatekeeper bypass documented alongside each
+release.
+
+Auto-update engine is an **open decision needing an ADR** before the first
+auto-updating release (M7): **Sparkle** (standard, well-understood on macOS, appcast + EdDSA signatures)
+vs **Chromium's own open-source updater** (`chrome/updater`, cross-platform, heavier
+to operate). Evaluation criteria: patch cost, operational burden of the update server,
+Windows/Linux story, delta-update support. Full-size updates first; **delta updates
+are a later optimization** (a Chromium app is large, so deltas matter, but correctness
+and signature verification come first).
+
+## Upstream tracking
+
+- **Policy: follow Chromium stable.** Every upstream stable release, including
+  security point releases, gets evaluated the day it ships.
+- **Security bumps are rebased, rebuilt, and shipped within days**, not weeks. This is
+  the strongest argument for the minimal-patch-series design: a browser that lags
+  upstream security fixes is worse than no browser.
+- **A minor rebase must usually be zero-touch.** The pin moves, `apply-patches` runs
+  clean, CI builds, release ships. If a routine point release regularly causes manual
+  conflict resolution, the offending patches are in the wrong layer — fix the patch,
+  not the process.
+- Major-version rebases (new stable milestone) are scheduled, budgeted work with a
+  checklist, performed on a branch and merged only when the full series applies and
+  the browser passes the release checklist in `QUALITY.md`.
+
+## CI reality
+
+GitHub-hosted runners cannot practically build Chromium: default runners have tens of
+GB of disk and modest CPU against a checkout+build that needs roughly an order of
+magnitude more disk and hours of compute. Even a bare source checkout exceeds the
+default runner disk. Pretending otherwise produces a CI that is always red or always
+skipped.
+
+Plan: **self-hosted or cloud macOS builders** (own Apple-silicon hardware, or a Mac
+cloud provider) for real builds — provider and topology are an open decision, ADR
+before M1. Until then, hosted CI still earns its keep with what it *can* do:
+
+- Lint and test the tooling scripts (shellcheck, dry runs against fixtures).
+- Docs checks: markdown lint, internal link validation, ADR format.
+- Patch hygiene: series is contiguous, numbered, each patch has a header.
+- Patch-apply dry runs against the pinned source — requires a cached partial checkout
+  or runs on the self-hosted builder; mechanism TBD with the builder ADR.
+
+## Rejected alternatives
+
+**Electron/CEF wrapper.** A browser-shaped app on Electron or CEF cannot deliver full
+Chrome extension compatibility — extension APIs are implemented in Chrome's browser
+layer, not in the embedding APIs — and it inherits a permanent performance and
+memory penalty plus a second-class multi-process model. Our hard requirement (real
+extension support) rules this out on its own; the rest just makes it worse.
+
+**Firefox base.** Gecko is a credible engine, but Chrome extension compatibility
+would mean WebExtensions-only with real gaps, and the users we target live in the
+Chrome extension ecosystem. Zen Browser already executes the Arc-style-UI-on-Firefox
+idea well; competing there means fighting for the smaller lane against an incumbent.
+Our differentiation depends on Chromium compatibility with none of Chrome's strings
+attached.
+
+**Hard fork of Chromium.** Diverging from upstream (own engine changes, own release
+cadence) means absorbing Chromium's full security-response burden with a team of
+approximately one. Chromium ships security fixes continuously; a hard fork falls
+behind within months and becomes dangerous to recommend. The minimal patch series
+keeps upstream doing the engine work while we do the product work — that asymmetry is
+the entire strategy.

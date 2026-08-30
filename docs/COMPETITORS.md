@@ -121,7 +121,7 @@ much distribution a solo closed product can't get.
 | Floorp | Gecko | Partial | Yes | MPL-2.0 | No (Firefox add-ons) | Active |
 | SigmaOS | WebKit | Partial (tasks) | No | — | No | Active |
 | Horse | Chromium | No (Trails) | No | — | Yes (recent) | Active, paid |
-| **Stedding** | Chromium | Yes (goal) | Yes | BSD-3-Clause | Yes (hard req.) | Pre-code |
+| **Stedding** | Chromium | Yes (goal) | Yes | BSD-3-Clause | Yes (hard req.) | M0, no installer |
 
 ## The gap we occupy
 
@@ -144,7 +144,8 @@ copyleft conditions). No other project on this list offers all three.
 
 Honesty section. As of 2026-08-30:
 
-- **We don't exist yet.** The project is pre-code (see ROADMAP.md). Every browser
+- **We don't exist as a product yet.** There is build tooling and no installable
+  browser (see ROADMAP.md — M0). Every browser
   above ships today; Zen and Brave ship polished products today.
 - **No track record.** Keeping a Chromium fork current with security updates is a
   treadmill that has broken larger teams. Until we demonstrate months of on-time

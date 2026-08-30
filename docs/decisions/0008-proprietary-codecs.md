@@ -7,8 +7,12 @@ Date: 2026-08-30
 
 A vanilla Chromium build compiles without proprietary codecs: `proprietary_codecs`
 is off and `ffmpeg_branding` is `"Chromium"`. Royalty-free formats work — VP8, VP9,
-AV1, Opus, Vorbis — and H.264 and AAC do not. This was confirmed empirically at M0
-rather than assumed; `tooling/verify-build` reports the codec matrix of any build.
+AV1, Opus, Vorbis — and H.264 and AAC do not.
+
+This is upstream's documented default, not yet a measurement of our own build:
+`tooling/verify-build` reports the codec matrix of any build, and has so far only been
+run against Chrome for Testing, which *does* ship the codecs and reported all of them
+playable. The vanilla build's own matrix gets recorded here when M0 completes.
 
 Google Chrome ships these codecs under licences Google holds. A fork does not inherit
 them. The distinction is legal, not technical: the code paths exist in the tree and

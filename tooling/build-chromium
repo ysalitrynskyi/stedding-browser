@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# Configure and build Chromium from the pinned checkout.
+#
+# Usage:
+#   tooling/build-chromium [release|debug|official] [ninja target ...]
+#
+#   tooling/build-chromium                  # release build of the browser
+#   tooling/build-chromium official          # shipping configuration
+#   tooling/build-chromium release chrome unit_tests
+#
+# gn args come from tooling/args/<config>.gn and are copied verbatim into the output
+# directory, so the args used for any build are recoverable from the build itself.
+
+. "$(cd "$(dirname "$0")" && pwd)/lib.sh"
+
+require_macos_arm64
+add_depot_tools_to_path
+
+CONFIG="${1:-release}"
+shift || true
+TARGETS=("$@")
+[ "${#TARGETS[@]}" -eq 0 ] && TARGETS=(chrome)
+
+ARGS_FILE="$STEDDING_ROOT/tooling/args/$CONFIG.gn"
+[ -f "$ARGS_FILE" ] || die "no gn args for config '$CONFIG' (expected $ARGS_FILE)"
+[ -d "$CHROMIUM_SRC" ] || die "no checkout at $CHROMIUM_SRC — run tooling/sync-chromium"
+
+OUT_DIR="out/$CONFIG"
+ABS_OUT="$CHROMIUM_SRC/$OUT_DIR"
+
+cd "$CHROMIUM_SRC"
+
+# Refuse to build a tree that is not on the pin: a build whose provenance is unclear
+# is worse than no build.
+head_commit="$(git rev-parse HEAD)"
+tag_commit="$(git rev-parse "refs/tags/$CHROMIUM_TAG^{commit}" 2>/dev/null || echo unknown)"
+if [ "$head_commit" != "$tag_commit" ]; then
+  die "checkout is at $head_commit, pin $CHROMIUM_TAG is $tag_commit — run tooling/sync-chromium"
+fi
+
+log "config:  $CONFIG"
+log "src:     $CHROMIUM_SRC @ $CHROMIUM_TAG"
+log "out:     $ABS_OUT"
+log "targets: ${TARGETS[*]}"
+
+mkdir -p "$ABS_OUT"
+cp "$ARGS_FILE" "$ABS_OUT/args.gn"
+
+log "gn gen"
+gn gen "$OUT_DIR"
+
+log "resolved gn args:"
+gn args "$OUT_DIR" --list --short --overrides-only | sed 's/^/    /' >&2
+
+start=$(date +%s)
+log "autoninja -C $OUT_DIR ${TARGETS[*]}  (this is the long one)"
+autoninja -C "$OUT_DIR" "${TARGETS[@]}"
+end=$(date +%s)
+
+elapsed=$(( end - start ))
+log "build finished in $(( elapsed / 3600 ))h $(( (elapsed % 3600) / 60 ))m $(( elapsed % 60 ))s"
+
+APP="$ABS_OUT/Chromium.app"
+if [ -d "$APP" ]; then
+  log "app:  $APP"
+  log "size: $(du -sh "$APP" | cut -f1)"
+  log "run:  open '$APP'"
+fi

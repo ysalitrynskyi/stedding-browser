@@ -324,6 +324,45 @@ explicitly a non-goal; user-visible surfaces (app name, menus, About, installer,
 settings) are the bar. The user agent stays Chrome-compatible per site-compat norms —
 we do not advertise a novel UA token by default.
 
+### Surfaces, as they actually are at the pin
+
+Surveyed against the checkout at M0 and spot-verified file by file. Paths are relative
+to the Chromium source root. This is a survey, not a decision — the branding itself
+lands at M1.
+
+| Surface | Where | How |
+|---|---|---|
+| Product name, company, bundle id, copyright | `chrome/app/theme/chromium/BRANDING` | asset replacement |
+| macOS app icon | `chrome/app/theme/chromium/mac/` — `app.icns`, `AppIcon.icon`, `Assets.car`, `Assets.xcassets` | asset replacement |
+| Product name in UI strings | `IDS_PRODUCT_NAME` in `chrome/app/chromium_strings.grd` | asset replacement |
+| Version | `chrome/VERSION` | set by the pin; never edited by hand |
+| About page | `chrome://settings/help` (macOS has no separate About panel) | grd/png replacement |
+| User agent | — | **leave alone** |
+
+`BRANDING` is a ten-line key/value file — `PRODUCT_FULLNAME`, `PRODUCT_SHORTNAME`,
+`COMPANY_FULLNAME`, `MAC_BUNDLE_ID`, `COPYRIGHT` and a few more — and it drives most of
+the macOS bundle. Replacing it is the single highest-leverage branding change available,
+and it costs no patches.
+
+Three findings worth knowing before M1 is planned:
+
+- **There is no third-brand path.** Upstream's branding switch is boolean
+  (`is_chrome_branded`), selecting `chrome/app/theme/chromium/` or
+  `chrome/app/theme/google_chrome/`. Adding a *third* directory is not supported: grit
+  includes hardcode `chromium/`. So our assets overwrite the `chromium/` tree in place
+  rather than sitting beside it — which is exactly what the `branding/` copy step does,
+  and why it must run before `gn gen`.
+- **Some identifiers do not follow `MAC_BUNDLE_ID`.** Several related identifiers are
+  hardcoded rather than derived. If they must match the product, those are patches —
+  the only patches branding is currently known to require. Enumerating them is M1 work.
+- **Icons are copied, not compiled** — the build takes prebuilt `app.icns` and
+  `Assets.car`. The newer vector `.icon` sources *are* compiled at build time, but
+  overwriting the sources is still asset replacement, not a patch.
+
+On the user agent: stock Chromium already emits a Chrome-compatible `Chrome/<version>`
+token. There is no gn arg to change it, and adding a novel product token would be both
+a patch and a site-compatibility regression. Leaving it alone is the decision.
+
 ## Updates and distribution
 
 macOS distribution for real users requires an Apple Developer ID, **code signing, and

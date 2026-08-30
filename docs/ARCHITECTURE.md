@@ -98,6 +98,11 @@ Policy for moving the pin: `decisions/0007-chromium-version-pin.md`.
   build itself, but the bootstrap needs a system pair).
 - **Disk:** `tooling/sync-chromium` refuses to start below 150 GB free on the volume
   holding `$CHROMIUM_ROOT`. Measured usage: TBD at M0 completion.
+- **No `node_modules` in any directory above the checkout.** Chromium's TypeScript
+  build resolves modules the way node does — by walking up parent directories — so a
+  stray `node_modules` in your home directory leaks its `@types` into the build. The
+  tooling checks for this before it does anything expensive; see "Known failure
+  modes".
 - **RAM:** 16 GB is the practical floor; linking is the memory-hungry step.
 
 `tooling/bootstrap-depot-tools` checks all of the above and fails with the exact
@@ -201,6 +206,24 @@ Filled in when M0 completes. Nothing here is an estimate.
 
 Recorded as they were actually hit on the reference machine, not imagined.
 
+- **`Undeclared dependencies to definition files` from `ts_library.py`,** naming
+  packages nobody asked for (`undici-types`, `buffer`, `@types/node`). Chromium's
+  TypeScript build walks up parent directories looking for `node_modules`, exactly as
+  node does, so any `node_modules` *above* the checkout contributes its `@types` to
+  every TypeScript target. On the reference machine a 1 GB `~/node_modules` — left by
+  some past `npm install` in the home directory — broke the build about ninety seconds
+  in, after the whole checkout had been made. The message names the leaked packages
+  rather than the cause, so `tooling/lib.sh` checks every ancestor directory during
+  preflight and fails immediately with the remedy. Put the checkout somewhere with no
+  `node_modules` above it:
+
+  ```bash
+  CHROMIUM_ROOT=/Users/Shared/chromium tooling/sync-chromium
+  ```
+
+  Note that *every* ancestor counts, so no path under a contaminated home directory
+  will do.
+
 - **`git clone` of `chromium/src` hangs with no output.** The connection is
   established and a few megabytes arrive, then nothing, indefinitely. This is the
   ref advertisement, not a network fault: the repository has an enormous number of
@@ -224,3 +247,8 @@ Recorded as they were actually hit on the reference machine, not imagined.
 
 - **`gsutil` warns that `~/.boto` authentication is deprecated.** Harmless; the
   bootstrap download proceeds anyway.
+
+- **`gn` warns that a build argument "has no effect".** The argument no longer exists
+  upstream. Hit at M0 with `enable_nacl`, which is inert now that Native Client has
+  been removed from Chromium. Delete the argument rather than silencing the warning:
+  a gn arg that does nothing is a comment pretending to be configuration.

@@ -1,0 +1,234 @@
+#!/usr/bin/env python3
+"""Verify that a built browser actually works.
+
+M0's acceptance criteria say the resulting app "launches, browses, and plays video and
+WebGL content". This checks exactly that, so the claim is evidence rather than
+someone's recollection of clicking around once.
+
+    tooling/verify-build --app ~/chromium/out/release/Chromium.app
+    tooling/verify-build --app ... --offline      # skip the network navigation
+    tooling/verify-build --app ... --json out.json
+
+Required to pass: the app launches, renders a page, WebGL 1 and 2 draw and read back
+a known colour, and at least one royalty-free video codec decodes a real frame.
+
+Not required: H.264 and AAC. A vanilla Chromium build is compiled without proprietary
+codecs, so those are reported and expected to fail. That gap is real and a shipping
+browser cannot keep it — the decision belongs to M1 and is a licensing question, not
+a technical one. See the "Codecs" section of docs/ARCHITECTURE.md.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import plistlib
+import queue
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+from http.server import SimpleHTTPRequestHandler, HTTPServer
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+VERIFY_DIR = HERE / "verify"
+LAUNCH_TIMEOUT_S = 120
+NETWORK_URL = "https://example.com/"
+
+
+class Handler(SimpleHTTPRequestHandler):
+    """Serves tooling/verify/ and collects the JSON the probe page posts back."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, directory=str(VERIFY_DIR), **kwargs)
+
+    def do_POST(self):  # noqa: N802
+        length = int(self.headers.get("Content-Length") or 0)
+        body = self.rfile.read(length) if length else b"{}"
+        if self.path == "/results":
+            try:
+                self.server.results.put(json.loads(body))  # type: ignore[attr-defined]
+            except json.JSONDecodeError as err:
+                self.server.results.put({"_error": f"bad JSON from probe: {err}"})  # type: ignore[attr-defined]
+        self.send_response(204)
+        self.end_headers()
+
+    def end_headers(self):
+        self.send_header("Cache-Control", "no-store")
+        super().end_headers()
+
+    def log_message(self, *_args):
+        pass
+
+
+def app_executable(app: Path) -> Path:
+    info = app / "Contents" / "Info.plist"
+    if not info.is_file():
+        raise SystemExit(f"{app} does not look like an .app bundle (no Info.plist)")
+    with info.open("rb") as fh:
+        name = plistlib.load(fh)["CFBundleExecutable"]
+    exe = app / "Contents" / "MacOS" / name
+    if not exe.is_file():
+        raise SystemExit(f"executable {exe} not found")
+    return exe
+
+
+def app_version(app: Path) -> str:
+    with (app / "Contents" / "Info.plist").open("rb") as fh:
+        data = plistlib.load(fh)
+    return str(data.get("CFBundleShortVersionString") or data.get("CFBundleVersion") or "unknown")
+
+
+def run_probe(app: Path, offline: bool) -> dict:
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    server.results = queue.Queue()  # type: ignore[attr-defined]
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    port = server.server_address[1]
+
+    # The probe page reads the network target from a data attribute so the harness,
+    # not the page, decides whether to touch the network at all.
+    page = VERIFY_DIR / "probe.html"
+    source = page.read_text(encoding="utf-8")
+    attr = "" if offline else f' data-network-url="{NETWORK_URL}"'
+    generated = VERIFY_DIR / ".probe-generated.html"
+    generated.write_text(source.replace("<body", f"<body{attr}", 1)
+                         if "<body" in source
+                         else source.replace("<h1>", f'<body{attr}><h1>', 1),
+                         encoding="utf-8")
+
+    try:
+        with tempfile.TemporaryDirectory(prefix="stedding-verify-") as tmp:
+            argv = [
+                str(app_executable(app)),
+                f"--user-data-dir={tmp}",
+                "--no-first-run",
+                "--no-default-browser-check",
+                f"http://127.0.0.1:{port}/.probe-generated.html",
+            ]
+            proc = subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            try:
+                return server.results.get(timeout=LAUNCH_TIMEOUT_S)
+            except queue.Empty:
+                raise SystemExit(
+                    f"the browser did not report results within {LAUNCH_TIMEOUT_S}s.\n"
+                    f"    Try launching it by hand to see what it does:\n"
+                    f"        open '{app}'"
+                )
+            finally:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=15)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+    finally:
+        generated.unlink(missing_ok=True)
+        server.shutdown()
+        server.server_close()
+
+
+GREEN, RED, YELLOW, DIM, RESET = "\033[32m", "\033[31m", "\033[33m", "\033[2m", "\033[0m"
+
+
+def report(results: dict, offline: bool) -> int:
+    def line(status: str, name: str, detail: str = "") -> None:
+        colour = {"PASS": GREEN, "FAIL": RED, "note": YELLOW, "skip": DIM}[status]
+        print(f"  {colour}{status:<4}{RESET} {name:<26} {DIM}{detail}{RESET}")
+
+    failures = 0
+    print(f"\nuser agent: {results.get('userAgent', 'unknown')}\n")
+
+    print("rendering")
+    line("PASS", "page loaded and ran", "the probe reported back at all")
+
+    for version in (1, 2):
+        gl = results.get(f"webgl{version}", {})
+        name = f"WebGL {version}"
+        if gl.get("supported") and gl.get("rendered"):
+            line("PASS", name, f"{gl.get('renderer', '?')}")
+        elif gl.get("supported"):
+            line("FAIL", name, gl.get("reason", "context created but did not render"))
+            failures += 1
+        else:
+            line("FAIL", name, gl.get("reason", "unsupported"))
+            failures += 1
+
+    print("\nvideo decode")
+    royalty_free_ok = False
+    for key, label, required in (
+        ("vp9", "VP9 / WebM", True),
+        ("av1", "AV1 / MP4", True),
+        ("h264_aac", "H.264 + AAC / MP4", False),
+    ):
+        m = results.get("media", {}).get(key, {})
+        if m.get("played") and m.get("decoded"):
+            line("PASS", label, f"{m.get('size')} {m.get('duration')}s")
+            if required:
+                royalty_free_ok = True
+        elif required:
+            line("FAIL", label, m.get("reason", "did not decode a frame"))
+        else:
+            line("note", label, (m.get("reason") or "did not decode")
+                 + "  — expected on a vanilla build, see docs/ARCHITECTURE.md")
+
+    if not royalty_free_ok:
+        failures += 1
+        line("FAIL", "royalty-free video", "no royalty-free codec decoded a frame")
+
+    print("\ncodec support reported by the build")
+    for codec, answer in results.get("codecs", {}).items():
+        line("PASS" if answer != "no" else "note", codec, answer)
+
+    print("\nnetwork")
+    net = results.get("network", {})
+    if offline or net.get("skipped"):
+        line("skip", "navigation", "--offline")
+    elif net.get("ok"):
+        line("PASS", "navigation", f"{NETWORK_URL} in {net.get('ms')} ms")
+    else:
+        line("FAIL", "navigation", net.get("reason", "failed"))
+        failures += 1
+
+    print()
+    if failures:
+        print(f"{RED}{failures} required check(s) failed{RESET}\n")
+    else:
+        print(f"{GREEN}all required checks passed{RESET}\n")
+    return failures
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--app", required=True, type=Path)
+    parser.add_argument("--offline", action="store_true", help="skip the network navigation")
+    parser.add_argument("--json", type=Path, help="write the raw probe results here")
+    args = parser.parse_args()
+
+    app = args.app.resolve()
+    if not app.is_dir():
+        raise SystemExit(f"no app bundle at {app}")
+
+    print(f"app:     {app}")
+    print(f"version: {app_version(app)}")
+
+    started = time.perf_counter()
+    results = run_probe(app, args.offline)
+    results["_verified_utc"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    results["_app"] = str(app)
+    results["_app_version"] = app_version(app)
+    print(f"probe returned in {time.perf_counter() - started:.1f}s")
+
+    if "_error" in results:
+        raise SystemExit(results["_error"])
+
+    if args.json:
+        args.json.write_text(json.dumps(results, indent=2) + "\n", encoding="utf-8")
+        print(f"raw results: {args.json}")
+
+    return 1 if report(results, args.offline) else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

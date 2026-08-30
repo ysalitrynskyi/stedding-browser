@@ -1,0 +1,141 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Stedding build verification</title>
+<style>
+  body { font: 14px/1.5 -apple-system, system-ui, sans-serif; margin: 2rem; background: #111; color: #eee }
+  .ok { color: #6ee7a8 } .bad { color: #ff8a8a } .note { color: #9aa }
+  code { color: #cbd5e1 }
+</style>
+<body>
+<h1>Stedding build verification</h1>
+<div id="out">running…</div>
+<script>
+// Everything here runs in the browser under test. It reports a JSON result back to
+// the harness, which decides pass or fail. Deliberately dependency-free.
+
+const MEDIA_TIMEOUT_MS = 8000;
+
+function withTimeout(promise, ms, onTimeout) {
+  return Promise.race([
+    promise,
+    new Promise(resolve => setTimeout(() => resolve(onTimeout), ms)),
+  ]);
+}
+
+// --- WebGL ---------------------------------------------------------------
+// Creating a context proves very little; drivers hand back contexts that cannot
+// draw. So render a known colour and read the pixel back.
+function testWebGL(version) {
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = 32;
+  const gl = canvas.getContext(version === 2 ? 'webgl2' : 'webgl');
+  if (!gl) return { supported: false, reason: 'no context' };
+
+  const info = gl.getExtension('WEBGL_debug_renderer_info');
+  const detail = {
+    supported: true,
+    vendor: info ? gl.getParameter(info.UNMASKED_VENDOR_WEBGL) : gl.getParameter(gl.VENDOR),
+    renderer: info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER),
+    version: gl.getParameter(gl.VERSION),
+  };
+
+  gl.clearColor(0.2, 0.6, 0.4, 1.0);
+  gl.clear(gl.COLOR_BUFFER_BIT);
+  const px = new Uint8Array(4);
+  gl.readPixels(16, 16, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+  // Allow for colour-space conversion; we only care that it actually drew.
+  detail.rendered = Math.abs(px[0] - 51) < 24 && Math.abs(px[1] - 153) < 24 && Math.abs(px[2] - 102) < 24;
+  detail.pixel = [px[0], px[1], px[2], px[3]];
+  if (!detail.rendered) detail.reason = 'context created but did not render the expected colour';
+  return detail;
+}
+
+// --- video ---------------------------------------------------------------
+// Playing to a non-zero currentTime can be faked by a stalled element, so a frame
+// is drawn into a canvas and sampled: that only succeeds if a frame really decoded.
+function testVideo(url) {
+  return withTimeout(new Promise(resolve => {
+    const v = document.createElement('video');
+    v.muted = true; v.playsInline = true; v.preload = 'auto'; v.src = url;
+
+    v.addEventListener('error', () => {
+      const e = v.error;
+      resolve({ played: false, reason: e ? `MediaError ${e.code}: ${e.message || 'unsupported'}` : 'error' });
+    });
+
+    v.addEventListener('timeupdate', function onTime() {
+      if (v.currentTime <= 0) return;
+      v.removeEventListener('timeupdate', onTime);
+      let decoded = false, pixel = null;
+      try {
+        const c = document.createElement('canvas');
+        c.width = v.videoWidth || 16; c.height = v.videoHeight || 16;
+        const ctx = c.getContext('2d');
+        ctx.drawImage(v, 0, 0, c.width, c.height);
+        const d = ctx.getImageData(Math.floor(c.width / 2), Math.floor(c.height / 2), 1, 1).data;
+        pixel = [d[0], d[1], d[2]];
+        decoded = !(d[0] === 0 && d[1] === 0 && d[2] === 0);
+      } catch (err) {
+        resolve({ played: true, decoded: false, reason: 'drawImage failed: ' + err });
+        return;
+      }
+      resolve({
+        played: true, decoded, pixel,
+        size: [v.videoWidth, v.videoHeight],
+        duration: Number(v.duration.toFixed(2)),
+      });
+    });
+
+    v.play().catch(err => resolve({ played: false, reason: 'play() rejected: ' + err }));
+  }), MEDIA_TIMEOUT_MS, { played: false, reason: 'timed out' });
+}
+
+// canPlayType tells us what the build was compiled to support, which is a different
+// question from whether one particular file decodes.
+function codecMatrix() {
+  const v = document.createElement('video');
+  const a = document.createElement('audio');
+  const probe = (el, type) => el.canPlayType(type) || 'no';
+  return {
+    'webm; vp8': probe(v, 'video/webm; codecs="vp8"'),
+    'webm; vp9': probe(v, 'video/webm; codecs="vp9"'),
+    'mp4; av1': probe(v, 'video/mp4; codecs="av01.0.05M.08"'),
+    'mp4; h264': probe(v, 'video/mp4; codecs="avc1.42E01E"'),
+    'mp4; aac': probe(a, 'audio/mp4; codecs="mp4a.40.2"'),
+    'webm; opus': probe(a, 'audio/webm; codecs="opus"'),
+    'ogg; vorbis': probe(a, 'audio/ogg; codecs="vorbis"'),
+    'mpeg; mp3': probe(a, 'audio/mpeg'),
+  };
+}
+
+async function testNetwork() {
+  const url = document.body.dataset.networkUrl;
+  if (!url) return { skipped: true };
+  try {
+    const t0 = performance.now();
+    const res = await fetch(url, { mode: 'no-cors', cache: 'no-store' });
+    return { ok: true, ms: Math.round(performance.now() - t0), type: res.type };
+  } catch (err) {
+    return { ok: false, reason: String(err) };
+  }
+}
+
+(async function main() {
+  const results = {
+    userAgent: navigator.userAgent,
+    hardwareConcurrency: navigator.hardwareConcurrency,
+    webgl1: testWebGL(1),
+    webgl2: testWebGL(2),
+    codecs: codecMatrix(),
+    media: {},
+  };
+  for (const [name, file] of [['vp9', 'media/vp9.webm'], ['av1', 'media/av1.mp4'], ['h264_aac', 'media/h264-aac.mp4']]) {
+    results.media[name] = await testVideo(file);
+  }
+  results.network = await testNetwork();
+
+  document.getElementById('out').textContent = 'reporting results…';
+  await fetch('/results', { method: 'POST', body: JSON.stringify(results) });
+  document.getElementById('out').textContent = 'done';
+})();
+</script>

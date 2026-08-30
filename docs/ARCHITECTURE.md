@@ -11,18 +11,23 @@ ordered, documented patch series on top of it — the Brave/Helium model. The me
 success is boring rebases: when upstream ships a new stable, our patches apply with
 little or no manual work.
 
-### Repository layout (planned; docs/ is all that exists pre-M0)
+### Repository layout
 
 ```
-patches/          Ordered patch series: NNNN-short-slug.patch
-branding/         Icons, names, strings, installer assets that replace Chromium's
-tooling/          Scripts: fetch/sync wrappers, apply-patches, update-patches, build
-docs/             This documentation
+tooling/          Scripts: sync, build, patch series, checks, measurement   exists
+docs/             This documentation                                        exists
+patches/          Ordered patch series: NNNN-short-slug.patch               from M1
+branding/         Icons, names, strings, installer assets replacing Chromium's   from M1
 ```
+
+`patches/` and `branding/` are empty until the first branding patch at M1; the tooling
+that reads them (`tooling/apply-patches`, `tooling/update-patches`) already exists and
+treats an absent series as a valid, empty one.
 
 The Chromium source tree itself is never committed here. A pinned upstream version
-(exact commit/tag, recorded in a single versions file under `tooling/`) is fetched at
-build time. The pin is updated deliberately, never implicitly.
+(exact commit and tag, recorded in `tooling/chromium-version`) is fetched at build
+time. The pin is updated deliberately, never implicitly — see
+`decisions/0007-chromium-version-pin.md`.
 
 ### Patch discipline
 

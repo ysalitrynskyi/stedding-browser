@@ -55,9 +55,18 @@ Concretely (full detail in `docs/QUALITY.md`):
 
 ## State of the project
 
-Pre-code. The current phase is documentation and planning — this scaffold. The first
-engineering milestone (M0) is reproducing a vanilla Chromium build. See
-`docs/ROADMAP.md` for the milestone ladder and acceptance criteria.
+**M0 in progress** — reproducing a vanilla Chromium build on macOS arm64.
+
+Landed: the build tooling in `tooling/`, the upstream pin
+(`tooling/chromium-version`, policy in `docs/decisions/0007-chromium-version-pin.md`),
+repository hygiene checks and CI, and the performance measurement harness that
+`docs/QUALITY.md` calls for.
+
+Not yet done: the vanilla build itself has not been produced and verified, so M0's
+acceptance criteria are not met and there is nothing to install. Measured build times
+and sizes in `docs/ARCHITECTURE.md` are still TBD.
+
+See `docs/ROADMAP.md` for the milestone ladder and acceptance criteria.
 
 ## Map of the docs
 
@@ -93,7 +102,9 @@ engineering milestone (M0) is reproducing a vanilla Chromium build. See
 
 ## Current priorities (keep this list short and fresh)
 
-1. Complete and refine this documentation scaffold.
-2. M0: vanilla Chromium build reproduced on macOS, documented step-by-step in
-   `docs/ARCHITECTURE.md` (build section) so any machine/agent can repeat it.
-3. Branding patch-set: name, icons, user agent, default settings (M1).
+1. M0: produce and verify the vanilla Chromium build, then replace the TBD build
+   times and sizes in `docs/ARCHITECTURE.md` with measured numbers.
+2. M0: record the vanilla performance baselines with `tooling/measure/harness.py`.
+3. Branding patch-set: name, icons, user agent, default settings (M1). Needs a
+   decision on proprietary codecs (H.264/AAC) — a licensing question, not a
+   technical one.

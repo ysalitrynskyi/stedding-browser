@@ -18,7 +18,8 @@ CHROMIUM_ROOT="${CHROMIUM_ROOT:-$HOME/chromium}"
 CHROMIUM_SRC="${CHROMIUM_SRC:-$CHROMIUM_ROOT/src}"
 export STEDDING_ROOT DEPOT_TOOLS_DIR CHROMIUM_ROOT CHROMIUM_SRC
 
-# shellcheck source=./chromium-version
+# chromium-version is data, not code; shellcheck cannot resolve the runtime path.
+# shellcheck disable=SC1091
 . "$STEDDING_ROOT/tooling/chromium-version"
 export CHROMIUM_TAG CHROMIUM_MILESTONE CHROMIUM_COMMIT CHROMIUM_CHANNEL CHROMIUM_PIN_DATE
 

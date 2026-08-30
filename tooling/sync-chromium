@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# Materialise the Chromium source tree at the pinned version in tooling/chromium-version.
+#
+# Usage:
+#   tooling/sync-chromium                 # shallow checkout (default, smaller/faster)
+#   tooling/sync-chromium --full-history  # full git history (wanted for patch archaeology)
+#   tooling/sync-chromium --nohooks       # skip runhooks (toolchain/binary downloads)
+#
+# Idempotent: re-running moves an existing checkout to the pinned version.
+# The tree is created at $CHROMIUM_ROOT (default ~/chromium) — outside this repo.
+
+. "$(cd "$(dirname "$0")" && pwd)/lib.sh"
+
+require_macos_arm64
+add_depot_tools_to_path
+
+FULL_HISTORY=0
+RUN_HOOKS=1
+for arg in "$@"; do
+  case "$arg" in
+    --full-history) FULL_HISTORY=1 ;;
+    --nohooks)      RUN_HOOKS=0 ;;
+    -h|--help)      sed -n '2,12p' "$0"; exit 0 ;;
+    *)              die "unknown argument: $arg" ;;
+  esac
+done
+
+# Measured on macOS arm64 at 153.0.8010.12: see docs/ARCHITECTURE.md for the numbers.
+# The floor below covers checkout + dependencies + one release build with headroom.
+require_free_gb "$CHROMIUM_ROOT" 150
+
+HISTORY_ARGS=(--no-history)
+[ "$FULL_HISTORY" -eq 1 ] && HISTORY_ARGS=()
+
+log "pinned version: $CHROMIUM_TAG (M$CHROMIUM_MILESTONE, $CHROMIUM_CHANNEL, pinned $CHROMIUM_PIN_DATE)"
+log "checkout root:  $CHROMIUM_ROOT"
+
+mkdir -p "$CHROMIUM_ROOT"
+cd "$CHROMIUM_ROOT"
+
+# 1. Create the gclient solution if this is a fresh checkout.
+#    --unmanaged: gclient must not move src/ behind our back. We pin src ourselves
+#    with an explicit git checkout below, and gclient only resolves DEPS from it.
+if [ ! -f .gclient ]; then
+  log "creating gclient solution (unmanaged src)"
+  gclient config --name src --unmanaged \
+    https://chromium.googlesource.com/chromium/src.git
+fi
+
+# 2. Clone src if absent.
+if [ ! -d "$CHROMIUM_SRC/.git" ]; then
+  log "cloning chromium/src (this downloads several GB and takes a while)"
+  if [ "$FULL_HISTORY" -eq 1 ]; then
+    git clone https://chromium.googlesource.com/chromium/src.git "$CHROMIUM_SRC"
+  else
+    git clone --filter=blob:none --no-checkout \
+      https://chromium.googlesource.com/chromium/src.git "$CHROMIUM_SRC"
+  fi
+fi
+
+# 3. Move src to the pinned tag.
+log "checking out src at tag $CHROMIUM_TAG"
+git -C "$CHROMIUM_SRC" fetch --tags origin "refs/tags/$CHROMIUM_TAG:refs/tags/$CHROMIUM_TAG" \
+  || git -C "$CHROMIUM_SRC" fetch --tags origin
+git -C "$CHROMIUM_SRC" checkout -f "refs/tags/$CHROMIUM_TAG"
+
+actual_commit="$(git -C "$CHROMIUM_SRC" rev-parse HEAD)"
+if [ "$actual_commit" != "$CHROMIUM_COMMIT" ]; then
+  warn "tag $CHROMIUM_TAG resolves to $actual_commit, but tooling/chromium-version"
+  warn "records CHROMIUM_COMMIT=$CHROMIUM_COMMIT. Upstream tags are immutable, so this"
+  warn "means the recorded commit is wrong. Fix tooling/chromium-version."
+fi
+log "src at $actual_commit"
+
+# 4. Resolve DEPS. This is the long pole: tens of GB of dependencies.
+log "gclient sync (dependencies for $CHROMIUM_TAG)"
+SYNC_ARGS=(--force --reset --delete_unversioned_trees --with_tags "${HISTORY_ARGS[@]}")
+[ "$RUN_HOOKS" -eq 0 ] && SYNC_ARGS+=(--nohooks)
+gclient sync "${SYNC_ARGS[@]}"
+
+if [ "$RUN_HOOKS" -eq 1 ]; then
+  log "gclient runhooks"
+  gclient runhooks
+fi
+
+log "checkout complete"
+log "src:  $CHROMIUM_SRC @ $CHROMIUM_TAG ($actual_commit)"
+log "size: $(du -sh "$CHROMIUM_ROOT" 2>/dev/null | cut -f1)"
+log "next: tooling/build-chromium"

@@ -56,34 +56,133 @@ patch should first be redesigned to not require one; if it truly does, that is a
 
 ## Build system
 
-Chromium builds with Google's standard toolchain: `depot_tools` (provides `fetch`,
-`gclient`, `gn`, `autoninja`), a `gclient sync` to materialize the source and
-dependencies at the pinned version, `gn gen` with our args, and an
-`autoninja -C out/<dir> chrome` build. Recent Chromium routes `autoninja` through
-**Siso** by default; whether we build with Siso or classic Ninja, and whether
-`cc_wrapper=ccache` measurably helps on macOS, is settled empirically at M0 and
-recorded here. Google's remote execution backends (reclient/RBE) are not available to
-us; any distributed-build setup would be our own infrastructure and is out of scope
-until builds become the bottleneck.
+Chromium builds with Google's standard toolchain: `depot_tools` (which supplies
+`gclient`, `gn`, `autoninja`, and a pinned Python), a `gclient sync` to materialise the
+source and its dependencies, `gn gen` with our args, and `autoninja` to build. Google's
+remote execution backends (RBE/reclient) are not available to us, so every build is
+local; `use_remoteexec = false` is set in all of our gn args files.
 
-Honest resource reality, to be replaced with measured numbers at M0:
+Everything below is driven by scripts in `tooling/`, so that the documented procedure
+and the executed procedure cannot drift apart. Running the commands by hand is a
+supported fallback, not the normal path.
 
-- Disk: roughly 100+ GB for checkout plus build output (exact: TBD).
-- First build: multiple hours on a fast machine (exact: TBD).
-- Incremental builds after small patches: minutes, not hours (exact: TBD).
+### Layout
 
-**M0 goal:** a documented, repeatable **vanilla Chromium build on macOS (arm64)** —
-no patches, just upstream at the pin. The exact command sequence, gn args, versions,
-and measured times get recorded in this file when M0 completes. Until a fresh agent or
-contributor can reproduce the build from this doc alone, M0 is not done.
+The Chromium tree lives **outside** this repository and is never committed here.
 
-Build sequence to be filled in at M0:
+| Path | Default | Override |
+|---|---|---|
+| This repository | wherever you cloned it | `$STEDDING_ROOT` |
+| depot_tools | `~/depot_tools` | `$DEPOT_TOOLS_DIR` |
+| gclient checkout root | `~/chromium` | `$CHROMIUM_ROOT` |
+| Chromium source | `~/chromium/src` | `$CHROMIUM_SRC` |
 
+### The pinned version
+
+`tooling/chromium-version` is the single source of truth for what upstream version we
+build. It is read by every script. A version number written anywhere else is a bug.
+Policy for moving the pin: `decisions/0007-chromium-version-pin.md`.
+
+### Prerequisites (macOS arm64)
+
+- **Full Xcode** — not just the Command Line Tools. `xcode-select -p` must point inside
+  `Xcode.app`; the licence must be accepted (`sudo xcodebuild -license accept`).
+- **Command Line Tools** installed alongside it.
+- **Python 3** and **git** on `PATH` (depot_tools brings its own copies of both for the
+  build itself, but the bootstrap needs a system pair).
+- **Disk:** `tooling/sync-chromium` refuses to start below 150 GB free on the volume
+  holding `$CHROMIUM_ROOT`. Measured usage: TBD at M0 completion.
+- **RAM:** 16 GB is the practical floor; linking is the memory-hungry step.
+
+`tooling/bootstrap-depot-tools` checks all of the above and fails with the exact
+remedy rather than a build error hours later.
+
+### Reference hardware
+
+Measurements in this document were taken on:
+
+| | |
+|---|---|
+| Machine | Apple M1 Max, 10 cores, 64 GB RAM |
+| OS | macOS 26.5.2, arm64 |
+| Xcode | 26.5 (17F42) |
+| Command Line Tools | 26.6.0.0.1781586589 |
+| depot_tools | `f70835271105ca56d2cd5382a0118152bc2bdeea` (2026-08-27) |
+| Chromium | `153.0.8010.12` (M153 stable) |
+
+### The build, end to end
+
+```bash
+# 1. Install depot_tools and verify the host toolchain. Idempotent.
+tooling/bootstrap-depot-tools
+
+# 2. Check out Chromium at the pinned version and resolve its dependencies.
+#    Long: downloads tens of GB. Safe to re-run; moves an existing tree to the pin.
+tooling/sync-chromium
+
+# 3. Build. Config is one of release (default), debug, official.
+tooling/build-chromium release
+
+# 4. Run it.
+open ~/chromium/out/release/Chromium.app
 ```
-# TBD at M0 — recorded verbatim once verified:
-# depot_tools install, fetch/gclient config, pinned version checkout,
-# gn args (release + debug variants), autoninja invocation, app bundle location.
-```
+
+`tooling/build-chromium` copies `tooling/args/<config>.gn` verbatim into the output
+directory as `args.gn`, so the configuration of any build is recoverable from the build
+itself. It also refuses to build a tree that is not sitting on the pin — a binary whose
+provenance is unclear is worse than no binary.
+
+### Build configurations
+
+| Config | Purpose | Notes |
+|---|---|---|
+| `release` | Day-to-day development | Optimised, no symbols, single binary. **Never quote performance numbers from this config.** |
+| `debug` | Debugging Chromium and our patches | Component build: one target relinks a small library, not the browser. |
+| `official` | Anything a user or benchmark sees | `is_official_build` — PGO with upstream's profile for the pin, plus ThinLTO. Slow, memory-hungry link. |
+
+The full args, with the reasoning for each, are in `tooling/args/`.
+
+`autoninja` selects Chromium's build executor. Which one it resolves to on this
+configuration, and whether `cc_wrapper=ccache` measurably helps on macOS, is recorded
+below once measured.
+
+### Codecs
+
+The M0 build is vanilla: upstream defaults, which means `ffmpeg_branding = "Chromium"`
+and no proprietary codecs. Video plays via VP8/VP9/AV1/Opus, so WebM and YouTube work,
+but H.264 and AAC do not. Shipping a browser without H.264 is not viable for a real
+product, and enabling it carries patent-licensing consequences rather than merely
+technical ones. That decision is deliberately not made here — it belongs to M1, with
+an ADR, and it needs a human to weigh the licensing position.
+
+### Measured results
+
+Filled in when M0 completes. Nothing here is an estimate.
+
+| | |
+|---|---|
+| `gclient sync` wall time | TBD |
+| Checkout size after sync | TBD |
+| `gn gen` wall time | TBD |
+| First `release` build wall time | TBD |
+| `out/release` size | TBD |
+| `Chromium.app` size | TBD |
+| Incremental build, one `.cc` touched | TBD |
+| First `official` build wall time | TBD |
+| Peak disk during a release build | TBD |
+
+### Known failure modes
+
+Recorded as they are actually hit, not imagined.
+
+- **`gclient` appears to hang for minutes with no output on a fresh machine.** It is
+  bootstrapping `cipd` and `vpython`, which download a Python distribution and wheels
+  before any Chromium code is fetched. First run only.
+- **`cipd` retries with `dial tcp [2607:f8b0:...]:443: connect: bad file descriptor`
+  or `i/o timeout`.** Google's infrastructure advertises AAAA records; on a host with
+  degraded IPv6 reachability the client burns through a 1s→2s→4s→8s→16s backoff before
+  falling back to IPv4. It does succeed. Observed on the reference machine; it makes
+  the first sync noticeably slower and looks exactly like a hang.
 
 ## De-Googling stance
 

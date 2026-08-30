@@ -72,6 +72,34 @@ require_free_gb() {
   log "disk check: ${have} GB free on the volume holding $path (need ${need} GB)"
 }
 
+# Chromium's TypeScript build resolves modules the way node does: by walking up
+# parent directories looking for node_modules. A stray node_modules ABOVE the
+# checkout therefore leaks its @types into the build, and ts_library.py fails with
+# "Undeclared dependencies to definition files" naming packages nobody asked for.
+#
+# The failure arrives after the whole checkout has been made and several minutes into
+# a build, and names the packages rather than the cause, so it is checked here instead.
+require_no_ancestor_node_modules() {
+  local path="$1" dir found=""
+  dir="$(cd "$path" 2>/dev/null && pwd || echo "$path")"
+  while [ "$dir" != "/" ] && [ -n "$dir" ]; do
+    dir="$(dirname "$dir")"
+    [ -e "$dir/node_modules" ] && found="$dir/node_modules"
+  done
+  [ -z "$found" ] && return 0
+  die "found $found
+
+     Chromium's TypeScript build walks up parent directories looking for
+     node_modules, so this directory's @types leak into the build and it fails
+     with 'Undeclared dependencies to definition files'.
+
+     Put the checkout somewhere with no node_modules in any ancestor directory:
+
+         CHROMIUM_ROOT=/Users/Shared/chromium tooling/sync-chromium
+
+     Deleting the offending node_modules also works, but it is not ours to delete."
+}
+
 require_macos_arm64() {
   [ "$(uname -s)" = "Darwin" ] || die "this script currently supports macOS only (got $(uname -s))"
   [ "$(uname -m)" = "arm64" ]  || die "this script currently supports arm64 only (got $(uname -m))"

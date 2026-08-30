@@ -30,7 +30,7 @@ This is a small project without a dedicated security team. Honestly stated:
 The project is **pre-release: there are no shipped binaries yet**. Until the first
 release, the realistic scope is:
 
-- The contents of this repository (documentation, and later build scripts and the
+- The contents of this repository (documentation, build tooling, and later the
   patch series).
 - The project's release and supply-chain setup as it comes into existence
   (CI, signing, update mechanism).

@@ -18,13 +18,17 @@ using the web without surveillance or vendor control. See `docs/NAMING.md`.
 
 ## Status
 
-**Pre-code planning phase.** There is nothing to download or build yet. The repository
-currently contains the project's documentation: vision, product spec, architecture,
-roadmap, and decision records. The first engineering milestone (M0) is reproducing a
-vanilla Chromium build on macOS. See `docs/ROADMAP.md` for the milestone ladder.
+**M0 in progress — nothing installable yet.** The repository holds the project's
+documentation and the build tooling in `tooling/`: scripts that check out Chromium at
+a pinned version, build it, verify the result, and measure it. What does not exist yet
+is a browser you can download.
+
+The first engineering milestone (M0) is reproducing a vanilla Chromium build on macOS
+and documenting it well enough that anyone can repeat it. See `docs/ROADMAP.md` for
+the milestone ladder and `docs/ARCHITECTURE.md` for the build.
 
 If you are evaluating browsers to use today, this is not one yet. If you want to
-follow or shape the design before code lands, this is the right time.
+follow or shape the design before the product exists, this is the right time.
 
 ## Planned features
 

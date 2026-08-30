@@ -1,8 +1,9 @@
 # Contributing to Stedding Browser
 
-Thanks for your interest. The project is in a **pre-code planning phase**
-(see [README.md](README.md) and [docs/ROADMAP.md](docs/ROADMAP.md)), which shapes
-what kinds of contributions are useful right now.
+Thanks for your interest. The project is at **milestone M0** — there is build
+tooling but no installable browser yet (see [README.md](README.md) and
+[docs/ROADMAP.md](docs/ROADMAP.md)). That shapes what kinds of contributions are
+useful right now.
 
 ## What helps now
 
@@ -16,12 +17,19 @@ what kinds of contributions are useful right now.
 - **Design input.** The feature spec (`docs/PRODUCT.md`) and privacy defaults
   (`docs/PRIVACY.md`) are living documents until code freezes them into behavior.
 
+- **Build tooling.** `tooling/` exists and is exercised on macOS arm64 only. Fixes
+  to the scripts, and reports of what breaks on a machine unlike the reference one,
+  are useful now. Run `tooling/check-repo` and `shellcheck -x tooling/*` before
+  opening a PR; CI runs both. Note that macOS ships bash 3.2, so the scripts must
+  work there.
+
 ## What comes later
 
-**Code contributions become meaningful at milestone M0** (reproducing a vanilla
-Chromium build — see `docs/ROADMAP.md`). Until the build scaffold and patch series
-exist, there is no code to contribute to. Once M0 lands, this file will grow build
-instructions, patch conventions, and a review process.
+**Browser code contributions become meaningful once M0 lands** — that is, once the
+vanilla Chromium build is verified and the patch series has somewhere to sit. The
+patch workflow (`tooling/apply-patches`, `tooling/update-patches`) is already built
+and documented in [tooling/README.md](tooling/README.md); it simply has an empty
+series so far. The first patches arrive with branding at M1.
 
 ## Ground rules
 

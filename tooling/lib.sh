@@ -82,6 +82,8 @@ require_free_gb() {
 require_no_ancestor_node_modules() {
   local path="$1" dir found=""
   dir="$(cd "$path" 2>/dev/null && pwd || echo "$path")"
+  # The checkout root counts too: node resolution starts there, not at its parent.
+  [ -e "$dir/node_modules" ] && found="$dir/node_modules"
   while [ "$dir" != "/" ] && [ -n "$dir" ]; do
     dir="$(dirname "$dir")"
     [ -e "$dir/node_modules" ] && found="$dir/node_modules"

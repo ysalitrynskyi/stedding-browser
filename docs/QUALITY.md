@@ -34,9 +34,17 @@ The measurement harness is `tooling/measure/harness.py` and the ten-site list is
 `tooling/measure/sites.txt`, so anyone can reproduce the numbers:
 
 ```bash
-tooling/measure/harness.py all --app /path/to/Chromium.app --out vanilla.json
-tooling/measure/harness.py all --app /path/to/Stedding.app --out stedding.json
+tooling/measure/harness.py all --app ~/chromium/src/out/official/Chromium.app --out vanilla.json
+tooling/measure/harness.py all --app /Applications/Stedding.app            --out stedding.json
 ```
+
+Two practical notes before running it. Measure the **`official`** build, not `release`:
+the release configuration skips PGO and LTO, so numbers from it describe a browser
+nobody ships. And a full run takes tens of minutes and needs working network — ten cold
+launches, ten warm, and five memory runs that each load the ten live sites in
+`tooling/measure/sites.txt` and idle for a minute. There is no offline mode; without
+network the memory and warm legs fail, and the harness will tell you so rather than
+publish a median over whatever survived.
 
 Two things about the harness are worth knowing before quoting anything it prints.
 It measures launch to **first painted frame** of a trivial local page — the browser

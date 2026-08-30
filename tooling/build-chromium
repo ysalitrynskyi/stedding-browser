@@ -28,6 +28,11 @@ ARGS_FILE="$STEDDING_ROOT/tooling/args/$CONFIG.gn"
 [ -d "$CHROMIUM_SRC" ] || die "no checkout at $CHROMIUM_SRC — run tooling/sync-chromium"
 require_no_ancestor_node_modules "$CHROMIUM_ROOT"
 
+# The sync-time floor covered the checkout. A build writes tens of GB more, and
+# running the volume dry three hours in wastes the whole run. Measured output sizes
+# are in docs/ARCHITECTURE.md.
+require_free_gb "$CHROMIUM_ROOT" 60
+
 OUT_DIR="out/$CONFIG"
 ABS_OUT="$CHROMIUM_SRC/$OUT_DIR"
 
@@ -66,6 +71,24 @@ log "out:     $ABS_OUT"
 log "targets: ${TARGETS[*]}"
 
 mkdir -p "$ABS_OUT"
+
+# Two builds in one output directory corrupt each other: the second `gn gen` rewrites
+# the ninja files under the first one's feet. Hold a lock naming the owning process,
+# and treat a lock whose process is gone as stale rather than as a permanent block.
+LOCK="$ABS_OUT/.stedding-build.lock"
+if [ -f "$LOCK" ]; then
+  other="$(cat "$LOCK" 2>/dev/null || echo)"
+  if [ -n "$other" ] && kill -0 "$other" 2>/dev/null; then
+    die "a build is already running in $ABS_OUT (pid $other).
+     Wait for it, or stop it with: kill $other"
+  fi
+  warn "removing a stale lock from pid ${other:-unknown}"
+  rm -f "$LOCK"
+fi
+echo $$ > "$LOCK"
+# shellcheck disable=SC2064  # expand $LOCK now, not at trap time
+trap "rm -f '$LOCK'" EXIT
+
 cp "$ARGS_FILE" "$ABS_OUT/args.gn"
 
 log "gn gen"

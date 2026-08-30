@@ -14,6 +14,21 @@
 set -euo pipefail
 
 STEDDING_ROOT="${STEDDING_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+
+# A checkout that is not in the default location has to stay found. Requiring
+# CHROMIUM_ROOT=... on the front of every command is a trap: sync-chromium would use
+# the override and build-chromium, run without it, would look somewhere else entirely
+# and report that there is no checkout. So the first successful sync records the
+# location here, and every later command picks it up.
+#
+# Precedence: environment beats the recorded value, which beats the default.
+# The file is local state, not configuration to be committed.
+STEDDING_LOCAL="$STEDDING_ROOT/.stedding-local"
+if [ -z "${CHROMIUM_ROOT:-}" ] && [ -f "$STEDDING_LOCAL" ]; then
+  # shellcheck disable=SC1090
+  . "$STEDDING_LOCAL"
+fi
+
 DEPOT_TOOLS_DIR="${DEPOT_TOOLS_DIR:-$HOME/depot_tools}"
 CHROMIUM_ROOT="${CHROMIUM_ROOT:-$HOME/chromium}"
 CHROMIUM_SRC="${CHROMIUM_SRC:-$CHROMIUM_ROOT/src}"
@@ -100,6 +115,19 @@ require_no_ancestor_node_modules() {
          CHROMIUM_ROOT=/Users/Shared/chromium tooling/sync-chromium
 
      Deleting the offending node_modules also works, but it is not ours to delete."
+}
+
+# Record where the checkout actually lives, so later commands do not need the override.
+remember_chromium_root() {
+  local target="$STEDDING_ROOT/.stedding-local"
+  [ "$CHROMIUM_ROOT" = "$HOME/chromium" ] && { rm -f "$target"; return 0; }
+  cat > "$target" <<EOF
+# Written by tooling/sync-chromium. Local state, not committed.
+# Delete this file to go back to the default (~/chromium).
+CHROMIUM_ROOT=$CHROMIUM_ROOT
+EOF
+  log "recorded CHROMIUM_ROOT=$CHROMIUM_ROOT in .stedding-local"
+  log "later commands will find the checkout without the override"
 }
 
 require_macos_arm64() {

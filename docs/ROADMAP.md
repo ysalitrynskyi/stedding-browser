@@ -27,8 +27,8 @@ Scope:
 - Document every step — prerequisites, disk/RAM requirements, full command sequence,
   expected build time range on reference hardware, and known failure modes — in the
   build section of `docs/ARCHITECTURE.md`.
-- Verify the result with `tooling/verify-build`, which is what checks the "launches,
-  browses, plays video and WebGL" criterion below.
+- Verify the result with `tooling/verify-build --app <path to the built Chromium.app>`,
+  which is what checks the "launches, browses, plays video and WebGL" criterion below.
 - Record the vanilla performance baselines defined in `docs/QUALITY.md` with
   `tooling/measure/harness.py`. These are the *vanilla* numbers; they become the
   baseline proper at M1, when Stedding is measured against them at the same pin.

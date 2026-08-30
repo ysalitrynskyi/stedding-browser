@@ -28,8 +28,26 @@ on each new platform (M8, M9).
 | Command bar open | Shortcut press to bar rendered and accepting input, median of 20 | ≤ 100 ms absolute |
 | Page load / rendering | Identical to vanilla | No measurable regression: we do not patch the rendering or network path |
 
-The measurement scripts and site list will be committed to the repo together with the
-M1 baselines, so anyone can reproduce the numbers. A budget miss is a release blocker; either the regression is fixed or the
+The measurement harness is `tooling/measure/harness.py` and the ten-site list is
+`tooling/measure/sites.txt`, so anyone can reproduce the numbers:
+
+```bash
+tooling/measure/harness.py all --app /path/to/Chromium.app --out vanilla.json
+tooling/measure/harness.py all --app /path/to/Stedding.app --out stedding.json
+```
+
+Two things about the harness are worth knowing before quoting anything it prints.
+It measures launch to **first painted frame** of a trivial local page — the browser
+cannot accept input into a page it has not painted, which is the operational reading
+of "launch to first accepted input". And it discards one warmup launch: the very first
+run of a binary also pays to fault the executable into the OS page cache, a cost paid
+once per machine rather than once per browser start, and large enough to swamp the
+overhead the budgets are trying to detect.
+
+Metrics that depend on features not yet built (sidebar tab switching, command bar) are
+absent from the harness rather than stubbed, and are added with the feature.
+
+A budget miss is a release blocker; either the regression is fixed or the
 budget is changed by ADR with the reasoning on record.
 
 ## Stability

@@ -1,0 +1,50 @@
+# Contributing to Stedding Browser
+
+Thanks for your interest. The project is in a **pre-code planning phase**
+(see [README.md](README.md) and [docs/ROADMAP.md](docs/ROADMAP.md)), which shapes
+what kinds of contributions are useful right now.
+
+## What helps now
+
+- **Discussions and issues.** Questions, critiques of the plan, prior art we missed,
+  Chromium fork experience, packaging and signing knowledge — open a GitHub issue or
+  discussion. Disagreement with a documented decision is welcome; argue against the
+  reasoning in the relevant ADR.
+- **Documentation PRs.** Fixes and improvements to anything in `docs/`, this file, or
+  the README: factual errors, unclear wording, broken links, missing considerations.
+  Small focused PRs are easiest to review.
+- **Design input.** The feature spec (`docs/PRODUCT.md`) and privacy defaults
+  (`docs/PRIVACY.md`) are living documents until code freezes them into behavior.
+
+## What comes later
+
+**Code contributions become meaningful at milestone M0** (reproducing a vanilla
+Chromium build — see `docs/ROADMAP.md`). Until the build scaffold and patch series
+exist, there is no code to contribute to. Once M0 lands, this file will grow build
+instructions, patch conventions, and a review process.
+
+## Ground rules
+
+- **Decisions go through ADRs.** Anything hard to reverse — dependencies, base
+  version policy, licensing, naming — is recorded in `docs/decisions/NNNN-slug.md`
+  before or with the change. If your proposal alters a recorded decision, the PR
+  should update or supersede the ADR, not silently contradict it.
+- **English.** All docs, code comments, commit messages, and issues are written in
+  plain, correct English.
+- **No fabrication.** No invented benchmarks, dates, user counts, or claims in any
+  document. Unknown numbers are marked `TBD`.
+- **This repo is public.** Never commit secrets, machine-specific paths, or personal
+  operational data.
+
+## Commit style
+
+- Conventional, imperative subject line: `docs: clarify M0 acceptance criteria`,
+  `fix: correct link to PRIVACY.md`.
+- Keep the subject under about 72 characters.
+- Add a body when the *why* is not obvious from the diff.
+
+## License and CLA
+
+There is **no CLA**. By contributing you agree that your contributions are licensed
+under the project's [BSD-3-Clause license](LICENSE), the same terms as the rest of
+the repository.

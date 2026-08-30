@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+# Apply the Stedding patch series onto the pinned Chromium checkout.
+#
+# Usage:
+#   tooling/apply-patches            # reset to the pin, then apply the whole series
+#   tooling/apply-patches --check    # verify the series applies; leave the tree as found
+#
+# docs/ARCHITECTURE.md: "Applying patches by hand is a bug in the tooling." This is
+# the only supported way to get a patched tree.
+#
+# The series is applied as real commits on a working branch, so that:
+#   * a conflict stops at the offending patch and names it,
+#   * tooling/update-patches can regenerate the series from the same branch,
+#   * `git log` on the branch is the patch series.
+
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=./lib.sh
+. "$(cd "$(dirname "$0")" && pwd)/lib.sh"
+
+add_depot_tools_to_path
+
+CHECK_ONLY=0
+for arg in "$@"; do
+  case "$arg" in
+    --check)   CHECK_ONLY=1 ;;
+    -h|--help) sed -n '2,8p' "$0"; exit 0 ;;
+    *)         die "unknown argument: $arg" ;;
+  esac
+done
+
+PATCH_DIR="$STEDDING_ROOT/patches"
+WORK_BRANCH="stedding-work"
+
+[ -d "$CHROMIUM_SRC/.git" ] || die "no checkout at $CHROMIUM_SRC — run tooling/sync-chromium"
+
+cd "$CHROMIUM_SRC" || die "cannot enter $CHROMIUM_SRC"
+
+git rev-parse -q --verify "refs/tags/$CHROMIUM_TAG" >/dev/null \
+  || die "pin $CHROMIUM_TAG is not in the checkout — run tooling/sync-chromium"
+
+mapfile -t PATCHES < <(find "$PATCH_DIR" -maxdepth 1 -name '[0-9][0-9][0-9][0-9]-*.patch' 2>/dev/null | sort)
+
+if [ "${#PATCHES[@]}" -eq 0 ]; then
+  log "no patches in $PATCH_DIR — a vanilla tree is the whole series"
+  [ "$CHECK_ONLY" -eq 1 ] && exit 0
+fi
+
+if [ "$CHECK_ONLY" -eq 1 ]; then
+  # Dry run against the pin without touching the working tree or current branch.
+  log "checking ${#PATCHES[@]} patch(es) against $CHROMIUM_TAG"
+  failed=0
+  for p in "${PATCHES[@]}"; do
+    if git apply --check --3way "$p" 2>/dev/null; then
+      printf '  ok   %s\n' "$(basename "$p")"
+    else
+      printf '  FAIL %s\n' "$(basename "$p")"
+      failed=$(( failed + 1 ))
+    fi
+  done
+  [ "$failed" -eq 0 ] || die "$failed patch(es) do not apply cleanly"
+  log "series applies cleanly"
+  exit 0
+fi
+
+if ! git diff-index --quiet HEAD -- 2>/dev/null; then
+  die "working tree at $CHROMIUM_SRC has uncommitted changes. Commit them onto
+     $WORK_BRANCH and run tooling/update-patches, or discard them, before re-applying."
+fi
+
+log "resetting to $CHROMIUM_TAG on branch $WORK_BRANCH"
+git checkout -q --detach "refs/tags/$CHROMIUM_TAG"
+git branch -qD "$WORK_BRANCH" 2>/dev/null || true
+git checkout -q -b "$WORK_BRANCH"
+
+for p in "${PATCHES[@]}"; do
+  name="$(basename "$p")"
+  log "applying $name"
+  if ! git am --3way --keep-non-patch "$p"; then
+    git am --abort 2>/dev/null || true
+    die "patch $name does not apply to $CHROMIUM_TAG.
+     Fix the patch, not the tree: re-apply the series up to the previous patch, make
+     the change as a commit, then run tooling/update-patches."
+  fi
+done
+
+log "applied ${#PATCHES[@]} patch(es) onto $CHROMIUM_TAG"
+log "branch: $WORK_BRANCH at $(git rev-parse --short HEAD)"

@@ -23,7 +23,7 @@ on each new platform (M8, M9).
 |---|---|---|
 | Cold startup to usable window | Median of 10 runs, fresh profile, timed launch to first accepted input | ≤ 10% overhead |
 | Warm startup | Median of 10 runs, existing profile with 10 restored tabs | ≤ 10% overhead |
-| Memory, 10-tab session | RSS across all browser processes after loading a fixed 10-site list and idling 60 s, median of 5 runs | ≤ 10% overhead |
+| Memory, 10-tab session | Physical footprint summed over the browser process tree after loading the fixed 10-site list and idling 60 s, median of 5 runs | ≤ 10% overhead |
 | Input latency, tab switch via sidebar | Keypress/click to target tab painted, median of 20 switches | ≤ 16 ms added over vanilla tab-strip switch |
 | Command bar open | Shortcut press to bar rendered and accepting input, median of 20 | ≤ 100 ms absolute |
 | Page load / rendering | Identical to vanilla | No measurable regression: we do not patch the rendering or network path |
@@ -43,6 +43,19 @@ of "launch to first accepted input". And it discards one warmup launch: the very
 run of a binary also pays to fault the executable into the OS page cache, a cost paid
 once per machine rather than once per browser start, and large enough to swamp the
 overhead the budgets are trying to detect.
+
+Memory is summed **physical footprint**, not RSS. macOS reports several memory numbers
+that disagree by a factor of three: summing `ps` RSS counts every shared page once per
+process, which on a three-tab session measured 9599 MB against a real cost of 3104 MB.
+Physical footprint is what Activity Monitor reports, and the harness reads it via
+`proc_pid_rusage`, which agrees with `vmmap --summary` exactly. It is summed over the
+launched process and its descendants — not over every process running from the app
+bundle, which on a machine where anything else is driving a copy of the same browser
+silently counts that too.
+
+Expect a three-figure process count: with site isolation, an ad-heavy news page alone
+contributes a process per cross-origin iframe. The harness reports the count alongside
+the total, because a count that moves between two builds is itself a finding.
 
 Metrics that depend on features not yet built (sidebar tab switching, command bar) are
 absent from the harness rather than stubbed, and are added with the feature.

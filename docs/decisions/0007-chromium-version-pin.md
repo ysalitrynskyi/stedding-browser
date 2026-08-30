@@ -19,8 +19,10 @@ vulnerabilities.
 ## Decision
 
 **Pin to the newest version on the Chromium stable channel for our platforms**, held
-in exactly one place: `tooling/chromium-version`. Every script, document, and build
-reads the pin from that file; a version number written anywhere else is a bug.
+in exactly one place: `tooling/chromium-version`. Every script and build reads the pin
+from that file, and `tooling/check-repo version` fails if any non-documentation file
+hard-codes a version. Prose may quote the current pin where it aids the reader; code
+and configuration may not, because those are what silently go stale.
 
 - The initial pin is `153.0.8010.12` (M153).
 - Security point releases move the pin on the timetable in `../QUALITY.md` (7 days

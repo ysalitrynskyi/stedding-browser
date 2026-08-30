@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# Repair a Chromium checkout whose git metadata points at a path that no longer exists.
+#
+# Usage: tooling/repair-checkout [--check]
+#
+# gclient clones every dependency from the git cache and records the cache location as
+# an ABSOLUTE path — in each dependency's .git/objects/info/alternates and .git/config.
+# Move or rename the checkout and all of those go stale at once. Git then reports
+# "unable to normalize alternate object path" and "fatal: bad object HEAD", while the
+# build mostly carries on, because the working trees still hold real files. That is the
+# dangerous part: version stamping silently gets it wrong rather than stopping.
+#
+# This rewrites those paths to the current $GIT_CACHE_PATH. It only ever touches git
+# metadata; source files are never modified.
+
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=./lib.sh
+. "$(cd "$(dirname "$0")" && pwd)/lib.sh"
+
+CHECK_ONLY=0
+for arg in "$@"; do
+  case "$arg" in
+    --check)   CHECK_ONLY=1 ;;
+    -h|--help) sed -n '2,14p' "$0"; exit 0 ;;
+    *)         die "unknown argument: $arg" ;;
+  esac
+done
+
+[ -d "$CHROMIUM_SRC/.git" ] || die "no checkout at $CHROMIUM_SRC"
+
+cd "$CHROMIUM_SRC" || die "cannot enter $CHROMIUM_SRC"
+
+log "checkout:  $CHROMIUM_SRC"
+log "git cache: $GIT_CACHE_PATH"
+
+# bash 3.2 is what macOS ships, so no mapfile.
+metadata=()
+while IFS= read -r f; do
+  metadata+=("$f")
+done < <(find . -path '*/.git/objects/info/alternates' -o -path '*/.git/config' 2>/dev/null)
+log "${#metadata[@]} git metadata file(s) to inspect"
+
+# A stale entry is any .git-cache path that is not the cache we are actually using.
+stale=()
+for f in "${metadata[@]}"; do
+  while IFS= read -r hit; do
+    case "$hit" in
+      "$GIT_CACHE_PATH"*) ;;              # already correct
+      *) stale+=("$f"); break ;;
+    esac
+  done < <(grep -oE '(/[^[:space:]:=]*)?\.git-cache[^[:space:]]*' "$f" 2>/dev/null)
+done
+
+if [ "${#stale[@]}" -eq 0 ]; then
+  log "no stale cache paths"
+  exit 0
+fi
+
+warn "${#stale[@]} file(s) reference a git cache other than $GIT_CACHE_PATH"
+if [ "$CHECK_ONLY" -eq 1 ]; then
+  printf '  %s\n' "${stale[@]:0:10}" >&2
+  [ "${#stale[@]}" -gt 10 ] && printf '  ... and %d more\n' "$(( ${#stale[@]} - 10 ))" >&2
+  die "run tooling/repair-checkout to rewrite them"
+fi
+
+for f in "${stale[@]}"; do
+  # Replace any absolute path ending in .git-cache with the current one, in place.
+  perl -pi -e 's{/[^\s:=]*?\.git-cache}{'"$GIT_CACHE_PATH"'}g' "$f"
+done
+log "rewrote ${#stale[@]} file(s)"
+
+# Prove it worked rather than assuming: a dependency must resolve its own HEAD.
+for probe in v8 third_party/angle third_party/skia; do
+  if [ -d "$probe/.git" ]; then
+    if sha="$(git -C "$probe" rev-parse HEAD 2>/dev/null)"; then
+      log "$probe HEAD $sha"
+    else
+      die "$probe still cannot resolve HEAD; the checkout needs a full gclient sync"
+    fi
+  fi
+done
+log "repair complete"

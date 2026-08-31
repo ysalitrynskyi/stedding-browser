@@ -251,7 +251,9 @@ Nothing here is an estimate; anything not yet measured says so.
 | `out/release` size | 9.3 GB |
 | `Chromium.app` size | 530 MB |
 | Incremental build, one `.cc` touched | TBD |
-| First `official` build wall time | TBD |
+| First `official` build wall time | **4 h 5 min** |
+| `official` `Chromium.app` size | 334 MB (against 530 MB for `release` — official is stripped) |
+| `official` output size | 13 GB |
 
 The 150 GB floor `sync-chromium` enforces is not arbitrary: the checkout alone is
 65 GB, a release build adds 9.3 GB, and an official build adds more on top of that,
@@ -361,6 +363,32 @@ Recorded as they were actually hit on the reference machine, not imagined.
   Anything above the compilers at a lower `ni` value is the problem. `renice +20 -p
   <pid>` on the offender restores it without killing anything — total `clang` CPU went
   back to 380% immediately. Worth knowing before concluding a build has hung.
+
+- **The `official` build launches but cannot load any network page.** Open. Found at
+  M0 and not yet explained. The browser starts, the window and all child processes come
+  up, `chrome://` pages render, and a tab is created with the correct URL — and then
+  nothing loads. `https://example.com` gives a page target with an **empty title**
+  where the `release` build gives "Example Domain". No request reaches even a local
+  HTTP server on `127.0.0.1`. There is no crash, no error in stderr beyond the usual
+  missing-API-key warnings, and the NetworkService process is alive.
+
+  This matters more than an ordinary bug: `official` is the configuration we would
+  *ship*, and `release` — the one that works — is explicitly not for users. It was
+  found only because M0 requires baselines measured on `official`. A milestone that
+  had accepted `release` numbers would have shipped a browser that cannot browse.
+
+  How to reproduce and inspect, without needing to see a window:
+
+  ```bash
+  APP=~/chromium/src/out/official/Chromium.app
+  "$APP/Contents/MacOS/Chromium" --user-data-dir=/tmp/p --no-first-run \
+      --remote-debugging-port=9333 https://example.com/ &
+  sleep 15 && curl -s http://127.0.0.1:9333/json/list
+  ```
+
+  An empty `title` on the page target is the signature. Bisection is under way:
+  `tooling/args/official-nopgo.gn` is `official` with `chrome_pgo_phase = 0`, which
+  separates PGO from ThinLTO and the rest of `is_official_build`.
 
 - **`gsutil` warns that `~/.boto` authentication is deprecated.** Harmless; the
   bootstrap download proceeds anyway.

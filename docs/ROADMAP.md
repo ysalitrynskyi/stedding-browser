@@ -290,3 +290,18 @@ Acceptance criteria:
 
 Mobile, built-in AI features, sync services, and paid add-ons are not on the path to
 1.0. Any of them entering the roadmap requires an ADR and a roadmap revision.
+
+## Deferred, with the intent to return
+
+Real Arc features that are specified in `PRODUCT.md` and deliberately not in the first
+releases. Listed here so they are visible as future work rather than quietly missing.
+
+| Feature | Why deferred | What brings it back |
+|---|---|---|
+| **Boosts** (per-site CSS/JS, Zap) | Extensions already answer it — Stylus, Violentmonkey, uBlock's element picker — and full extension support is a hard requirement we keep regardless. It is also a script host, so it carries security work nothing else here does. | The workflow features ship and meet the quality bar, *and* a threat model exists. The threat model comes first, not alongside. |
+| **Easels** (whiteboards) | A drawing application inside a browser, and the single largest item in `PRODUCT.md`. Almost nothing to do with browsing. | Capacity after the features people actually stay in Arc for, or evidence users want it. |
+
+Deferred is not cancelled. Both remain specified in `PRODUCT.md`; see
+`decisions/0012-defer-boosts-and-easels.md` for the reasoning and the conditions.
+
+Page capture is **not** deferred — captures are useful with or without a canvas.

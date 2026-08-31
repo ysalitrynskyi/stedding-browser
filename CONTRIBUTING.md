@@ -43,6 +43,17 @@ series so far. The first patches arrive with branding at M1.
   document. Unknown numbers are marked `TBD`.
 - **This repo is public.** Never commit secrets, machine-specific paths, or personal
   operational data.
+- **Do not copy code from other browsers into this repository.** Studying how another
+  project solved something is encouraged; transcribing its implementation is not. The
+  licences differ in ways that matter: this project is BSD-3-Clause (ADR 0002), while
+  Zen Browser is MPL-2.0 and Vivaldi's UI is proprietary. MPL-2.0 is file-level
+  copyleft — a file containing MPL code stays MPL and its source must be distributed —
+  so pasting it here would either breach the licence or force those files out of the
+  BSD core we committed to. Chromium itself is the exception and the reason: it is
+  BSD-3-Clause, which is why we can build on it at all.
+
+  In practice: read other browsers for product and architectural decisions, write our
+  own implementation, and say in the commit message where an idea came from.
 
 ## Commit style
 

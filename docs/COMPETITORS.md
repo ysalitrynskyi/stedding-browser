@@ -131,6 +131,26 @@ Competitor claims in this document were fact-checked against vendor sources on
 2026-08-30. Rival products move; treat anything here as needing a re-check before it
 is quoted, and prefer the vendor's own site over this table.
 
+### The competitor this table omits: Chromium itself
+
+Chromium 153 ships vertical tabs. Not an experiment — a landed feature with collapse,
+pinning, drag-to-reorder, persisted width and state, a settings toggle, in-product help
+promoting it to users, and interactive tests. `kVerticalTabsLaunch` is enabled by
+default; only a user pref keeps it off. There is a separate expand-on-hover feature.
+Verified in the tree at our pin; details and file paths are in
+`decisions/0010-ride-upstream-vertical-tabs.md`.
+
+This matters more than any row above. The gap analysis below was written on the premise
+that a sidebar with vertical tabs on Chromium, open source, was an empty cell. Upstream
+has now filled part of it, and Chrome inherits it. What is *not* upstream is the rest of
+the workflow model — workspaces, a command bar, split view as a first-class concept —
+together with privacy defaults and who controls the roadmap.
+
+Whether that is still enough to justify this project is a genuine question and is
+deliberately not answered here or in the ADR. It is the kind of decision that belongs
+to a person, taken deliberately, and not to whoever happens to be editing the
+competitive analysis.
+
 ## The gap we occupy
 
 Every cell combination above is taken except one. Users today can have:

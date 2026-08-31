@@ -80,12 +80,12 @@ Measured against the table above, not against "looks closer".
 
 | Item | State |
 |---|---|
-| Contents corner nearest the tab strip | Done — 12 px, `SteddingBrowserViewLayout` |
+| Contents corner nearest the tab strip | Done — 12 px, `SteddingBrowserViewLayout`, measured at 12 pt in the capture |
 | Sidebar width | Done — 352 px default, still resizable and pref-backed |
 | Tab row height | Done — 44 px (Chromium's default is 30) |
 | Active tab pill radius | Done — 10 px |
 | Favicon size | **Deliberately not done.** 16 px, not 18. `gfx::kFaviconSize` is global and the image would not scale with the slot |
-| Bare-host URL | Done — unfocused only; the full URL returns on focus |
+| Bare-host URL | Done — unfocused only; the full URL returns on focus. Verified in the capture |
 | Centred URL | Not started — needs spacers in `ToolbarView`'s flex layout |
 | Space switcher | Not started — blocked on Spaces actually switching tabs |
 | Favorites row | Not started |

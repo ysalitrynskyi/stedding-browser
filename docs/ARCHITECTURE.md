@@ -346,6 +346,22 @@ Recorded as they were actually hit on the reference machine, not imagined.
   now wrap their bodies in a `main()` called on the last line, so bash parses the whole
   file before running any of it. Prefer that shape for any script that runs for hours.
 
+- **The build crawls while something else runs, even on an idle-looking machine.**
+  `autoninja` deliberately runs the compile at **nice 5**, so anything at normal
+  priority outcompetes it — a code-search tool, an indexer, another agent. Observed
+  here: two `ripgrep` processes scanning the Chromium tree took roughly 3.6 cores and
+  dropped total `clang` CPU from about 588% to 130%, with the object count nearly
+  flat for half an hour. Nothing was broken and no error appeared; the build simply
+  starved. Check with:
+
+  ```bash
+  ps -Ao %cpu,ni,command | sort -rn | head
+  ```
+
+  Anything above the compilers at a lower `ni` value is the problem. `renice +20 -p
+  <pid>` on the offender restores it without killing anything — total `clang` CPU went
+  back to 380% immediately. Worth knowing before concluding a build has hung.
+
 - **`gsutil` warns that `~/.boto` authentication is deprecated.** Harmless; the
   bootstrap download proceeds anyway.
 

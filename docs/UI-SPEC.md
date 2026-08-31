@@ -81,6 +81,20 @@ close" is not a check — the comparison image goes in the pull request.
 Captured with `tooling/capture-ui` at 1400x880. Numbers below are measured from
 that image, not estimated.
 
+## Tuning these numbers costs nothing
+
+The contents corner radius, the tab row height and the tab pill radius are
+feature parameters, not constants, so a value can be tried against a build that
+already exists:
+
+```
+tooling/capture-ui --features \
+  'SteddingArcStyleWindow:contents_corner_radius/16/vertical_tab_height/48'
+```
+
+Change a number, capture, measure, repeat — no compile, no link. Defaults are
+the shipping values in the table below. See patch 0007.
+
 ## Progress
 
 Measured against the table above, not against "looks closer".

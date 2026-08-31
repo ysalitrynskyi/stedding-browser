@@ -1,0 +1,229 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Mon, 31 Aug 2026 16:40:20 -0400
+Subject: make the Arc metrics tunable without a rebuild
+
+Matching a reference screenshot means trying a number, looking at the result,
+and trying another. As constants, each of those attempts cost a compile and a
+link. As feature parameters they cost nothing:
+
+  tooling/capture-ui --features \
+    'SteddingArcStyleWindow:contents_corner_radius/28/vertical_tab_height/64'
+
+Verified: that command produces 64 pt tab rows and a visibly larger corner
+against a build that was already made, with no rebuild.
+
+The contents corner radius, the vertical tab row height and the tab pill radius
+now come from stedding::kArcStyleWindow parameters, declared in one small
+source_set that depends only on //base so layout_constants can use it without
+pulling in views. Defaults are unchanged and remain the shipping values from
+docs/UI-SPEC.md; the override path exists for iteration and nothing in the
+product depends on it.
+
+The sidebar width is deliberately not a parameter. It is already resizable and
+pref-backed at runtime, so a second knob would only be a way to disagree with
+the pref.
+
+Why: the iteration loop for a pixel match is look-change-look, and a build in
+the middle of it is the whole cost.
+Removable when: the metrics stop moving, at which point they can go back to
+being constants.
+---
+ chrome/browser/ui/BUILD.gn                    | 11 ++++++
+ chrome/browser/ui/layout_constants.cc         |  5 ++-
+ chrome/browser/ui/stedding_ui_metrics.cc      | 21 ++++++++++
+ chrome/browser/ui/stedding_ui_metrics.h       | 38 +++++++++++++++++++
+ .../layout/stedding_browser_view_layout.cc    | 11 +-----
+ .../layout/stedding_browser_view_layout.h     | 14 +------
+ 6 files changed, 76 insertions(+), 24 deletions(-)
+ create mode 100644 chrome/browser/ui/stedding_ui_metrics.cc
+ create mode 100644 chrome/browser/ui/stedding_ui_metrics.h
+
+diff --git a/chrome/browser/ui/BUILD.gn b/chrome/browser/ui/BUILD.gn
+index e09872a3d6f24..d43e1dc4bb864 100644
+--- a/chrome/browser/ui/BUILD.gn
++++ b/chrome/browser/ui/BUILD.gn
+@@ -1339,6 +1339,7 @@ static_library("ui") {
+       ":confirm_bubble_model",
+       ":focus_tab_after_navigation_helper",
+       ":layout_constants",
++      ":stedding_ui_metrics",
+       ":uma_browsing_activity_observer",
+       "//base",
+       "//chrome/app/vector_icons",
+@@ -3779,6 +3780,15 @@ source_set("confirm_bubble") {
+   ]
+ }
+ 
++source_set("stedding_ui_metrics") {
++  sources = [
++    "stedding_ui_metrics.cc",
++    "stedding_ui_metrics.h",
++  ]
++
++  deps = [ "//base" ]
++}
++
+ source_set("layout_constants") {
+   sources = [
+     "layout_constants.cc",
+@@ -3788,6 +3798,7 @@ source_set("layout_constants") {
+   public_deps = [ "//ui/gfx/geometry" ]
+ 
+   deps = [
++    ":stedding_ui_metrics",
+     "//base",
+     "//chrome/browser/ui:ui_features",
+     "//chrome/common:chrome_features",
+diff --git a/chrome/browser/ui/layout_constants.cc b/chrome/browser/ui/layout_constants.cc
+index e61eacaa2052b..80a2328d6c00c 100644
+--- a/chrome/browser/ui/layout_constants.cc
++++ b/chrome/browser/ui/layout_constants.cc
+@@ -3,6 +3,7 @@
+ // found in the LICENSE file.
+ 
+ #include "chrome/browser/ui/layout_constants.h"
++#include "chrome/browser/ui/stedding_ui_metrics.h"
+ 
+ #include "base/notreached.h"
+ #include "build/build_config.h"
+@@ -147,9 +148,9 @@ int GetLayoutConstant(LayoutConstant constant) {
+     case LayoutConstant::kToolbarCornerRadius:
+       return 8;
+     case LayoutConstant::kVerticalTabCornerRadius:
+-      return 10;
++      return stedding::kVerticalTabCornerRadius.Get();
+     case LayoutConstant::kVerticalTabHeight:
+-      return 44;
++      return stedding::kVerticalTabHeight.Get();
+     case LayoutConstant::kVerticalTabPinnedHeight:
+       return 32;
+     case LayoutConstant::kVerticalTabMinWidth:
+diff --git a/chrome/browser/ui/stedding_ui_metrics.cc b/chrome/browser/ui/stedding_ui_metrics.cc
+new file mode 100644
+index 0000000000000..e3ba46933dc02
+--- /dev/null
++++ b/chrome/browser/ui/stedding_ui_metrics.cc
+@@ -0,0 +1,21 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/stedding_ui_metrics.h"
++
++namespace stedding {
++
++BASE_FEATURE(kArcStyleWindow, "SteddingArcStyleWindow",
++             base::FEATURE_ENABLED_BY_DEFAULT);
++
++BASE_FEATURE_PARAM(int, kContentsCornerRadius, &kArcStyleWindow,
++                   "contents_corner_radius", 12);
++
++BASE_FEATURE_PARAM(int, kVerticalTabHeight, &kArcStyleWindow,
++                   "vertical_tab_height", 44);
++
++BASE_FEATURE_PARAM(int, kVerticalTabCornerRadius, &kArcStyleWindow,
++                   "vertical_tab_corner_radius", 10);
++
++}  // namespace stedding
+diff --git a/chrome/browser/ui/stedding_ui_metrics.h b/chrome/browser/ui/stedding_ui_metrics.h
+new file mode 100644
+index 0000000000000..4c376aac6a5a1
+--- /dev/null
++++ b/chrome/browser/ui/stedding_ui_metrics.h
+@@ -0,0 +1,38 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_STEDDING_UI_METRICS_H_
++#define CHROME_BROWSER_UI_STEDDING_UI_METRICS_H_
++
++#include "base/feature_list.h"
++#include "base/metrics/field_trial_params.h"
++
++// The numbers that make the window look like Arc rather than like Chromium.
++//
++// These are feature parameters rather than constants for one reason: matching a
++// reference screenshot means trying values and looking at the result, and a
++// constant costs a compile and a link for every value tried. As parameters they
++// can be swept from the command line against a build that is already made:
++//
++//   tooling/capture-ui --features \
++//     'SteddingArcStyleWindow:contents_corner_radius/16/vertical_tab_height/48'
++//
++// The defaults here are the shipping values, taken from docs/UI-SPEC.md. The
++// override path exists for iteration; nothing in the product depends on it.
++namespace stedding {
++
++BASE_DECLARE_FEATURE(kArcStyleWindow);
++
++// Radius of the contents corner nearest the tab strip, in DIPs.
++BASE_DECLARE_FEATURE_PARAM(int, kContentsCornerRadius);
++
++// Height of one tab row in the vertical tab strip, in DIPs.
++BASE_DECLARE_FEATURE_PARAM(int, kVerticalTabHeight);
++
++// Radius of the active tab's pill in the vertical tab strip, in DIPs.
++BASE_DECLARE_FEATURE_PARAM(int, kVerticalTabCornerRadius);
++
++}  // namespace stedding
++
++#endif  // CHROME_BROWSER_UI_STEDDING_UI_METRICS_H_
+diff --git a/chrome/browser/ui/views/frame/layout/stedding_browser_view_layout.cc b/chrome/browser/ui/views/frame/layout/stedding_browser_view_layout.cc
+index aa8f114f7947f..429f30967fe35 100644
+--- a/chrome/browser/ui/views/frame/layout/stedding_browser_view_layout.cc
++++ b/chrome/browser/ui/views/frame/layout/stedding_browser_view_layout.cc
+@@ -11,13 +11,6 @@
+ #include "chrome/browser/ui/views/frame/multi_contents_view.h"
+ #include "ui/gfx/geometry/rounded_corners_f.h"
+ 
+-namespace stedding {
+-
+-BASE_FEATURE(kArcStyleWindow, "SteddingArcStyleWindow",
+-             base::FEATURE_ENABLED_BY_DEFAULT);
+-
+-}  // namespace stedding
+-
+ SteddingBrowserViewLayout::SteddingBrowserViewLayout(
+     std::unique_ptr<BrowserViewLayoutDelegate> delegate,
+     BrowserViewLayoutViews views)
+@@ -41,9 +34,9 @@ void SteddingBrowserViewLayout::DoPostLayoutVisualAdjustments(
+   // inset that has already pulled the contents off the window edge.
+   gfx::RoundedCornersF radii = contents->GetBackgroundRadii();
+   if (base::i18n::IsRTL()) {
+-    radii.set_upper_right(stedding::kContentsCornerRadius);
++    radii.set_upper_right(stedding::kContentsCornerRadius.Get());
+   } else {
+-    radii.set_upper_left(stedding::kContentsCornerRadius);
++    radii.set_upper_left(stedding::kContentsCornerRadius.Get());
+   }
+   contents->SetBackgroundRadii(radii);
+ }
+diff --git a/chrome/browser/ui/views/frame/layout/stedding_browser_view_layout.h b/chrome/browser/ui/views/frame/layout/stedding_browser_view_layout.h
+index 5efd3e2521c51..37ab92897dd48 100644
+--- a/chrome/browser/ui/views/frame/layout/stedding_browser_view_layout.h
++++ b/chrome/browser/ui/views/frame/layout/stedding_browser_view_layout.h
+@@ -7,21 +7,9 @@
+ 
+ #include <memory>
+ 
+-#include "base/feature_list.h"
++#include "chrome/browser/ui/stedding_ui_metrics.h"
+ #include "chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.h"
+ 
+-namespace stedding {
+-
+-// Stedding's window chrome: the web contents are rounded away from the corner
+-// where the toolbar meets the tab strip, so the window background reads as a
+-// mat around the page. See docs/UI-SPEC.md.
+-BASE_DECLARE_FEATURE(kArcStyleWindow);
+-
+-// The radius of the contents corner nearest the tab strip, in DIPs.
+-inline constexpr float kContentsCornerRadius = 12.f;
+-
+-}  // namespace stedding
+-
+ // Layout for normal tabbed browsers in Stedding. Everything about where views
+ // go is inherited; this class only adjusts visuals after layout has run, which
+ // keeps it clear of `BrowserViewTabbedLayoutImpl`'s hot layout code.

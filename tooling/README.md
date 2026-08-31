@@ -20,6 +20,9 @@ its configuration from `chromium-version` — never from a value typed twice.
 | `apply-patches` | Replays the patch series onto the pin as commits on `stedding-work`. |
 | `update-patches` | Turns those commits back into `../patches/`. |
 | `repair-checkout` | Rewrites git cache paths after a checkout is moved. |
+| `update-pin` | Moves the Chromium pin to the newest stable and checks the series still applies. |
+| `package-dmg` | Packages a built app into an installable `.dmg`. |
+| `brand/generate.py` | Regenerates the whole brand system from one geometry file. |
 | `check-repo` | Repository hygiene: shell portability, links, ADRs, patch series, the pin, no machine paths. |
 | `verify-build` | Runs a built browser and checks it renders, does WebGL, and decodes video. |
 | `measure/` | Performance harness and the fixed ten-site list for the QUALITY.md budgets. |
@@ -30,8 +33,24 @@ its configuration from `chromium-version` — never from a value typed twice.
 ```bash
 tooling/bootstrap-depot-tools     # once per machine
 tooling/sync-chromium             # once per pin change
-tooling/build-chromium release    # as often as you like
+tooling/apply-patches             # our patch series
+tooling/apply-branding            # our name and icon
+tooling/build-chromium release
+tooling/verify-build --app ~/chromium/src/out/release/Stedding.app
+tooling/package-dmg release
 ```
+
+## Following upstream
+
+```bash
+tooling/update-pin                # is there a newer stable? changes nothing
+tooling/update-pin --apply        # take it, sync, check the series still applies
+```
+
+A scheduled workflow (`.github/workflows/upstream.yml`) runs this comparison daily and
+opens a single tracking issue when we fall behind. A patch that conflicts on a routine
+point release is in the wrong layer — see
+[docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md).
 
 Full prerequisites, measured build times and sizes, and known failure modes are in
 [docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md#build-system).

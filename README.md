@@ -18,12 +18,19 @@ using the web without surveillance or vendor control. See `docs/NAMING.md`.
 
 ## Status
 
-**M0 nearly complete — nothing installable yet.** The repository holds the project's
-documentation and the build tooling in `tooling/`: scripts that check out Chromium at
-a pinned version, build it, verify the result, and measure it. Those scripts now
-produce a working vanilla Chromium on macOS arm64 that passes verification. What does
-not exist yet is a *browser you can download* — the build is still Chromium's name,
-Chromium's icon and Chromium's defaults, with no packaging. That is M1.
+**M1 in progress — buildable, not yet released.** The tooling in `tooling/` checks
+out Chromium at a pinned version, applies our patch series, brands it, builds it,
+verifies it and packages a `.dmg`. That produces **Stedding**: our name, our icon, our
+bundle identifier, with the vertical tab sidebar on by default.
+
+What does not exist yet is a *release*. Builds are unsigned, so macOS requires a
+right-click to open them; signing and notarisation land at M7. There is no download
+page and no published binary — if you want one today you build it, and the steps are
+in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+The product features — Spaces, Peek, the command bar — are being built now. Folders
+and the Space model are in the tree; see [docs/PRODUCT.md](docs/PRODUCT.md) for the
+full specification and what is deliberately not in it.
 
 The first engineering milestone (M0) is reproducing a vanilla Chromium build on macOS
 and documenting it well enough that anyone can repeat it. See `docs/ROADMAP.md` for
@@ -31,6 +38,22 @@ the milestone ladder and `docs/ARCHITECTURE.md` for the build.
 
 If you are evaluating browsers to use today, this is not one yet. If you want to
 follow or shape the design before the product exists, this is the right time.
+
+## Building it
+
+```bash
+tooling/bootstrap-depot-tools     # once per machine
+tooling/sync-chromium             # once per pin change; downloads tens of GB
+tooling/apply-patches             # our patch series
+tooling/apply-branding            # our name and icon
+tooling/build-chromium release
+tooling/package-dmg release
+```
+
+Full prerequisites, measured build times, and the failure modes we actually hit are
+in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Following upstream is
+`tooling/update-pin`, and a scheduled workflow opens an issue the day Chromium
+stable moves ahead of our pin.
 
 ## Planned features
 

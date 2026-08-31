@@ -426,9 +426,27 @@ Three findings worth knowing before M1 is planned:
   includes hardcode `chromium/`. So our assets overwrite the `chromium/` tree in place
   rather than sitting beside it — which is exactly what the `branding/` copy step does,
   and why it must run before `gn gen`.
-- **Some identifiers do not follow `MAC_BUNDLE_ID`.** Several related identifiers are
-  hardcoded rather than derived. If they must match the product, those are patches —
-  the only patches branding is currently known to require. Enumerating them is M1 work.
+- **Three identifiers do not follow `MAC_BUNDLE_ID`.** Most do: the main app, every
+  helper, the framework, PWA and app-shim ids, Mach and mojo rendezvous names, the
+  keychain groups under `chrome/`, and the Crashpad filename all derive from it, and
+  cost nothing. Three do not, and each was verified in the tree at the pin:
+
+  | Where | What | Why it matters |
+  |---|---|---|
+  | `build/apple/tweak_info_plist.py:299` | matches the literal `org.chromium.Chromium` to decide the direct-launch URL scheme | change the bundle id and the scheme silently vanishes from `Info.plist`, while `chrome/browser/shell_integration_mac.mm` still returns `"chromium"` — the plist and the code disagree |
+  | `net/device_bound_sessions/unexportable_key_service_factory.cc:30` | hardcodes `.org.chromium.Chromium` for the keychain group | its own comment says it cannot depend on `//chrome`, so it cannot derive the value |
+  | `content/browser/media/capture/desktop_capture_util_mac.mm:77` | lists `org.chromium.Chromium` among known browser prefixes | our own helpers and PWAs stop being recognised as this browser for audio capture |
+
+  Two more surfaces hardcode ids — `chrome/updater/branding.gni` and
+  `chrome/enterprise_companion/branding.gni` — but neither ships for us:
+  `enable_updater = is_chrome_branded && …` (`chrome/browser/buildflags.gni:16`), and we
+  build unbranded. They become relevant only if the Chromium updater is adopted at M7,
+  which is an open ADR.
+
+  Some hardcoded `org.chromium.*` strings should deliberately **stay**: the
+  `org.chromium.extension` and `org.chromium.shortcut` UTIs and the clipboard pasteboard
+  types are interoperability identifiers shared with other Chromium browsers, not
+  branding. Renaming them would break interchange for no user-visible gain.
 - **Icons are copied, not compiled** — the build takes prebuilt `app.icns` and
   `Assets.car`. The newer vector `.icon` sources *are* compiled at build time, but
   overwriting the sources is still asset replacement, not a patch.

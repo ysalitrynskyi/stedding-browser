@@ -68,6 +68,61 @@ entry to one element directory. A Stedding section is a new directory plus small
 to four files with 45, 24, 17 and 13 commits a year — low churn by Chromium standards,
 and no generated search catalog to regenerate.
 
+## Spaces: the seams, verified
+
+ADR 0015 decides that Spaces filter one tab strip. These are the exact places
+that implements against, each read in the pinned tree rather than assumed. All
+line numbers are Chromium 153.0.8010.12.
+
+**A space id on a tab, without patching the tab.**
+`TabInterface::GetUnownedUserDataHost()` (`components/tabs/public/tab_interface.h`)
+takes arbitrary per-tab data. `TabUIHelper` is the working precedent:
+
+```
+chrome/browser/ui/tab_ui_helper.cc:82
+    scoped_unowned_user_data_(tab_interface.GetUnownedUserDataHost(), *this)
+```
+
+So a `SpaceTabData` attaches to each tab with no change to `tabs::TabModel` at
+all. `TabModel` does carry `group_` and `split_` as plain fields, so a field is
+possible, but it would be a patch to a file we would rather not own.
+
+**"The user cannot see this tab" already exists.**
+Collapsed tab groups are tabs that are in the model and not on screen, and the
+machinery is centralised:
+
+| Concern | Where | Note |
+|---|---|---|
+| The predicate | `tab_strip_model.cc:1515` `IsTabCollapsed` | small caller set |
+| Ctrl+Tab | `tab_strip_model.cc:4139` `SelectRelativeTab`'s `is_tab_invalid` | already filters |
+| Which tab to activate next | `tab_strip_model.cc:5653`, `5661`, `5671` | already filters |
+| Moving activation off a tab about to be hidden | `tab_strip_model.cc:3458` `GetNextExpandedActiveTab` | takes a range, returns the nearest visible index |
+| Hiding in the view | `tab_group_view.cc:281` `child->SetVisible(!collapsed)` | model untouched |
+
+The order that function implies matters: activate the next visible tab *first*,
+then hide the outgoing set. `SelectRelativeTab` `DCHECK`s that the active tab is
+not hidden, so hiding first trips it.
+
+**Persistence.** `SessionService::AddTabExtraData(window, tab, key, data)`
+(`chrome/browser/sessions/session_service.h:132`) writes per-tab key/value into
+the session; it comes back as `SessionTab::extra_data`
+(`components/sessions/core/session_types.h:113`). `SessionWindow::extra_data`
+(`:237`) is the matching place for the window's list of spaces. The precedent is
+send-tab-to-self:
+
+```
+chrome/browser/ui/send_tab_to_self/send_tab_to_self_activation_tracker.cc:94
+    AddTabExtraData(..., kSendTabToSelfEntryGUIDKey, ...)
+```
+
+Because every tab stays in the live strip, compaction rebuilds all of them and
+no session-service patch is needed — which is the whole reason ADR 0015 chose
+filtering over parking.
+
+**Churn of what this touches:** `tab_strip_model.cc` 153/yr (a few small hunks),
+`tab_group_view.cc` and the vertical strip views lower, and the new code lives
+in `chrome/browser/ui/spaces/`, which is ours.
+
 ## Build order
 
 Following `EVIDENCE.md`, which says folders were the gate for Arc switchers and that

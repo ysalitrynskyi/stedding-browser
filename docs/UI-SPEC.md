@@ -74,8 +74,31 @@ Screenshot the built browser at the reference window size, put it beside the Arc
 reference, and compare. Differences are logged here as they are fixed. "Looks
 close" is not a check — the comparison image goes in the pull request.
 
+## Progress
+
+Measured against the table above, not against "looks closer".
+
+| Item | State |
+|---|---|
+| Contents corner nearest the tab strip | Done — 12 px, `SteddingBrowserViewLayout` |
+| Sidebar width | Done — 352 px default, still resizable and pref-backed |
+| Tab row height | Done — 44 px (Chromium's default is 30) |
+| Active tab pill radius | Done — 10 px |
+| Favicon size | **Deliberately not done.** 16 px, not 18. `gfx::kFaviconSize` is global and the image would not scale with the slot |
+| Bare-host URL | Done — unfocused only; the full URL returns on focus |
+| Centred URL | Not started — needs spacers in `ToolbarView`'s flex layout |
+| Space switcher | Not started — blocked on Spaces actually switching tabs |
+| Favorites row | Not started |
+| Window background tinted per space | Not started — `Widget::SetUserColorOverride` is the hook |
+
 ## Known gaps
 
-Everything. As of writing, the browser uses Chromium's vertical tab strip
-unmodified: square edge-to-edge contents, list-style tabs, a full omnibox, no
-space switcher and no favorites row.
+The sidebar's top area still holds Chromium's collapse button and the tab-group
+and tab-search combo buttons, where Arc has the space switcher. The toolbar is
+still Chromium's, left-aligned, with the omnibox pill. There is no favorites
+grid and no bottom app-icon row.
+
+The space switcher is deliberately not built yet. A row of pills that changes an
+active id without moving any tabs would be a picture of a feature, and this
+project ships features complete or not at all — see the mandate in AGENTS.md.
+It lands with the tab-parking work, not before.

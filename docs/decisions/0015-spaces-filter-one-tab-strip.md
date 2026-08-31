@@ -73,13 +73,38 @@ Good:
 Costs, accepted:
 
 - `TabStripModel` still holds every space's tabs, so anything that walks it by
-  index sees tabs the user cannot currently see. Ctrl+Tab, ⌘1–⌘9 and next/
-  previous tab must be made space-aware explicitly; they will not be correct by
-  default. This is the main work this decision creates, and the main thing to
-  test.
+  index sees tabs the user cannot currently see. This is less work than it first
+  appeared — see "A tab that is not on screen is not a new idea" below — but it
+  is still the main thing to test.
 - `tab_strip_model()->count()` is a count across all spaces. Anything user-facing
   that reports a tab count needs to say which it means.
 - Tab search deliberately keeps searching every space, matching Arc.
+
+## A tab that is not on screen is not a new idea
+
+An earlier draft of this ADR said that Ctrl+Tab and the tab-number shortcuts
+"must be made space-aware explicitly; they will not be correct by default."
+That was wrong, and the correction is worth recording because it changes the
+size of the job.
+
+Chromium already has tabs that exist in the model and are not on screen:
+collapsed tab groups. Both halves are handled, and both are centralised.
+
+On the model side, `TabStripModel::IsTabCollapsed()` is one predicate
+(`tab_strip_model.cc:1515`) with a small, findable set of callers. Ctrl+Tab
+already skips such tabs — `SelectRelativeTab()` filters through an
+`is_tab_invalid` lambda (`tab_strip_model.cc:4139`) — and so does the choice of
+which tab to activate when the active one closes (`5653`, `5661`, `5671`).
+
+On the view side, `TabGroupView::SetIsCollapsed()` hides its tabs with plain
+`child->SetVisible(!collapsed)` (`tab_group_view.cc:281`), leaving the model
+untouched.
+
+So Spaces extend an existing notion rather than introducing one: a predicate for
+"the user cannot currently see this tab" that answers yes for a collapsed group
+or an inactive space, and the same `SetVisible` treatment in the strip. That is
+a handful of hunks in `tab_strip_model.cc` (153 commits/year) instead of a
+rewrite of tab traversal.
 
 ## Removable when
 

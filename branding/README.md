@@ -16,6 +16,21 @@ includes hardcode `chromium/`, so there is no third directory to add. Our files
 overwrite the `chromium/` tree in place, which is why the copy must happen before
 `gn gen`.
 
+## The BRANDING file format
+
+`BRANDING` is a data file in a format Chromium defines, not one of ours. Chromium's
+`build/util/version.py` reads it with `line.split('=', 1)` on **every** line, so:
+
+- Every line must be `KEY=VALUE`.
+- **No comments. No blank lines.** Either throws.
+
+A malformed file does not fail where you edited it. It fails much later inside
+`gn gen`, as `branding.gni: Script returned non-zero exit code` plus a Python
+traceback, which is a long way from the cause. `tooling/apply-branding` therefore
+validates the file the same way upstream will, before installing it.
+
+That is why the explanations live in this README rather than in the file itself.
+
 ## Status
 
 `BRANDING` is real. **The icons are not written yet** and this directory does not

@@ -230,19 +230,31 @@ an ADR, and it needs a human to weigh the licensing position.
 
 ### Measured results
 
-Filled in when M0 completes. Nothing here is an estimate.
+Measured on the reference hardware above, at `153.0.8010.12`, from an empty directory.
+Nothing here is an estimate; anything not yet measured says so.
 
 | | |
 |---|---|
-| `gclient sync` wall time | TBD |
-| Checkout size after sync | TBD |
-| `gn gen` wall time | TBD |
-| First `release` build wall time | TBD |
-| `out/release` size | TBD |
-| `Chromium.app` size | TBD |
+| git cache bootstrap (first sync only) | ~25 min |
+| `gclient sync` after the cache exists | ~19 min |
+| git cache size | 25 GB |
+| Chromium source incl. dependencies | 55 GB |
+| Checkout total (cache + source) | 65 GB |
+| `gn gen` wall time | 6–12 s (32,499 targets from 4,955 files) |
+| First `release` build, cold | **3 h 29 min** (13:57 → 17:26) |
+| `release` object files | 46,555 |
+| `out/release` size | 9.3 GB |
+| `Chromium.app` size | 530 MB |
 | Incremental build, one `.cc` touched | TBD |
 | First `official` build wall time | TBD |
-| Peak disk during a release build | TBD |
+
+The 150 GB floor `sync-chromium` enforces is not arbitrary: the checkout alone is
+65 GB, a release build adds 9.3 GB, and an official build adds more on top of that,
+before leaving any room to work in.
+
+PGO profiles are two ~300 MB files (x86-64 and arm64) that `gclient runhooks`
+downloads only when the solution requests them — see the note on
+`checkout_pgo_profiles` under "Known failure modes".
 
 ### Known failure modes
 
@@ -311,6 +323,23 @@ Recorded as they were actually hit on the reference machine, not imagined.
   resolves to it. Anything needing bash 4 works on a machine with Homebrew bash and
   fails on a stock one — which is the machine a new contributor has. `tooling/check-repo
   shell` rejects bash-4-only constructs so this cannot come back.
+
+- **`gn gen` fails on an official build with a missing PGO profile**, telling you to
+  run `gclient runhooks`. Running it changes nothing on its own: the profile hook is
+  gated on the gclient solution asking for it, and a solution created without
+  `checkout_pgo_profiles` never will. Add it to `.gclient` and re-run hooks — which
+  `tooling/sync-chromium` now does for new checkouts and repairs in existing ones.
+  The cost of getting this wrong is that the failure appears at `gn gen` for a
+  configuration you may not build until much later.
+
+- **Editing a `tooling/` script while it is running corrupts the running shell.**
+  bash reads a script incrementally, by byte offset, as it executes. Editing the file
+  shifts those offsets, so a long-running script resumes mid-statement and dies with a
+  syntax error — after the work is done but before it reports. This cost us a completed
+  three-and-a-half-hour Chromium build whose success went unnoticed, because the script
+  died on the line that would have announced it. `build-chromium` and `sync-chromium`
+  now wrap their bodies in a `main()` called on the last line, so bash parses the whole
+  file before running any of it. Prefer that shape for any script that runs for hours.
 
 - **`gsutil` warns that `~/.boto` authentication is deprecated.** Harmless; the
   bootstrap download proceeds anyway.

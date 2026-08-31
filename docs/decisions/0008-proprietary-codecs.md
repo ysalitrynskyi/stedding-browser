@@ -9,10 +9,20 @@ A vanilla Chromium build compiles without proprietary codecs: `proprietary_codec
 is off and `ffmpeg_branding` is `"Chromium"`. Royalty-free formats work — VP8, VP9,
 AV1, Opus, Vorbis — and H.264 and AAC do not.
 
-This is upstream's documented default, not yet a measurement of our own build:
-`tooling/verify-build` reports the codec matrix of any build, and has so far only been
-run against Chrome for Testing, which *does* ship the codecs and reported all of them
-playable. The vanilla build's own matrix gets recorded here when M0 completes.
+This is now measured rather than assumed. `tooling/verify-build` against the M0 vanilla
+build of `153.0.8010.12` decoded real frames from VP9/WebM and AV1/MP4, and failed on
+H.264+AAC with:
+
+```
+MediaError 4: PipelineStatus::DEMUXER_ERROR_NO_SUPPORTED_STREAMS:
+FFmpegDemuxer: no supported streams
+```
+
+`canPlayType` returns `no` for both `video/mp4; codecs="avc1.42E01E"` and
+`audio/mp4; codecs="mp4a.40.2"`, while returning `probably` for VP8, VP9, AV1, Opus,
+Vorbis and MP3. The same harness run against Chrome for Testing — which does ship the
+codecs — passes all of them, so the difference is the build configuration and not the
+test.
 
 Google Chrome ships these codecs under licences Google holds. A fork does not inherit
 them. The distinction is legal, not technical: the code paths exist in the tree and

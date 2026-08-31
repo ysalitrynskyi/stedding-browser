@@ -16,6 +16,7 @@ its configuration from `chromium-version` — never from a value typed twice.
 | `bootstrap-depot-tools` | Verifies the host toolchain, then installs or updates `depot_tools`. |
 | `sync-chromium` | Materialises the Chromium tree at the pin, outside this repository. |
 | `build-chromium` | `gn gen` + `autoninja` for a named configuration. |
+| `apply-branding` | Copies `../branding/` assets over the checkout. Not a patch. |
 | `apply-patches` | Replays the patch series onto the pin as commits on `stedding-work`. |
 | `update-patches` | Turns those commits back into `../patches/`. |
 | `repair-checkout` | Rewrites git cache paths after a checkout is moved. |
@@ -34,6 +35,22 @@ tooling/build-chromium release    # as often as you like
 
 Full prerequisites, measured build times and sizes, and known failure modes are in
 [docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md#build-system).
+
+## Branding
+
+Branding is asset replacement, not patching: upstream's switch is boolean and grit
+hardcodes the `chromium/` theme path, so our files overwrite that tree in place. It
+must run before `gn gen`, and it leaves the Chromium checkout dirty on purpose so
+`git status` shows exactly what changed.
+
+```bash
+tooling/apply-branding --check     # what would change; touches nothing
+tooling/apply-branding             # copy branding/ into the checkout
+tooling/apply-branding --revert    # restore Chromium's originals
+```
+
+Order matters when both are in play: `apply-patches` first (it requires a clean tree),
+then `apply-branding`, then build.
 
 ## Patch workflow
 

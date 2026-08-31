@@ -43,6 +43,11 @@ They return when either condition holds:
 2. Users tell us the extension answer is not good enough. That is evidence, not
    speculation, and it is the kind of thing a public issue tracker produces.
 
+Evidence gathered after this ADR was written supports it more strongly than the
+reasoning did. On Zen Browser's tracker — the closest comparable project — Boosts drew
+**4 upvotes** and Easels **41**, against **412** for folders and **475** for sync. Zen
+shipped Boosts; almost nobody had asked. See `../EVIDENCE.md`.
+
 For Boosts specifically, the threat model comes **before** any implementation, not
 alongside it.
 

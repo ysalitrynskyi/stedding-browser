@@ -48,6 +48,9 @@ Space icons, the Library, and a `+` control.
   `⌘⇧K` clears them as a set.
 - **Folders** **[1.0]** — group tabs; **tabs in folders do not auto-archive**. Created
   from `+`. Rename, move, delete from the folder title's context menu. Drag to add.
+  **Not deferrable**: on the comparable project this was the single highest Arc-named
+  request (412 upvotes), and users said explicitly they would not leave Arc without
+  collapsible *pinned* folders (`EVIDENCE.md`).
 - **No bookmarks** **[1.0]** — Arc has none, by design. Pinned Tabs replace them.
   Imported bookmarks land as pinned tabs and folders.
 - **Tab switching** **[1.0]** — `⌘⌥↑/↓` moves in sidebar order; `⌘1`…`⌘9` jumps to tab
@@ -213,6 +216,12 @@ Two are separable and are **[1.0]** because they need no model: *tidy downloads*
   order. `ROADMAP.md` puts sync services out of scope and `PRIVACY.md` is emphatic that
   we run no accounts. Parity here means either running a sync service or offering a
   self-hosted/file-based alternative. Not decided here.
+
+  **This is the largest unmet demand in the space.** The equivalent request on Zen's
+  tracker has 475 upvotes and has stayed open for about two years (`EVIDENCE.md`). Our
+  position against running accounts is deliberate and this does not overturn it — but
+  end-to-end encrypted, self-hostable, or plain file export/import are all answers we
+  could give without becoming a service company, and giving none is a choice too.
 - **Recovery Card** **[not applicable]** — recovery for an Arc account we do not have.
 - **Arc account / sign-in** **[not applicable]** — we ship no account. This is a
   deliberate divergence and a selling point, not a gap.

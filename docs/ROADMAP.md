@@ -291,6 +291,19 @@ Acceptance criteria:
 Mobile, built-in AI features, sync services, and paid add-ons are not on the path to
 1.0. Any of them entering the roadmap requires an ADR and a roadmap revision.
 
+## Build order, and why
+
+The milestone order below predates any evidence about what Arc switchers actually want.
+`EVIDENCE.md` gathers that evidence from the tracker of a comparable project. Two things
+in it change how these milestones should be built rather than what is in them:
+
+- **Session restore belongs inside the sidebar milestone, not after it.** The largest
+  bug cluster on the comparable project is tab identity across windows, spaces and
+  favorites — restore duplicating favorites, moving a favorite between windows silently
+  un-favoriting it. Build the persistence model with the tab model.
+- **Folders are a gate, not a nicety** (412 upvotes, and named as the thing keeping
+  people on Arc). They belong with the sidebar, not in a later polish pass.
+
 ## Deferred, with the intent to return
 
 Real Arc features that are specified in `PRODUCT.md` and deliberately not in the first

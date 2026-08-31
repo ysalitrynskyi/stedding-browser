@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+# Package a built .app into a distributable .dmg.
+#
+# Usage:
+#   tooling/package-dmg [config]            # default: official
+#   tooling/package-dmg release             # package a specific build config
+#   tooling/package-dmg --app /path/to.app  # package an arbitrary bundle
+#
+# Produces dist/<Name>-<version>-<arch>.dmg plus a .sha256 next to it.
+#
+# The result is UNSIGNED and UNNOTARIZED until M7. Gatekeeper will refuse to open it
+# by double-click; the documented bypass is printed at the end and belongs in the
+# release notes of every build before M7.
+
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=./lib.sh
+. "$(cd "$(dirname "$0")" && pwd)/lib.sh"
+
+# NOTE: body in main(), called on the last line — see tooling/build-chromium for why.
+main() {
+    require_macos_arm64
+
+    CONFIG=official
+    APP=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --app)     APP="${2:-}"; shift 2 ;;
+        -h|--help) sed -n '2,12p' "$0"; exit 0 ;;
+        -*)        die "unknown argument: $1" ;;
+        *)         CONFIG="$1"; shift ;;
+      esac
+    done
+
+    [ -n "$APP" ] || APP="$CHROMIUM_SRC/out/$CONFIG/Chromium.app"
+    [ -d "$APP" ] || die "no app bundle at $APP
+     Build one first: tooling/build-chromium $CONFIG"
+
+    plist="$APP/Contents/Info.plist"
+    [ -f "$plist" ] || die "$APP has no Info.plist; that is not an app bundle"
+
+    name="$(/usr/bin/defaults read "$plist" CFBundleName 2>/dev/null || echo Chromium)"
+    version="$(/usr/bin/defaults read "$plist" CFBundleShortVersionString 2>/dev/null || echo unknown)"
+    arch="$(uname -m)"
+
+    DIST="$STEDDING_ROOT/dist"
+    mkdir -p "$DIST"
+    dmg="$DIST/$name-$version-$arch.dmg"
+
+    log "app:     $APP"
+    log "name:    $name"
+    log "version: $version"
+    log "output:  $dmg"
+
+    # Stage the exact layout the user sees when the image opens: the app, and a symlink
+    # to /Applications to drag it into. Anything else in the window is clutter.
+    stage="$(mktemp -d -t stedding-dmg)"
+    # shellcheck disable=SC2064  # expand $stage now, not at trap time
+    trap "rm -rf '$stage'" EXIT INT TERM
+
+    log "staging bundle (copying ~$(du -sh "$APP" | cut -f1))"
+    # -c uses APFS clonefile where possible: near-instant and no extra disk.
+    cp -cR "$APP" "$stage/" 2>/dev/null || cp -R "$APP" "$stage/"
+    ln -s /Applications "$stage/Applications"
+
+    rm -f "$dmg"
+    log "building disk image"
+    hdiutil create \
+      -volname "$name $version" \
+      -srcfolder "$stage" \
+      -fs HFS+ \
+      -format UDZO \
+      -imagekey zlib-level=9 \
+      -quiet \
+      "$dmg" || die "hdiutil failed"
+
+    ( cd "$DIST" && shasum -a 256 "$(basename "$dmg")" > "$(basename "$dmg").sha256" )
+
+    log "done: $dmg ($(du -sh "$dmg" | cut -f1))"
+    log "sha256: $(cut -d' ' -f1 < "$dmg.sha256")"
+
+    cat >&2 <<EOF
+
+This image is UNSIGNED and UNNOTARIZED. Signing lands at M7
+(see docs/ROADMAP.md). Until then, macOS will refuse to open the app on a
+double-click, and every release note must say so and give this bypass:
+
+    1. Drag the app to Applications.
+    2. Right-click it in Applications and choose Open.
+    3. Confirm once. Subsequent launches are normal.
+
+Do not tell users to disable Gatekeeper globally. The per-app bypass above is
+enough, and turning Gatekeeper off makes their whole machine less safe to run
+one unsigned browser.
+EOF
+}
+
+main "$@"

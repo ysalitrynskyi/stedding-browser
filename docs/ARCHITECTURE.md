@@ -364,35 +364,44 @@ Recorded as they were actually hit on the reference machine, not imagined.
   <pid>` on the offender restores it without killing anything — total `clang` CPU went
   back to 380% immediately. Worth knowing before concluding a build has hung.
 
-- **The `official` build hangs in the HTTP disk cache and so loads no page.** Open,
-  cause not yet known, diagnosis precise. Found at M0.
+- **The `official` build never initialises its SQLite databases, so no page loads.**
+  Open, cause not yet known. Found at M0.
 
-  The symptom is that the browser starts normally — every child process, `chrome://`
-  pages, a tab with the correct URL — and then nothing loads. `https://example.com`
-  gives a DevTools page target with an **empty title** where `release` gives "Example
-  Domain". No crash, no error, no `net_error`.
+  The symptom: the browser starts normally — every child process, `chrome://` pages, a
+  tab with the correct URL — and then nothing loads. `https://example.com` gives a
+  DevTools page target with an **empty title** where `release` gives "Example Domain".
+  No crash, no error, no `net_error`.
 
-  A NetLog (`--log-net-log=<file>`, which needs no UI) locates it exactly. The request
-  is identical in both builds up to `COMPUTED_PRIVACY_MODE`. `release` then proceeds
-  through `NETWORK_DELEGATE_BEFORE_START_TRANSACTION` and `HTTP_CACHE_GET_BACKEND` to a
-  response. `official` **stops there and emits nothing further** — a hang, not a
-  failure, which is why no error surfaces anywhere.
+  The cause is in the profile's on-disk databases, not the network. Compare fresh
+  profiles after loading one page:
 
-  Confirmed by elimination, all against the same `official` binary:
+  | | `release` | `official` |
+  |---|---|---|
+  | `Default/Network/Cookies` | created, 20 KB | **never created** |
+  | `Default/History` | created | created, **no tables** |
+
+  A NetLog (`--log-net-log=<file>`, which needs no visible window) shows the request
+  identical in both builds up to `COMPUTED_PRIVACY_MODE`, after which `release`
+  continues to `NETWORK_DELEGATE_BEFORE_START_TRANSACTION` and a response while
+  `official` emits nothing further. That gap is where the cookie store is consulted,
+  and every network request consults it — so a cookie store that never comes up stalls
+  every navigation while leaving `chrome://` pages, which need no cookies, working.
+
+  Confirmed by elimination against the same binary. Only in-memory storage works:
 
   | Run | Result |
   |---|---|
   | normal | empty title |
-  | `--incognito` (in-memory cache) | **"Example Domain"** |
-  | `--disk-cache-size=1` | empty title |
-  | `--disable-features=NetworkServiceSandbox` | empty title |
+  | **`--incognito`** (in-memory cookie store) | **"Example Domain"** |
+  | `--disable-http-cache`, `--use-simple-cache-backend=off`, `--disk-cache-size=1` | empty title |
+  | `--disable-features=NetworkServiceSandbox`, `--disable-gpu` | empty title |
 
-  So the network stack, TLS and the renderer are all fine; the on-disk HTTP cache
-  backend is where it stops. `--incognito` is a diagnostic, not a workaround — a
-  browser that only works in private mode is not a browser.
+  That the HTTP cache flags change nothing, while incognito fixes it, is what rules the
+  cache out and points at SQLite-backed profile storage. `--incognito` is a diagnostic,
+  not a workaround: a browser that only works in private mode is not a browser.
 
   This matters more than an ordinary bug because `official` is the configuration we
-  would *ship* and `release` — the one that works — is explicitly not for users. It was
+  would *ship*, and `release` — the one that works — is explicitly not for users. It was
   found only because M0 requires baselines measured on `official`; a milestone willing
   to accept `release` numbers would have shipped a browser that cannot browse.
 
@@ -403,11 +412,13 @@ Recorded as they were actually hit on the reference machine, not imagined.
   "$APP/Contents/MacOS/Chromium" --user-data-dir=/tmp/p --no-first-run \
       --remote-debugging-port=9333 https://example.com/ &
   sleep 15 && curl -s http://127.0.0.1:9333/json/list   # empty "title" is the signature
+  find /tmp/p -name Cookies                              # absent on a broken build
   ```
 
   Bisection in progress: `tooling/args/official-nopgo.gn` is `official` with
   `chrome_pgo_phase = 0`, separating PGO from ThinLTO and the rest of
-  `is_official_build`. If PGO is exonerated, LTO is next.
+  `is_official_build`. Building `sql_unittests` against each configuration would confirm
+  a miscompiled SQLite directly and is the next step if the bisection is ambiguous.
 
 - **`gsutil` warns that `~/.boto` authentication is deprecated.** Harmless; the
   bootstrap download proceeds anyway.

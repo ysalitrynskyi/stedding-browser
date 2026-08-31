@@ -18,6 +18,7 @@ Every feature carries a tier:
 | **[post-1.0]** | Real Arc behaviour, deferred deliberately, with the reason stated. |
 | **[needs decision]** | Parity here conflicts with a documented out-of-scope item in `ROADMAP.md`, or requires infrastructure we do not have. Listed, not silently dropped. |
 | **[not applicable]** | Exists in Arc but is a property of Arc's business, not a browser capability. |
+| **[deferred]** | Real Arc behaviour, kept in this document, but not in the first releases. Each says why and what would bring it back. |
 
 Where Arc's behaviour is macOS-only, that is noted — convenient, since we are macOS
 first (`decisions/0006-platform-order-macos-first.md`).
@@ -140,27 +141,39 @@ and parity is the target.
 - **Blank Window** **[1.0]** — a fully separate window not sharing the Space's tabs.
 - **Incognito Window** **[1.0]** — Chromium's, with extensions optionally allowed.
 
-## 6. Boosts
+## 6. Boosts — [deferred]
 
-- **Boosts** **[1.0]** — per-site restyling: colour wheel, invert lightness for a dark
-  mode, contrast/brightness/saturation, font presets, size 90–150%, capitalization, and
+Deferred past the first releases by `decisions/0012-defer-boosts-and-easels.md`.
+Specified here so the eventual implementation has something to build against.
+
+- **Boosts** — per-site restyling: colour wheel, invert lightness for a dark mode,
+  contrast/brightness/saturation, font presets, size 90–150%, capitalization, and
   **full CSS and JavaScript editors**.
-- **Zap** **[1.0]** — click a page element to hide it, persisting across that site's
-  pages; `\` restores.
-- **Sharing Boosts** **[needs decision]** — Arc hosted a gallery. The local capability
-  (export/import a Boost as a file) is [1.0]; a gallery is infrastructure.
+- **Zap** — click a page element to hide it, persisting across that site's pages;
+  `\` restores.
+- **Sharing Boosts** — Arc hosted a gallery. The local half (export/import a Boost as a
+  file) is the part worth having; a gallery is infrastructure.
 
-Boosts are the one Arc feature that is *also* a security surface: user JavaScript
-injected per site. Whatever we build here needs a threat model before it ships, not
-after.
+**Why deferred.** Extensions already answer this, and full extension support is a hard
+requirement we are keeping: Stylus does per-site CSS, Violentmonkey does per-site
+JavaScript, uBlock Origin's element picker does Zap. A user can have all three on day
+one without us building or securing them.
+
+**Before any implementation:** Boosts is a script host, and a script host is a security
+surface. User JavaScript injected per site needs a threat model, a permission story, and
+an answer for how a shared Boost cannot become an attack. That work comes first, not
+alongside.
 
 ## 7. Easels and captures
 
 - **Capture Full Page** **[1.0]** — full-page PNG to the downloads folder.
 - **Capture region to Easel** **[1.0]** — grab a rectangle of a page.
-- **Easels** **[post-1.0]** — freeform whiteboards that hold captures, drawings and
-  text, living as pinned tabs and archived to the Library. A substantial product in
-  itself; deferred with the reason stated rather than pretended to be small.
+- **Easels** **[deferred]** — freeform whiteboards that hold captures, drawings and
+  text, living as pinned tabs and archived to the Library. Deferred by
+  `decisions/0012-defer-boosts-and-easels.md`: it is a drawing application inside a
+  browser, it is the single largest item in this document, and it has almost nothing to
+  do with browsing. The page-capture features it feeds remain **[1.0]** — captures are
+  useful with or without a canvas to put them on.
 - **Arc Notes** **[not applicable]** — Arc shipped notes and then removed them in three
   phases during 2024, ending in export-only. Parity with a feature its author deleted
   is not parity; we skip it deliberately.
@@ -245,6 +258,11 @@ restructured honestly, because each collides with a documented out-of-scope item
 
 Until those are settled, "full parity" means *full parity with the local, offline
 capabilities of Arc*, which is the large majority of it, plus explicit gaps here.
+
+Separately, **Boosts and Easels are deferred past the first releases**
+(`decisions/0012-defer-boosts-and-easels.md`). So the honest description of the target
+until that is revisited is **parity minus Boosts and Easels** — which removes the two
+largest items in this document and is most of why parity looked out of reach.
 
 ## Where we deliberately differ
 

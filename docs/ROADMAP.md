@@ -42,6 +42,11 @@ Acceptance criteria:
 
 ## M1 — Branded minimal build, installable .dmg
 
+> **In progress.** Branding is applied and the build produces `Stedding.app` with
+> our icon and bundle identifier `dev.stedding.Stedding`; `tooling/package-dmg`
+> makes an installable image. Outstanding: the network audit, the performance
+> baselines from an `official` build, and the codec decision in ADR 0008.
+
 **Goal:** the same browser, but ours: name, icons, defaults, and zero telemetry —
 delivered as a .dmg a user can install.
 
@@ -218,7 +223,10 @@ Scope:
   updates over HTTPS; update checks contain no identifying data beyond what the
   updater strictly needs (documented in `docs/PRIVACY.md`).
 - Update safety gates from `docs/QUALITY.md`: n-1 upgrade test and rollback path.
-- stedding.dev live: download, release notes, source link, security policy.
+- stedding.dev live: download, release notes, source link, security policy. The site
+  lives in its own repository (`ysalitrynskyi/stedding-site`, Astro, static) and is
+  deliberately not on the path of an update check — see
+  `decisions/0014-github-releases-as-update-channel.md`.
 - Release checklist from `docs/QUALITY.md` adopted as the gate for every release from
   here on.
 

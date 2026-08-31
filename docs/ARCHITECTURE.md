@@ -364,31 +364,50 @@ Recorded as they were actually hit on the reference machine, not imagined.
   <pid>` on the offender restores it without killing anything — total `clang` CPU went
   back to 380% immediately. Worth knowing before concluding a build has hung.
 
-- **The `official` build launches but cannot load any network page.** Open. Found at
-  M0 and not yet explained. The browser starts, the window and all child processes come
-  up, `chrome://` pages render, and a tab is created with the correct URL — and then
-  nothing loads. `https://example.com` gives a page target with an **empty title**
-  where the `release` build gives "Example Domain". No request reaches even a local
-  HTTP server on `127.0.0.1`. There is no crash, no error in stderr beyond the usual
-  missing-API-key warnings, and the NetworkService process is alive.
+- **The `official` build hangs in the HTTP disk cache and so loads no page.** Open,
+  cause not yet known, diagnosis precise. Found at M0.
 
-  This matters more than an ordinary bug: `official` is the configuration we would
-  *ship*, and `release` — the one that works — is explicitly not for users. It was
-  found only because M0 requires baselines measured on `official`. A milestone that
-  had accepted `release` numbers would have shipped a browser that cannot browse.
+  The symptom is that the browser starts normally — every child process, `chrome://`
+  pages, a tab with the correct URL — and then nothing loads. `https://example.com`
+  gives a DevTools page target with an **empty title** where `release` gives "Example
+  Domain". No crash, no error, no `net_error`.
 
-  How to reproduce and inspect, without needing to see a window:
+  A NetLog (`--log-net-log=<file>`, which needs no UI) locates it exactly. The request
+  is identical in both builds up to `COMPUTED_PRIVACY_MODE`. `release` then proceeds
+  through `NETWORK_DELEGATE_BEFORE_START_TRANSACTION` and `HTTP_CACHE_GET_BACKEND` to a
+  response. `official` **stops there and emits nothing further** — a hang, not a
+  failure, which is why no error surfaces anywhere.
+
+  Confirmed by elimination, all against the same `official` binary:
+
+  | Run | Result |
+  |---|---|
+  | normal | empty title |
+  | `--incognito` (in-memory cache) | **"Example Domain"** |
+  | `--disk-cache-size=1` | empty title |
+  | `--disable-features=NetworkServiceSandbox` | empty title |
+
+  So the network stack, TLS and the renderer are all fine; the on-disk HTTP cache
+  backend is where it stops. `--incognito` is a diagnostic, not a workaround — a
+  browser that only works in private mode is not a browser.
+
+  This matters more than an ordinary bug because `official` is the configuration we
+  would *ship* and `release` — the one that works — is explicitly not for users. It was
+  found only because M0 requires baselines measured on `official`; a milestone willing
+  to accept `release` numbers would have shipped a browser that cannot browse.
+
+  Reproduce:
 
   ```bash
   APP=~/chromium/src/out/official/Chromium.app
   "$APP/Contents/MacOS/Chromium" --user-data-dir=/tmp/p --no-first-run \
       --remote-debugging-port=9333 https://example.com/ &
-  sleep 15 && curl -s http://127.0.0.1:9333/json/list
+  sleep 15 && curl -s http://127.0.0.1:9333/json/list   # empty "title" is the signature
   ```
 
-  An empty `title` on the page target is the signature. Bisection is under way:
-  `tooling/args/official-nopgo.gn` is `official` with `chrome_pgo_phase = 0`, which
-  separates PGO from ThinLTO and the rest of `is_official_build`.
+  Bisection in progress: `tooling/args/official-nopgo.gn` is `official` with
+  `chrome_pgo_phase = 0`, separating PGO from ThinLTO and the rest of
+  `is_official_build`. If PGO is exonerated, LTO is next.
 
 - **`gsutil` warns that `~/.boto` authentication is deprecated.** Harmless; the
   bootstrap download proceeds anyway.

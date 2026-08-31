@@ -1,6 +1,7 @@
 # 0008 — Proprietary codecs (H.264, AAC)
 
-Status: Proposed — needs a human decision before M1
+Status: Accepted
+Supersedes the Proposed state of 2026-08-30, decided by the operator 2026-08-31.
 Date: 2026-08-30
 
 ## Context
@@ -49,15 +50,25 @@ The options, as they actually stand:
 
 ## Decision
 
-**Not made.** This ADR exists to hold the question open in the right place rather
-than to let a build flag decide it by default.
+**Ship them.** `proprietary_codecs = true` and `ffmpeg_branding = "Chrome"` in every
+build configuration, so H.264, AAC, MP3 and the MP4 container work as they do in every
+mainstream browser.
 
-It is out of scope for M0, whose build is deliberately vanilla. It must be settled
-before M1 ships anything installable, because a release is a distribution and that is
-what the licensing attaches to.
+The reasoning is the mandate in `../../AGENTS.md`: a technical user should prefer this
+to Chrome within a day. A browser that silently fails on a large share of the web's
+video does not clear that bar, and "we did not want the licensing conversation" is not
+an answer a user cares about.
 
-The decision needs a human: it commits money, or it commits the project to a known
-product gap. An agent should not pick either on the project's behalf.
+**What this obliges us to.** Distributing binaries that decode AVC/H.264 and AAC
+carries patent-licensing obligations, administered by Via LA. Building for yourself is
+not distribution; publishing a `.dmg` is. That obligation attaches at the first public
+release, not now, and it is a cost of being a real browser rather than a reason not to
+be one. It is written here so nobody discovers it at release time.
+
+Two things this does not change. We build with Chromium branding and our own, never
+Google Chrome branding, so no Google licence is implied or relied on. And the codecs
+are compiled in rather than fetched, so there is no new network endpoint and nothing
+for `../PRIVACY.md` to declare.
 
 ## Consequences
 

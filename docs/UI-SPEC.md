@@ -96,8 +96,20 @@ Measured against the table above, not against "looks closer".
 | Sign-in promo pill | Removed — Chromium advertises Google sign-in in the toolbar by default |
 | Centred URL | **Deferred, on purpose** — see below |
 | Space switcher | Not started — blocked on Spaces actually moving tabs (ADR 0015) |
-| Favorites row | Not started |
+| Favorites row | Partly free — pinned tabs in the vertical strip **already** lay out as a grid (`pinned_tab_container_view.cc`, 11 commits/yr). What is left is tile size: Chromium's are 32x32 centred favicons, Arc's are roughly twice that. Not yet changed, because it cannot be checked — see below |
 | Window background tinted per space | Not started — blocked on the same. `Widget::SetUserColorOverride` is the hook |
+
+## Pinned tabs cannot be seeded for a screenshot
+
+Checking the Favorites grid means having pinned tabs, and pinning is a UI
+gesture. The obvious shortcut — writing `pinned_tabs` into a throwaway profile's
+`Preferences`, which is the pref `PinnedTabCodec` reads at startup — does not
+work: Chromium's tracked-preference protection rejects a value it did not write
+itself, and the key comes back empty. That is the anti-tampering feature doing
+its job, and not something to work around.
+
+So the tile-size change waits until it can be looked at, either from a real
+profile or through UI automation. The mechanism is already known to be there.
 
 ## Why the centred URL is deferred
 

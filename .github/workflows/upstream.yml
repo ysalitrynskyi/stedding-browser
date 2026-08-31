@@ -1,0 +1,97 @@
+# Watch Chromium stable and say, every day, whether we are behind.
+#
+# A fork that drifts from upstream ships known vulnerabilities. docs/QUALITY.md
+# commits to shipping a rebased release within 7 days of an in-the-wild exploit
+# fix and 14 days otherwise. That deadline is only meetable if falling behind is
+# noticed the same day rather than the next time somebody happens to look.
+#
+# This cannot build Chromium — see the "CI reality" section of
+# docs/ARCHITECTURE.md — so it does the part it genuinely can: compare the pin
+# against the live stable channel and fail loudly when they diverge.
+
+name: upstream
+
+on:
+  schedule:
+    # Daily, early UTC. Chromium stable releases land on no fixed schedule, so
+    # polling beats guessing.
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check-pin:
+    name: is the pin current
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compare the pin against Chromium stable
+        id: check
+        run: |
+          set -euo pipefail
+          . tooling/chromium-version
+          latest=$(curl -sS --max-time 30 \
+            'https://chromiumdash.appspot.com/fetch_releases?channel=Stable&platform=Mac&num=1' \
+            | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d[0]["version"] if d else "")')
+          [ -n "$latest" ] || { echo "could not reach chromiumdash"; exit 1; }
+
+          echo "pinned=$CHROMIUM_TAG" >> "$GITHUB_OUTPUT"
+          echo "latest=$latest"       >> "$GITHUB_OUTPUT"
+
+          if [ "$CHROMIUM_TAG" = "$latest" ]; then
+            echo "current: $CHROMIUM_TAG"
+            echo "behind=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "behind=true" >> "$GITHUB_OUTPUT"
+          if [ "${CHROMIUM_TAG%%.*}" != "${latest%%.*}" ]; then
+            echo "MILESTONE bump available: M${CHROMIUM_TAG%%.*} -> M${latest%%.*}"
+          else
+            echo "point release available: $CHROMIUM_TAG -> $latest"
+          fi
+
+      - name: Open or update a tracking issue
+        if: steps.check.outputs.behind == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PINNED: ${{ steps.check.outputs.pinned }}
+          LATEST: ${{ steps.check.outputs.latest }}
+        run: |
+          set -euo pipefail
+          title="Chromium stable is at $LATEST; we are pinned to $PINNED"
+          # One open issue at a time. A new issue per day would be noise, and
+          # noise is how a security deadline gets missed.
+          existing=$(gh issue list --state open --label upstream --json number,title \
+                     --jq '.[] | select(.title | startswith("Chromium stable is at")) | .number' | head -1)
+          body=$(printf '%s\n' \
+            "Upstream stable: \`$LATEST\`" \
+            "Our pin: \`$PINNED\` (\`tooling/chromium-version\`)" \
+            "" \
+            "To take it:" \
+            "" \
+            '```bash' \
+            "tooling/update-pin --apply" \
+            '```' \
+            "" \
+            "That moves the pin, syncs, and reports whether the patch series still" \
+            "applies. If a patch conflicts on a routine point release, the patch is" \
+            "in the wrong layer — see docs/ARCHITECTURE.md." \
+            "" \
+            "Security timetable is in docs/QUALITY.md: 7 days for fixes to" \
+            "in-the-wild exploits, 14 days otherwise.")
+          if [ -n "$existing" ]; then
+            gh issue edit "$existing" --title "$title" --body "$body"
+          else
+            gh issue create --title "$title" --body "$body" --label upstream
+          fi
+
+      - name: Fail so the badge goes red while we are behind
+        if: steps.check.outputs.behind == 'true'
+        run: |
+          echo "pinned ${{ steps.check.outputs.pinned }}, upstream ${{ steps.check.outputs.latest }}"
+          exit 1

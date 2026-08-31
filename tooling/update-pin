@@ -1,0 +1,136 @@
+#!/usr/bin/env bash
+# Move the Chromium pin to the newest stable release and prove the patch series
+# still applies.
+#
+# Usage:
+#   tooling/update-pin                  # check only; report and change nothing
+#   tooling/update-pin --apply          # move the pin, sync, verify the series
+#   tooling/update-pin --to 154.0.1.2   # a specific version instead of newest
+#
+# This is the routine that makes ADR 0003 true. A fork that cannot follow
+# upstream stable is a fork that ships known vulnerabilities, and the security
+# gate in docs/QUALITY.md is 7 days for in-the-wild exploits. That deadline is
+# only meetable if this is boring.
+#
+# What it never does: push, commit, or build. It leaves the tree in a state you
+# can inspect, and prints exactly what to do next.
+
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=./lib.sh
+. "$(cd "$(dirname "$0")" && pwd)/lib.sh"
+
+# NOTE: body in main(), called on the last line — see tooling/build-chromium.
+main() {
+    APPLY=0
+    TARGET=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --apply)   APPLY=1; shift ;;
+        --to)      TARGET="${2:-}"; shift 2 ;;
+        -h|--help) sed -n '2,12p' "$0"; exit 0 ;;
+        *)         die "unknown argument: $1" ;;
+      esac
+    done
+
+    command -v curl >/dev/null || die "curl not found"
+    command -v python3 >/dev/null || die "python3 not found"
+
+    log "current pin: $CHROMIUM_TAG (M$CHROMIUM_MILESTONE)"
+
+    if [ -z "$TARGET" ]; then
+      log "asking chromiumdash for the newest stable release for macOS"
+      # One source of truth for "what is stable", queried rather than remembered.
+      TARGET="$(curl -s --max-time 30 \
+        'https://chromiumdash.appspot.com/fetch_releases?channel=Stable&platform=Mac&num=1' \
+        | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d[0]["version"] if d else "")')"
+      [ -n "$TARGET" ] || die "could not determine the newest stable version"
+    fi
+
+    log "newest stable: $TARGET"
+
+    if [ "$TARGET" = "$CHROMIUM_TAG" ]; then
+      log "already on the newest stable; nothing to do"
+      exit 0
+    fi
+
+    # Report the gap in a form a human can act on.
+    cur_major="${CHROMIUM_TAG%%.*}"
+    new_major="${TARGET%%.*}"
+    if [ "$cur_major" != "$new_major" ]; then
+      warn "this is a MILESTONE bump: M$cur_major -> M$new_major"
+      warn "milestone bumps are scheduled work, not a routine security update"
+    else
+      log "same milestone; this should be a routine point-release bump"
+    fi
+
+    if [ "$APPLY" -eq 0 ]; then
+      cat >&2 <<EOF
+
+Check only. Nothing has been changed.
+
+To take it:
+
+    tooling/update-pin --apply
+
+EOF
+      exit 0
+    fi
+
+    # --- from here on we change things -------------------------------------
+    add_depot_tools_to_path
+
+    commit="$(git ls-remote --tags "$CHROMIUM_URL" "refs/tags/$TARGET" 2>/dev/null \
+              | awk '{print $1}' | head -1)"
+    [ -n "$commit" ] || die "upstream has no tag $TARGET"
+
+    log "writing the new pin"
+    python3 - "$STEDDING_ROOT/tooling/chromium-version" "$TARGET" "$new_major" "$commit" <<'PYEOF'
+import io, re, sys, datetime
+path, tag, milestone, commit = sys.argv[1:5]
+s = io.open(path, encoding="utf-8").read()
+s = re.sub(r"^CHROMIUM_TAG=.*$",       f"CHROMIUM_TAG={tag}",             s, flags=re.M)
+s = re.sub(r"^CHROMIUM_MILESTONE=.*$", f"CHROMIUM_MILESTONE={milestone}", s, flags=re.M)
+s = re.sub(r"^CHROMIUM_COMMIT=.*$",    f"CHROMIUM_COMMIT={commit}",       s, flags=re.M)
+s = re.sub(r"^CHROMIUM_PIN_DATE=.*$",
+           f"CHROMIUM_PIN_DATE={datetime.date.today().isoformat()}",      s, flags=re.M)
+io.open(path, "w", encoding="utf-8").write(s)
+PYEOF
+
+    log "syncing the checkout to $TARGET"
+    "$STEDDING_ROOT/tooling/sync-chromium" || die "sync failed; the pin has been written but the tree is not on it"
+
+    log "checking whether the patch series still applies"
+    if "$STEDDING_ROOT/tooling/apply-patches" --check; then
+      cat >&2 <<EOF
+
+The series applies cleanly to $TARGET.
+
+Next:
+    tooling/apply-patches            # put the series on the new pin
+    tooling/build-chromium release
+    tooling/verify-build --app <the built app>
+
+Then commit tooling/chromium-version on its own, as ADR 0007 requires.
+EOF
+      exit 0
+    fi
+
+    cat >&2 <<EOF
+
+The series does NOT apply cleanly to $TARGET.
+
+That is information, not a failure — it is the cost of the patch that broke, and
+it is exactly what this check exists to surface early. To resolve:
+
+    tooling/apply-patches            # stops at the first patch that conflicts
+    # fix the conflict in the checkout, commit it on stedding-work
+    tooling/update-patches           # re-export the series
+
+If a patch has become hard to carry, consider whether it is in the wrong layer.
+docs/ARCHITECTURE.md is explicit that a patch which regularly conflicts on a
+routine point release is a patch to redesign, not a chore to repeat.
+EOF
+    exit 1
+}
+
+main "$@"

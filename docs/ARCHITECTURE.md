@@ -111,7 +111,9 @@ Policy for moving the pin: `decisions/0007-chromium-version-pin.md`.
 - **Python 3** and **git** on `PATH` (depot_tools brings its own copies of both for the
   build itself, but the bootstrap needs a system pair).
 - **Disk:** `tooling/sync-chromium` refuses to start below 150 GB free on the volume
-  holding `$CHROMIUM_ROOT`. Measured usage: TBD at M0 completion.
+  holding `$CHROMIUM_ROOT`, and `tooling/build-chromium` wants 60 GB of its own before
+  it starts. Measured: the checkout is 65 GB and a release build adds 9.3 GB — see
+  "Measured results".
 - **No `node_modules` in any directory above the checkout.** Chromium's TypeScript
   build resolves modules the way node does — by walking up parent directories — so a
   stray `node_modules` in your home directory leaks its `@types` into the build. The
@@ -202,8 +204,11 @@ Two consequences worth knowing:
 
 `tooling/build-chromium` copies `tooling/args/<config>.gn` verbatim into the output
 directory as `args.gn`, so the configuration of any build is recoverable from the build
-itself. It also refuses to build a tree that is not sitting on the pin — a binary whose
-provenance is unclear is worse than no binary.
+itself. It also refuses to build a tree whose provenance is unclear: the checkout must
+be either vanilla at the pin or a descendant of it — that is, the pin with our patch
+series applied, which is what `apply-patches` produces. It reports which of the two it
+found, and how many patches are applied. Anything else — a stray branch, a different
+pin, upstream commits mixed in — is refused.
 
 ### Build configurations
 

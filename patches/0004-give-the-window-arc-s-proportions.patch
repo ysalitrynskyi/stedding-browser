@@ -1,0 +1,228 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Mon, 31 Aug 2026 13:55:18 -0400
+Subject: give the window Arc's proportions
+
+Three changes, all aimed at the gap recorded in docs/UI-SPEC.md between
+Chromium's vertical tab strip and Arc's window chrome.
+
+SteddingBrowserViewLayout rounds the contents corner nearest the tab strip,
+so the window background reads as a mat around the page rather than the page
+running into the corner. Upstream only ever rounds that area in glass mode
+(macOS 26 plus a disabled-by-default feature), and rounds the bottom corner
+rather than the top; this subclasses BrowserViewTabbedLayoutImpl and adjusts
+visuals after layout rather than editing that file, which takes 137 commits a
+year. Where upstream has already chosen radii -- split view, and the shadow box
+it draws under a side panel -- those are kept, because they come with an inset
+that has already pulled the contents off the window edge.
+
+The tab strip gets Arc's proportions: 352 DIP wide by default instead of 240,
+44 DIP tall rows instead of 30, and a 10 DIP pill instead of 8. Width stays
+resizable and pref-backed exactly as before -- only the default moves -- and
+the maximum goes to 480 so the new default is not pinned against it.
+
+Favicons stay at 16 DIP. The spec says 18, but gfx::kFaviconSize is global and
+the icon would not scale with the slot, so the difference is not worth the
+blast radius.
+
+Why: the square, edge-to-edge contents and the narrow, tightly-packed tab rows
+are the two things that most make the window read as Chromium rather than Arc.
+Removable when: upstream's glass frame ships enabled by default and rounds the
+contents on all platforms, and the vertical tab strip's default metrics are
+themable without a patch.
+---
+ chrome/browser/ui/BUILD.gn                    |  2 +
+ chrome/browser/ui/layout_constants.cc         |  5 +-
+ .../ui/tabs/vertical_tab_strip_state.h        |  2 +-
+ .../views/frame/layout/browser_view_layout.cc |  5 ++
+ .../layout/stedding_browser_view_layout.cc    | 49 +++++++++++++++++++
+ .../layout/stedding_browser_view_layout.h     | 43 ++++++++++++++++
+ .../frame/vertical_tab_strip_region_view.h    |  2 +-
+ 7 files changed, 104 insertions(+), 4 deletions(-)
+ create mode 100644 chrome/browser/ui/views/frame/layout/stedding_browser_view_layout.cc
+ create mode 100644 chrome/browser/ui/views/frame/layout/stedding_browser_view_layout.h
+
+diff --git a/chrome/browser/ui/BUILD.gn b/chrome/browser/ui/BUILD.gn
+index bd7c42556fa36..e09872a3d6f24 100644
+--- a/chrome/browser/ui/BUILD.gn
++++ b/chrome/browser/ui/BUILD.gn
+@@ -2709,6 +2709,8 @@ static_library("ui") {
+       "views/frame/layout/browser_view_popup_layout_impl.cc",
+       "views/frame/layout/browser_view_popup_layout_impl.h",
+       "views/frame/layout/browser_view_tabbed_layout_impl.cc",
++      "views/frame/layout/stedding_browser_view_layout.cc",
++      "views/frame/layout/stedding_browser_view_layout.h",
+       "views/frame/layout/browser_view_tabbed_layout_impl.h",
+       "views/frame/main_background_region_view.cc",
+       "views/frame/main_background_region_view.h",
+diff --git a/chrome/browser/ui/layout_constants.cc b/chrome/browser/ui/layout_constants.cc
+index a8b7ef68008b1..e61eacaa2052b 100644
+--- a/chrome/browser/ui/layout_constants.cc
++++ b/chrome/browser/ui/layout_constants.cc
+@@ -145,10 +145,11 @@ int GetLayoutConstant(LayoutConstant constant) {
+       return 20;
+     case LayoutConstant::kMainBackgroundRegionCornerRadius:
+     case LayoutConstant::kToolbarCornerRadius:
+-    case LayoutConstant::kVerticalTabCornerRadius:
+       return 8;
++    case LayoutConstant::kVerticalTabCornerRadius:
++      return 10;
+     case LayoutConstant::kVerticalTabHeight:
+-      return 30;
++      return 44;
+     case LayoutConstant::kVerticalTabPinnedHeight:
+       return 32;
+     case LayoutConstant::kVerticalTabMinWidth:
+diff --git a/chrome/browser/ui/tabs/vertical_tab_strip_state.h b/chrome/browser/ui/tabs/vertical_tab_strip_state.h
+index b46ad7ecdfff7..05a3795f519ab 100644
+--- a/chrome/browser/ui/tabs/vertical_tab_strip_state.h
++++ b/chrome/browser/ui/tabs/vertical_tab_strip_state.h
+@@ -7,7 +7,7 @@
+ 
+ namespace tabs {
+ 
+-inline constexpr int kVerticalTabStripDefaultUncollapsedWidth = 240;
++inline constexpr int kVerticalTabStripDefaultUncollapsedWidth = 352;
+ 
+ // Per-window state for the vertical tab strip.
+ struct VerticalTabStripState {
+diff --git a/chrome/browser/ui/views/frame/layout/browser_view_layout.cc b/chrome/browser/ui/views/frame/layout/browser_view_layout.cc
+index 778997a0f1aec..dfad7c27d53d2 100644
+--- a/chrome/browser/ui/views/frame/layout/browser_view_layout.cc
++++ b/chrome/browser/ui/views/frame/layout/browser_view_layout.cc
+@@ -17,6 +17,7 @@
+ #include "chrome/browser/ui/views/frame/layout/browser_view_layout_delegate.h"
+ #include "chrome/browser/ui/views/frame/layout/browser_view_popup_layout_impl.h"
+ #include "chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.h"
++#include "chrome/browser/ui/views/frame/layout/stedding_browser_view_layout.h"
+ #include "chrome/browser/ui/views/frame/multi_contents_view.h"
+ #include "chrome/browser/ui/web_applications/app_browser_controller.h"
+ #include "components/web_modal/web_contents_modal_dialog_host.h"
+@@ -142,6 +143,10 @@ std::unique_ptr<BrowserViewLayout> BrowserViewLayout::CreateLayout(
+   if (browser) {
+     switch (browser->GetType()) {
+       case BrowserWindowInterface::Type::TYPE_NORMAL:
++        if (base::FeatureList::IsEnabled(stedding::kArcStyleWindow)) {
++          return std::make_unique<SteddingBrowserViewLayout>(
++              std::move(delegate), std::move(views));
++        }
+         return std::make_unique<BrowserViewTabbedLayoutImpl>(
+             std::move(delegate), std::move(views));
+       case BrowserWindowInterface::Type::TYPE_APP:
+diff --git a/chrome/browser/ui/views/frame/layout/stedding_browser_view_layout.cc b/chrome/browser/ui/views/frame/layout/stedding_browser_view_layout.cc
+new file mode 100644
+index 0000000000000..aa8f114f7947f
+--- /dev/null
++++ b/chrome/browser/ui/views/frame/layout/stedding_browser_view_layout.cc
+@@ -0,0 +1,49 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/views/frame/layout/stedding_browser_view_layout.h"
++
++#include <utility>
++
++#include "base/i18n/rtl.h"
++
++#include "chrome/browser/ui/views/frame/multi_contents_view.h"
++#include "ui/gfx/geometry/rounded_corners_f.h"
++
++namespace stedding {
++
++BASE_FEATURE(kArcStyleWindow, "SteddingArcStyleWindow",
++             base::FEATURE_ENABLED_BY_DEFAULT);
++
++}  // namespace stedding
++
++SteddingBrowserViewLayout::SteddingBrowserViewLayout(
++    std::unique_ptr<BrowserViewLayoutDelegate> delegate,
++    BrowserViewLayoutViews views)
++    : BrowserViewTabbedLayoutImpl(std::move(delegate), std::move(views)) {}
++
++SteddingBrowserViewLayout::~SteddingBrowserViewLayout() = default;
++
++void SteddingBrowserViewLayout::DoPostLayoutVisualAdjustments(
++    const BrowserLayoutParams& params) {
++  BrowserViewTabbedLayoutImpl::DoPostLayoutVisualAdjustments(params);
++
++  MultiContentsView* const contents = views().multi_contents_view;
++  if (!contents) {
++    return;
++  }
++
++  // Upstream only rounds the contents in glass mode, and only the corner at the
++  // bottom of the tab strip. Arc rounds the corner where the toolbar meets the
++  // tab strip instead, so add that corner and keep whatever upstream chose for
++  // the rest -- in split view and under a side panel those radii go with an
++  // inset that has already pulled the contents off the window edge.
++  gfx::RoundedCornersF radii = contents->GetBackgroundRadii();
++  if (base::i18n::IsRTL()) {
++    radii.set_upper_right(stedding::kContentsCornerRadius);
++  } else {
++    radii.set_upper_left(stedding::kContentsCornerRadius);
++  }
++  contents->SetBackgroundRadii(radii);
++}
+diff --git a/chrome/browser/ui/views/frame/layout/stedding_browser_view_layout.h b/chrome/browser/ui/views/frame/layout/stedding_browser_view_layout.h
+new file mode 100644
+index 0000000000000..5efd3e2521c51
+--- /dev/null
++++ b/chrome/browser/ui/views/frame/layout/stedding_browser_view_layout.h
+@@ -0,0 +1,43 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_VIEWS_FRAME_LAYOUT_STEDDING_BROWSER_VIEW_LAYOUT_H_
++#define CHROME_BROWSER_UI_VIEWS_FRAME_LAYOUT_STEDDING_BROWSER_VIEW_LAYOUT_H_
++
++#include <memory>
++
++#include "base/feature_list.h"
++#include "chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.h"
++
++namespace stedding {
++
++// Stedding's window chrome: the web contents are rounded away from the corner
++// where the toolbar meets the tab strip, so the window background reads as a
++// mat around the page. See docs/UI-SPEC.md.
++BASE_DECLARE_FEATURE(kArcStyleWindow);
++
++// The radius of the contents corner nearest the tab strip, in DIPs.
++inline constexpr float kContentsCornerRadius = 12.f;
++
++}  // namespace stedding
++
++// Layout for normal tabbed browsers in Stedding. Everything about where views
++// go is inherited; this class only adjusts visuals after layout has run, which
++// keeps it clear of `BrowserViewTabbedLayoutImpl`'s hot layout code.
++class SteddingBrowserViewLayout : public BrowserViewTabbedLayoutImpl {
++ public:
++  SteddingBrowserViewLayout(std::unique_ptr<BrowserViewLayoutDelegate> delegate,
++                            BrowserViewLayoutViews views);
++  SteddingBrowserViewLayout(const SteddingBrowserViewLayout&) = delete;
++  SteddingBrowserViewLayout& operator=(const SteddingBrowserViewLayout&) =
++      delete;
++  ~SteddingBrowserViewLayout() override;
++
++ protected:
++  // BrowserViewTabbedLayoutImpl:
++  void DoPostLayoutVisualAdjustments(
++      const BrowserLayoutParams& params) override;
++};
++
++#endif  // CHROME_BROWSER_UI_VIEWS_FRAME_LAYOUT_STEDDING_BROWSER_VIEW_LAYOUT_H_
+diff --git a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
+index b35f686251462..1cb4980b1ad55 100644
+--- a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
++++ b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
+@@ -65,7 +65,7 @@ class VerticalTabStripRegionView final
+   static constexpr int kUncollapsedMinWidth = 126;
+   // TODO(crbug.com/465832180): Replace constant based width final max width for
+   // view.
+-  static constexpr int kUncollapsedMaxWidth = 400;
++  static constexpr int kUncollapsedMaxWidth = 480;
+   static constexpr int kCollapsedWidth = 56;
+   // TODO(crbug.com/465833741): Determine snapping behavior.
+   static constexpr int kCollapseSnapWidth =

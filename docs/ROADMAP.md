@@ -199,6 +199,12 @@ Scope:
 - Full pass of `docs/QUALITY.md` UX completeness and accessibility gates over M2–M5
   features; fix or explicitly de-scope (ADR) everything that fails.
 - Complete keyboard shortcut reference shipped in-product.
+- A setting for URL elision. The steady-state omnibox shows the bare host, as Arc
+  does; Chrome tried the same thing and withdrew it, on the grounds that a user
+  can misjudge a page from a host a long path would contradict. Ours is narrower
+  -- the full URL returns on focus, and a bad certificate or the existing
+  `kPreventUrlElisionsInOmnibox` pref keeps it visible throughout -- but the
+  choice belongs to the user, not to us. See patch 0005.
 - Known-issues list triaged to zero release-blockers.
 
 Acceptance criteria:

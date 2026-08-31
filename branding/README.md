@@ -31,21 +31,46 @@ validates the file the same way upstream will, before installing it.
 
 That is why the explanations live in this README rather than in the file itself.
 
+## Generated, not authored
+
+Everything except `BRANDING` is produced by:
+
+```bash
+python3 tooling/brand/generate.py
+```
+
+from the single geometry definition in `tooling/brand/mark.py`. Do not hand-edit
+the SVGs, PNGs, `app.icns` or `Assets.car` — change the mark and re-run. Hand-
+edited derivatives drift apart from each other; generated ones cannot.
+
+`public/` is a drop-in web brand folder (favicons, social card, logo variants)
+and `public/_preview.html` shows every asset, with the small sizes at actual
+size. `public/README.md` has the palette and the reasoning.
+
+## The macOS icon needs three files, not one
+
+Replacing `app.icns` alone leaves the old icon showing. Modern macOS reads the
+compiled asset catalog:
+
+| File | What reads it |
+|---|---|
+| `mac/app.icns` | older macOS, some tooling |
+| `mac/Assets.car` | modern macOS — compiled from `mac/Assets.xcassets` with `actool` |
+| `mac/AppIcon.icon` | macOS 26's vector format, authored in Icon Composer |
+
 ## Status
 
-`BRANDING` is real. **The icons are not written yet** and this directory does not
-contain them; `tooling/apply-branding` copies whatever is present and reports what is
-missing rather than substituting anything. A build with no icon here keeps Chromium's,
-which is honest and obvious, rather than shipping a placeholder that might survive to
-a release.
+`BRANDING`, `app.icns` and `Assets.car` are real and applied.
 
-Icon requirements when they are made: `app.icns` needs the full set of sizes macOS
-expects (16 through 1024 at 1x and 2x). `AppIcon.icon` is the newer vector source and
-is compiled at build time; `Assets.car` is prebuilt and simply copied.
+**`AppIcon.icon` is still Chromium's.** It is macOS 26's new vector icon format,
+which is authored in Icon Composer rather than generated from an SVG, so ours
+does not exist yet. `tooling/apply-branding` reports it as absent on every run
+rather than substituting a placeholder — a placeholder icon is exactly the kind
+of thing that survives to a release.
 
 ## Reverting
 
 The files this overwrites are tracked in the Chromium repository, so
-`tooling/apply-branding --revert` restores them with `git checkout`. Applying branding
-leaves the Chromium checkout dirty by design: that is what makes it visible in
-`git status` and trivially reversible.
+`tooling/apply-branding --revert` restores them with `git checkout`. Applying
+branding leaves the Chromium checkout dirty by design: that is what makes it
+visible in `git status` and trivially reversible.

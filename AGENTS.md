@@ -55,22 +55,35 @@ Concretely (full detail in `docs/QUALITY.md`):
 
 ## State of the project
 
-**M0 nearly complete** — the vanilla Chromium build works.
+**M1 in progress** — Stedding builds, brands and packages; features are landing.
 
-Done: the build tooling in `tooling/`; the upstream pin at `153.0.8010.12`
-(`tooling/chromium-version`, policy in `docs/decisions/0007-chromium-version-pin.md`);
-repository hygiene checks and CI; the performance measurement harness; and **a vanilla
-`release` build that passes `tooling/verify-build`** — it renders, does WebGL 1 and 2,
-decodes VP9 and AV1, and browses. Measured build times and sizes are recorded in
-`docs/ARCHITECTURE.md`.
+Done:
 
-Outstanding for M0: the `official` build (PGO + LTO), which is what performance
-baselines must be measured on, and those baselines themselves.
+- Build tooling in `tooling/` — sync, patch series, branding, build, verify,
+  measure, package, and `update-pin` for following upstream.
+- Upstream pinned at `153.0.8010.12` (`tooling/chromium-version`, policy in
+  `decisions/0007-chromium-version-pin.md`). A daily workflow opens an issue the
+  day stable moves ahead of us.
+- **Branding applied**: the build produces `Stedding.app`, bundle id
+  `dev.stedding.Stedding`, wearing our icon. The whole brand system is generated
+  from one geometry file by `tooling/brand/generate.py`.
+- **Patch series, three deep**: vertical tabs on by default; a `FOLDER` tab
+  collection type; the Space model. All compile, and the Space model's nine unit
+  tests pass in the real `unit_tests` binary.
+- Repository hygiene checks and CI, and the performance measurement harness.
 
-There is still nothing installable. A built `Chromium.app` is not a product: it has
-Chromium's branding, Chromium's defaults, and no packaging. That is M1.
+Outstanding:
 
-See `docs/ROADMAP.md` for the milestone ladder and acceptance criteria.
+- **No release.** Builds are unsigned, so macOS needs a right-click to open
+  them; signing and notarisation are M7. Nothing is published.
+- **No performance baselines.** They must come from an `official` build, which
+  builds but has not been measured.
+- Switching tabs between Spaces, which must land together with the session
+  persistence fix — see the note under Current priorities.
+
+See `docs/ROADMAP.md` for the milestone ladder, `docs/IMPLEMENTATION.md` for how
+each remaining feature is built, and `docs/EVIDENCE.md` for what Arc switchers
+actually ask for.
 
 ## Map of the docs
 
@@ -106,9 +119,13 @@ See `docs/ROADMAP.md` for the milestone ladder and acceptance criteria.
 
 ## Current priorities (keep this list short and fresh)
 
-1. M0: finish the `official` build and record the vanilla performance baselines with
-   `tooling/measure/harness.py`. Baselines must come from `official`, not `release` —
-   `docs/QUALITY.md` forbids quoting numbers from a build nobody ships.
-3. Branding patch-set: name, icons, user agent, default settings (M1). Needs a
-   decision on proprietary codecs (H.264/AAC) — a licensing question, not a
-   technical one.
+1. **Space switching plus session persistence, as one change.** Chromium's session
+   compaction rebuilds only from the live tab strip every 250 writes, so tabs parked
+   in an inactive Space would silently vanish. Landing switching without the
+   persistence fix loses people's tabs — the single largest bug cluster on the
+   comparable project (`docs/EVIDENCE.md`).
+2. Record the vanilla performance baselines with `tooling/measure/harness.py`, from an
+   `official` build. `docs/QUALITY.md` forbids quoting numbers from `release`.
+3. Peek, then the command bar (`docs/IMPLEMENTATION.md` has the seams and costs).
+4. Proprietary codecs (H.264/AAC) still need a human decision — a licensing
+   question, not a technical one (`decisions/0008-proprietary-codecs.md`).

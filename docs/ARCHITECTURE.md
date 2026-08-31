@@ -519,13 +519,23 @@ signing/notarization lands at M7. Builds before that — including M2, the first
 pre-alpha — ship unsigned, with the Gatekeeper bypass documented alongside each
 release.
 
-Auto-update engine is an **open decision needing an ADR** before the first
-auto-updating release (M7): **Sparkle** (standard, well-understood on macOS, appcast + EdDSA signatures)
-vs **Chromium's own open-source updater** (`chrome/updater`, cross-platform, heavier
-to operate). Evaluation criteria: patch cost, operational burden of the update server,
-Windows/Linux story, delta-update support. Full-size updates first; **delta updates
-are a later optimization** (a Chromium app is large, so deltas matter, but correctness
-and signature verification come first).
+**Update checks go to the GitHub Releases API** — `decisions/0014-github-releases-as-update-channel.md`.
+The browser compares its version against the latest release of the repository and says
+when a newer one exists. No account, no identifier, no telemetry; GitHub sees an IP and
+a timing pattern, and `PRIVACY.md` names that endpoint rather than glossing it. The
+check is off until it has a settings entry, per the UX completeness rule in
+`QUALITY.md`.
+
+That decision removes the update *server* from the project: the release artifacts and
+the update metadata are the same objects, so there is nothing extra to run, secure or
+pay for. What stays open for M7 is whether we ever download and apply updates
+automatically, and with what — Sparkle and `chrome/updater` are both still candidates
+for that, and both need signing first. Full-size updates before deltas; correctness and
+signature verification before either.
+
+**stedding.dev is a website, not infrastructure.** Separate repository, Astro, static.
+Download link, release notes, security policy, source link. Deliberately not on the path
+of an update check: if the site is down, updates still work.
 
 ## Upstream tracking
 

@@ -71,8 +71,18 @@ Acceptance criteria:
 
 ## M2 — Sidebar with vertical tabs (first public pre-alpha)
 
-**Goal:** the first visible product differentiator: the Arc-style sidebar replaces the
-horizontal tab strip. First build we publish for strangers to try.
+**Goal:** the Arc-style sidebar replaces the horizontal tab strip. First build we
+publish for strangers to try.
+
+> **Since this was written, upstream shipped vertical tabs.** Chromium 153 has a
+> landed `VerticalTabStripRegionView` with collapse, pinning, drag-reorder and
+> persisted state, enabled by default behind a user pref. M2 therefore builds on it
+> rather than replacing the tab strip — see
+> `decisions/0010-ride-upstream-vertical-tabs.md`. That makes M2 much cheaper, and it
+> means the sidebar by itself is no longer a differentiator. What still distinguishes
+> Stedding is workspaces, the command bar, split view, privacy defaults and
+> governance. Whether that changes the product's positioning is an open question for
+> a human, recorded in ADR 0010.
 
 Scope:
 
@@ -81,8 +91,11 @@ Scope:
   previews are deliberately not listed: they are not in the product spec, and adding
   scope here rather than there is how a phantom requirement gets built.
 - Collapse/expand the sidebar; toggle shortcut; state persists across restarts.
-- Horizontal tab strip removed: the sidebar fully replaces it, as specified in
-  `docs/PRODUCT.md`; the already-specified decision is recorded in an ADR.
+- Vertical tabs on by default: the `vertical_tabs.enabled` pref defaults on, so the
+  sidebar fully replaces the horizontal strip as specified in `docs/PRODUCT.md`. Any
+  look-and-feel divergence lives in a subclass in new files, never as edits to
+  `browser_view.cc` or `vertical_tab_strip_region_view.cc` — 412 and 181 commits a
+  year respectively.
 - Keyboard: all existing Chromium tab shortcuts still work; sidebar-specific shortcuts
   documented in the shortcut reference.
 - Pre-alpha release published on GitHub with known-issues list.

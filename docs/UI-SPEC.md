@@ -74,6 +74,13 @@ Screenshot the built browser at the reference window size, put it beside the Arc
 reference, and compare. Differences are logged here as they are fixed. "Looks
 close" is not a check — the comparison image goes in the pull request.
 
+## Where it stands
+
+![The Stedding window today](images/ui-current.png)
+
+Captured with `tooling/capture-ui` at 1400x880. Numbers below are measured from
+that image, not estimated.
+
 ## Progress
 
 Measured against the table above, not against "looks closer".
@@ -81,15 +88,31 @@ Measured against the table above, not against "looks closer".
 | Item | State |
 |---|---|
 | Contents corner nearest the tab strip | Done — 12 px, `SteddingBrowserViewLayout`, measured at 12 pt in the capture |
-| Sidebar width | Done — 352 px default, still resizable and pref-backed |
-| Tab row height | Done — 44 px (Chromium's default is 30) |
+| Sidebar width | Done — 352 px, measured in the capture |
+| Tab row height | Done — 44 px, measured in the capture (Chromium's default is 30) |
 | Active tab pill radius | Done — 10 px |
 | Favicon size | **Deliberately not done.** 16 px, not 18. `gfx::kFaviconSize` is global and the image would not scale with the slot |
 | Bare-host URL | Done — unfocused only; the full URL returns on focus. Verified in the capture |
-| Centred URL | Not started — needs spacers in `ToolbarView`'s flex layout |
-| Space switcher | Not started — blocked on Spaces actually switching tabs |
+| Sign-in promo pill | Removed — Chromium advertises Google sign-in in the toolbar by default |
+| Centred URL | **Deferred, on purpose** — see below |
+| Space switcher | Not started — blocked on Spaces actually moving tabs (ADR 0015) |
 | Favorites row | Not started |
-| Window background tinted per space | Not started — `Widget::SetUserColorOverride` is the hook |
+| Window background tinted per space | Not started — blocked on the same. `Widget::SetUserColorOverride` is the hook |
+
+## Why the centred URL is deferred
+
+Everything else in the table was reachable either through a subclass or by
+moving a default. Centring the URL is not: it needs two flexible spacer views
+either side of the location bar and a changed flex rule, and `InitLayout()` is
+private and non-virtual, so it cannot be done from a subclass.
+
+That means editing `toolbar_view.cc` — 2,010 lines and **205 commits a year**,
+the most-churned file this project would touch. `ARCHITECTURE.md` asks for a
+minimal patch series that rebases cheaply, and this would be the single most
+expensive patch in it, bought for the least visible of the four differences.
+
+It is deferred until either the toolbar grows a seam we can subclass, or the
+rest of the sidebar is done and this is genuinely the last thing left.
 
 ## Known gaps
 

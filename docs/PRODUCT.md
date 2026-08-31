@@ -1,237 +1,256 @@
-# Product Specification
+# Product specification
 
-This is the feature specification for Stedding Browser 1.0 and beyond. Every feature
-is marked **[1.0]** or **[post-1.0]**. A feature marked [1.0] ships complete — behavior,
-keyboard shortcuts, settings entry, edge cases — or 1.0 does not ship. See
-`docs/QUALITY.md` for the bar and `docs/ROADMAP.md` for sequencing.
+**Stedding targets full functional parity with Arc**, per
+`decisions/0011-full-arc-parity.md`. This document is the inventory of what that means,
+written from Arc's own documentation rather than from recollection, and using Arc's
+terminology for Arc's concepts so it can be checked against the thing it copies.
 
-**Keyboard-first is a core principle.** Every feature below includes its shortcut
-story. All shortcuts listed are defaults and are remappable in Settings → Shortcuts.
-Shortcuts are given in macOS notation; Windows/Linux substitute Ctrl for Cmd unless
-noted otherwise.
+Arc is a fixed target: its maker put it in maintenance mode in May 2025 and moved to
+Dia (`COMPETITORS.md`). That is what makes parity finishable.
 
-## Sidebar [1.0]
+## How to read this
 
-The sidebar replaces the horizontal tab strip entirely. It contains, top to bottom:
-the current space's pinned tabs, its regular ("today") tabs, and the space switcher.
+Every feature carries a tier:
 
-- **Vertical tabs.** Tabs are rows: favicon, title, close affordance on hover, audio
-  indicator when playing. Active tab is visually distinct. Tab order is manual.
-- **Pinned tabs.** Pinning moves a tab to the pinned section. Pinned tabs persist
-  across restarts, never auto-archive, and keep their assigned URL: navigating away
-  within a pinned tab is allowed, but activating it again after it has been closed
-  reloads its pinned URL. Closing a pinned tab unloads it without removing it.
-- **Today tabs with auto-archive.** Regular tabs are ephemeral by design. A tab
-  untouched for a configurable period (default: 12 hours; options include 24 hours,
-  7 days, never) is archived automatically — removed from the sidebar, recorded in
-  the archive timeline (see Tab management). Nothing is deleted; archive is always
-  recoverable.
-- **Drag organization.** Tabs reorder by drag, move between pinned and today sections
-  by drag, and move to another space by dragging onto that space's name in the
-  switcher. Dragging a tab into the page area creates a split (see Split view).
-- **Folders.** Pinned tabs can be grouped into named, collapsible folders. [1.0]
-- **Collapse.** The sidebar collapses to hide all chrome, leaving only the page.
-  A hover zone at the window edge reveals it temporarily. Collapsed state persists
-  per window.
+| Tier | Meaning |
+|---|---|
+| **[1.0]** | Required for parity. Ships before 1.0. |
+| **[post-1.0]** | Real Arc behaviour, deferred deliberately, with the reason stated. |
+| **[needs decision]** | Parity here conflicts with a documented out-of-scope item in `ROADMAP.md`, or requires infrastructure we do not have. Listed, not silently dropped. |
+| **[not applicable]** | Exists in Arc but is a property of Arc's business, not a browser capability. |
 
-Keyboard: `Cmd+S` toggle sidebar; `Cmd+W` archive current tab; `Cmd+Shift+W` close
-window; `Ctrl+Tab` / `Ctrl+Shift+Tab` next/previous tab in most-recently-used order
-(hold to see a switcher overlay); `Cmd+1`–`Cmd+8` jump to Nth tab, `Cmd+9` last tab;
-`Cmd+D` pin/unpin current tab (bookmark-add is folded into pinning); arrow keys move
-through the sidebar when it has focus, `Enter` activates, `Space` previews.
+Where Arc's behaviour is macOS-only, that is noted — convenient, since we are macOS
+first (`decisions/0006-platform-order-macos-first.md`).
 
-## Workspaces (Spaces) [1.0]
+Shortcuts are Arc's documented macOS shortcuts. Ours may differ where they collide with
+Chromium bindings; every deliberate divergence belongs in the in-product shortcut
+reference (`QUALITY.md`).
 
-A space is a named set of pinned and today tabs with its own visual identity.
-Typical use: Work / Personal / Project X.
+---
 
-- **Separate tab sets.** Each space has independent pinned tabs, today tabs, and
-  folders. Switching spaces swaps the sidebar content; loaded pages stay loaded.
-- **Profile association.** By default all spaces share one Chromium profile (cookies,
-  storage, extensions). A space can instead be bound to a separate profile at
-  creation, giving it isolated cookies, logins, and extension set — true
-  work/personal separation. Binding is per-space and explicit; the UI states plainly
-  which spaces share state. Moving a tab between spaces with different profiles
-  reloads it in the target profile.
-- **Per-space accent color.** Each space has an accent color used in the sidebar
-  background tint, active-tab highlight, and window accents, so the active space is
-  identifiable at a glance (see Appearance).
-- **Per-space defaults.** New-tab search engine and download directory are settable
-  per space. [post-1.0]
-- **Default containers.** A space bound to a separate profile acts as a container:
-  links opened from within it stay in it. Rules that route specific domains to a
-  specific space ("always open github.com in Work") are [post-1.0].
-- **Fast switching.** Switching is instant — no profile relaunch, even for
-  profile-bound spaces; all profiles are live within one browser process tree.
+## 1. Sidebar and tabs
 
-Keyboard: `Ctrl+1`–`Ctrl+9` jump to space by position; `Cmd+Option+Left/Right`
-previous/next space; space switching is also first-class in the command bar
-(type the space name). `Cmd+Shift+N` creates a new space. On Windows/Linux,
-space switching is `Alt+1`–`Alt+9` instead: the Cmd→Ctrl substitution gives
-`Ctrl+1`–`Ctrl+8` to the Nth-tab jump, so spaces move to `Alt`.
+The sidebar is the primary surface. It has, top to bottom: **Favorites**, the Space
+title, **Pinned Tabs**, a horizontal divider, **Unpinned Tabs**, and at the bottom the
+Space icons, the Library, and a `+` control.
 
-## Command bar [1.0]
+- **Sidebar** **[1.0]** — vertical tab strip replacing the horizontal strip. Show/hide
+  with `⌘S`. State persists.
+- **Pinned Tabs** **[1.0]** — saved per Space, above the divider, never auto-archived.
+  `⌘D` pins. Arc describes them as between an app and a bookmark: navigating *within*
+  the site stays in the tab; **a link that would leave the site opens Peek instead of
+  replacing the pinned page**. Clicking the favicon resets the tab to its pinned URL.
+- **Favorites** **[1.0]** — pinned tabs visible in *every* Space, shown above Space
+  titles, **capped at 12**. Distinct from Pinned Tabs; a spec that conflates the two
+  gets the model wrong.
+- **Unpinned Tabs** **[1.0]** — below the divider, auto-archived when idle.
+  `⌘⇧K` clears them as a set.
+- **Folders** **[1.0]** — group tabs; **tabs in folders do not auto-archive**. Created
+  from `+`. Rename, move, delete from the folder title's context menu. Drag to add.
+- **No bookmarks** **[1.0]** — Arc has none, by design. Pinned Tabs replace them.
+  Imported bookmarks land as pinned tabs and folders.
+- **Tab switching** **[1.0]** — `⌘⌥↑/↓` moves in sidebar order; `⌘1`…`⌘9` jumps to tab
+  N; `⌃⇥` cycles the five most recently visited.
+- **Favicons** **[1.0]** — per tab; a "navigated away" indicator appears when a pinned
+  tab has left its URL, and the favicon is the reset control.
+- **Audio indicator and mute** **[1.0]** — click to mute; right-click mutes a tab that
+  is not currently playing; mutable from within a Split View.
+- **Collapse Pinned Tabs** **[1.0]** — hide the pinned list without hiding the sidebar.
+  Requires the Space to be named.
+- **Previews on hover** **[post-1.0]** — hovering a pinned/favorited tab glances the
+  site: recent mail, upcoming calendar events, open PRs. Deferred because each
+  supported site is a bespoke integration; the hover affordance itself is [1.0].
+- **Rename tab** **[1.0]** — double-click.
+- **Drag tab out → Blank Window** **[1.0]** — a genuinely separate window, distinct
+  from a Space-synced one.
+- **Sidebar backups** **[1.0]** — restore prior sidebar states: 10 for today, 1/day for
+  10 days, 1/week for a month, 1/month for a year. Distinct from the tab Archive.
+- **Copy URL, and copy as Markdown** **[1.0]** — `⌘⇧C`.
+- **Reopen closed tab** **[1.0]** — `⌘⇧T`.
 
-One entry point for everything, in the spirit of a code editor's command palette.
-Opens as a centered overlay. There is no separate, always-visible URL bar; the
-current URL is shown compactly at the top of the sidebar and expands on focus.
+## 2. Spaces
 
-A single input, fuzzy-matched across ranked providers:
+- **Spaces** **[1.0]** — distinct browsing areas, each with its own pinned section,
+  unpinned section, theme and icon. `⌃1`…`⌃N` focuses a Space; two-finger swipe in the
+  sidebar switches; icons live at the sidebar bottom.
+- **Create, rename, reorder** **[1.0]** — `+` creates; rename from the menu bar;
+  drag the Space icon to reorder.
+- **Theme and icon** **[1.0]** — per-Space colour theme picker. The same picker also
+  sets app-wide light/dark/automatic.
+- **Per-Space Profiles** **[1.0]** — bind a Space to a profile. A profile scopes
+  logins, cookies, history, archive timing, default-browser choice, favorites and
+  extensions. New profiles start empty.
+- **Move tabs between Spaces** **[1.0]** — command bar "Move to [Space]", right-click,
+  or drag sideways.
+- **Air Traffic Control** **[1.0]** — rules routing URLs to Spaces: *contains* or
+  *is equal to* → destination Space, plus a default destination for links opened from
+  other applications. This is one of Arc's most distinctive features and is easy to
+  overlook.
+- **Live Folders (GitHub)** **[post-1.0]** — a sidebar folder auto-populated with your
+  open pull requests, filterable by author, draft state or repository. A bespoke
+  integration; deferred, not dropped.
+- **Live Calendars** **[post-1.0]** — a pinned calendar shows a countdown to the next
+  event and a Join button. Same reasoning.
+- **Share Space** **[needs decision]** — publishes a snapshot of a Space to a public
+  URL. Requires hosting we do not have, and it is a publishing feature with privacy
+  consequences (shared links cannot be deleted by the sharer). The local half —
+  exporting a Space — is [1.0].
+- **Share Quote** **[needs decision]** — same: a hosted link whose preview image
+  contains the quoted text.
 
-1. **Open tabs** — switch to a matching tab in any space (labeled with its space).
-2. **URL / search** — anything URL-like navigates; anything else searches with the
-   default engine. Explicit prefixes force a provider (`?` search, `#` tabs,
-   `>` commands, `@` history, `*` bookmarks/pinned).
-3. **History and bookmarks/pinned** — fuzzy over title and URL.
-4. **Browser commands** — every menu action and every feature in this document is
-   invocable by name ("Split right", "Archive tab", "New space", "Toggle dark
-   mode"). Each result shows its shortcut, which is how users discover shortcuts.
-5. **Extension actions** — installed extensions' actions and their registered
-   commands appear as results.
+## 3. Command Bar
 
-Behavior: results update per keystroke; `Enter` acts on the top result; `Cmd+Enter`
-opens a URL/search result in a new tab; ranking blends match quality with recency
-and frequency of use. Matching is local; nothing typed is sent anywhere except the
-chosen search engine on an explicit search, and search suggestions are off by
-default (`docs/PRIVACY.md`).
+- **Command Bar** **[1.0]** — Arc's combined new-tab, URL bar, search, tab switcher and
+  action palette. `⌘T` opens it; `⌘L` opens it targeting the current tab's URL. There is
+  no always-visible URL bar.
+- **Actions mode** **[1.0]** — `⇥` immediately after `⌘T` filters to actions. Every
+  Stedding feature must be reachable here; that is already a `QUALITY.md` gate.
+- **Site Search** **[1.0]** — one- or two-letter shortcuts that search a site directly
+  from the command bar, configurable with a `%s` URL template.
+- **Full URL in Toolbar** **[1.0]** — `⌘⇧D` reveals a toolbar with the full URL, for
+  people who want one.
+- **Instant Links** **[needs decision]** — `⇧↵` opens the top result instead of the
+  results page. The non-AI half is a lucky-style navigation; the "Folder of …" variant
+  is AI. See §8.
+- **Ranking** **[1.0]** — Arc never documented its ranking function. Ours will be
+  specified rather than inherited, since we cannot copy what was never published.
 
-Keyboard: `Cmd+T` opens the command bar (new-tab intent); `Cmd+L` opens it with the
-current URL selected (edit intent); `Esc` closes; `Up/Down` move selection; `Tab`
-cycles provider filters.
+## 4. Split View
 
-## Split view [1.0]
+- **Split View** **[1.0]** — multiple tabs in one window, **horizontal or vertical**.
+  Created by shortcut, by dragging a sidebar tab to the centre, or from the command bar.
+- **A split is a tab** **[1.0]** — it appears in the sidebar as a single item and can be
+  pinned, favorited and renamed as a unit. This is the part most clones miss.
+- **Persistence** **[1.0]** — returning to that sidebar item restores the split.
 
-- **Creation.** Drag a tab from the sidebar to the left or right half of the page
-  area, or use the command bar ("Split right with…"), or `Cmd+Shift+D` to split the
-  current tab with the next tab.
-- **Panes.** Two panes side by side at 1.0. Three or more panes and 2×2 grids are
-  [post-1.0]. Each pane is a full tab: its own navigation, its own history, its own
-  audio. The focused pane has a visible highlight and receives all keyboard input,
-  including shortcuts like `Cmd+L` and `Cmd+W` (which closes only that pane,
-  collapsing the split when one pane remains).
-- **Resizing.** Panes resize by dragging the divider; double-click the divider to
-  reset to 50/50.
-- **Persistence.** A split is a sidebar item: it appears as one grouped row, is
-  restored across restarts, and archives as a unit.
+Note: this supersedes the earlier "exactly two panes at 1.0" scope. Arc supports more,
+and parity is the target.
 
-Keyboard: `Cmd+Shift+D` split with next tab; `Cmd+Option+Up/Down` cycle pane focus
-(`Cmd+Option+Left/Right` is taken by space switching); "Swap panes", "Close pane",
-and "Break split into tabs" are command-bar commands with assignable shortcuts.
+## 5. Transient windows
 
-## Tab management: archive and restore [1.0]
+- **Peek** **[1.0]** — a link from a pinned or favorited tab opens in a transient
+  overlay rather than navigating the pinned tab away. Expand to a real tab with `⌘O`,
+  promote into a split, or dismiss by clicking outside. **Peek is what makes pinned
+  tabs behave like apps**; without it, pinning is just a bookmark.
+- **Little Arc** **[1.0]** — a small window for links opened from *other applications*,
+  to read and dismiss or triage into the sidebar. `⌘⌥N` opens one anywhere. Archives on
+  its own schedule (6 hours by default, against 12 for normal tabs).
+- **Folder peek** **[post-1.0]** — hover a closed folder, search or scroll its contents,
+  open one tab without expanding the folder.
+- **Blank Window** **[1.0]** — a fully separate window not sharing the Space's tabs.
+- **Incognito Window** **[1.0]** — Chromium's, with extensions optionally allowed.
 
-- **Archive timeline.** Every archived tab (auto-archived, or closed with `Cmd+W`)
-  is recorded with title, URL, favicon, space, and archive time. The archive view
-  is a reverse-chronological, searchable timeline grouped by day, filterable by
-  space. Retention is configurable (default: 30 days, options up to forever);
-  history proper is separate and unaffected.
-- **Restore.** `Enter` on an archive entry reopens the tab in its original space.
-  `Cmd+Shift+T` restores the most recently archived/closed tab, repeatedly, exactly
-  like Chrome's reopen-closed-tab, and also restores closed windows.
-- **Session safety.** Quitting and relaunching restores all spaces, pinned tabs,
-  today tabs, and splits. Crash recovery restores the same.
+## 6. Boosts
 
-Keyboard: `Cmd+Shift+E` opens the archive view; within it, type to search, arrows
-to move, `Enter` restore, `Cmd+Enter` restore without switching to it.
+- **Boosts** **[1.0]** — per-site restyling: colour wheel, invert lightness for a dark
+  mode, contrast/brightness/saturation, font presets, size 90–150%, capitalization, and
+  **full CSS and JavaScript editors**.
+- **Zap** **[1.0]** — click a page element to hide it, persisting across that site's
+  pages; `\` restores.
+- **Sharing Boosts** **[needs decision]** — Arc hosted a gallery. The local capability
+  (export/import a Boost as a file) is [1.0]; a gallery is infrastructure.
 
-## Settings [1.0]
+Boosts are the one Arc feature that is *also* a security surface: user JavaScript
+injected per site. Whatever we build here needs a threat model before it ships, not
+after.
 
-- Opens in a tab. A single search field filters all settings live, including
-  Chromium-inherited ones; every result deep-links to the exact control.
-- **Sane defaults.** Privacy-respecting defaults per `docs/PRIVACY.md` (no
-  telemetry, no search suggestions, tracker blocking on). Auto-archive at 12 hours.
-  Defaults are chosen so a new user never needs Settings on day one.
-- **Everything keyboardable.** Every control is reachable by Tab/arrows and operable
-  by keyboard. Settings → Shortcuts lists every command, shows conflicts, and
-  allows remapping; a "restore defaults" action exists per shortcut and globally.
+## 7. Easels and captures
 
-Keyboard: `Cmd+,` opens Settings with the search field focused.
+- **Capture Full Page** **[1.0]** — full-page PNG to the downloads folder.
+- **Capture region to Easel** **[1.0]** — grab a rectangle of a page.
+- **Easels** **[post-1.0]** — freeform whiteboards that hold captures, drawings and
+  text, living as pinned tabs and archived to the Library. A substantial product in
+  itself; deferred with the reason stated rather than pretended to be small.
+- **Arc Notes** **[not applicable]** — Arc shipped notes and then removed them in three
+  phases during 2024, ending in export-only. Parity with a feature its author deleted
+  is not parity; we skip it deliberately.
+- **New Documents** **[1.0]** — a configurable "new note" action that opens the user's
+  chosen service (Notion, Google Docs, Word, Confluence).
 
-## Import [1.0]
+## 8. Arc Max (AI) — [needs decision]
 
-First-run offers import from **Chrome, Arc, and Brave** (macOS profile locations at
-1.0; Windows/Linux follow their platform releases). Import is re-runnable later
-from Settings.
+Arc Max bundles: 5-second previews on hover, tidy tab titles, tidy downloads, tidy
+tabs, Ask on Page, Instant Links, and ChatGPT in the command bar.
 
-- **Bookmarks, history, open tabs.** Imported directly. Arc import maps spaces to
-  spaces and pinned tabs to pinned tabs; Chrome/Brave bookmark folders can be
-  converted to pinned-tab folders or kept as bookmarks.
-- **Passwords — honest constraints.** Chromium-family browsers encrypt stored
-  passwords with an OS-keychain-protected key. Import therefore triggers OS
-  authentication prompts (macOS will ask for the login keychain / user password,
-  attributed to the source browser), and can only work while the source profile is
-  on the same machine and user account. If access is denied, we say exactly what
-  failed and fall back to guiding a CSV export/import from the source browser,
-  with a one-click secure delete of the CSV afterwards. We never claim a seamless
-  password migration that the OS does not permit.
-- **Extensions — re-install flow.** Extension binaries and their local data are not
-  copied. Import reads the source profile's extension list and presents it with
-  checkboxes; confirming installs each selected extension fresh from the Chrome
-  Web Store. Extensions absent from the store (sideloaded/enterprise) are listed
-  as not importable, with their IDs shown.
-- **Cookies/sessions** are not imported at 1.0; users re-log-in. [post-1.0: opt-in
-  session import where the OS permits.]
+**Every one of these requires a model provider.** `ROADMAP.md` lists built-in AI
+features as out of scope for 1.0, and `VISION.md` is hostile to bundled cloud services.
+Full Arc parity and that out-of-scope list cannot both be true, and this document will
+not paper over it: **this needs a decision**, recorded as its own ADR, covering whether
+Stedding ships AI features at all, and if so whether they are local, bring-your-own-key,
+or hosted.
 
-Keyboard: the import wizard is fully operable by keyboard: arrows/`Space` toggle
-items, `Enter` advances, `Esc` cancels.
+Two are separable and are **[1.0]** because they need no model: *tidy downloads*
+(grouping downloads sensibly) and the *hover preview* affordance itself.
 
-## Extensions [1.0]
+## 9. Media and downloads
 
-Full Chrome Web Store compatibility is a hard requirement (`AGENTS.md`). Users
-install from the Web Store directly; extension APIs, keyboard commands
-(`chrome.commands`), context menus, and DevTools integrations behave as in Chrome.
-Extension toolbar actions live at the bottom of the sidebar and can be hidden
-per-extension; hidden or not, every action remains invocable from the command bar.
-No custom extension store, no allowlist, no "verified" tier at 1.0.
+- **Mini Player / Picture-in-Picture** **[1.0]** — floating video player.
+- **Audio Player** **[1.0]** — playback control for audio tabs; suppressed for muted
+  tabs.
+- **Downloads** **[1.0]** — panel and default location.
+- **Library** **[1.0]** — the archive of easels, captures, downloads and archived tabs,
+  reachable from the sidebar's bottom-left.
 
-## Media: picture-in-picture [1.0]
+## 10. Profiles, windows, sync
 
-Any page video can pop into a floating always-on-top PiP window (site permission
-not required; this is a user action). The PiP window offers play/pause, seek,
-volume, and return-to-tab, and survives tab archiving while playing. Auto-PiP when
-switching away from a playing tab is off by default, available in Settings.
+- **Profiles** **[1.0]** — Chromium profiles, surfaced Arc's way and bound to Spaces.
+- **Multi-window and multi-display** **[1.0]** — tabs in a Space appear in every window
+  showing that Space; Blank Windows are independent.
+- **Arc Sync** **[needs decision]** — cross-device sync of spaces, pinned tabs and
+  order. `ROADMAP.md` puts sync services out of scope and `PRIVACY.md` is emphatic that
+  we run no accounts. Parity here means either running a sync service or offering a
+  self-hosted/file-based alternative. Not decided here.
+- **Recovery Card** **[not applicable]** — recovery for an Arc account we do not have.
+- **Arc account / sign-in** **[not applicable]** — we ship no account. This is a
+  deliberate divergence and a selling point, not a gap.
 
-Keyboard: `Cmd+Option+P` toggles PiP for the active tab's playing video; inside the
-PiP window `Space` play/pause and arrow keys seek.
+## 11. Archive, history, search
 
-## Appearance [1.0]
+- **Auto Archive** **[1.0]** — idle unpinned tabs archive on a schedule, **12 hours by
+  default**, per profile, reset by viewing the tab. In Arc it **cannot be disabled**;
+  we will make it configurable, including off, because a browser that closes your tabs
+  against your wishes is not respecting the user.
+- **View / restore / clear Archive** **[1.0]**.
+- **History** **[1.0]** — `⌘Y`.
+- **Find in page** **[1.0]** — `⌘F`.
 
-- **Light/dark** follows the OS by default; forceable either way in Settings.
-- **Per-space accents** as described under Workspaces: each space picks an accent
-  from a curated palette or a custom color; the accent tints sidebar and highlights
-  in both light and dark modes with contrast maintained.
-- **Themes.** 1.0 ships light, dark, and per-space accents only. Full theming
-  (user-defined palettes, community themes) is [post-1.0]. Chrome Web Store themes
-  are not supported; they target a horizontal-tab layout that does not exist here,
-  and partial support would look broken.
-- **Density.** Compact/comfortable sidebar density toggle. [1.0]
+## 12. macOS integration and the rest
 
-Keyboard: "Toggle dark mode" and "Edit space color" are command-bar commands;
-`Cmd+Shift+L` toggles light/dark override.
+- **Keyboard shortcut customisation** **[1.0]** — Arc has a full remapping settings
+  page. Ours must too; `QUALITY.md` already requires the reference.
+- **Site Control Center** **[1.0]** — per-site permissions and controls from the URL
+  area, and the entry point to Boosts and Developer Mode.
+- **Developer Mode** **[1.0]** — per-site mode with the full URL bar and developer
+  affordances, automatic for localhost.
+- **Extensions** **[1.0]** — full Chrome Web Store compatibility. Already a hard
+  requirement (`AGENTS.md`); `⌘E` cycles them.
+- **Import from another browser** **[1.0]** — already M6.
+- **Multi-select tabs** **[1.0]** — `⌘`/`⇧` click, then act on the selection.
+- **Progressive Web Apps** — Arc does *not* support installing PWAs and points users at
+  Favorites instead. **We should ship PWA support anyway**: parity is the floor, not the
+  ceiling, and this is a case where Arc is simply worse.
+- **Arc Search (iOS/Android)** **[not applicable]** — mobile is out of scope in
+  `ROADMAP.md` and nothing here changes that.
 
-## Developer niceties
+---
 
-- **Flags page [1.0].** `stedding://flags` (Chromium's flags mechanism, inherited)
-  plus a small, documented set of Stedding-specific flags. Experimental features
-  ship behind flags before they ship by default.
-- **Custom CSS/JS per site [post-1.0].** User stylesheets and scripts scoped by
-  domain, managed in Settings, stored locally, with an obvious kill switch. Until
-  then, existing Web Store extensions (e.g. user-style managers) cover this.
-- **stedding:// pages [1.0].** Internal pages (settings, flags, archive, version)
-  use the `stedding://` scheme; `chrome://` equivalents redirect.
+## What parity does not cover
 
-## Scope summary
+Three things in this document need a human decision before the roadmap can be
+restructured honestly, because each collides with a documented out-of-scope item:
 
-| Area | 1.0 | Post-1.0 |
-|---|---|---|
-| Sidebar | Vertical/pinned/today tabs, auto-archive, folders, drag, collapse | — |
-| Spaces | Tab sets, optional profile binding, accents, fast switch | Domain→space rules, per-space search/downloads |
-| Command bar | All five providers, fuzzy matching, prefixes | Custom user commands |
-| Split view | Two panes, drag-to-split, resize, persistence | 3+ panes, grids |
-| Tab management | Archive timeline, search, restore, session restore | — |
-| Settings | Searchable, keyboardable, remappable shortcuts | Settings sync |
-| Import | Chrome/Arc/Brave; bookmarks, history, tabs, passwords (keychain-honest), extension re-install | Opt-in session import |
-| Extensions | Full Chrome Web Store compatibility | — |
-| Media | Picture-in-picture | Auto-PiP refinements |
-| Appearance | Light/dark, per-space accents, density | Full theming |
-| Developer | Flags page, stedding:// pages | Per-site CSS/JS |
+1. **AI features (§8)** — the whole Arc Max bundle.
+2. **Sync (§10)** — requires infrastructure and an account model we have rejected.
+3. **Hosted sharing (§2, §6)** — Share Space, Share Quote, the Boost gallery.
+
+Until those are settled, "full parity" means *full parity with the local, offline
+capabilities of Arc*, which is the large majority of it, plus explicit gaps here.
+
+## Where we deliberately differ
+
+- **No account, ever.** Arc requires one; we do not.
+- **Auto Archive can be turned off.** Arc does not permit that.
+- **PWA support**, which Arc lacks.
+- **No telemetry**, per `PRIVACY.md`.
+- **Open source under BSD**, so the browser cannot be discontinued out from under its
+  users — which is precisely what happened to Arc's.

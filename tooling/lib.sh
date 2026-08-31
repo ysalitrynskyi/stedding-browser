@@ -25,8 +25,12 @@ STEDDING_ROOT="${STEDDING_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 # The file is local state, not configuration to be committed.
 STEDDING_LOCAL="$STEDDING_ROOT/.stedding-local"
 if [ -z "${CHROMIUM_ROOT:-}" ] && [ -f "$STEDDING_LOCAL" ]; then
-  # shellcheck disable=SC1090
-  . "$STEDDING_LOCAL"
+  # Parsed, never sourced. Sourcing it executes it: a path with a space in it made
+  # bash read the remainder as a command and run it, and any other line in the file
+  # would run outright. This reads one key and takes its value verbatim, spaces and
+  # all, with no expansion of anything the file contains.
+  CHROMIUM_ROOT="$(sed -n 's/^CHROMIUM_ROOT=//p' "$STEDDING_LOCAL" | tail -1)"
+  [ -n "$CHROMIUM_ROOT" ] || warn_pending_local="$STEDDING_LOCAL names no CHROMIUM_ROOT; using the default"
 fi
 
 DEPOT_TOOLS_DIR="${DEPOT_TOOLS_DIR:-$HOME/depot_tools}"
@@ -60,6 +64,9 @@ git_cache_dir() {
 log()  { printf '\033[1;34m==>\033[0m %s\n' "$*" >&2; }
 warn() { printf '\033[1;33m!!\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31mxx\033[0m %s\n' "$*" >&2; exit 1; }
+
+[ -n "${warn_pending_local:-}" ] && warn "$warn_pending_local"
+unset warn_pending_local
 
 # Put depot_tools first on PATH. Chromium's build requires its bundled python,
 # ninja, gn and git wrappers to shadow any system copies.
@@ -120,6 +127,9 @@ require_no_ancestor_node_modules() {
 # Record where the checkout actually lives, so later commands do not need the override.
 remember_chromium_root() {
   local target="$STEDDING_ROOT/.stedding-local"
+  # Persist an absolute path. A relative one resolves against whatever directory the
+  # next command happens to start in, which is not the one it was recorded from.
+  CHROMIUM_ROOT="$(cd "$CHROMIUM_ROOT" 2>/dev/null && pwd || printf '%s' "$CHROMIUM_ROOT")"
   [ "$CHROMIUM_ROOT" = "$HOME/chromium" ] && { rm -f "$target"; return 0; }
   cat > "$target" <<EOF
 # Written by tooling/sync-chromium. Local state, not committed.

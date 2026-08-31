@@ -18,10 +18,12 @@ using the web without surveillance or vendor control. See `docs/NAMING.md`.
 
 ## Status
 
-**M0 in progress — nothing installable yet.** The repository holds the project's
+**M0 nearly complete — nothing installable yet.** The repository holds the project's
 documentation and the build tooling in `tooling/`: scripts that check out Chromium at
-a pinned version, build it, verify the result, and measure it. What does not exist yet
-is a browser you can download.
+a pinned version, build it, verify the result, and measure it. Those scripts now
+produce a working vanilla Chromium on macOS arm64 that passes verification. What does
+not exist yet is a *browser you can download* — the build is still Chromium's name,
+Chromium's icon and Chromium's defaults, with no packaging. That is M1.
 
 The first engineering milestone (M0) is reproducing a vanilla Chromium build on macOS
 and documenting it well enough that anyone can repeat it. See `docs/ROADMAP.md` for

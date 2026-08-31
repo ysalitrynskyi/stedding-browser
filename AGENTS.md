@@ -55,16 +55,20 @@ Concretely (full detail in `docs/QUALITY.md`):
 
 ## State of the project
 
-**M0 in progress** — reproducing a vanilla Chromium build on macOS arm64.
+**M0 nearly complete** — the vanilla Chromium build works.
 
-Landed: the build tooling in `tooling/`, the upstream pin
-(`tooling/chromium-version`, policy in `docs/decisions/0007-chromium-version-pin.md`),
-repository hygiene checks and CI, and the performance measurement harness that
-`docs/QUALITY.md` calls for.
+Done: the build tooling in `tooling/`; the upstream pin at `153.0.8010.12`
+(`tooling/chromium-version`, policy in `docs/decisions/0007-chromium-version-pin.md`);
+repository hygiene checks and CI; the performance measurement harness; and **a vanilla
+`release` build that passes `tooling/verify-build`** — it renders, does WebGL 1 and 2,
+decodes VP9 and AV1, and browses. Measured build times and sizes are recorded in
+`docs/ARCHITECTURE.md`.
 
-Not yet done: the vanilla build itself has not been produced and verified, so M0's
-acceptance criteria are not met and there is nothing to install. Measured build times
-and sizes in `docs/ARCHITECTURE.md` are still TBD.
+Outstanding for M0: the `official` build (PGO + LTO), which is what performance
+baselines must be measured on, and those baselines themselves.
+
+There is still nothing installable. A built `Chromium.app` is not a product: it has
+Chromium's branding, Chromium's defaults, and no packaging. That is M1.
 
 See `docs/ROADMAP.md` for the milestone ladder and acceptance criteria.
 
@@ -102,9 +106,9 @@ See `docs/ROADMAP.md` for the milestone ladder and acceptance criteria.
 
 ## Current priorities (keep this list short and fresh)
 
-1. M0: produce and verify the vanilla Chromium build, then replace the TBD build
-   times and sizes in `docs/ARCHITECTURE.md` with measured numbers.
-2. M0: record the vanilla performance baselines with `tooling/measure/harness.py`.
+1. M0: finish the `official` build and record the vanilla performance baselines with
+   `tooling/measure/harness.py`. Baselines must come from `official`, not `release` —
+   `docs/QUALITY.md` forbids quoting numbers from a build nobody ships.
 3. Branding patch-set: name, icons, user agent, default settings (M1). Needs a
    decision on proprietary codecs (H.264/AAC) — a licensing question, not a
    technical one.

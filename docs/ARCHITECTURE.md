@@ -364,61 +364,43 @@ Recorded as they were actually hit on the reference machine, not imagined.
   <pid>` on the offender restores it without killing anything — total `clang` CPU went
   back to 380% immediately. Worth knowing before concluding a build has hung.
 
-- **The `official` build never initialises its SQLite databases, so no page loads.**
-  Open, cause not yet known. Found at M0.
+- **An unsigned build hangs on its first macOS Keychain access, and headlessly that
+  looks like a broken browser.** This cost most of a day at M0 and produced two wrong
+  diagnoses before the right one, so it is written out in full.
 
-  The symptom: the browser starts normally — every child process, `chrome://` pages, a
-  tab with the correct URL — and then nothing loads. `https://example.com` gives a
-  DevTools page target with an **empty title** where `release` gives "Example Domain".
-  No crash, no error, no `net_error`.
+  Symptom: the browser starts, every child process comes up, `chrome://` pages render,
+  a tab is created with the correct URL — and then nothing loads, with no crash, no
+  error and no `net_error`. `Default/Network/Cookies` is never created and
+  `Default/History` exists with no tables.
 
-  The cause is in the profile's on-disk databases, not the network. Compare fresh
-  profiles after loading one page:
+  Cause: cookie encryption goes through OSCrypt, which on macOS reads a
+  "Chromium Safe Storage" Keychain item. Keychain ACLs are **per binary**, so a newly
+  built, unsigned binary is a stranger to the Keychain and macOS raises an
+  authorisation prompt. Driven headlessly there is nobody to click it, and the browser
+  waits — forever, silently, because `official` builds compile out the `DLOG(ERROR)`
+  that would have said so.
 
-  | | `release` | `official` |
-  |---|---|---|
-  | `Default/Network/Cookies` | created, 20 KB | **never created** |
-  | `Default/History` | created | created, **no tables** |
+  Why it looked like a compiler bug: the `release` build was built and run first, so it
+  had already been authorised. `official`, being a different binary, had not. Same
+  source, same machine, one worked and one did not — which points at the build
+  configuration and is exactly the wrong conclusion.
 
-  A NetLog (`--log-net-log=<file>`, which needs no visible window) shows the request
-  identical in both builds up to `COMPUTED_PRIVACY_MODE`, after which `release`
-  continues to `NETWORK_DELEGATE_BEFORE_START_TRANSACTION` and a response while
-  `official` emits nothing further. That gap is where the cookie store is consulted,
-  and every network request consults it — so a cookie store that never comes up stalls
-  every navigation while leaving `chrome://` pages, which need no cookies, working.
-
-  Confirmed by elimination against the same binary. Only in-memory storage works:
-
-  | Run | Result |
-  |---|---|
-  | normal | empty title |
-  | **`--incognito`** (in-memory cookie store) | **"Example Domain"** |
-  | `--disable-http-cache`, `--use-simple-cache-backend=off`, `--disk-cache-size=1` | empty title |
-  | `--disable-features=NetworkServiceSandbox`, `--disable-gpu` | empty title |
-
-  That the HTTP cache flags change nothing, while incognito fixes it, is what rules the
-  cache out and points at SQLite-backed profile storage. `--incognito` is a diagnostic,
-  not a workaround: a browser that only works in private mode is not a browser.
-
-  This matters more than an ordinary bug because `official` is the configuration we
-  would *ship*, and `release` — the one that works — is explicitly not for users. It was
-  found only because M0 requires baselines measured on `official`; a milestone willing
-  to accept `release` numbers would have shipped a browser that cannot browse.
-
-  Reproduce:
+  How to tell it apart from a real failure:
 
   ```bash
-  APP=~/chromium/src/out/official/Chromium.app
-  "$APP/Contents/MacOS/Chromium" --user-data-dir=/tmp/p --no-first-run \
-      --remote-debugging-port=9333 https://example.com/ &
-  sleep 15 && curl -s http://127.0.0.1:9333/json/list   # empty "title" is the signature
-  find /tmp/p -name Cookies                              # absent on a broken build
+  # If --incognito works and a normal profile does not, suspect the Keychain,
+  # not the build. Incognito never touches the encrypted store.
+  "$APP/Contents/MacOS/Chromium" --user-data-dir=/tmp/p --incognito https://example.com/
+  security find-generic-password -s "Chromium Safe Storage"   # does an item exist?
   ```
 
-  Bisection in progress: `tooling/args/official-nopgo.gn` is `official` with
-  `chrome_pgo_phase = 0`, separating PGO from ThinLTO and the rest of
-  `is_official_build`. Building `sql_unittests` against each configuration would confirm
-  a miscompiled SQLite directly and is the next step if the bisection is ambiguous.
+  `--use-mock-keychain` bypasses it entirely and is the right flag for automated
+  testing. Do not treat it as a fix for a user-facing build: it means cookies are not
+  encrypted at rest.
+
+  The lesson for CI: any unattended test of a freshly built browser needs
+  `--use-mock-keychain`, or a human to authorise the binary once, or signing. Signing
+  lands at M7 and makes this go away for real builds.
 
 - **`gsutil` warns that `~/.boto` authentication is deprecated.** Harmless; the
   bootstrap download proceeds anyway.

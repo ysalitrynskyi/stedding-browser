@@ -151,6 +151,38 @@ release-notes entry.
 
 ---
 
+## The update check
+
+Stedding checks for updates against the GitHub Releases API
+(`decisions/0014-github-releases-as-update-channel.md`). This is the only endpoint
+this project deliberately adds to Chromium, so it is described exactly.
+
+| | |
+|---|---|
+| Endpoint | `https://api.github.com/repos/ysalitrynskyi/stedding-browser/releases/latest` |
+| Sends | a plain HTTPS GET. No account, no install id, no machine id, no usage data, no query parameters. |
+| Receives | the latest release tag, which is compared against the running version. |
+| Frequency | at most once a day, and only while enabled. |
+| Default | **off**, until it has a settings entry — `QUALITY.md` requires one before any feature ships. |
+
+**What GitHub can see.** An IP address and a timing pattern. Over time that is
+enough to infer roughly where an installation is and that it is still running.
+That is a real cost and it is written here rather than hidden behind the phrase
+"no telemetry", which would be technically true and misleading.
+
+**What it is not.** It is not a check-in, a licence check, or an analytics event.
+Nothing identifies the installation, and the response is the same for everybody.
+
+**Why GitHub rather than our own server.** Running an update service means
+running infrastructure that knows who is asking. The release artifacts already
+live on GitHub, so the update metadata and the download are the same objects, and
+there is no additional party — including us — learning anything. If GitHub ever
+becomes unacceptable, the check is one URL to move.
+
+**Turning it off.** The settings entry disables it completely; there is no
+"reduced" mode that still calls home. A build with the check off makes no request
+to GitHub at all.
+
 ## Implementation status against the current build
 
 Everything above is a product commitment. This section says how much of it is *already

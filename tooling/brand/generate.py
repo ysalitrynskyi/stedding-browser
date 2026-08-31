@@ -160,6 +160,61 @@ def main():
                 os.path.join(BRAND, "mac", "Assets.car"))
     shutil.rmtree(carbuild, ignore_errors=True)
 
+    # Product logos: the mark that appears inside the browser UI — About page,
+    # settings header, default profile avatar. Transparent background, since they
+    # sit on the page rather than in a Dock.
+    glyph_src = os.path.join(PUB, "svg", "icon-glyph-cream.svg")
+    logo_dir = os.path.join(BRAND, "product_logo")
+    os.makedirs(logo_dir, exist_ok=True)
+    for n in (16, 22, 24, 32, 48, 64, 128, 256):
+        run(["rsvg-convert", "-w", str(n), "-h", str(n), src_tile,
+             "-o", os.path.join(logo_dir, f"product_logo_{n}.png")])
+    # The mono variant is a single-colour stamp for menu bars.
+    run(["rsvg-convert", "-w", "22", "-h", "22",
+         os.path.join(PUB, "svg", "icon-glyph-mono-slate.svg"),
+         "-o", os.path.join(logo_dir, "product_logo_22_mono.png")])
+    shutil.copy(src_tile, os.path.join(logo_dir, "product_logo.svg"))
+
+    # AppIcon.icon — macOS 26's layered icon format, normally authored in Icon
+    # Composer. It is a JSON manifest over SVG layers, so it can be generated:
+    # one group, two layers (arch and hearth) over a solid ground. Deliberately
+    # simple; the platform composes the material, shadow and glass itself.
+    icon_dir = os.path.join(BRAND, "mac", "AppIcon.icon")
+    shutil.rmtree(icon_dir, ignore_errors=True)
+    assets = os.path.join(icon_dir, "Assets")
+    os.makedirs(assets, exist_ok=True)
+
+    def layer_svg(body):
+        return ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" '
+                'width="120" height="120">' + body + '</svg>\n')
+
+    write(os.path.join(assets, "arch.svg"), layer_svg(
+        f'<path d="{M.arch_path(1.0)}" fill="none" stroke="{M.CREAM}" '
+        f'stroke-width="{M.ARCH_STROKE}" stroke-linecap="round" '
+        f'stroke-linejoin="round"/>'))
+    write(os.path.join(assets, "hearth.svg"), layer_svg(
+        f'<circle cx="60" cy="79" r="{M.HEARTH_R}" fill="{M.AMBER}"/>'))
+
+    def rgb(hex_):
+        r, g, b = (int(hex_[i:i + 2], 16) / 255 for i in (1, 3, 5))
+        return f"display-p3:{r:.5f},{g:.5f},{b:.5f},1.00000"
+
+    icon_json = {
+        "fill": {"solid": rgb(M.SLATE)},
+        "groups": [{
+            "layers": [
+                {"image-name": "hearth.svg", "name": "hearth", "glass": False,
+                 "hidden": False},
+                {"image-name": "arch.svg", "name": "arch", "glass": False,
+                 "hidden": False},
+            ],
+        }],
+        "supported-platforms": {"squares": "shared"},
+    }
+    import json as _json
+    write(os.path.join(icon_dir, "icon.json"),
+          _json.dumps(icon_json, indent=2) + "\n")
+
     print("generated:")
     for d in (BRAND, PUB):
         for dirpath, _, files in os.walk(d):

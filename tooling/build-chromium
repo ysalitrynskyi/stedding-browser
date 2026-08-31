@@ -15,99 +15,111 @@
 # shellcheck source=./lib.sh
 . "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
-require_macos_arm64
-add_depot_tools_to_path
+# NOTE: the body lives in main() and is called on the last line. bash reads a script
+# incrementally, by byte offset, as it executes — so editing a script while it is
+# running makes the live shell resume mid-file and die on a syntax error. Wrapping the
+# body means bash parses all of it before running any of it, which makes the script
+# safe to edit during a multi-hour build. This is not a style choice; it cost us a
+# completed Chromium build whose result went unnoticed for three hours.
+main() {
 
-CONFIG="${1:-release}"
-shift || true
-TARGETS=("$@")
-[ "${#TARGETS[@]}" -eq 0 ] && TARGETS=(chrome)
+    require_macos_arm64
+    add_depot_tools_to_path
 
-ARGS_FILE="$STEDDING_ROOT/tooling/args/$CONFIG.gn"
-[ -f "$ARGS_FILE" ] || die "no gn args for config '$CONFIG' (expected $ARGS_FILE)"
-[ -d "$CHROMIUM_SRC" ] || die "no checkout at $CHROMIUM_SRC — run tooling/sync-chromium"
-require_no_ancestor_node_modules "$CHROMIUM_ROOT"
+    CONFIG="${1:-release}"
+    shift || true
+    TARGETS=("$@")
+    [ "${#TARGETS[@]}" -eq 0 ] && TARGETS=(chrome)
 
-# The sync-time floor covered the checkout. A build writes tens of GB more, and
-# running the volume dry three hours in wastes the whole run. Measured output sizes
-# are in docs/ARCHITECTURE.md.
-require_free_gb "$CHROMIUM_ROOT" 60
+    ARGS_FILE="$STEDDING_ROOT/tooling/args/$CONFIG.gn"
+    [ -f "$ARGS_FILE" ] || die "no gn args for config '$CONFIG' (expected $ARGS_FILE)"
+    [ -d "$CHROMIUM_SRC" ] || die "no checkout at $CHROMIUM_SRC — run tooling/sync-chromium"
+    require_no_ancestor_node_modules "$CHROMIUM_ROOT"
 
-OUT_DIR="out/$CONFIG"
-ABS_OUT="$CHROMIUM_SRC/$OUT_DIR"
+    # The sync-time floor covered the checkout. A build writes tens of GB more, and
+    # running the volume dry three hours in wastes the whole run. Measured output sizes
+    # are in docs/ARCHITECTURE.md.
+    require_free_gb "$CHROMIUM_ROOT" 60
 
-cd "$CHROMIUM_SRC" || die "cannot enter $CHROMIUM_SRC"
+    OUT_DIR="out/$CONFIG"
+    ABS_OUT="$CHROMIUM_SRC/$OUT_DIR"
 
-# A build whose provenance is unclear is worse than no build. Two trees are legitimate:
-# vanilla at the pin, and the patch series applied on top of the pin. Anything else —
-# a stray branch, a different pin, upstream commits mixed in — is refused.
-#
-# Note what this must NOT do: tell someone with a patched tree to run sync-chromium.
-# That resets to vanilla and destroys the branch they are working on.
-head_commit="$(git rev-parse HEAD)"
-tag_commit="$(git rev-parse "refs/tags/$CHROMIUM_TAG^{commit}" 2>/dev/null || echo unknown)"
-patch_count=0
+    cd "$CHROMIUM_SRC" || die "cannot enter $CHROMIUM_SRC"
 
-if [ "$head_commit" = "$tag_commit" ]; then
-  log "tree:    vanilla, at the pin"
-elif [ "$tag_commit" != unknown ] \
-     && [ "$(git merge-base "$head_commit" "$tag_commit")" = "$tag_commit" ]; then
-  patch_count="$(git rev-list --count "$tag_commit..$head_commit")"
-  branch="$(git rev-parse --abbrev-ref HEAD)"
-  log "tree:    $branch, $patch_count commit(s) on top of the pin"
-else
-  die "the checkout is at $head_commit, which is neither the pin $CHROMIUM_TAG
-     ($tag_commit) nor a descendant of it.
+    # A build whose provenance is unclear is worse than no build. Two trees are legitimate:
+    # vanilla at the pin, and the patch series applied on top of the pin. Anything else —
+    # a stray branch, a different pin, upstream commits mixed in — is refused.
+    #
+    # Note what this must NOT do: tell someone with a patched tree to run sync-chromium.
+    # That resets to vanilla and destroys the branch they are working on.
+    head_commit="$(git rev-parse HEAD)"
+    tag_commit="$(git rev-parse "refs/tags/$CHROMIUM_TAG^{commit}" 2>/dev/null || echo unknown)"
+    patch_count=0
 
-     If this is a vanilla tree that has drifted:  tooling/sync-chromium
-     If you have patches here, do NOT run that — it resets to vanilla and takes your
-     branch with it. Rebase onto the pin instead, or export the series first with
-     tooling/update-patches."
-fi
+    if [ "$head_commit" = "$tag_commit" ]; then
+      log "tree:    vanilla, at the pin"
+    elif [ "$tag_commit" != unknown ] \
+         && [ "$(git merge-base "$head_commit" "$tag_commit")" = "$tag_commit" ]; then
+      patch_count="$(git rev-list --count "$tag_commit..$head_commit")"
+      branch="$(git rev-parse --abbrev-ref HEAD)"
+      log "tree:    $branch, $patch_count commit(s) on top of the pin"
+    else
+      die "the checkout is at $head_commit, which is neither the pin $CHROMIUM_TAG
+         ($tag_commit) nor a descendant of it.
 
-log "config:  $CONFIG"
-log "src:     $CHROMIUM_SRC @ $CHROMIUM_TAG"
-log "out:     $ABS_OUT"
-log "targets: ${TARGETS[*]}"
+         If this is a vanilla tree that has drifted:  tooling/sync-chromium
+         If you have patches here, do NOT run that — it resets to vanilla and takes your
+         branch with it. Rebase onto the pin instead, or export the series first with
+         tooling/update-patches."
+    fi
 
-mkdir -p "$ABS_OUT"
+    log "config:  $CONFIG"
+    log "src:     $CHROMIUM_SRC @ $CHROMIUM_TAG"
+    log "out:     $ABS_OUT"
+    log "targets: ${TARGETS[*]}"
 
-# Two builds in one output directory corrupt each other: the second `gn gen` rewrites
-# the ninja files under the first one's feet. Hold a lock naming the owning process,
-# and treat a lock whose process is gone as stale rather than as a permanent block.
-LOCK="$ABS_OUT/.stedding-build.lock"
-if [ -f "$LOCK" ]; then
-  other="$(cat "$LOCK" 2>/dev/null || echo)"
-  if [ -n "$other" ] && kill -0 "$other" 2>/dev/null; then
-    die "a build is already running in $ABS_OUT (pid $other).
-     Wait for it, or stop it with: kill $other"
-  fi
-  warn "removing a stale lock from pid ${other:-unknown}"
-  rm -f "$LOCK"
-fi
-echo $$ > "$LOCK"
-# shellcheck disable=SC2064  # expand $LOCK now, not at trap time
-trap "rm -f '$LOCK'" EXIT
+    mkdir -p "$ABS_OUT"
 
-cp "$ARGS_FILE" "$ABS_OUT/args.gn"
+    # Two builds in one output directory corrupt each other: the second `gn gen` rewrites
+    # the ninja files under the first one's feet. Hold a lock naming the owning process,
+    # and treat a lock whose process is gone as stale rather than as a permanent block.
+    LOCK="$ABS_OUT/.stedding-build.lock"
+    if [ -f "$LOCK" ]; then
+      other="$(cat "$LOCK" 2>/dev/null || echo)"
+      if [ -n "$other" ] && kill -0 "$other" 2>/dev/null; then
+        die "a build is already running in $ABS_OUT (pid $other).
+         Wait for it, or stop it with: kill $other"
+      fi
+      warn "removing a stale lock from pid ${other:-unknown}"
+      rm -f "$LOCK"
+    fi
+    echo $$ > "$LOCK"
+    # shellcheck disable=SC2064  # expand $LOCK now, not at trap time
+    trap "rm -f '$LOCK'" EXIT
 
-log "gn gen"
-gn gen "$OUT_DIR"
+    cp "$ARGS_FILE" "$ABS_OUT/args.gn"
 
-log "resolved gn args:"
-gn args "$OUT_DIR" --list --short --overrides-only | sed 's/^/    /' >&2
+    log "gn gen"
+    gn gen "$OUT_DIR"
 
-start=$(date +%s)
-log "autoninja -C $OUT_DIR ${TARGETS[*]}  (this is the long one)"
-autoninja -C "$OUT_DIR" "${TARGETS[@]}"
-end=$(date +%s)
+    log "resolved gn args:"
+    gn args "$OUT_DIR" --list --short --overrides-only | sed 's/^/    /' >&2
 
-elapsed=$(( end - start ))
-log "build finished in $(( elapsed / 3600 ))h $(( (elapsed % 3600) / 60 ))m $(( elapsed % 60 ))s"
+    start=$(date +%s)
+    log "autoninja -C $OUT_DIR ${TARGETS[*]}  (this is the long one)"
+    autoninja -C "$OUT_DIR" "${TARGETS[@]}"
+    end=$(date +%s)
 
-APP="$ABS_OUT/Chromium.app"
-if [ -d "$APP" ]; then
-  log "app:  $APP"
-  log "size: $(du -sh "$APP" | cut -f1)"
-  log "run:  open '$APP'"
-fi
+    elapsed=$(( end - start ))
+    log "build finished in $(( elapsed / 3600 ))h $(( (elapsed % 3600) / 60 ))m $(( elapsed % 60 ))s"
+
+    APP="$ABS_OUT/Chromium.app"
+    if [ -d "$APP" ]; then
+      log "app:  $APP"
+      log "size: $(du -sh "$APP" | cut -f1)"
+      log "run:  open '$APP'"
+    fi
+
+}
+
+main "$@"

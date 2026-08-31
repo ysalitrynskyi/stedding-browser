@@ -102,7 +102,11 @@ Details in `docs/ARCHITECTURE.md`.
 | [docs/COMPETITORS.md](docs/COMPETITORS.md) | Arc, Dia, Zen, Helium, Vivaldi, Brave, Thorium — and our gap |
 | [docs/NAMING.md](docs/NAMING.md) | The naming decision record |
 | [docs/BRAND.md](docs/BRAND.md) | Name meaning, voice, taglines, trademark hygiene |
+| [docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md) | How each feature is built, what upstream already provides, and what it costs |
+| [docs/EVIDENCE.md](docs/EVIDENCE.md) | What Arc switchers actually ask for, with counts |
 | [docs/decisions/](docs/decisions/) | Architecture decision records (ADRs) |
+| [tooling/README.md](tooling/README.md) | The build scripts and how to use them |
+| [branding/README.md](branding/README.md) | The mark, the palette, and how assets are generated |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute |
 | [SECURITY.md](SECURITY.md) | How to report vulnerabilities |
 

@@ -148,3 +148,52 @@ consequences we will not hide:
 
 Changes to any default in this table require an ADR in docs/decisions/ and a
 release-notes entry.
+
+---
+
+## Implementation status against the current build
+
+Everything above is a product commitment. This section says how much of it is *already
+true* of the vanilla Chromium we build today, and what each remaining item actually
+costs. It was produced by auditing the Chromium source at the pin, not from memory, and
+every mechanism named below was located in the tree.
+
+It exists because the two are easy to confuse. Building unbranded Chromium
+(`is_chrome_branded=false`, no Google API keys) already removes a great deal — but it
+removes far less than a reader of the Principles section would assume, and the gap is
+the M1 work.
+
+### Already true, because we build unbranded
+
+Metrics and UMA/UKM reporting, crash upload to Google, RLZ, the variations/Finch seed
+fetch, Google account sign-in and Sync, and the browser updater are all absent or
+inert without Google branding and API keys. `enable_updater` is literally
+`is_chrome_branded && …`, so no updater is even compiled.
+
+### Still to do, with the mechanism
+
+| Commitment | Costs |
+|---|---|
+| Search suggestions off until the user opts in | `search.suggest_enabled` defaults to **true**; flip the default |
+| No Google New Tab Page network | `kNtpLogo`, `kNtpOneGoogleBar`, `kNtpMiddleSlotPromo` are enabled by default; disable or replace the NTP |
+| Default search engine chosen by the user | stock Chromium preselects Google; needs a real first-run chooser |
+| Global Privacy Control on | currently off — `IsGlobalPrivacyControlEnabled()` is gated behind a Force/Test feature flag, and the pref path is an unfinished upstream TODO |
+| Translate off by default | `translate.enabled` defaults to true |
+| No navigation prediction / preconnect | `net.network_prediction_options` defaults to standard preloading |
+| Network time queries off | enabled by default on desktop, and not gated on branding |
+| Component updates from our infrastructure | component updater is on by default; needs an endpoint swap and a component allowlist |
+| No dummy API keys in request URLs | the placeholder key is still appended to some Google requests |
+
+### What a fresh profile at rest actually contacts today
+
+This is the list the M1 network capture is checked against, and the reason that
+criterion is worth having. On an idle, freshly-created profile, an unbranded build
+still reaches out for: **component updater checks** (first at about one minute, then
+roughly every five hours, including the certificate CRLSet), **Safe Browsing list
+updates**, and **network time**. Opening the New Tab Page adds Google requests for the
+logo and the One Google Bar.
+
+Nothing here is telemetry. But "no telemetry" and "contacts nothing" are different
+claims, and only the first one is currently true — which is exactly why
+`docs/QUALITY.md` makes an unexplained endpoint a release blocker rather than trusting
+the intent in this document.

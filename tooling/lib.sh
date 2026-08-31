@@ -79,6 +79,21 @@ add_depot_tools_to_path() {
   export PATH
 }
 
+# Locate the browser bundle in an output directory. Branding renames it — that is the
+# point of branding — so it cannot be assumed to be Chromium.app. Helper bundles sit
+# beside it and must not be matched.
+find_app_bundle() {
+  local out_dir="$1" app=""
+  for candidate in "$out_dir"/*.app; do
+    [ -d "$candidate" ] || continue
+    case "$(basename "$candidate")" in
+      *" Helper"*|*Helper*.app) continue ;;
+    esac
+    app="$candidate"
+  done
+  [ -n "$app" ] && printf '%s' "$app"
+}
+
 # Free space in GB on the volume holding $1.
 free_gb() {
   df -Pk "$1" | awk 'NR==2 { printf "%d", $4 / 1024 / 1024 }'

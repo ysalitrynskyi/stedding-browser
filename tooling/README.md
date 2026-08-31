@@ -86,6 +86,18 @@ Every patch commit message must carry `Why:` and `Removable when:` fields.
 `update-patches` refuses to export a series without them, because a patch nobody can
 justify or delete is how a minimal patch set stops being minimal.
 
+### `capture-ui`
+
+Screenshots the built browser's own window and nothing else, so UI changes can be
+compared against `docs/UI-SPEC.md` without photographing whatever else is on the
+screen. Works on a window that is behind others or on another macOS Space, so it
+never raises the window or takes focus.
+
+```
+tooling/capture-ui --out /tmp/now.png --size 1400x880
+```
+
+
 ## Paths
 
 All overridable by environment variable; defaults suit a fresh machine.

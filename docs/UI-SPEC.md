@@ -51,7 +51,7 @@ version of this file put the space switcher at the top, which is wrong.
 |---|---|
 | **Essentials** | A grid of large rounded cards at the very top, ~150x50, radius ~12. These are pinned tabs that live **above all Spaces** — they are visible whichever Space is active. Icon only, no label |
 | Space-pinned tabs | Below the essentials: ordinary rows, favicon plus label, pinned **within the current Space** |
-| Divider | 1 px hairline with a `Clear` at its right end, which closes this Space's tabs and leaves the essentials. **Done** (patch 0024) |
+| Divider | 1 px hairline with a `Clear` at its right end, which closes this Space's tabs and leaves the essentials. **Done** (patch 0004) |
 | `New Tab` row | Plus glyph plus label, muted, **above** the unpinned tabs |
 | Tab row height | ~48 px |
 | Favicon | ~18 px, left inset ~28 px |
@@ -133,7 +133,7 @@ tooling/capture-ui --features \
 ```
 
 Change a number, capture, measure, repeat — no compile, no link. Defaults are
-the shipping values in the table below. See patch 0007.
+the shipping values in the table below. See patch 0002.
 
 ## Progress
 
@@ -145,14 +145,14 @@ Measured against the table above, not against "looks closer".
 | Sidebar width | Done — 352 px, measured in the capture |
 | Tab row height | Done — 44 px, measured in the capture (Chromium's default is 30) |
 | Active tab pill radius | Done — 10 px |
-| Favicon size | **Done** — 18 px (patch 0027). The earlier claim that the image would not scale was wrong: TabIcon draws through DrawImageInt, scaled to its bounds |
+| Favicon size | **Done** — 18 px (patch 0002). The earlier claim that the image would not scale was wrong: TabIcon draws through DrawImageInt, scaled to its bounds |
 | Bare-host URL | Done — unfocused only; the full URL returns on focus. Verified in the capture |
 | Sign-in promo pill | Removed — Chromium advertises Google sign-in in the toolbar by default |
-| Command bar (⌘T) | **Done** — centred overlay, searches every Space and names the Space a result is in, opens URLs and searches (patches 0016-0017) |
-| Centred URL | **Done** — capped by a flex rule, spacers either side; measured centre 890 against a content centre of 876 (patch 0015) |
-| Space switcher | **Done** — a row of icons at the **bottom** of the sidebar, active one full strength, plus a button that makes a new Space (patches 0011, 0013). The first attempt put named pills at the top, which was wrong |
-| Essentials row | **Done** — pinned tabs are exempt from the Space filter, so they sit above all Spaces, and their tiles are 50 DIP tall so they read as cards (patch 0014) |
-| Window background tinted per space | **Done** — `Widget::SetUserColorOverride` from the active Space's colour, and the colour is settable from the Space's context menu (patch 0025). A window with one Space is left untinted |
+| Command bar (⌘T) | **Done** — centred overlay, searches every Space and names the Space a result is in, opens URLs and searches (patch 0005) |
+| Centred URL | **Done** — capped by a flex rule, spacers either side; measured centre 890 against a content centre of 876 (patch 0002) |
+| Space switcher | **Done** — a row of icons at the **bottom** of the sidebar, active one full strength, plus a button that makes a new Space (patch 0004). The first attempt put named pills at the top, which was wrong |
+| Essentials row | **Done** — pinned tabs are exempt from the Space filter, so they sit above all Spaces, and their tiles are 50 DIP tall so they read as cards (patch 0004) |
+| Window background tinted per space | **Done** — `Widget::SetUserColorOverride` from the active Space's colour, and the colour is settable from the Space's context menu (patch 0004). A window with one Space is left untinted |
 
 ## Still not the reference
 

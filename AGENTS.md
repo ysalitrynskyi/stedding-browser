@@ -77,9 +77,9 @@ Built, with tests or measured captures:
 - **Spaces**: switcher with floating hover names, per-Space tint, context-menu
   icon/rename/colour/delete, drag-tab-onto-Space, persistence (`decisions/0015`).
   Core semantics — membership on open, active tab follows the switch, delete
-  moves tabs — landed as patch 0044 with `space_model_window_unittest.cc`.
+  moves tabs — landed as patch 0004 with `space_model_window_unittest.cc`.
 - **Folders with nesting**: create from tab context menu, drop a dragged tab
-  on a folder header (patch 0045), collapse, inline rename, session
+  on a folder header (patch 0008), collapse, inline rename, session
   persistence; the close-path use-after-free is fixed and regression-tested.
 - **⌘T command bar** across Spaces. Stedding colours (sand light, blue→plum
   gradient dark). Codecs verified. Sign-in promo removed. Mac updater stubbed

@@ -29,7 +29,8 @@ tooling/dev test spaces               # builds unit_tests, runs the feature's fi
 tooling/dev capture --features 'SteddingArcStyleWindow:extra_spaces/2/pin_tabs/1'
 # look at the capture. measure pixels, don't eyeball.
 # 3. commit in the checkout with Why:/Removable when: footers -- a fix to an existing
-#    feature is a fixup into that feature's commit, not a new patch
+#    feature is a fixup into that feature's commit (git commit --fixup=<sha>, then
+#    GIT_SEQUENCE_EDITOR=true git rebase --autosquash <pin>), not a new patch
 tooling/dev patch                     # update-patches + check-repo
 tooling/dev status                    # the numbers for any doc you touch
 # commit + push this repo
@@ -86,7 +87,7 @@ perform; a param that recreates the state IS the test surface.
 ## Open items
 
 `BACKLOG.md` is the list; do not keep one here. First up: cut a DMG for the
-operator retests (`S-9`, `S-10`), then `S-11` before the next pin move.
+operator retests (`S-9`, `S-10`).
 
 ## Release channel
 

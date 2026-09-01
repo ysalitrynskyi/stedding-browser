@@ -1,8 +1,7 @@
 # Feature: Folders
 
 Status: **F1–F9 built and tested**; F10–F11 are gaps (`S-4`, `S-3` for the live restart).
-Owner docs: `docs/decisions/0013-folders-are-a-collection-type.md` (model). Patches: `0002`,
-`0042`, `0043`, `0045` (drag into a folder).
+Owner docs: `docs/decisions/0013-folders-are-a-collection-type.md` (model). Patch: `0008` (the whole feature; the series is per feature since `S-11`).
 
 A folder is a named, collapsible container of tabs in the sidebar. Folders nest. A folder is
 a collection type in the tab tree, not a tab group, so Chrome's groups keep working and a

@@ -1,10 +1,9 @@
 # Feature: Spaces
 
-Status: **B1–B8, B10–B12 built and tested** (patch 0044 closed `S-1`); B9 needs the
+Status: **B1–B8, B10–B12 built and tested** (patch 0004 closed `S-1`); B9 needs the
 live-browser harness (`S-3`); B13–B14 are untested gaps (`S-7`, `S-8`).
 Owner docs: `docs/decisions/0015-spaces-filter-one-tab-strip.md` (model), `docs/UI-SPEC.md`
-(pixels). Patches: `0003`, `0008`–`0014`, `0018`–`0021`, `0023`, `0025`–`0026`, `0029`–`0031`,
-`0036`, `0039`–`0040`, `0044` (core semantics).
+(pixels). Patch: `0004` (the whole feature, since the series was squashed per feature, `S-11`).
 
 This file is the definition of done. A behaviour is shipped when its test id is green,
 not when a capture looks right. Every behaviour below is phrased so it can be checked
@@ -31,7 +30,7 @@ sidebar.
 | B7 | Tab traversal (Ctrl+Tab, Ctrl+Shift+Tab, next-tab-after-close) skips tabs in other Spaces. | `SpaceWindowTest.NextTabSkipsOtherSpaces` | built |
 | B8 | Moving a tab to another Space hides it here, shows it there, and observers are told so views refresh without a Space switch. | `SpaceWindowTest.MovingATabNotifiesObservers` | built |
 | B9 | Space list, active Space, per-tab membership and per-Space pins survive a real quit and relaunch. | live harness (`tooling/dev verify --spaces`, TBD) — mechanism unit-tested by `SpaceModelTest.*Serialize*` and B2 | partial |
-| B10 | Per-Space pin: a tab pinned in its Space sits above the Clear line there and survives Clear. | `SpaceModelTest.SpacePin*` (patch 0039) | built |
+| B10 | Per-Space pin: a tab pinned in its Space sits above the Clear line there and survives Clear. | `SpaceModelTest.SpacePin*` (patch 0004) | built |
 | B11 | Space metadata (name, icon, colour) edits persist and repaint the switcher and window tint. | `SpaceModelTest.*Metadata*`; capture | built |
 | B12 | Drag a tab onto a Space chip moves it there and switches to that Space. Dropping nowhere changes nothing. | `SpaceDragTargetTest.*` | built |
 | B13 | ⌘T command bar lists tabs from every Space; choosing one switches Space and activates it. | none yet | gap |

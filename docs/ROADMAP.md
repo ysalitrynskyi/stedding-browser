@@ -204,7 +204,7 @@ Scope:
   can misjudge a page from a host a long path would contradict. Ours is narrower
   -- the full URL returns on focus, and a bad certificate or the existing
   `kPreventUrlElisionsInOmnibox` pref keeps it visible throughout -- but the
-  choice belongs to the user, not to us. See patch 0005.
+  choice belongs to the user, not to us. See patch 0002.
 - Known-issues list triaged to zero release-blockers.
 
 Acceptance criteria:

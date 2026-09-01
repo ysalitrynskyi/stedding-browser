@@ -1,0 +1,128 @@
+#!/usr/bin/env bash
+# The one entry point for day-to-day work. docs/AGENT-LOOP.md is the procedure;
+# this is the procedure as a command, so nobody retypes it.
+#
+# Usage:
+#   tooling/dev build [config] [target ...]   build (refuses while another build runs)
+#   tooling/dev test <feature|all> [--no-build] build unit_tests, run the feature's tests
+#   tooling/dev capture [capture-ui args...]  screenshot the built window
+#   tooling/dev patch                         commits on stedding-work -> patches/, then check-repo
+#   tooling/dev check                         check-repo + check-shell
+#   tooling/dev status                        what the repo really contains (for docs)
+#   tooling/dev features                      list the feature test filters
+#
+# Feature filters map a name in docs/features/ to a gtest filter. Add a line to
+# FEATURE_FILTERS when a feature gains tests; tooling/status counts from the same
+# table, so the docs and the test run cannot disagree about what "spaces" means.
+
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=./lib.sh
+. "$(cd "$(dirname "$0")" && pwd)/lib.sh"
+
+# name:filter, one per line. bash 3.2 has no associative arrays.
+FEATURE_FILTERS='
+spaces:SpaceWindowTest.*:SpaceModelTest.*:SpaceDragTargetTest.*
+folders:FolderSessionTest.*:TabStripModelTest.AddToNewFolder*
+'
+
+filter_for() {
+  printf '%s\n' "$FEATURE_FILTERS" | sed -n "s/^$1://p"
+}
+
+all_filters() {
+  printf '%s\n' "$FEATURE_FILTERS" | sed -n 's/^[a-z]*://p' | paste -sd: -
+}
+
+feature_names() {
+  printf '%s\n' "$FEATURE_FILTERS" | sed -n 's/^\([a-z]*\):.*/\1/p'
+}
+
+build_running() {
+  # siso/ninja hold a lock file in the output directory while they run.
+  pgrep -f "siso ninja -C $CHROMIUM_SRC/out" >/dev/null 2>&1 ||
+    pgrep -f "autoninja -C out/" >/dev/null 2>&1
+}
+
+cmd_build() {
+  if build_running; then
+    die "a build is already running; editing or building now would race it (HANDOFF trap 1)"
+  fi
+  "$STEDDING_ROOT/tooling/build-chromium" "$@"
+}
+
+cmd_test() {
+  local feature="${1:-all}"
+  shift || true
+  local build=1
+  [ "${1:-}" = "--no-build" ] && build=0
+
+  local filter
+  if [ "$feature" = "all" ]; then
+    filter="$(all_filters)"
+  else
+    filter="$(filter_for "$feature")"
+    [ -n "$filter" ] || die "no test filter for '$feature'; known: $(feature_names | paste -sd' ' -)"
+  fi
+
+  if [ "$build" -eq 1 ]; then
+    cmd_build release unit_tests
+  fi
+
+  local bin="$CHROMIUM_SRC/out/release/unit_tests"
+  [ -x "$bin" ] || die "no unit_tests at $bin — tooling/dev build release unit_tests"
+  log "unit_tests --gtest_filter=$filter"
+  local out status
+  out="$(mktemp "${TMPDIR:-/tmp}/stedding-test.XXXXXX")"
+  set +e
+  "$bin" --gtest_filter="$filter" --test-launcher-bot-mode >"$out" 2>&1
+  status=$?
+  set -e
+  # Failures in full, then the launcher's own summary.
+  grep -E 'Failure$|^\[  FAILED|error:' "$out" || true
+  grep -E 'tests? (ran|passed|failed)|SUCCESS|FAILURE' "$out" | tail -4 || true
+  rm -f "$out"
+  return "$status"
+}
+
+cmd_capture() {
+  "$STEDDING_ROOT/tooling/capture-ui" "$@"
+}
+
+cmd_patch() {
+  if build_running; then
+    die "a build is running; wait for it before rewriting the branch"
+  fi
+  "$STEDDING_ROOT/tooling/update-patches"
+  "$STEDDING_ROOT/tooling/check-repo"
+}
+
+cmd_check() {
+  "$STEDDING_ROOT/tooling/check-repo"
+  "$STEDDING_ROOT/tooling/check-shell"
+}
+
+cmd_status() {
+  "$STEDDING_ROOT/tooling/status" "$@"
+}
+
+cmd_features() {
+  printf '%s\n' "$FEATURE_FILTERS" | sed '/^$/d'
+}
+
+main() {
+  local cmd="${1:-}"
+  shift || true
+  case "$cmd" in
+    build)    cmd_build "$@" ;;
+    test)     cmd_test "$@" ;;
+    capture)  cmd_capture "$@" ;;
+    patch)    cmd_patch "$@" ;;
+    check)    cmd_check "$@" ;;
+    status)   cmd_status "$@" ;;
+    features) cmd_features ;;
+    -h|--help|"") sed -n '2,17p' "$0"; exit 0 ;;
+    *) die "unknown command: $cmd (try tooling/dev --help)" ;;
+  esac
+}
+
+main "$@"

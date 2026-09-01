@@ -9,6 +9,8 @@ into something a machine can fail on:
   paths    no absolute machine paths or personal data in tracked files
   patches  the patch series is contiguous, numbered, and each patch has a header
   version  the Chromium pin is well formed and referenced from exactly one place
+  truth    docs carry no known-stale phrases, feature specs are well formed, and
+           every backlog id cited anywhere exists in BACKLOG.md
 
 Run: tooling/check-repo [check ...]     (no arguments: run everything)
 Exit status is the number of failures, capped at 125.
@@ -248,6 +250,63 @@ def check_shell() -> None:
                     fail(f"{rel}:{line_no}", f"uses {label}")
 
 
+# --------------------------------------------------------------------------- truth
+
+# Phrases that were true once and then stayed in a document after the repo moved
+# on. Each one cost a reader a wrong belief; a machine can refuse them.
+STALE_PHRASES = [
+    ("patches/README.md", "Empty so far"),
+    ("docs/HANDOFF.md", "tests currently green"),
+    ("AGENTS.md", "tests green in"),
+]
+
+BEHAVIOUR_ROW = re.compile(r"^\| (B\d+) \| (.+?) \| (.+?) \| (built|partial|gap) \|$")
+BACKLOG_ID = re.compile(r"\bS-(\d+)\b")
+
+
+def check_truth() -> None:
+    for rel, phrase in STALE_PHRASES:
+        path = ROOT / rel
+        if path.exists() and phrase in path.read_text(encoding="utf-8"):
+            fail(rel, f"contains {phrase!r}, which is no longer true")
+
+    # Numbers in prose are hand-typed numbers. tooling/status generates them.
+    for rel in ("AGENTS.md", "docs/HANDOFF.md"):
+        text = (ROOT / rel).read_text(encoding="utf-8")
+        for m in re.finditer(r"\b(\d+) tests\b", text):
+            fail(rel, f"hand-typed test count {m.group(0)!r}; use tooling/status")
+
+    # Feature specs: every behaviour row has an id, a test column and a state.
+    for spec in sorted((ROOT / "docs" / "features").glob("*.md")):
+        seen: set[str] = set()
+        for n, line in enumerate(spec.read_text(encoding="utf-8").splitlines(), 1):
+            if not line.startswith("| B"):
+                continue
+            m = BEHAVIOUR_ROW.match(line)
+            if not m:
+                fail(f"{spec.relative_to(ROOT)}:{n}", "behaviour row must be | B<n> | text | test | built|partial|gap |")
+                continue
+            bid, _, test, state = m.groups()
+            if bid in seen:
+                fail(f"{spec.relative_to(ROOT)}:{n}", f"duplicate behaviour id {bid}")
+            seen.add(bid)
+            if state == "built" and test.strip().lower().startswith("none"):
+                fail(f"{spec.relative_to(ROOT)}:{n}", f"{bid} is 'built' with no test")
+            if state == "gap" and not test.strip().lower().startswith("none"):
+                fail(f"{spec.relative_to(ROOT)}:{n}", f"{bid} is 'gap' but names a test")
+
+    # Backlog ids cited anywhere must exist.
+    backlog = (ROOT / "BACKLOG.md").read_text(encoding="utf-8")
+    known = set(BACKLOG_ID.findall(backlog))
+    for path in tracked_files():
+        if path.suffix != ".md" or path.name == "BACKLOG.md":
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        for m in BACKLOG_ID.finditer(text):
+            if m.group(1) not in known:
+                fail(str(path.relative_to(ROOT)), f"cites S-{m.group(1)}, which is not in BACKLOG.md")
+
+
 CHECKS = {
     "shell": check_shell,
     "links": check_links,
@@ -255,6 +314,7 @@ CHECKS = {
     "paths": check_paths,
     "patches": check_patches,
     "version": check_version,
+    "truth": check_truth,
 }
 
 

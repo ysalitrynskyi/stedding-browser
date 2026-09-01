@@ -3,15 +3,15 @@
 The Stedding patch series: ordered, numbered patches applied on top of the pinned
 Chromium version in `../tooling/chromium-version`.
 
-**Empty so far.** M0 builds vanilla Chromium deliberately, so there is nothing here
-yet. The first patches arrive with branding at M1 — three of them, because three
-upstream files hardcode `org.chromium.Chromium` instead of deriving it from
-`MAC_BUNDLE_ID`. They are enumerated in the Branding section of
-[../docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md).
+The series is organised **by feature, not by date**. A fix to Spaces amends the Spaces
+patch it belongs to (`git commit --fixup=<sha>` in the checkout, then `git rebase
+--autosquash`); it does not become patch 0044 at the end. A series that records every
+toolbar-height change as its own patch is a changelog, and a changelog is what makes
+the next Chromium rebase expensive. Squashing the current series is `S-11` in
+`../BACKLOG.md`.
 
-Note that most branding is **not** here: it is asset replacement in
-[../branding/](../branding/), which costs no patches at all. A patch is the last
-resort, not the first.
+Most branding is **not** here: it is asset replacement in [../branding/](../branding/),
+which costs no patches at all. A patch is the last resort, not the first.
 
 ## Rules
 

@@ -20,21 +20,23 @@ in one contributor's head. Read both.
 
 ## The loop that works
 
+The procedure is `docs/AGENT-LOOP.md`; the command is `tooling/dev`. Short form:
+
 ```bash
-# edit code in /Users/Shared/chromium/src (on stedding-work)
-tooling/build-chromium release        # incremental, ~40s-14min
-tooling/capture-ui --out /tmp/x.png --size 1400x880 \
-  --features 'SteddingArcStyleWindow:extra_spaces/2/pin_tabs/1'
+# 1. spec the behaviour in docs/features/<feature>.md, write the failing test
+# 2. edit code in /Users/Shared/chromium/src (on stedding-work) -- never while a build runs
+tooling/dev test spaces               # builds unit_tests, runs the feature's filter
+tooling/dev capture --features 'SteddingArcStyleWindow:extra_spaces/2/pin_tabs/1'
 # look at the capture. measure pixels, don't eyeball.
-autoninja -C out/release unit_tests   # when model code changed
-./out/release/unit_tests --gtest_filter='SpaceModelTest.*:SpaceDragTargetTest.*:FolderSessionTest.*:TabStripModelTest.AddToNewFolder*'
-# commit in the checkout with Why:/Removable when: footers, then:
-tooling/update-patches && tooling/check-repo
+# 3. commit in the checkout with Why:/Removable when: footers -- a fix to an existing
+#    feature is a fixup into that feature's commit, not a new patch
+tooling/dev patch                     # update-patches + check-repo
+tooling/dev status                    # the numbers for any doc you touch
 # commit + push this repo
 ```
 
-23 tests currently green. `tooling/verify-build --app .../Stedding.app` checks
-rendering, codecs (H.264 decodes real frames), and navigation.
+`tooling/verify-build --app .../Stedding.app` checks rendering, codecs (H.264
+decodes real frames), and navigation.
 
 ## Dev parameters (all on `SteddingArcStyleWindow`, tunable without rebuilds)
 
@@ -78,23 +80,10 @@ perform; a param that recreates the state IS the test surface.
    once on BrowserView with sidebar/top-container/mat made *invisible, not
    removed* (a nulled background crashes: the layout dereferences it).
 
-## Open items, in priority order
+## Open items
 
-1. **Drag a tab into a folder** — folders are menu-driven; `TabDragTarget` is
-   the seam (see `SpaceDragTarget` for the pattern and its tests).
-2. **Live folder/Space restore check via a real ⌘Q** (mechanism unit-tested;
-   see trap 4). Also operator retests: fullscreen URL width, pill site icon
-   (`docs/ARC-ROUND2.md` items 1 and 4).
-3. **Folder variant in the tab-strip mojom** — FOLDER currently maps to the
-   plain-container variant (patch 0042 note).
-4. **New Tab row position** — Arc puts it under the Clear line, above unpinned.
-5. **Space switching + full session-compaction audit** (ADR 0015 carries the
-   reasoning; per-tab extra data is the channel).
-6. **Performance baselines from `out/official`** (M1 leftover), then the M1
-   network audit.
-7. **Peek, settings surface, import** — `docs/ROADMAP.md` M4–M6.
-8. **Signing + notarisation + updater** — M7; the help page points at GitHub
-   Releases until then.
+`BACKLOG.md` is the list; do not keep one here. First up is `S-2` (drag into a
+folder).
 
 ## Release channel
 

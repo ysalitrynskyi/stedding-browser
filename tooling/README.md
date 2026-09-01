@@ -11,6 +11,8 @@ its configuration from `chromium-version` — never from a value typed twice.
 
 | File | What it does |
 |---|---|
+| `dev` | **Start here.** `build`, `test <feature>`, `capture`, `patch`, `check`, `status` — the loop in [docs/AGENT-LOOP.md](../docs/AGENT-LOOP.md) as one command. Owns the feature→gtest-filter table. |
+| `status` | Prints what the repo and checkout actually contain (pin, patch count, tests per feature, backlog). Docs quote this instead of typing numbers. |
 | `chromium-version` | The pinned upstream Chromium version. Single source of truth. Policy: [ADR 0007](../docs/decisions/0007-chromium-version-pin.md). |
 | `lib.sh` | Shared paths, logging, and preflight checks. Sourced, never executed. |
 | `bootstrap-depot-tools` | Verifies the host toolchain, then installs or updates `depot_tools`. |

@@ -1,0 +1,395 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Tue, 1 Sep 2026 07:47:47 -0400
+Subject: put Clear on the line between pinned and unpinned tabs
+
+The first DMG put the Clear row above the new-tab button at the bottom of the
+sidebar. The reference puts it on the hairline that separates pinned tabs from
+the rest, near the top, and the operator called the bottom placement out.
+
+The hairline is TabStripView's existing separator, which its layout positions
+by pointer and type -- so the affordance is a views::Separator subclass swapped
+in at construction, painting a hairline with Clear at the trailing end when the
+region view wires a callback, and the stock separator otherwise. Upstream only
+showed that separator when the strip was collapsed; it now shows whenever
+pinned and unpinned tabs both exist, since it carries the affordance.
+
+Clear closes the unpinned tabs of the active Space, collected before any close
+because closing shifts every index behind it.
+
+Why: operator feedback; the reference's Clear separates pinned from unpinned.
+Removable when: the sidebar's sections are restructured wholesale (per-Space
+pins, New Tab above the list), at which point this moves with them.
+---
+ .../frame/vertical_tab_strip_region_view.cc   |  42 ++++++--
+ .../frame/vertical_tab_strip_region_view.h    |   3 +
+ chrome/browser/ui/views/spaces/BUILD.gn       |   2 -
+ chrome/browser/ui/views/tabs/common/BUILD.gn  |   2 +
+ .../views/tabs/common/clear_tabs_separator.cc | 100 ++++++++++++++++++
+ .../views/tabs/common/clear_tabs_separator.h  |  43 ++++++++
+ .../ui/views/tabs/common/tab_strip_view.cc    |  12 ++-
+ .../ui/views/tabs/common/tab_strip_view.h     |   4 +
+ .../tabs/common/tab_strip_view_layout.cc      |   9 +-
+ 9 files changed, 201 insertions(+), 16 deletions(-)
+ create mode 100644 chrome/browser/ui/views/tabs/common/clear_tabs_separator.cc
+ create mode 100644 chrome/browser/ui/views/tabs/common/clear_tabs_separator.h
+
+diff --git a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+index 0cf757dca9e0b..9ec747bddb47b 100644
+--- a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
++++ b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+@@ -6,7 +6,6 @@
+ 
+ #include "chrome/browser/ui/spaces/space_model.h"
+ #include "chrome/browser/ui/stedding_ui_metrics.h"
+-#include "chrome/browser/ui/views/spaces/clear_tabs_row_view.h"
+ #include "chrome/browser/ui/views/spaces/space_drag_target.h"
+ #include "chrome/browser/ui/views/spaces/space_switcher_view.h"
+ #include "chrome/browser/ui/views/spaces/space_tab_visibility_controller.h"
+@@ -163,13 +162,6 @@ VerticalTabStripRegionView::VerticalTabStripRegionView(
+               LayoutConstant::kVerticalTabStripCollapsedVerticalPadding),
+           region_horizontal_padding, 0, region_horizontal_padding));
+ 
+-  // The hairline with Clear sits directly above the new-tab row, as it does in
+-  // the reference.
+-  if (spaces::SpaceModel::From(browser_view->browser())) {
+-    AddChildView(
+-        std::make_unique<spaces::ClearTabsRowView>(browser_view->browser()));
+-  }
+-
+   // The Space switcher lives at the bottom of the sidebar, below the new-tab
+   // row, as the reference does. Windows with no Spaces -- popups, app windows
+   // -- get no switcher at all.
+@@ -784,6 +776,15 @@ void VerticalTabStripRegionView::OnTabStripViewSet() {
+   CHECK(separator_index.has_value());
+   ReorderChildView(tab_strip_view(), separator_index.value() + 1);
+ 
++  // Arc's Clear lives on the line between pinned and unpinned tabs. It closes
++  // the unpinned tabs of the Space being looked at and leaves pinned ones.
++  if (spaces::SpaceModel::From(browser_view()->browser())) {
++    static_cast<TabStripView*>(tab_strip_view())
++        ->SetSeparatorClearCallback(base::BindRepeating(
++            &VerticalTabStripRegionView::ClearCurrentSpaceTabs,
++            base::Unretained(this)));
++  }
++
+   // Tabs outside the active Space are hidden the way a collapsed group hides
+   // its tabs. Only normal windows have a SpaceModel; elsewhere this stays null
+   // and every tab shows, as before.
+@@ -1192,5 +1193,30 @@ void VerticalTabStripRegionView::OnActiveTabChanged(
+   }
+ }
+ 
++void VerticalTabStripRegionView::ClearCurrentSpaceTabs() {
++  Browser* const browser = browser_view()->browser();
++  TabStripModel* const tabs = browser->tab_strip_model();
++  spaces::SpaceModel* const model = spaces::SpaceModel::From(browser);
++
++  // Collect first, close after: closing shifts every index behind it.
++  std::vector<content::WebContents*> doomed;
++  for (int i = 0; i < tabs->count(); ++i) {
++    tabs::TabInterface* const tab = tabs->GetTabAtIndex(i);
++    if (tab->IsPinned()) {
++      continue;
++    }
++    if (model && !model->IsTabInActiveSpace(tab)) {
++      continue;
++    }
++    doomed.push_back(tab->GetContents());
++  }
++  for (content::WebContents* contents : doomed) {
++    const int index = tabs->GetIndexOfWebContents(contents);
++    if (index != TabStripModel::kNoTab) {
++      tabs->CloseWebContentsAt(index, TabCloseTypes::CLOSE_USER_GESTURE);
++    }
++  }
++}
++
+ BEGIN_METADATA(VerticalTabStripRegionView)
+ END_METADATA
+diff --git a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
+index 6033b8337e344..1e46eeea8f866 100644
+--- a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
++++ b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
+@@ -302,6 +302,9 @@ class VerticalTabStripRegionView final
+   int keep_expanded_lock_count_ = 0;
+   std::unique_ptr<ExpandOnHoverLock> omnibox_open_lock_;
+ 
++  // Closes the unpinned tabs of the active Space; the Clear affordance.
++  void ClearCurrentSpaceTabs();
++
+   // Hides tabs that belong to a Space other than the active one. Null in a
+   // window with no Spaces.
+   std::unique_ptr<spaces::SpaceTabVisibilityController> space_tab_visibility_;
+diff --git a/chrome/browser/ui/views/spaces/BUILD.gn b/chrome/browser/ui/views/spaces/BUILD.gn
+index 3a9d143215ff9..ce948acc7247d 100644
+--- a/chrome/browser/ui/views/spaces/BUILD.gn
++++ b/chrome/browser/ui/views/spaces/BUILD.gn
+@@ -4,13 +4,11 @@
+ 
+ source_set("spaces") {
+   public = [
+-    "clear_tabs_row_view.h",
+     "space_drag_target.h",
+     "space_switcher_view.h",
+     "space_tab_visibility_controller.h",
+   ]
+   sources = [
+-    "clear_tabs_row_view.cc",
+     "space_drag_target.cc",
+     "space_switcher_view.cc",
+     "space_tab_visibility_controller.cc",
+diff --git a/chrome/browser/ui/views/tabs/common/BUILD.gn b/chrome/browser/ui/views/tabs/common/BUILD.gn
+index 2a16453481722..fdc432f68582d 100644
+--- a/chrome/browser/ui/views/tabs/common/BUILD.gn
++++ b/chrome/browser/ui/views/tabs/common/BUILD.gn
+@@ -18,6 +18,7 @@ source_set("common") {
+     "tab_group_view_layout.h",
+     "tab_strip_layout_utils.h",
+     "tab_strip_utils.h",
++    "clear_tabs_separator.h",
+     "tab_strip_view.h",
+     "tab_strip_view_layout.h",
+     "unpinned_tab_container_view.h",
+@@ -66,6 +67,7 @@ source_set("impl") {
+     "tab_strip_collection_controller.h",
+     "tab_strip_layout_utils.cc",
+     "tab_strip_utils.cc",
++    "clear_tabs_separator.cc",
+     "tab_strip_view.cc",
+     "tab_strip_view_layout.cc",
+     "tab_view.cc",
+diff --git a/chrome/browser/ui/views/tabs/common/clear_tabs_separator.cc b/chrome/browser/ui/views/tabs/common/clear_tabs_separator.cc
+new file mode 100644
+index 0000000000000..2772db412d824
+--- /dev/null
++++ b/chrome/browser/ui/views/tabs/common/clear_tabs_separator.cc
+@@ -0,0 +1,100 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/views/tabs/common/clear_tabs_separator.h"
++
++#include <utility>
++
++#include "base/no_destructor.h"
++#include "cc/paint/paint_flags.h"
++#include "ui/base/metadata/metadata_impl_macros.h"
++#include "ui/gfx/canvas.h"
++#include "ui/gfx/font_list.h"
++#include "ui/views/controls/separator.h"
++
++namespace {
++
++constexpr int kRowHeight = 22;
++constexpr int kSideInset = 12;
++constexpr int kLabelGap = 8;
++constexpr SkColor kHairline = SkColorSetA(SK_ColorWHITE, 0x2B);
++constexpr SkColor kLabel = SkColorSetA(SK_ColorWHITE, 0x8C);
++
++const gfx::FontList& LabelFont() {
++  static const base::NoDestructor<gfx::FontList> font(
++      gfx::FontList({"system-ui"}, gfx::Font::NORMAL, 11,
++                    gfx::Font::Weight::MEDIUM));
++  return *font;
++}
++
++}  // namespace
++
++ClearTabsSeparator::ClearTabsSeparator() = default;
++ClearTabsSeparator::~ClearTabsSeparator() = default;
++
++void ClearTabsSeparator::SetClearCallback(base::RepeatingClosure callback) {
++  clear_callback_ = std::move(callback);
++  PreferredSizeChanged();
++  SchedulePaint();
++}
++
++gfx::Size ClearTabsSeparator::CalculatePreferredSize(
++    const views::SizeBounds& available_size) const {
++  if (!clear_callback_) {
++    return views::Separator::CalculatePreferredSize(available_size);
++  }
++  return gfx::Size(0, kRowHeight);
++}
++
++void ClearTabsSeparator::OnPaint(gfx::Canvas* canvas) {
++  if (!clear_callback_) {
++    views::Separator::OnPaint(canvas);
++    return;
++  }
++
++  const std::u16string label = u"Clear";
++  const int label_width =
++      gfx::Canvas::GetStringWidth(label, LabelFont()) + 2 * kLabelGap;
++  const gfx::Rect bounds = GetContentsBounds();
++  const int line_y = bounds.CenterPoint().y();
++
++  cc::PaintFlags flags;
++  flags.setColor(kHairline);
++  flags.setStrokeWidth(1);
++  canvas->DrawLine(gfx::PointF(bounds.x() + kSideInset, line_y),
++                   gfx::PointF(bounds.right() - kSideInset - label_width,
++                               line_y),
++                   flags);
++
++  clear_rect_ =
++      gfx::Rect(bounds.right() - kSideInset - label_width, bounds.y(),
++                label_width, bounds.height());
++  canvas->DrawStringRectWithFlags(label, LabelFont(), kLabel, clear_rect_,
++                                  gfx::Canvas::TEXT_ALIGN_CENTER);
++}
++
++bool ClearTabsSeparator::OnMousePressed(const ui::MouseEvent& event) {
++  pressed_in_clear_ =
++      clear_callback_ && clear_rect_.Contains(event.location());
++  return pressed_in_clear_;
++}
++
++void ClearTabsSeparator::OnMouseReleased(const ui::MouseEvent& event) {
++  if (pressed_in_clear_ && clear_rect_.Contains(event.location()) &&
++      clear_callback_) {
++    clear_callback_.Run();
++  }
++  pressed_in_clear_ = false;
++}
++
++std::u16string ClearTabsSeparator::GetRenderedTooltipText(
++    const gfx::Point& p) const {
++  if (clear_callback_ && clear_rect_.Contains(p)) {
++    return u"Close this Space's tabs";
++  }
++  return std::u16string();
++}
++
++BEGIN_METADATA(ClearTabsSeparator)
++END_METADATA
+diff --git a/chrome/browser/ui/views/tabs/common/clear_tabs_separator.h b/chrome/browser/ui/views/tabs/common/clear_tabs_separator.h
+new file mode 100644
+index 0000000000000..2f35d77825098
+--- /dev/null
++++ b/chrome/browser/ui/views/tabs/common/clear_tabs_separator.h
+@@ -0,0 +1,43 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_VIEWS_TABS_COMMON_CLEAR_TABS_SEPARATOR_H_
++#define CHROME_BROWSER_UI_VIEWS_TABS_COMMON_CLEAR_TABS_SEPARATOR_H_
++
++#include "base/functional/callback.h"
++#include "ui/base/metadata/metadata_header_macros.h"
++#include "ui/views/controls/separator.h"
++
++// The line between pinned and unpinned tabs, with a Clear at its trailing end.
++//
++// A views::Separator subclass rather than a sibling view because
++// TabStripViewLayout positions the separator by pointer and type; swapping the
++// instance keeps that layout untouched. With no callback set it paints as a
++// plain hairline, so popups and tests see the stock separator.
++class ClearTabsSeparator : public views::Separator {
++  METADATA_HEADER(ClearTabsSeparator, views::Separator)
++
++ public:
++  ClearTabsSeparator();
++  ~ClearTabsSeparator() override;
++
++  // Shows the Clear affordance and runs `callback` when it is pressed.
++  void SetClearCallback(base::RepeatingClosure callback);
++
++  // views::View:
++  gfx::Size CalculatePreferredSize(
++      const views::SizeBounds& available_size) const override;
++  void OnPaint(gfx::Canvas* canvas) override;
++  bool OnMousePressed(const ui::MouseEvent& event) override;
++  void OnMouseReleased(const ui::MouseEvent& event) override;
++  std::u16string GetRenderedTooltipText(const gfx::Point& p) const override;
++
++ private:
++  // The rect the Clear label was last painted in, for hit testing.
++  gfx::Rect clear_rect_;
++  bool pressed_in_clear_ = false;
++  base::RepeatingClosure clear_callback_;
++};
++
++#endif  // CHROME_BROWSER_UI_VIEWS_TABS_COMMON_CLEAR_TABS_SEPARATOR_H_
+diff --git a/chrome/browser/ui/views/tabs/common/tab_strip_view.cc b/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
+index 407bcbbae7aea..c58dae4908769 100644
+--- a/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
++++ b/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "chrome/browser/ui/views/tabs/common/tab_strip_view.h"
+ 
++#include "chrome/browser/ui/views/tabs/common/clear_tabs_separator.h"
++
+ #include "base/callback_list.h"
+ #include "base/functional/bind.h"
+ #include "base/memory/raw_ptr.h"
+@@ -184,8 +186,9 @@ TabStripView::TabStripView(TabCollectionNode* collection_node)
+       views::ScrollView::ScrollWithLayers::kEnabled));
+   SetScrollViewProperties(pinned_tabs_scroll_view_);
+ 
+-  auto tabs_separator = std::make_unique<views::Separator>();
+-  tabs_separator_ = AddChildView(std::move(tabs_separator));
++  // Stedding: the separator carries the Clear affordance when the region view
++  // wires one up; with no callback it paints as the stock hairline.
++  tabs_separator_ = AddChildView(std::make_unique<ClearTabsSeparator>());
+ 
+   unpinned_tabs_scroll_view_ = AddChildView(std::make_unique<views::ScrollView>(
+       views::ScrollView::ScrollWithLayers::kEnabled));
+@@ -207,6 +210,11 @@ TabStripView::TabStripView(TabCollectionNode* collection_node)
+ 
+ TabStripView::~TabStripView() = default;
+ 
++void TabStripView::SetSeparatorClearCallback(base::RepeatingClosure callback) {
++  static_cast<ClearTabsSeparator*>(tabs_separator_.get())
++      ->SetClearCallback(std::move(callback));
++}
++
+ void TabStripView::AddedToWidget() {
+   views::Widget* const widget = GetWidget();
+   paint_as_active_subscription_ = widget->RegisterPaintAsActiveChangedCallback(
+diff --git a/chrome/browser/ui/views/tabs/common/tab_strip_view.h b/chrome/browser/ui/views/tabs/common/tab_strip_view.h
+index bca3e9acc58f9..221fd4678fb6c 100644
+--- a/chrome/browser/ui/views/tabs/common/tab_strip_view.h
++++ b/chrome/browser/ui/views/tabs/common/tab_strip_view.h
+@@ -37,6 +37,10 @@ class TabStripView final : public views::View,
+ 
+   views::Separator* GetTabsSeparator() const { return tabs_separator_; }
+ 
++  // Stedding: shows a Clear affordance on the pinned/unpinned separator that
++  // runs `callback`. See ClearTabsSeparator.
++  void SetSeparatorClearCallback(base::RepeatingClosure callback);
++
+   PinnedTabContainerView* GetPinnedTabsContainer() const;
+   UnpinnedTabContainerView* GetUnpinnedTabsContainer() const;
+ 
+diff --git a/chrome/browser/ui/views/tabs/common/tab_strip_view_layout.cc b/chrome/browser/ui/views/tabs/common/tab_strip_view_layout.cc
+index db53e40e59129..c8299b65da443 100644
+--- a/chrome/browser/ui/views/tabs/common/tab_strip_view_layout.cc
++++ b/chrome/browser/ui/views/tabs/common/tab_strip_view_layout.cc
+@@ -158,7 +158,6 @@ views::ProposedLayout TabStripViewLayout::CalculateVerticalLayout(
+   views::ScrollView* unpinned_tabs_scroll_view =
+       tab_strip_view->unpinned_tabs_scroll_view();
+   views::Separator* tabs_separator = tab_strip_view->GetTabsSeparator();
+-  const bool is_collapsed = tab_strip_view->is_collapsed_;
+ 
+   if (!size_bounds.width().is_bounded()) {
+     return layouts;
+@@ -182,9 +181,11 @@ views::ProposedLayout TabStripViewLayout::CalculateVerticalLayout(
+   const int unpinned_preferred_height =
+       unpinned_tabs_scroll_view->GetPreferredSize(size_bounds).height();
+ 
+-  const bool should_show_separator = pinned_preferred_height != 0 &&
+-                                     unpinned_preferred_height != 0 &&
+-                                     is_collapsed;
++  // Stedding: the line between pinned and unpinned tabs shows whenever both
++  // exist, collapsed or not -- it carries the Clear affordance, as the
++  // reference does. Upstream only showed it collapsed.
++  const bool should_show_separator =
++      pinned_preferred_height != 0 && unpinned_preferred_height != 0;
+ 
+   // If the height is bounded, calculate the available space for laying out the
+   // pinned and unpinned containers.

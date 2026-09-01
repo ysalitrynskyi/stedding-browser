@@ -11,8 +11,9 @@ refer to `docs/features/<feature>.md`.
 
 | Id | Item | Feature / spec | Notes |
 |---|---|---|---|
-| S-2 | Drag a tab into a folder | folders | `TabDragTarget` is the seam; `SpaceDragTarget` is the pattern |
 | S-3 | Live restart check for Spaces and folders through a real ⌘Q | spaces B9, folders | harness must quit via the menu (HANDOFF trap 4) |
+| S-19 | Live drag harness in tooling: launch, activate, synthetic drag, capture (the scratch script that verified S-2) | tooling | `tooling/dev drag` wrapping `capture-window.py` + Quartz events; needs the window key, so never on a machine someone is using |
+| S-20 | Folder drop highlight: capture mid-drag to verify the header tint | folders F7 | needs S-19 |
 | S-4 | Folder variant in the tab-strip mojom (FOLDER maps to the plain container today) | folders | patch 0042 note |
 | S-5 | New Tab row under the Clear line, above unpinned | ui-spec | Arc order |
 | S-6 | Session-compaction audit for per-tab extra data | spaces, folders | ADR 0015 carries the reasoning |
@@ -33,4 +34,5 @@ refer to `docs/features/<feature>.md`.
 
 | Id | Item | Closed by |
 |---|---|---|
+| S-2 | Drag a tab onto a folder header to move it in | patch 0045, `folder_drag_target_unittest.cc` (folders F7–F9), verified live by synthetic drag |
 | S-1 | Spaces core semantics: membership on insert, active tab follows the switch, empty Space opens a tab, delete moves tabs | patch 0044, `space_model_window_unittest.cc` (spaces B1–B8) |

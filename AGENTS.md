@@ -78,9 +78,9 @@ Built, with tests or measured captures:
   icon/rename/colour/delete, drag-tab-onto-Space, persistence (`decisions/0015`).
   Core semantics — membership on open, active tab follows the switch, delete
   moves tabs — landed as patch 0044 with `space_model_window_unittest.cc`.
-- **Folders with nesting**: create from tab context menu, collapse, inline
-  rename, session persistence; the close-path use-after-free is fixed and
-  regression-tested.
+- **Folders with nesting**: create from tab context menu, drop a dragged tab
+  on a folder header (patch 0045), collapse, inline rename, session
+  persistence; the close-path use-after-free is fixed and regression-tested.
 - **⌘T command bar** across Spaces. Stedding colours (sand light, blue→plum
   gradient dark). Codecs verified. Sign-in promo removed. Mac updater stubbed
   (no Keystone) pointing at GitHub Releases.
@@ -129,6 +129,7 @@ Outstanding: `BACKLOG.md`. Unsigned (M7), no performance baselines yet.
 
 ## Current priorities (keep this list short and fresh)
 
-The order is `BACKLOG.md`. In one line: `S-2` drag-into-folder, then the operator retests `S-9`/`S-10` on the next DMG, then
+The order is `BACKLOG.md`. In one line: the operator retests `S-9`/`S-10` on
+the next DMG, then
 `S-11` squash the series before the next Chromium pin move. `S-18`
 (proprietary-codecs licensing) still needs a human decision.

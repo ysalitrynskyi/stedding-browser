@@ -61,8 +61,11 @@ perform; a param that recreates the state IS the test surface.
    was invisible to every capture and found by a unit-test fixture. Anything
    that owns a tab needs a test, not a screenshot.
 3. **Synthetic input**: `CGEventPostToPid` reaches the app for HOVER without
-   focus; CLICKS need the window key. Never drive the user's real pointer.
-   `tooling/capture-window.py` captures one window by id — never the screen.
+   focus; CLICKS and DRAGS need the window key (activate the process via
+   System Events first, then post HID-tap mouse events; a tab drag needs a few
+   slow moves past the threshold before the long move). Never drive the
+   user's real pointer while they are at the machine. `tooling/capture-window.py`
+   captures one window by id — never the screen. `S-19` turns this into a tool.
 4. **SIGTERM does not reliably flush Chromium session files** from a raw binary
    launch — live restore tests via kill are meaningless; use unit tests or a
    real menu quit.
@@ -82,8 +85,8 @@ perform; a param that recreates the state IS the test surface.
 
 ## Open items
 
-`BACKLOG.md` is the list; do not keep one here. First up is `S-2` (drag into a
-folder).
+`BACKLOG.md` is the list; do not keep one here. First up: cut a DMG for the
+operator retests (`S-9`, `S-10`), then `S-11` before the next pin move.
 
 ## Release channel
 

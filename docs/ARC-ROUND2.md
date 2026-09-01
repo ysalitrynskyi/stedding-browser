@@ -11,9 +11,9 @@ fullscreen. Each gets fixed and verified by capture; this file tracks status.
 | 4 | Site icon clipped in pill | Not reproducible after the tiling fix; pill renders clean at zoom. Re-check on the next DMG | needs retest |
 | 5 | One rounded corner looks odd | **Fixed** — the card floats on a mat with all four corners rounded, via MultiContentsView's own layout so the web layer stays in step; orphaned floating corners silenced (patch 0034) | done |
 | 6 | Help page error code 0 | **Fixed** — Stedding mac updater stub reports a plain disabled state; Keystone was never shipped (patch 0037) | done |
-| 7 | Tab groups are Chromium bubbles; Arc has folders (nesting) | We already carry FOLDER collection + FolderView (patch 0002). Wire a creation UI and Arc-style folder rows; verify nesting | open |
+| 7 | Folders | **Deferred to its own milestone, with the map drawn.** Research confirmed nothing constructs a FOLDER today, and true nesting means threading a folder id through TabStripCollection::MoveTabsRecursive/GetMovePosition the way TabGroupId is — invariant-heavy model surgery that should not ride a ten-fix batch. The group-creation pipeline to mirror is recorded in the research; groups remain the interim container | planned |
 | 8 | Clear line position | **Fixed** — Clear lives on TabStripView's pinned/unpinned separator, which now shows whenever both exist (patch 0035) | done |
-| 9 | Our "pinned = above all Spaces" is Arc's *super*-pin (essentials). Regular pin is per-Space, above the Clear line | Two tiers: Chromium pin stays essentials (grid, global). New per-Space pin marker in SpaceModel, persisted; Clear skips them; tab context menu gets the toggle | open |
+| 9 | Pin tiers | **Fixed** — Chromium pin = essentials (grid, global); new per-Space pin in SpaceModel, persisted and restored, Clear skips it, tab context menu carries Pin/Unpin to This Space (patch 0039) | done |
 
 Method: grok researches seams read-only; implementation and every visual check
 here. No fix is done until a capture shows it.

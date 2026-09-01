@@ -1,0 +1,322 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Tue, 1 Sep 2026 08:15:55 -0400
+Subject: add Arc's second pin tier: pinned within a Space
+
+The first DMG treated Chromium's pin as "above all Spaces", which is Arc's
+essentials tier; Arc's ordinary pin is per-Space, sits above the Clear line,
+and survives Clear. The operator called the missing tier out.
+
+SpaceModel now carries it: IsSpacePinned/SetSpacePinned by tab handle,
+persisted in per-tab session extra data next to the tab's Space and collected
+on restore through the same parked user data. Clear skips Space-pinned tabs.
+Pinning moves the tab to the top of the unpinned block, directly under the
+Clear line, which is where the tier lives visually.
+
+The toggle is a pair of tab context menu items -- Pin to This Space / Unpin
+from This Space -- rather than one toggle, because the menu model cannot ask
+per-tab checked state; the tab strip collection controller enables exactly one
+of the pair from the window's SpaceModel and executes both. The model's own
+command switches treat the pair as no-ops, so nothing changes for windows
+without Spaces.
+
+Why: the two tiers are how Arc's sidebar is actually organised; with one tier
+the essentials row and the pinned section could not both exist.
+Removable when: never, short of dropping Spaces.
+---
+ chrome/browser/ui/spaces/space_model.cc       | 28 ++++++++++++++++
+ chrome/browser/ui/spaces/space_model.h        | 11 +++++++
+ .../ui/spaces/tab_space_restore_data.cc       | 12 +++++--
+ .../ui/spaces/tab_space_restore_data.h        |  6 +++-
+ chrome/browser/ui/tabs/tab_menu_model.cc      |  8 +++++
+ chrome/browser/ui/tabs/tab_strip_model.cc     | 10 ++++++
+ chrome/browser/ui/tabs/tab_strip_model.h      |  5 +++
+ .../frame/vertical_tab_strip_region_view.cc   |  5 +++
+ .../common/tab_strip_collection_controller.cc | 33 +++++++++++++++++++
+ 9 files changed, 114 insertions(+), 4 deletions(-)
+
+diff --git a/chrome/browser/ui/spaces/space_model.cc b/chrome/browser/ui/spaces/space_model.cc
+index b562798bfc402..6841de9008bfd 100644
+--- a/chrome/browser/ui/spaces/space_model.cc
++++ b/chrome/browser/ui/spaces/space_model.cc
+@@ -195,6 +195,9 @@ SpaceId SpaceModel::SpaceIdForNewTab(tabs::TabInterface* tab) {
+   if (content::WebContents* const contents = tab->GetContents()) {
+     if (const TabSpaceRestoreData* const restored =
+             TabSpaceRestoreData::FromWebContents(contents)) {
++      if (restored->space_pinned()) {
++        space_pinned_.insert(tab->GetHandle());
++      }
+       if (const std::optional<base::Token> token =
+               base::Token::FromString(restored->space_id());
+           token) {
+@@ -254,6 +257,31 @@ bool SpaceModel::IsTabInActiveSpace(const tabs::TabInterface* tab) const {
+   return it == tab_spaces_.end() || it->second == active_id_;
+ }
+ 
++bool SpaceModel::IsSpacePinned(const tabs::TabInterface* tab) const {
++  return tab && space_pinned_.contains(tab->GetHandle());
++}
++
++void SpaceModel::SetSpacePinned(tabs::TabInterface* tab, bool pinned) {
++  if (!tab) {
++    return;
++  }
++  if (pinned) {
++    space_pinned_.insert(tab->GetHandle());
++  } else {
++    space_pinned_.erase(tab->GetHandle());
++  }
++  if (session_service_ && session_id_.is_valid()) {
++    if (content::WebContents* const contents = tab->GetContents()) {
++      const SessionID tab_id = sessions::SessionTabHelper::IdForTab(contents);
++      if (tab_id.is_valid()) {
++        session_service_->AddTabExtraData(session_id_, tab_id,
++                                          kSessionTabSpacePinKey,
++                                          pinned ? "1" : "0");
++      }
++    }
++  }
++}
++
+ void SpaceModel::ForgetClosedTabs() {
+   std::erase_if(tab_spaces_, [](const auto& entry) {
+     return entry.first.Get() == nullptr;
+diff --git a/chrome/browser/ui/spaces/space_model.h b/chrome/browser/ui/spaces/space_model.h
+index d4aeb9107e8cc..49621971c9754 100644
+--- a/chrome/browser/ui/spaces/space_model.h
++++ b/chrome/browser/ui/spaces/space_model.h
+@@ -6,6 +6,7 @@
+ #define CHROME_BROWSER_UI_SPACES_SPACE_MODEL_H_
+ 
+ #include <map>
++#include <set>
+ #include <memory>
+ #include <optional>
+ #include <string>
+@@ -28,6 +29,9 @@ namespace spaces {
+ // The key Spaces are written under in the session's per-window extra data.
+ inline constexpr char kSessionSpacesKey[] = "stedding.spaces";
+ 
++// The key a tab's per-Space pin is written under in per-tab extra data.
++inline constexpr char kSessionTabSpacePinKey[] = "stedding.spacepin";
++
+ 
+ // The Spaces belonging to one browser window, and which of them is active.
+ //
+@@ -110,6 +114,12 @@ class SpaceModel {
+   // Moves `tab` to `id`. Does nothing if `id` is not a Space in this model.
+   void SetSpaceForTab(tabs::TabInterface* tab, const SpaceId& id);
+ 
++  // Arc's second pin tier: pinned within its Space, shown above the Clear
++  // line there, and skipped by Clear -- unlike Chromium-pinned tabs, which are
++  // the essentials row and sit above every Space.
++  bool IsSpacePinned(const tabs::TabInterface* tab) const;
++  void SetSpacePinned(tabs::TabInterface* tab, bool pinned);
++
+   // True if `tab` is in the active Space, and so should be visible. Tabs this
+   // model has never seen count as visible: a window whose tabs predate Spaces
+   // must not blink out of existence.
+@@ -135,6 +145,7 @@ class SpaceModel {
+   void SaveTabToSession(tabs::TabInterface* tab, const SpaceId& id);
+ 
+   std::map<tabs::TabHandle, SpaceId> tab_spaces_;
++  std::set<tabs::TabHandle> space_pinned_;
+   raw_ptr<SessionService> session_service_ = nullptr;
+   SessionID session_id_ = SessionID::InvalidValue();
+   std::optional<ui::ScopedUnownedUserData<SpaceModel>> scoped_user_data_;
+diff --git a/chrome/browser/ui/spaces/tab_space_restore_data.cc b/chrome/browser/ui/spaces/tab_space_restore_data.cc
+index 05a89ab34c598..63a5d8b42adc8 100644
+--- a/chrome/browser/ui/spaces/tab_space_restore_data.cc
++++ b/chrome/browser/ui/spaces/tab_space_restore_data.cc
+@@ -6,14 +6,17 @@
+ 
+ #include <utility>
+ 
++#include "chrome/browser/ui/spaces/space_model.h"
+ #include "content/public/browser/web_contents.h"
+ 
+ namespace spaces {
+ 
+ TabSpaceRestoreData::TabSpaceRestoreData(content::WebContents* contents,
+-                                         std::string space_id)
++                                         std::string space_id,
++                                         bool space_pinned)
+     : content::WebContentsUserData<TabSpaceRestoreData>(*contents),
+-      space_id_(std::move(space_id)) {}
++      space_id_(std::move(space_id)),
++      space_pinned_(space_pinned) {}
+ 
+ TabSpaceRestoreData::~TabSpaceRestoreData() = default;
+ 
+@@ -24,7 +27,10 @@ void RestoreSpaceFromExtraData(
+   if (it == extra_data.end() || it->second.empty()) {
+     return;
+   }
+-  TabSpaceRestoreData::CreateForWebContents(web_contents, it->second);
++  const auto pin = extra_data.find(kSessionTabSpacePinKey);
++  TabSpaceRestoreData::CreateForWebContents(
++      web_contents, it->second,
++      pin != extra_data.end() && pin->second == "1");
+ }
+ 
+ WEB_CONTENTS_USER_DATA_KEY_IMPL(TabSpaceRestoreData);
+diff --git a/chrome/browser/ui/spaces/tab_space_restore_data.h b/chrome/browser/ui/spaces/tab_space_restore_data.h
+index 7271d889e4366..15c4f28eb8379 100644
+--- a/chrome/browser/ui/spaces/tab_space_restore_data.h
++++ b/chrome/browser/ui/spaces/tab_space_restore_data.h
+@@ -30,13 +30,17 @@ class TabSpaceRestoreData
+   ~TabSpaceRestoreData() override;
+ 
+   const std::string& space_id() const { return space_id_; }
++  bool space_pinned() const { return space_pinned_; }
+ 
+  private:
+   friend class content::WebContentsUserData<TabSpaceRestoreData>;
+ 
+-  TabSpaceRestoreData(content::WebContents* contents, std::string space_id);
++  TabSpaceRestoreData(content::WebContents* contents,
++                      std::string space_id,
++                      bool space_pinned);
+ 
+   const std::string space_id_;
++  const bool space_pinned_;
+ 
+   WEB_CONTENTS_USER_DATA_KEY_DECL();
+ };
+diff --git a/chrome/browser/ui/tabs/tab_menu_model.cc b/chrome/browser/ui/tabs/tab_menu_model.cc
+index 85b8f3eb6302b..793876fe3b6ef 100644
+--- a/chrome/browser/ui/tabs/tab_menu_model.cc
++++ b/chrome/browser/ui/tabs/tab_menu_model.cc
+@@ -422,6 +422,14 @@ void TabMenuModel::Build(int index) {
+       TabStripModel::CommandTogglePinned,
+       will_pin ? IDS_TAB_CXMENU_PIN_TAB : IDS_TAB_CXMENU_UNPIN_TAB);
+ 
++  // Stedding: pin within the current Space -- Arc's second pin tier, above the
++  // Clear line, unlike the essentials pin above. The tab strip controller
++  // enables exactly one of the pair from the window's SpaceModel.
++  if (tabs::IsVerticalTabsFeatureEnabled()) {
++    AddItem(TabStripModel::CommandSpacePin, u"Pin to This Space");
++    AddItem(TabStripModel::CommandSpaceUnpin, u"Unpin from This Space");
++  }
++
+   if (features::IsMenuSimplificationEnabled()) {
+     SetIconForCommandId(
+         TabStripModel::CommandTogglePinned,
+diff --git a/chrome/browser/ui/tabs/tab_strip_model.cc b/chrome/browser/ui/tabs/tab_strip_model.cc
+index 6e5f181eb9e8c..bfc36a1dbf0a8 100644
+--- a/chrome/browser/ui/tabs/tab_strip_model.cc
++++ b/chrome/browser/ui/tabs/tab_strip_model.cc
+@@ -2584,6 +2584,11 @@ bool TabStripModel::IsContextMenuCommandEnabled(
+   }
+ 
+   switch (command_id) {
++    // Enabled state for the per-Space pin pair comes from the collection
++    // controller; from the model alone they are disabled.
++    case CommandSpacePin:
++    case CommandSpaceUnpin:
++      return false;
+     case CommandNewTabToRight:
+     case CommandCloseTab:
+       return true;
+@@ -2692,6 +2697,11 @@ void TabStripModel::ExecuteContextMenuCommand(int context_index,
+     return;
+   }
+   switch (command_id) {
++    // Stedding's per-Space pin pair is handled by the tab strip collection
++    // controller, which owns the SpaceModel; nothing to do here.
++    case CommandSpacePin:
++    case CommandSpaceUnpin:
++      break;
+     case CommandNewTabToRight: {
+       base::UmaHistogramCounts1000(
+           "Tab.ContextMenu.NewTabToRight.SelectedTabsCount",
+diff --git a/chrome/browser/ui/tabs/tab_strip_model.h b/chrome/browser/ui/tabs/tab_strip_model.h
+index 7176dac30181d..5ff6bc4b86f3d 100644
+--- a/chrome/browser/ui/tabs/tab_strip_model.h
++++ b/chrome/browser/ui/tabs/tab_strip_model.h
+@@ -784,6 +784,11 @@ class TabStripModel {
+     CommandCloseOtherTabs,
+     CommandCloseTabsToRight,
+     CommandTogglePinned,
++    // Stedding: Arc's second pin tier, pinned within the current Space. Two
++    // commands rather than a toggle because the menu cannot ask per-tab checked
++    // state; exactly one is enabled at a time.
++    CommandSpacePin,
++    CommandSpaceUnpin,
+     CommandToggleGrouped,
+     CommandToggleSiteMuted,
+     CommandSendTabToSelf,
+diff --git a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+index 9ec747bddb47b..59b0052b57b52 100644
+--- a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
++++ b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+@@ -1208,6 +1208,11 @@ void VerticalTabStripRegionView::ClearCurrentSpaceTabs() {
+     if (model && !model->IsTabInActiveSpace(tab)) {
+       continue;
+     }
++    // Space-pinned tabs sit above the Clear line and survive it; that is what
++    // the second pin tier is for.
++    if (model && model->IsSpacePinned(tab)) {
++      continue;
++    }
+     doomed.push_back(tab->GetContents());
+   }
+   for (content::WebContents* contents : doomed) {
+diff --git a/chrome/browser/ui/views/tabs/common/tab_strip_collection_controller.cc b/chrome/browser/ui/views/tabs/common/tab_strip_collection_controller.cc
+index 1ad01e47e1a71..283d671a72b11 100644
+--- a/chrome/browser/ui/views/tabs/common/tab_strip_collection_controller.cc
++++ b/chrome/browser/ui/views/tabs/common/tab_strip_collection_controller.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "chrome/browser/ui/views/tabs/common/tab_strip_collection_controller.h"
+ 
++#include "chrome/browser/ui/spaces/space_model.h"
++
+ #include <variant>
+ 
+ #include "base/memory/weak_ptr.h"
+@@ -515,6 +517,17 @@ bool TabStripCollectionController::IsContextMenuCommandChecked(
+ bool TabStripCollectionController::IsContextMenuCommandEnabled(
+     tabs::TabInterface* tab,
+     TabStripModel::ContextMenuCommand command_id) {
++  // Stedding's per-Space pin pair: exactly one enabled, from the SpaceModel.
++  if (command_id == TabStripModel::CommandSpacePin ||
++      command_id == TabStripModel::CommandSpaceUnpin) {
++    spaces::SpaceModel* const space_model =
++        spaces::SpaceModel::From(browser_view_->browser());
++    if (!space_model || !tab || tab->IsPinned()) {
++      return false;
++    }
++    const bool pinned = space_model->IsSpacePinned(tab);
++    return command_id == TabStripModel::CommandSpacePin ? !pinned : pinned;
++  }
+   return model_->IsContextMenuCommandEnabled(model_->GetIndexOfTab(tab),
+                                              command_id);
+ }
+@@ -528,6 +541,26 @@ void TabStripCollectionController::ExecuteContextMenuCommand(
+     tabs::TabInterface* tab,
+     TabStripModel::ContextMenuCommand command_id,
+     int event_flags) {
++  if (command_id == TabStripModel::CommandSpacePin ||
++      command_id == TabStripModel::CommandSpaceUnpin) {
++    spaces::SpaceModel* const space_model =
++        spaces::SpaceModel::From(browser_view_->browser());
++    if (!space_model || !tab) {
++      return;
++    }
++    const bool pin = command_id == TabStripModel::CommandSpacePin;
++    space_model->SetSpacePinned(tab, pin);
++    // A Space-pinned tab lives at the top of the unpinned block, directly
++    // under the Clear line, so pinning moves it there.
++    if (pin) {
++      const int index = model_->GetIndexOfTab(tab);
++      const int first_unpinned = model_->IndexOfFirstNonPinnedTab();
++      if (index != TabStripModel::kNoTab && index != first_unpinned) {
++        model_->MoveWebContentsAt(index, first_unpinned, false);
++      }
++    }
++    return;
++  }
+   model_->ExecuteContextMenuCommand(model_->GetIndexOfTab(tab), command_id);
+ }
+ 

@@ -151,8 +151,11 @@ written off has been fixed. What a side-by-side still shows:
   or the padding 3 or 7. The floor is a minimum reported by one of the toolbar's
   other children. Scaled for window width the reference looks like about 33, so
   this is close but not equal.
-- Tabs move between Spaces through a Space's context menu, where the reference
-  drags them onto the Space.
+- Tabs move between Spaces through a Space's context menu. Dragging one onto a
+  Space icon is implemented against `TabDragTarget` but **off by default**
+  (`drag_tabs_to_spaces`), because a drag cannot be driven from a screenshot
+  harness and a wrong drop handler loses the tab it was given. It needs one
+  interactive check before it can be turned on.
 
 
 ## Pinned tabs cannot be seeded for a screenshot

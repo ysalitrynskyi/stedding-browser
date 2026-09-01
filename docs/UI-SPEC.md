@@ -44,29 +44,47 @@ one change accounts for most of "looks like Arc".
 
 ## Sidebar
 
+Top to bottom. This order is corrected from a reference screenshot; an earlier
+version of this file put the space switcher at the top, which is wrong.
+
 | Element | Value |
 |---|---|
-| Space switcher | row of rounded pills at the top, ~150×50 px, radius ~12 px, active pill lighter |
+| **Essentials** | A grid of large rounded cards at the very top, ~150x50, radius ~12. These are pinned tabs that live **above all Spaces** — they are visible whichever Space is active. Icon only, no label |
+| Space-pinned tabs | Below the essentials: ordinary rows, favicon plus label, pinned **within the current Space** |
+| Divider | 1 px hairline, with a `Clear` affordance at its right end |
+| `New Tab` row | Plus glyph plus label, muted, **above** the unpinned tabs |
 | Tab row height | ~48 px |
 | Favicon | ~18 px, left inset ~28 px |
-| Label | ~15 px, left inset ~52 px, single line, ellipsised |
-| Active tab | filled rounded rect, radius ~10 px, inset ~10 px from the sidebar edges |
-| Hover | same shape, lower opacity |
-| Section divider | 1 px hairline at ~12% opacity, above `New Tab` |
-| `New Tab` row | plus glyph plus label, same height as a tab row, muted |
-| Bottom bar | row of small app icons, ~24 px, plus a trailing `+` |
+| Active tab | Filled rounded rect, radius ~10, inset ~10 from the sidebar edges |
+| **Space switcher** | At the **bottom**, not the top: a row of small icons, ~24 px, one per Space, with a trailing `+`. Hovering one raises a pill showing that Space's name |
+| Space identity | Each Space has a name **and an icon**, both user-set |
 
-Pinned tabs sit above the divider, unpinned below. There is no horizontal tab
-strip anywhere.
+The two things this project got wrong first time, recorded so they are not
+repeated: the essentials row is not the same thing as pinned tabs (essentials
+are global, pinned tabs are per-Space), and the Space switcher is at the bottom
+of the sidebar, shown as icons rather than named pills.
 
 ## Toolbar
 
-Back, forward and reload at the left. The URL is **centred** and shown as the
-bare host — `example.com`, not the full URL — with a small link glyph. Extension
-icons are right-aligned. No omnibox chrome: no pill background, no border.
+Thin — noticeably thinner than Chromium's. Back, forward and reload at the left.
+The URL is **centred** and shows the bare host with a small link glyph.
+Extension and plugin icons are in the **top right**, on the same row.
 
-This is not Chromium's toolbar restyled. Chromium centres nothing and always
-shows a full omnibox.
+No omnibox chrome: no pill background, no border.
+
+## Command bar
+
+⌘T opens a centred overlay, not a focused omnibox: a dark rounded panel with
+`Search or Enter URL...` and a result list beneath it.
+
+The results are the important part. They mix:
+
+- open tabs in the current Space, actioned as `Switch to Tab`
+- tabs in **other** Spaces, labelled with the name of the Space they are in
+- ordinary suggestions and search
+
+So the command bar searches across every Space, which is why `TabStripModel`
+holding all Spaces' tabs (ADR 0015) is the right shape rather than a limitation.
 
 ## How this gets checked
 
@@ -78,8 +96,8 @@ close" is not a check — the comparison image goes in the pull request.
 
 ![The Stedding window today](images/ui-current.png)
 
-With three Spaces, to show the switcher (`--features
-'SteddingArcStyleWindow:extra_spaces/2'`):
+With four Spaces and a pinned essential (`--features
+'SteddingArcStyleWindow:extra_spaces/3/pin_tabs/1'`):
 
 ![Three Spaces](images/ui-spaces.png)
 
@@ -114,21 +132,32 @@ Measured against the table above, not against "looks closer".
 | Bare-host URL | Done — unfocused only; the full URL returns on focus. Verified in the capture |
 | Sign-in promo pill | Removed — Chromium advertises Google sign-in in the toolbar by default |
 | Centred URL | **Deferred, on purpose** — see below |
-| Space switcher | **Done** — a row of pills under the sidebar buttons, active one filled in its Space's colour, plus a button that makes a new Space (patch 0011) |
-| Favorites row | Partly free — pinned tabs in the vertical strip **already** lay out as a grid (`pinned_tab_container_view.cc`, 11 commits/yr). What is left is tile size: Chromium's are 32x32 centred favicons, Arc's are roughly twice that. Not yet changed, because it cannot be checked — see below |
+| Space switcher | **Done** — a row of icons at the **bottom** of the sidebar, active one full strength, plus a button that makes a new Space (patches 0011, 0013). The first attempt put named pills at the top, which was wrong |
+| Essentials row | **Done** — pinned tabs are exempt from the Space filter, so they sit above all Spaces, and their tiles are 50 DIP tall so they read as cards (patch 0014) |
 | Window background tinted per space | Not started — now unblocked by the same patches. `Widget::SetUserColorOverride` is the hook |
+
+## Still not the reference
+
+Honest list of what a side-by-side still shows, after the sidebar structure was
+corrected:
+
+- The toolbar is Chromium's, not a thin strip, and the URL is not centred.
+- ⌘T focuses the omnibox; it does not open the command bar overlay.
+- Hovering a Space icon shows a tooltip, not the raised name pill.
+- A Space's icon can be set in the model but there is no UI to set it.
+- The divider above `New Tab` has no `Clear` affordance.
 
 ## Pinned tabs cannot be seeded for a screenshot
 
-Checking the Favorites grid means having pinned tabs, and pinning is a UI
-gesture. The obvious shortcut — writing `pinned_tabs` into a throwaway profile's
-`Preferences`, which is the pref `PinnedTabCodec` reads at startup — does not
-work: Chromium's tracked-preference protection rejects a value it did not write
-itself, and the key comes back empty. That is the anti-tampering feature doing
-its job, and not something to work around.
+Writing `pinned_tabs` into a throwaway profile's `Preferences`, which is the
+pref `PinnedTabCodec` reads at startup, does not work: Chromium's
+tracked-preference protection rejects a value it did not write itself and the
+key comes back empty. That is the anti-tampering feature doing its job, and not
+something to work around.
 
-So the tile-size change waits until it can be looked at, either from a real
-profile or through UI automation. The mechanism is already known to be there.
+The way round it is a parameter on our own code — `pin_tabs` — which pins the
+first N tabs once the window has them. That defeats nothing; it is the same
+trade as `extra_spaces` and the tunable metrics.
 
 ## Why the centred URL is deferred
 

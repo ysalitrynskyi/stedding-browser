@@ -55,35 +55,32 @@ Concretely (full detail in `docs/QUALITY.md`):
 
 ## State of the project
 
-**M1 in progress** — Stedding builds, brands and packages; features are landing.
+**Feature work is well past M1** — the milestone ladder in `docs/ROADMAP.md` is
+being executed out of order on purpose, chasing operator feedback on real
+builds. A 43-patch series sits on the pin; unsigned beta pre-releases go to
+GitHub Releases.
 
-Done:
+Working and verified (capture or unit test; 23 tests green in `unit_tests`):
 
-- Build tooling in `tooling/` — sync, patch series, branding, build, verify,
-  measure, package, and `update-pin` for following upstream.
-- Upstream pinned at `153.0.8010.12` (`tooling/chromium-version`, policy in
-  `decisions/0007-chromium-version-pin.md`). A daily workflow opens an issue the
-  day stable moves ahead of us.
-- **Branding applied**: the build produces `Stedding.app`, bundle id
-  `dev.stedding.Stedding`, wearing our icon. The whole brand system is generated
-  from one geometry file by `tooling/brand/generate.py`.
-- **Patch series, three deep**: vertical tabs on by default; a `FOLDER` tab
-  collection type; the Space model. All compile, and the Space model's nine unit
-  tests pass in the real `unit_tests` binary.
-- Repository hygiene checks and CI, and the performance measurement harness.
+- Arc-proportioned sidebar: essentials row, per-Space pins, Clear line,
+  44 px rows, 18 px favicons; floating content card; centred bare-host URL;
+  33 px toolbar.
+- **Spaces**: switcher with floating hover names, per-Space tint, context-menu
+  icon/rename/colour/delete, drag-tab-onto-Space, persistence incl. per-tab
+  membership (`docs/decisions/0015`).
+- **Folders with nesting**: create from tab context menu, collapse, inline
+  rename, session persistence; the close-path use-after-free is fixed and
+  regression-tested.
+- **⌘T command bar** across Spaces. Stedding colours (sand light, blue→plum
+  gradient dark). Codecs verified. Sign-in promo removed. Mac updater stubbed
+  (no Keystone) pointing at GitHub Releases.
 
-Outstanding:
+Read `docs/HANDOFF.md` before touching anything — it carries the working loop,
+every dev parameter, and the traps already paid for. `docs/ARC-ROUND2.md` is
+the operator-feedback ledger; `docs/UI-SPEC.md` the measured Arc match.
 
-- **No release.** Builds are unsigned, so macOS needs a right-click to open
-  them; signing and notarisation are M7. Nothing is published.
-- **No performance baselines.** They must come from an `official` build, which
-  builds but has not been measured.
-- Switching tabs between Spaces, which must land together with the session
-  persistence fix — see the note under Current priorities.
-
-See `docs/ROADMAP.md` for the milestone ladder, `docs/IMPLEMENTATION.md` for how
-each remaining feature is built, and `docs/EVIDENCE.md` for what Arc switchers
-actually ask for.
+Outstanding: unsigned (M7), no performance baselines yet, and the open-items
+list in `docs/HANDOFF.md`.
 
 ## Map of the docs
 
@@ -119,13 +116,9 @@ actually ask for.
 
 ## Current priorities (keep this list short and fresh)
 
-1. **Space switching plus session persistence, as one change.** Chromium's session
-   compaction rebuilds only from the live tab strip every 250 writes, so tabs parked
-   in an inactive Space would silently vanish. Landing switching without the
-   persistence fix loses people's tabs — the single largest bug cluster on the
-   comparable project (`docs/EVIDENCE.md`).
-2. Record the vanilla performance baselines with `tooling/measure/harness.py`, from an
-   `official` build. `docs/QUALITY.md` forbids quoting numbers from `release`.
-3. Peek, then the command bar (`docs/IMPLEMENTATION.md` has the seams and costs).
-4. Proprietary codecs (H.264/AAC) still need a human decision — a licensing
-   question, not a technical one (`decisions/0008-proprietary-codecs.md`).
+1. The open-items list in `docs/HANDOFF.md` — drag-into-folder first.
+2. Operator retests from `docs/ARC-ROUND2.md` (fullscreen URL width, pill icon)
+   on the latest DMG.
+3. Performance baselines from an `official` build, then the M1 network audit.
+4. Proprietary-codecs licensing question still needs a human decision
+   (`decisions/0008`) — the build ships them; the obligation question stands.

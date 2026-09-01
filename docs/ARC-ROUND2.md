@@ -17,3 +17,18 @@ fullscreen. Each gets fixed and verified by capture; this file tracks status.
 
 Method: grok researches seams read-only; implementation and every visual check
 here. No fix is done until a capture shows it.
+
+
+## Round 3 — folders and colours (operator request, 2026-09-01)
+
+| Item | State |
+|---|---|
+| Colours | **Done** (patch 0041) — light #C8B377; dark a #21263A→#31243A top-left→bottom-right gradient painted once by `SteddingWindowBackground` on BrowserView, with sidebar, top container and mat invisible over it so it reads as one surface. Both modes verified by pixel probe and capture |
+| Folders: create | **Done** (patch 0042) — tab context menu → Move Tab to New Folder; `TabStripModel::AddToNewFolder` wraps `MoveTabsToNewFolderRecursive`, which attaches through the same primitive as detached groups |
+| Folders: nest | **Done** — a folder made from a tab already in a folder nests inside it; verified by capture (outer folder holding a tab + a nested folder holding its own tab) and by the model unit test |
+| Folders: header/collapse/rename | **Done** — chevron+name header one tab-row tall, click collapses (hidden from Ctrl+Tab via the IsTabHidden contract, nested included), double-click renames in place |
+| Folders: persistence | **Built, unit-verified** — per-tab folder ancestry in session extra data, rebuilt after restore through the same AddToNewFolder path; `FolderSessionTest.RebuildsNestedFoldersFromParkedPaths` covers the nested round trip. A live restart check is pending a real menu-quit: SIGTERM from this harness does not reliably flush Chromium's session files, which is a harness limit, not a product path |
+| Folders: drag-into | Not built — moving into folders is menu-driven this round; drag targets on folder rows are the natural follow-up |
+
+Known interim: the tab-strip mojo API maps FOLDER to its plain-container
+variant until the mojom grows a Folder type (recorded in patch 0042).

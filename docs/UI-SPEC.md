@@ -138,15 +138,16 @@ Measured against the table above, not against "looks closer".
 | Centred URL | **Done** — capped by a flex rule, spacers either side; measured centre 890 against a content centre of 876 (patch 0015) |
 | Space switcher | **Done** — a row of icons at the **bottom** of the sidebar, active one full strength, plus a button that makes a new Space (patches 0011, 0013). The first attempt put named pills at the top, which was wrong |
 | Essentials row | **Done** — pinned tabs are exempt from the Space filter, so they sit above all Spaces, and their tiles are 50 DIP tall so they read as cards (patch 0014) |
-| Window background tinted per space | Not started — now unblocked by the same patches. `Widget::SetUserColorOverride` is the hook |
+| Window background tinted per space | **Done** — `Widget::SetUserColorOverride` from the active Space's colour, and the colour is settable from the Space's context menu (patch 0025). A window with one Space is left untinted |
 
 ## Still not the reference
 
-Honest list of what a side-by-side still shows, after the sidebar structure was
-corrected:
+Every item in the tables above is built. What a side-by-side still shows:
 
-- The toolbar is 39 DIP, down from Chromium's 46. It does not go lower by these constants.
-- A Space's colour cannot be changed; its name and icon can, from its context menu.
+- The toolbar is 39 DIP, down from Chromium's 46. It does not go lower by these
+  constants; something else floors it there.
+- Favicons are 16 DIP where the reference has 18, on purpose: `gfx::kFaviconSize`
+  is global and the image would not scale with the slot.
 
 ## Pinned tabs cannot be seeded for a screenshot
 

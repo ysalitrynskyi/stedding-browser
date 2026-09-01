@@ -131,7 +131,7 @@ Measured against the table above, not against "looks closer".
 | Favicon size | **Deliberately not done.** 16 px, not 18. `gfx::kFaviconSize` is global and the image would not scale with the slot |
 | Bare-host URL | Done — unfocused only; the full URL returns on focus. Verified in the capture |
 | Sign-in promo pill | Removed — Chromium advertises Google sign-in in the toolbar by default |
-| Centred URL | **Deferred, on purpose** — see below |
+| Centred URL | **Done** — capped by a flex rule, spacers either side; measured centre 890 against a content centre of 876 (patch 0015) |
 | Space switcher | **Done** — a row of icons at the **bottom** of the sidebar, active one full strength, plus a button that makes a new Space (patches 0011, 0013). The first attempt put named pills at the top, which was wrong |
 | Essentials row | **Done** — pinned tabs are exempt from the Space filter, so they sit above all Spaces, and their tiles are 50 DIP tall so they read as cards (patch 0014) |
 | Window background tinted per space | Not started — now unblocked by the same patches. `Widget::SetUserColorOverride` is the hook |
@@ -141,7 +141,7 @@ Measured against the table above, not against "looks closer".
 Honest list of what a side-by-side still shows, after the sidebar structure was
 corrected:
 
-- The toolbar is Chromium's, not a thin strip, and the URL is not centred.
+- The toolbar is 43 DIP, down from 46, but not as thin as the reference; the back button's own preferred size floors it.
 - ⌘T focuses the omnibox; it does not open the command bar overlay.
 - Hovering a Space icon shows a tooltip, not the raised name pill.
 - A Space's icon can be set in the model but there is no UI to set it.
@@ -159,20 +159,17 @@ The way round it is a parameter on our own code — `pin_tabs` — which pins th
 first N tabs once the window has them. That defeats nothing; it is the same
 trade as `extra_spaces` and the tunable metrics.
 
-## Why the centred URL is deferred
+## The centred URL was deferred, wrongly
 
-Everything else in the table was reachable either through a subclass or by
-moving a default. Centring the URL is not: it needs two flexible spacer views
-either side of the location bar and a changed flex rule, and `InitLayout()` is
-private and non-virtual, so it cannot be done from a subclass.
+This file previously argued the centred URL was not worth doing: it needed
+spacers around the location bar, `InitLayout()` is private and non-virtual so no
+subclass could reach it, and `toolbar_view.cc` takes 205 commits a year.
 
-That means editing `toolbar_view.cc` — 2,010 lines and **205 commits a year**,
-the most-churned file this project would touch. `ARCHITECTURE.md` asks for a
-minimal patch series that rebases cheaply, and this would be the single most
-expensive patch in it, bought for the least visible of the four differences.
-
-It is deferred until either the toolbar grows a seam we can subclass, or the
-rest of the sidebar is done and this is genuinely the last thing left.
+The premise was right and the conclusion was wrong. It is not a rewrite of the
+layout: it is a flex rule on a child that is already there, plus two empty
+views. Recorded because the reasoning -- "this file is expensive, therefore do
+not touch it" -- is worth applying to the size of the change rather than to the
+file.
 
 ## Known gaps
 

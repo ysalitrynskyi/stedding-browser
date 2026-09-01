@@ -57,7 +57,7 @@ version of this file put the space switcher at the top, which is wrong.
 | Favicon | ~18 px, left inset ~28 px |
 | Active tab | Filled rounded rect, radius ~10, inset ~10 from the sidebar edges |
 | **Space switcher** | At the **bottom**, not the top: a row of small icons, ~24 px, one per Space, with a trailing `+`. Hovering one raises a pill showing that Space's name |
-| Space identity | Each Space has a name **and an icon**, both user-set |
+| Space identity | Each Space has a name **and an icon**, both user-set. Hovering an icon raises its name above the row |
 
 The two things this project got wrong first time, recorded so they are not
 repeated: the essentials row is not the same thing as pinned tabs (essentials
@@ -146,8 +146,8 @@ Honest list of what a side-by-side still shows, after the sidebar structure was
 corrected:
 
 - The toolbar is 43 DIP, down from 46, but not as thin as the reference; the back button's own preferred size floors it.
-- Hovering a Space icon shows a tooltip, not the raised name pill.
-- A Space's icon can be set in the model but there is no UI to set it.
+- A Space's icon and name can be set in the model but there is no UI to set them.
+- Restoring a session puts every tab in the active Space: the Spaces come back, but which Space each tab was in does not.
 - The divider above `New Tab` has no `Clear` affordance.
 
 ## Pinned tabs cannot be seeded for a screenshot

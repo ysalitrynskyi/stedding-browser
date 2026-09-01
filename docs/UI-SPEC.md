@@ -159,12 +159,32 @@ Measured against the table above, not against "looks closer".
 Every item in the tables above is built, and every deviation that was once
 written off has been fixed. What a side-by-side still shows:
 
-- The toolbar is 39 DIP against a reference that scales to about 33. Measured,
-  its height is `max(39, content + 2 x margin)`, where content follows the
-  location bar height: at a margin of 10 the strip is 45 with a 20 DIP location
-  bar and 51 with a 28 DIP one. Below a margin of about 4 it stops shrinking, so
-  39 is a floor rather than a sum, and no constant this project sets moves it.
-  Going lower means finding what reports that minimum.
+- The toolbar is 39 DIP against a reference that scales to about 33.
+
+  The floor is found. `BrowserViewLayoutImpl::GetBoundsWithExclusion()`
+  (`browser_view_layout_impl.cc:154`) sizes the toolbar as
+  `max(exclusion_height, view->GetMinimumSize().height())` whenever the window
+  has a leading exclusion at all, and only falls back to the toolbar's preferred
+  height when there is none. On macOS the leading exclusion is the traffic
+  lights, and 39 is their height with padding.
+
+  That explains every measurement: the strip is 39 whether the location bar is
+  24 or 30, the icon 13 or 20, or the padding 3 or 7, and only a margin of 10 —
+  which pushes `content + 2 x margin` past 39 — moves it.
+
+  With vertical tabs the traffic lights sit over the tab strip, which already
+  leaves room for them, so the toolbar is clearing something that is not in its
+  column. Clearing `leading_exclusion` was tried from both virtual hooks a
+  subclass has — `DoPreLayoutComputations` and `CalculateProposedLayout` — and
+  neither reaches it: the layout re-derives the params from the delegate. Both
+  attempts measured 39 and were reverted rather than left in as changes that do
+  nothing.
+
+  Closing the last 6 DIP means either a patch to
+  `browser_view_tabbed_layout_impl.cc` so the toolbar skips the exclusion when a
+  vertical tab strip already covers it, or a delegate that reports no leading
+  exclusion. Both are real changes to hot upstream code for 6 DIP, which is why
+  it has not been done rather than because it is not understood.
 - Tabs move between Spaces by dragging one onto a Space icon, or from a Space's
   context menu. Chromium's decision to consult the drop target mid-drag is the
   one part not covered by a test; if it never fires, the drag does nothing.

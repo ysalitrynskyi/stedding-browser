@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# Print what the repository and checkout actually contain, so documents quote
+# generated numbers instead of remembered ones.
+#
+# Usage: tooling/status [--markdown]
+#
+# Counts come from the artifacts themselves: patches from patches/, tests by
+# asking the built unit_tests binary (if present) with the same filters
+# tooling/dev uses, the pin from tooling/chromium-version, the branch state from
+# the checkout. Nothing here is typed by hand, which is the point.
+
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=./lib.sh
+. "$(cd "$(dirname "$0")" && pwd)/lib.sh"
+
+main() {
+  local md=0
+  [ "${1:-}" = "--markdown" ] && md=1
+
+  local patch_count
+  patch_count="$(find "$STEDDING_ROOT/patches" -name '[0-9][0-9][0-9][0-9]-*.patch' | wc -l | tr -d ' ')"
+
+  local branch="" ahead="" dirty=""
+  if [ -d "$CHROMIUM_SRC/.git" ] || [ -f "$CHROMIUM_SRC/.git" ]; then
+    branch="$(git -C "$CHROMIUM_SRC" branch --show-current 2>/dev/null || true)"
+    ahead="$(git -C "$CHROMIUM_SRC" rev-list --count "$CHROMIUM_COMMIT..HEAD" 2>/dev/null || echo '?')"
+    dirty="$(git -C "$CHROMIUM_SRC" status --porcelain 2>/dev/null | grep -vc 'chrome/app/theme' || true)"
+  fi
+
+  local bin="$CHROMIUM_SRC/out/release/unit_tests"
+  local test_lines=""
+  if [ -x "$bin" ]; then
+    # tooling/dev owns the feature->filter table; read it rather than copy it.
+    local features
+    features="$("$STEDDING_ROOT/tooling/dev" features)"
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      local name="${line%%:*}" filter="${line#*:}"
+      local n
+      n="$("$bin" --gtest_filter="$filter" --gtest_list_tests 2>/dev/null | grep -c '^  ' || true)"
+      test_lines="$test_lines$name=$n "
+    done <<EOF
+$features
+EOF
+  fi
+
+  local built=""
+  [ -d "$CHROMIUM_SRC/out/release" ] && built="release"
+  [ -d "$CHROMIUM_SRC/out/official" ] && built="$built official"
+
+  local backlog_open backlog_done
+  backlog_open="$(sed -n '/^## Open/,/^## Done/p' "$STEDDING_ROOT/BACKLOG.md" | grep -c '^| S-' || true)"
+  backlog_done="$(sed -n '/^## Done/,$p' "$STEDDING_ROOT/BACKLOG.md" | grep -c '^| S-' || true)"
+
+  if [ "$md" -eq 1 ]; then
+    printf '| Field | Value |\n|---|---|\n'
+    printf '| Chromium pin | %s (M%s, %s) |\n' "$CHROMIUM_TAG" "$CHROMIUM_MILESTONE" "$CHROMIUM_PIN_DATE"
+    printf '| Patches in series | %s |\n' "$patch_count"
+    printf '| Checkout branch | %s, %s commits above the pin, %s uncommitted files |\n' "${branch:-none}" "${ahead:-?}" "${dirty:-?}"
+    printf '| Tests by feature | %s |\n' "${test_lines:-unit_tests not built}"
+    printf '| Built configurations | %s |\n' "${built:-none}"
+    printf '| Backlog | %s open, %s done |\n' "$backlog_open" "$backlog_done"
+  else
+    printf 'pin:       %s (M%s, pinned %s)\n' "$CHROMIUM_TAG" "$CHROMIUM_MILESTONE" "$CHROMIUM_PIN_DATE"
+    printf 'patches:   %s\n' "$patch_count"
+    printf 'checkout:  %s, %s commits above pin, %s uncommitted (branding excluded)\n' "${branch:-none}" "${ahead:-?}" "${dirty:-?}"
+    printf 'tests:     %s\n' "${test_lines:-unit_tests not built}"
+    printf 'built:     %s\n' "${built:-none}"
+    printf 'backlog:   %s open, %s done\n' "$backlog_open" "$backlog_done"
+  fi
+}
+
+main "$@"

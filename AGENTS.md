@@ -57,17 +57,27 @@ Concretely (full detail in `docs/QUALITY.md`):
 
 **Feature work is well past M1** — the milestone ladder in `docs/ROADMAP.md` is
 being executed out of order on purpose, chasing operator feedback on real
-builds. A 43-patch series sits on the pin; unsigned beta pre-releases go to
-GitHub Releases.
+builds. The patch series sits on the pin; unsigned beta pre-releases go to
+GitHub Releases. `tooling/dev status` prints the real counts (patches, tests
+per feature, pin); do not type them here.
 
-Working and verified (capture or unit test; 23 tests green in `unit_tests`):
+What "working" means here: **a behaviour is shipped when its test in
+`docs/features/<feature>.md` is green.** Captures prove pixels only. This rule
+exists because the Spaces feature shipped with its switcher, colours and
+persistence all verified by capture while a new tab did not actually join the
+active Space and switching Spaces did not change the active tab
+(`docs/features/spaces.md` B1–B5, found 2026-09-01). The procedure that
+prevents a repeat is `docs/AGENT-LOOP.md`.
+
+Built, with tests or measured captures:
 
 - Arc-proportioned sidebar: essentials row, per-Space pins, Clear line,
   44 px rows, 18 px favicons; floating content card; centred bare-host URL;
   33 px toolbar.
 - **Spaces**: switcher with floating hover names, per-Space tint, context-menu
-  icon/rename/colour/delete, drag-tab-onto-Space, persistence incl. per-tab
-  membership (`docs/decisions/0015`).
+  icon/rename/colour/delete, drag-tab-onto-Space, persistence (`decisions/0015`).
+  Core semantics — membership on open, active tab follows the switch, delete
+  moves tabs — landed as patch 0044 with `space_model_window_unittest.cc`.
 - **Folders with nesting**: create from tab context menu, collapse, inline
   rename, session persistence; the close-path use-after-free is fixed and
   regression-tested.
@@ -79,13 +89,16 @@ Read `docs/HANDOFF.md` before touching anything — it carries the working loop,
 every dev parameter, and the traps already paid for. `docs/ARC-ROUND2.md` is
 the operator-feedback ledger; `docs/UI-SPEC.md` the measured Arc match.
 
-Outstanding: unsigned (M7), no performance baselines yet, and the open-items
-list in `docs/HANDOFF.md`.
+Outstanding: `BACKLOG.md`. Unsigned (M7), no performance baselines yet.
 
 ## Map of the docs
 
 | File | What's in it |
 |---|---|
+| `docs/AGENT-LOOP.md` | **The working procedure**: research → spec → failing test → implement → build → test → capture → patch |
+| `docs/features/` | One spec per feature; numbered behaviours, each with its test id. The definition of done |
+| `BACKLOG.md` | The one list of open work, by id. Other docs cite ids |
+| `docs/HANDOFF.md` | Where things live, dev parameters, the traps already paid for |
 | `docs/VISION.md` | Why this exists, values, explicit non-goals |
 | `docs/PRODUCT.md` | Full feature spec: sidebar, workspaces, split view, command bar, settings, import |
 | `docs/ARCHITECTURE.md` | Fork strategy, build system, patch management, updater, signing |
@@ -116,9 +129,6 @@ list in `docs/HANDOFF.md`.
 
 ## Current priorities (keep this list short and fresh)
 
-1. The open-items list in `docs/HANDOFF.md` — drag-into-folder first.
-2. Operator retests from `docs/ARC-ROUND2.md` (fullscreen URL width, pill icon)
-   on the latest DMG.
-3. Performance baselines from an `official` build, then the M1 network audit.
-4. Proprietary-codecs licensing question still needs a human decision
-   (`decisions/0008`) — the build ships them; the obligation question stands.
+The order is `BACKLOG.md`. In one line: `S-2` drag-into-folder, then the operator retests `S-9`/`S-10` on the next DMG, then
+`S-11` squash the series before the next Chromium pin move. `S-18`
+(proprietary-codecs licensing) still needs a human decision.

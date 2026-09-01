@@ -51,7 +51,7 @@ version of this file put the space switcher at the top, which is wrong.
 |---|---|
 | **Essentials** | A grid of large rounded cards at the very top, ~150x50, radius ~12. These are pinned tabs that live **above all Spaces** — they are visible whichever Space is active. Icon only, no label |
 | Space-pinned tabs | Below the essentials: ordinary rows, favicon plus label, pinned **within the current Space** |
-| Divider | 1 px hairline, with a `Clear` affordance at its right end |
+| Divider | 1 px hairline with a `Clear` at its right end, which closes this Space's tabs and leaves the essentials. **Done** (patch 0024) |
 | `New Tab` row | Plus glyph plus label, muted, **above** the unpinned tabs |
 | Tab row height | ~48 px |
 | Favicon | ~18 px, left inset ~28 px |
@@ -147,7 +147,6 @@ corrected:
 
 - The toolbar is 39 DIP, down from Chromium's 46. It does not go lower by these constants.
 - A Space's colour cannot be changed; its name and icon can, from its context menu.
-- The divider above `New Tab` has no `Clear` affordance.
 
 ## Pinned tabs cannot be seeded for a screenshot
 

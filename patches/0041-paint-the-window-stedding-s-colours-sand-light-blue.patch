@@ -1,0 +1,392 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Tue, 1 Sep 2026 09:17:57 -0400
+Subject: paint the window Stedding's colours: sand light, blue-to-plum dark
+ gradient
+
+From the operator: light mode #C8B377, dark mode a top-left to bottom-right
+gradient from #21263A to #31243A.
+
+Two layers. A colour mixer, added after every Chromium mixer and before custom
+themes, sets the flat palette (frame, toolbar) so everything that derives a
+colour derives it from ours. The gradient itself cannot come from a mixer --
+mixers hand out single colours -- so BrowserView paints a
+SteddingWindowBackground: the gradient in dark, flat sand in light.
+
+For the gradient to read as one surface, the sidebar, the top container and the
+content mat paint nothing in Arc mode and let it show through. Nothing is
+removed, only made invisible: the first attempt set the sidebar's background to
+null and crashed at startup, because the layout dereferences that
+CustomCornersBackground unconditionally for corner cutouts. Invisible objects
+keep every such caller safe.
+
+Verified by pixel probe: dark reads (33,38,57) at the top-left drifting redder
+toward the bottom, continuous through sidebar, toolbar and mat; light reads
+sand within colour-profile rounding. All 22 tests pass.
+
+Why: the operator picked the colours; one ground with no seams is what makes
+the chrome feel like one object.
+Removable when: Stedding grows real theme settings, where these become the
+defaults rather than the only choice.
+---
+ chrome/browser/ui/BUILD.gn                    |  2 +
+ chrome/browser/ui/color/BUILD.gn              |  3 ++
+ .../browser/ui/color/chrome_color_mixers.cc   |  6 +++
+ .../browser/ui/color/stedding_color_mixer.cc  | 45 ++++++++++++++++
+ .../browser/ui/color/stedding_color_mixer.h   | 19 +++++++
+ chrome/browser/ui/views/frame/browser_view.cc | 10 ++++
+ .../layout/stedding_browser_view_layout.cc    | 14 +++++
+ .../layout/stedding_browser_view_layout.h     |  3 ++
+ .../frame/multi_contents_background_view.cc   |  8 +++
+ .../views/frame/stedding_window_background.cc | 52 +++++++++++++++++++
+ .../views/frame/stedding_window_background.h  | 27 ++++++++++
+ .../frame/vertical_tab_strip_region_view.cc   |  7 +++
+ 12 files changed, 196 insertions(+)
+ create mode 100644 chrome/browser/ui/color/stedding_color_mixer.cc
+ create mode 100644 chrome/browser/ui/color/stedding_color_mixer.h
+ create mode 100644 chrome/browser/ui/views/frame/stedding_window_background.cc
+ create mode 100644 chrome/browser/ui/views/frame/stedding_window_background.h
+
+diff --git a/chrome/browser/ui/BUILD.gn b/chrome/browser/ui/BUILD.gn
+index 3a9a18f9b1581..b0eb9d64ccc02 100644
+--- a/chrome/browser/ui/BUILD.gn
++++ b/chrome/browser/ui/BUILD.gn
+@@ -2713,6 +2713,8 @@ static_library("ui") {
+       "views/frame/layout/browser_view_popup_layout_impl.h",
+       "views/frame/layout/browser_view_tabbed_layout_impl.cc",
+       "views/frame/layout/stedding_browser_view_layout.cc",
++      "views/frame/stedding_window_background.cc",
++      "views/frame/stedding_window_background.h",
+       "views/frame/layout/stedding_browser_view_layout.h",
+       "views/frame/layout/browser_view_tabbed_layout_impl.h",
+       "views/frame/main_background_region_view.cc",
+diff --git a/chrome/browser/ui/color/BUILD.gn b/chrome/browser/ui/color/BUILD.gn
+index f3f7ea8c06809..83f8bbd772a83 100644
+--- a/chrome/browser/ui/color/BUILD.gn
++++ b/chrome/browser/ui/color/BUILD.gn
+@@ -35,6 +35,8 @@ source_set("mixers") {
+     "material_tab_strip_color_mixer.cc",
+     "material_tab_strip_color_mixer.h",
+     "native_chrome_color_mixer.cc",
++    "stedding_color_mixer.cc",
++    "stedding_color_mixer.h",
+     "native_chrome_color_mixer.h",
+     "new_tab_page_color_mixer.cc",
+     "new_tab_page_color_mixer.h",
+@@ -50,6 +52,7 @@ source_set("mixers") {
+   configs += [ "//build/config/compiler:wexit_time_destructors" ]
+ 
+   deps = [
++    "//chrome/browser/ui:stedding_ui_metrics",
+     ":color_headers",
+     "//build:branding_buildflags",
+     "//chrome/app/theme:theme_resources",
+diff --git a/chrome/browser/ui/color/chrome_color_mixers.cc b/chrome/browser/ui/color/chrome_color_mixers.cc
+index 9698e807b11df..cf991a6aba9cd 100644
+--- a/chrome/browser/ui/color/chrome_color_mixers.cc
++++ b/chrome/browser/ui/color/chrome_color_mixers.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "chrome/browser/ui/color/chrome_color_mixers.h"
+ 
++#include "chrome/browser/ui/color/stedding_color_mixer.h"
++
+ #include <memory>
+ #include <string_view>
+ 
+@@ -74,6 +76,10 @@ void AddChromeColorMixers(ui::ColorProvider* provider,
+   // Must be the last one in order to override other mixer colors.
+   AddNativeChromeColorMixer(provider, key);
+ 
++  // Stedding's palette goes over everything Chromium chose, and under any
++  // custom theme the user installs.
++  AddSteddingColorMixer(provider, key);
++
+   if (key.custom_theme) {
+     key.custom_theme->AddColorMixers(provider, key);
+   }
+diff --git a/chrome/browser/ui/color/stedding_color_mixer.cc b/chrome/browser/ui/color/stedding_color_mixer.cc
+new file mode 100644
+index 0000000000000..bdc4710a7c935
+--- /dev/null
++++ b/chrome/browser/ui/color/stedding_color_mixer.cc
+@@ -0,0 +1,45 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/color/stedding_color_mixer.h"
++
++#include "base/feature_list.h"
++#include "chrome/browser/ui/color/chrome_color_id.h"
++#include "chrome/browser/ui/stedding_ui_metrics.h"
++#include "ui/color/color_id.h"
++#include "ui/color/color_mixer.h"
++#include "ui/color/color_provider.h"
++#include "ui/color/color_provider_key.h"
++#include "ui/color/color_recipe.h"
++#include "ui/color/color_transform.h"
++
++namespace {
++
++// The window colours, from the operator: sand for light, deep blue for dark.
++// The dark gradient's second stop lives in SteddingWindowBackground; these are
++// the flat colours everything else derives from.
++constexpr SkColor kSteddingLightWindow = SkColorSetRGB(0xC8, 0xB3, 0x77);
++constexpr SkColor kSteddingDarkWindow = SkColorSetRGB(0x21, 0x26, 0x3A);
++
++}  // namespace
++
++void AddSteddingColorMixer(ui::ColorProvider* provider,
++                           const ui::ColorProviderKey& key) {
++  if (!base::FeatureList::IsEnabled(stedding::kArcStyleWindow)) {
++    return;
++  }
++  // A user-installed theme still wins: it is added after this mixer.
++  const bool dark =
++      key.color_mode == ui::ColorProviderKey::ColorMode::kDark;
++  const SkColor window = dark ? kSteddingDarkWindow : kSteddingLightWindow;
++
++  ui::ColorMixer& mixer = provider->AddMixer();
++  // The chrome around the page is one colour, as the reference has it: frame,
++  // toolbar strip, tab strip and the mat under the content card.
++  mixer[ui::kColorFrameActive] = {window};
++  mixer[ui::kColorFrameInactive] = {window};
++  mixer[kColorToolbar] = {window};
++  mixer[kColorNewTabButtonBackgroundFrameActive] = {kColorToolbar};
++  mixer[kColorNewTabButtonBackgroundFrameInactive] = {kColorToolbar};
++}
+diff --git a/chrome/browser/ui/color/stedding_color_mixer.h b/chrome/browser/ui/color/stedding_color_mixer.h
+new file mode 100644
+index 0000000000000..054c9f844dabf
+--- /dev/null
++++ b/chrome/browser/ui/color/stedding_color_mixer.h
+@@ -0,0 +1,19 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_COLOR_STEDDING_COLOR_MIXER_H_
++#define CHROME_BROWSER_UI_COLOR_STEDDING_COLOR_MIXER_H_
++
++namespace ui {
++class ColorProvider;
++struct ColorProviderKey;
++}  // namespace ui
++
++// Stedding's palette: warm sand in light mode, deep blue in dark. Added after
++// every Chromium mixer so it wins, but before custom themes so a user theme
++// still overrides it.
++void AddSteddingColorMixer(ui::ColorProvider* provider,
++                           const ui::ColorProviderKey& key);
++
++#endif  // CHROME_BROWSER_UI_COLOR_STEDDING_COLOR_MIXER_H_
+diff --git a/chrome/browser/ui/views/frame/browser_view.cc b/chrome/browser/ui/views/frame/browser_view.cc
+index f9b1d3de0545b..b7ff561e057e5 100644
+--- a/chrome/browser/ui/views/frame/browser_view.cc
++++ b/chrome/browser/ui/views/frame/browser_view.cc
+@@ -4,6 +4,9 @@
+ 
+ #include "chrome/browser/ui/views/frame/browser_view.h"
+ 
++#include "chrome/browser/ui/stedding_ui_metrics.h"
++#include "chrome/browser/ui/views/frame/stedding_window_background.h"
++
+ #include <stdint.h>
+ 
+ #include <algorithm>
+@@ -6026,6 +6029,13 @@ void BrowserView::FrameColorsChanged() {
+     web_app_window_title_->SetEnabledColor(caption_color);
+   }
+   GetWidget()->SetBackgroundColor(kColorToolbar);
++  if (base::FeatureList::IsEnabled(stedding::kArcStyleWindow)) {
++    // The window ground: a top-left to bottom-right gradient in dark mode and
++    // the flat sand colour in light. The sidebar, top container and content
++    // mat paint nothing in Arc mode, so this single painter shows through them
++    // all with no seams.
++    SetBackground(std::make_unique<stedding::SteddingWindowBackground>());
++  }
+ }
+ 
+ void BrowserView::UpdateAccessibleNameForAllTabs() {
+diff --git a/chrome/browser/ui/views/frame/layout/stedding_browser_view_layout.cc b/chrome/browser/ui/views/frame/layout/stedding_browser_view_layout.cc
+index 80d86802f6ccc..f40203f427ff7 100644
+--- a/chrome/browser/ui/views/frame/layout/stedding_browser_view_layout.cc
++++ b/chrome/browser/ui/views/frame/layout/stedding_browser_view_layout.cc
+@@ -7,6 +7,7 @@
+ #include <utility>
+ 
+ #include "chrome/browser/ui/views/frame/layout/browser_view_layout_delegate.h"
++#include "chrome/browser/ui/views/frame/custom_corners_background.h"
+ #include "chrome/browser/ui/views/frame/custom_floating_corner.h"
+ #include "chrome/browser/ui/views/frame/multi_contents_view.h"
+ #include "ui/gfx/geometry/rounded_corners_f.h"
+@@ -36,6 +37,19 @@ gfx::Rect SteddingBrowserViewLayout::CalculateTopContainerLayout(
+       needs_exclusion && !delegate().ShouldDrawVerticalTabStrip());
+ }
+ 
++void SteddingBrowserViewLayout::ConfigureTopContainerBackground(
++    const BrowserLayoutParams& params,
++    CustomCornersBackground* background) {
++  // Let upstream configure corners and cutouts as usual, then paint nothing:
++  // the top container sits on the window's own gradient ground, and a flat
++  // toolbar-theme rectangle here would cover it.
++  BrowserViewTabbedLayoutImpl::ConfigureTopContainerBackground(params,
++                                                               background);
++  if (background) {
++    background->SetVisible(false);
++  }
++}
++
+ void SteddingBrowserViewLayout::DoPostLayoutVisualAdjustments(
+     const BrowserLayoutParams& params) {
+   BrowserViewTabbedLayoutImpl::DoPostLayoutVisualAdjustments(params);
+diff --git a/chrome/browser/ui/views/frame/layout/stedding_browser_view_layout.h b/chrome/browser/ui/views/frame/layout/stedding_browser_view_layout.h
+index c24b0a2d4f2d5..1d0e4a111cd98 100644
+--- a/chrome/browser/ui/views/frame/layout/stedding_browser_view_layout.h
++++ b/chrome/browser/ui/views/frame/layout/stedding_browser_view_layout.h
+@@ -27,6 +27,9 @@ class SteddingBrowserViewLayout : public BrowserViewTabbedLayoutImpl {
+   gfx::Rect CalculateTopContainerLayout(ProposedLayout& layout,
+                                         BrowserLayoutParams params,
+                                         bool needs_exclusion) const override;
++  void ConfigureTopContainerBackground(
++      const BrowserLayoutParams& params,
++      CustomCornersBackground* background) override;
+   void DoPostLayoutVisualAdjustments(
+       const BrowserLayoutParams& params) override;
+ };
+diff --git a/chrome/browser/ui/views/frame/multi_contents_background_view.cc b/chrome/browser/ui/views/frame/multi_contents_background_view.cc
+index 6a9a34e7f84fe..93c93816d012b 100644
+--- a/chrome/browser/ui/views/frame/multi_contents_background_view.cc
++++ b/chrome/browser/ui/views/frame/multi_contents_background_view.cc
+@@ -4,6 +4,9 @@
+ 
+ #include "chrome/browser/ui/views/frame/multi_contents_background_view.h"
+ 
++#include "base/feature_list.h"
++#include "chrome/browser/ui/stedding_ui_metrics.h"
++
+ #include "chrome/browser/ui/views/frame/themed_background.h"
+ #include "ui/base/metadata/metadata_impl_macros.h"
+ #include "ui/compositor/layer.h"
+@@ -54,6 +57,11 @@ ui::LayerType MultiContentsBackgroundView::CalculateLayerType() const {
+ 
+ void MultiContentsBackgroundView::UpdateSolidLayerColor() {
+   CHECK_EQ(layer()->type(), ui::LAYER_SOLID_COLOR);
++  // Stedding: the mat is the window's own gradient ground showing through.
++  if (base::FeatureList::IsEnabled(stedding::kArcStyleWindow)) {
++    layer()->AsSolidColor()->SetColor(SkColors::kTransparent);
++    return;
++  }
+   if (auto color = ThemedBackground::GetBackgroundColor(this, browser_view_)) {
+     layer()->AsSolidColor()->SetColor(SkColor4f::FromColor(*color));
+   }
+diff --git a/chrome/browser/ui/views/frame/stedding_window_background.cc b/chrome/browser/ui/views/frame/stedding_window_background.cc
+new file mode 100644
+index 0000000000000..00508a3aad3fb
+--- /dev/null
++++ b/chrome/browser/ui/views/frame/stedding_window_background.cc
+@@ -0,0 +1,52 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/views/frame/stedding_window_background.h"
++
++#include "cc/paint/paint_flags.h"
++#include "cc/paint/paint_shader.h"
++#include "third_party/skia/include/core/SkColor.h"
++#include "third_party/skia/include/core/SkPoint.h"
++#include "ui/color/color_provider.h"
++#include "ui/gfx/canvas.h"
++#include "ui/native_theme/native_theme.h"
++#include "ui/views/view.h"
++
++namespace stedding {
++namespace {
++
++constexpr SkColor kLight = SkColorSetRGB(0xC8, 0xB3, 0x77);
++constexpr SkColor kDarkFrom = SkColorSetRGB(0x21, 0x26, 0x3A);
++constexpr SkColor kDarkTo = SkColorSetRGB(0x31, 0x24, 0x3A);
++
++}  // namespace
++
++SteddingWindowBackground::SteddingWindowBackground() = default;
++SteddingWindowBackground::~SteddingWindowBackground() = default;
++
++void SteddingWindowBackground::Paint(gfx::Canvas* canvas,
++                                     views::View* view) const {
++  const gfx::Rect bounds = view->GetLocalBounds();
++  const ui::NativeTheme* const theme = view->GetNativeTheme();
++  const bool dark =
++      theme && theme->preferred_color_scheme() ==
++                   ui::NativeTheme::PreferredColorScheme::kDark;
++  if (!dark) {
++    canvas->DrawColor(kLight);
++    return;
++  }
++
++  const SkPoint points[2] = {
++      SkPoint::Make(bounds.x(), bounds.y()),
++      SkPoint::Make(bounds.right(), bounds.bottom()),
++  };
++  const SkColor4f colors[2] = {SkColor4f::FromColor(kDarkFrom),
++                               SkColor4f::FromColor(kDarkTo)};
++  cc::PaintFlags flags;
++  flags.setShader(cc::PaintShader::MakeLinearGradient(points, colors, nullptr,
++                                                      2, SkTileMode::kClamp));
++  canvas->DrawRect(gfx::RectF(bounds), flags);
++}
++
++}  // namespace stedding
+diff --git a/chrome/browser/ui/views/frame/stedding_window_background.h b/chrome/browser/ui/views/frame/stedding_window_background.h
+new file mode 100644
+index 0000000000000..a1c15d4aec966
+--- /dev/null
++++ b/chrome/browser/ui/views/frame/stedding_window_background.h
+@@ -0,0 +1,27 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_VIEWS_FRAME_STEDDING_WINDOW_BACKGROUND_H_
++#define CHROME_BROWSER_UI_VIEWS_FRAME_STEDDING_WINDOW_BACKGROUND_H_
++
++#include "ui/views/background.h"
++
++namespace stedding {
++
++// The ground every piece of window chrome sits on: a #21263A to #31243A
++// gradient running top-left to bottom-right in dark mode, flat #C8B377 sand in
++// light. The sidebar, the top container and the content mat are transparent in
++// Arc mode, so this paints once for all of them and nothing seams.
++class SteddingWindowBackground : public views::Background {
++ public:
++  SteddingWindowBackground();
++  ~SteddingWindowBackground() override;
++
++  // views::Background:
++  void Paint(gfx::Canvas* canvas, views::View* view) const override;
++};
++
++}  // namespace stedding
++
++#endif  // CHROME_BROWSER_UI_VIEWS_FRAME_STEDDING_WINDOW_BACKGROUND_H_
+diff --git a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+index abf5df349b8b9..31450c44b5c95 100644
+--- a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
++++ b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+@@ -218,6 +218,13 @@ VerticalTabStripRegionView::VerticalTabStripRegionView(
+       *this, *browser_view,
+       /*primary_color=*/CustomCornersBackground::FrameTheme(),
+       /*corner_color=*/CustomCornersBackground::ToolbarTheme()));
++  if (base::FeatureList::IsEnabled(stedding::kArcStyleWindow)) {
++    // Invisible rather than removed: the layout dereferences this background
++    // unconditionally for corner cutouts, so it must exist. Painting nothing
++    // lets the window's own gradient ground show through, making the sidebar,
++    // toolbar and mat one unbroken surface.
++    background()->AsA<CustomCornersBackground>()->SetVisible(false);
++  }
+ 
+   shadow_frame_ = AddChildView(std::make_unique<ShadowFrameView>(
+       kExpandOnHoverShadowElevation, kExpandOnHoverShadowAlpha));

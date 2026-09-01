@@ -74,6 +74,9 @@ No omnibox chrome: no pill background, no border.
 
 ## Command bar
 
+![The command bar](images/ui-command-bar.png)
+
+
 ⌘T opens a centred overlay, not a focused omnibox: a dark rounded panel with
 `Search or Enter URL...` and a result list beneath it.
 
@@ -131,6 +134,7 @@ Measured against the table above, not against "looks closer".
 | Favicon size | **Deliberately not done.** 16 px, not 18. `gfx::kFaviconSize` is global and the image would not scale with the slot |
 | Bare-host URL | Done — unfocused only; the full URL returns on focus. Verified in the capture |
 | Sign-in promo pill | Removed — Chromium advertises Google sign-in in the toolbar by default |
+| Command bar (⌘T) | **Done** — centred overlay, searches every Space and names the Space a result is in, opens URLs and searches (patches 0016-0017) |
 | Centred URL | **Done** — capped by a flex rule, spacers either side; measured centre 890 against a content centre of 876 (patch 0015) |
 | Space switcher | **Done** — a row of icons at the **bottom** of the sidebar, active one full strength, plus a button that makes a new Space (patches 0011, 0013). The first attempt put named pills at the top, which was wrong |
 | Essentials row | **Done** — pinned tabs are exempt from the Space filter, so they sit above all Spaces, and their tiles are 50 DIP tall so they read as cards (patch 0014) |
@@ -142,7 +146,6 @@ Honest list of what a side-by-side still shows, after the sidebar structure was
 corrected:
 
 - The toolbar is 43 DIP, down from 46, but not as thin as the reference; the back button's own preferred size floors it.
-- ⌘T focuses the omnibox; it does not open the command bar overlay.
 - Hovering a Space icon shows a tooltip, not the raised name pill.
 - A Space's icon can be set in the model but there is no UI to set it.
 - The divider above `New Tab` has no `Clear` affordance.

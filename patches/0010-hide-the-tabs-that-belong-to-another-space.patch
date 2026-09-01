@@ -1,0 +1,372 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Mon, 31 Aug 2026 21:45:58 -0400
+Subject: hide the tabs that belong to another Space
+
+The view half of ADR 0015. SpaceTabVisibilityController observes the window's
+SpaceModel and hides tab views outside the active Space with SetVisible(false),
+which is exactly how a collapsed tab group hides its own tabs. Nothing else has
+to change: every tab container already skips children that
+LayoutManagerBase::CanBeVisible() rejects, and that reflects SetVisible() calls
+made from outside layout.
+
+Showing a tab again asks the tab strip model whether a collapsed group is also
+hiding it, so the two reasons a tab can be invisible do not fight each other.
+
+The controller walks into group and folder views rather than only the top level,
+because those hold tabs of their own.
+
+Only normal windows have a SpaceModel, so in a popup or an app window the
+controller is never created and every tab shows, as before.
+
+Six tests cover the membership rules: a tab joins the active Space when first
+asked, stays put when the active Space changes, a new tab joins whichever Space
+is active, a tab can be moved, a move to a Space that does not exist is refused,
+and a tab the model has never seen counts as visible. All 15 SpaceModelTest
+tests pass in the real unit_tests binary.
+
+Why: without this, Spaces are bookkeeping the user cannot see.
+Removable when: the tab collection tree can express a hidden subtree itself.
+---
+ chrome/browser/ui/BUILD.gn                    |  1 +
+ chrome/browser/ui/spaces/BUILD.gn             |  2 +
+ .../browser/ui/spaces/space_model_unittest.cc | 67 +++++++++++++++++++
+ .../frame/vertical_tab_strip_region_view.cc   | 14 ++++
+ .../frame/vertical_tab_strip_region_view.h    |  8 +++
+ chrome/browser/ui/views/spaces/BUILD.gn       | 19 ++++++
+ .../spaces/space_tab_visibility_controller.cc | 66 ++++++++++++++++++
+ .../spaces/space_tab_visibility_controller.h  | 59 ++++++++++++++++
+ 8 files changed, 236 insertions(+)
+ create mode 100644 chrome/browser/ui/views/spaces/BUILD.gn
+ create mode 100644 chrome/browser/ui/views/spaces/space_tab_visibility_controller.cc
+ create mode 100644 chrome/browser/ui/views/spaces/space_tab_visibility_controller.h
+
+diff --git a/chrome/browser/ui/BUILD.gn b/chrome/browser/ui/BUILD.gn
+index d43e1dc4bb864..473bfab8914c5 100644
+--- a/chrome/browser/ui/BUILD.gn
++++ b/chrome/browser/ui/BUILD.gn
+@@ -1340,6 +1340,7 @@ static_library("ui") {
+       ":focus_tab_after_navigation_helper",
+       ":layout_constants",
+       ":stedding_ui_metrics",
++      "//chrome/browser/ui/views/spaces",
+       ":uma_browsing_activity_observer",
+       "//base",
+       "//chrome/app/vector_icons",
+diff --git a/chrome/browser/ui/spaces/BUILD.gn b/chrome/browser/ui/spaces/BUILD.gn
+index 70b8b52e889d7..4eee562994df5 100644
+--- a/chrome/browser/ui/spaces/BUILD.gn
++++ b/chrome/browser/ui/spaces/BUILD.gn
+@@ -32,6 +32,8 @@ source_set("unit_tests") {
+   deps = [
+     ":spaces",
+     "//base",
++    "//components/tabs:test_support",
++    "//testing/gmock",
+     "//testing/gtest",
+   ]
+ }
+diff --git a/chrome/browser/ui/spaces/space_model_unittest.cc b/chrome/browser/ui/spaces/space_model_unittest.cc
+index 1151fee68b44c..d60358b227f80 100644
+--- a/chrome/browser/ui/spaces/space_model_unittest.cc
++++ b/chrome/browser/ui/spaces/space_model_unittest.cc
+@@ -6,6 +6,7 @@
+ 
+ #include <string>
+ 
++#include "components/tabs/public/mock_tab_interface.h"
+ #include "testing/gtest/include/gtest/gtest.h"
+ 
+ namespace spaces {
+@@ -110,5 +111,71 @@ TEST(SpaceModelTest, NotifiesObservers) {
+   model.RemoveObserver(&observer);
+ }
+ 
++
++// Tab membership. Spaces filter one tab strip (ADR 0015), so which Space a tab
++// belongs to is a fact this model owns.
++
++TEST(SpaceModelTest, TabJoinsTheActiveSpaceTheFirstTimeItIsAsked) {
++  SpaceModel model;
++  tabs::MockTabInterface tab;
++  EXPECT_EQ(model.active_id(), model.SpaceForTab(&tab));
++}
++
++TEST(SpaceModelTest, TabStaysInItsSpaceWhenTheActiveSpaceChanges) {
++  SpaceModel model;
++  tabs::MockTabInterface tab;
++  const SpaceId home = model.SpaceForTab(&tab);
++
++  Space* const work = model.AddSpace("Work", kRed);
++  model.SetActiveSpace(work->id());
++
++  EXPECT_EQ(home, model.SpaceForTab(&tab))
++      << "switching Space must not move tabs between Spaces";
++  EXPECT_FALSE(model.IsTabInActiveSpace(&tab));
++
++  model.SetActiveSpace(home);
++  EXPECT_TRUE(model.IsTabInActiveSpace(&tab));
++}
++
++TEST(SpaceModelTest, NewTabsJoinWhicheverSpaceIsActive) {
++  SpaceModel model;
++  Space* const work = model.AddSpace("Work", kRed);
++  model.SetActiveSpace(work->id());
++
++  tabs::MockTabInterface tab;
++  EXPECT_EQ(work->id(), model.SpaceForTab(&tab));
++  EXPECT_TRUE(model.IsTabInActiveSpace(&tab));
++}
++
++TEST(SpaceModelTest, MovesATabBetweenSpaces) {
++  SpaceModel model;
++  tabs::MockTabInterface tab;
++  model.SpaceForTab(&tab);
++
++  Space* const work = model.AddSpace("Work", kRed);
++  model.SetSpaceForTab(&tab, work->id());
++
++  EXPECT_EQ(work->id(), model.SpaceForTab(&tab));
++  EXPECT_FALSE(model.IsTabInActiveSpace(&tab));
++}
++
++TEST(SpaceModelTest, RefusesToMoveATabToASpaceThatDoesNotExist) {
++  SpaceModel model;
++  tabs::MockTabInterface tab;
++  const SpaceId home = model.SpaceForTab(&tab);
++
++  model.SetSpaceForTab(&tab, SpaceId::GenerateNew());
++
++  EXPECT_EQ(home, model.SpaceForTab(&tab));
++}
++
++TEST(SpaceModelTest, ATabTheModelHasNeverSeenIsVisible) {
++  SpaceModel model;
++  tabs::MockTabInterface stranger;
++  // A window whose tabs predate Spaces must not blink out of existence.
++  EXPECT_TRUE(model.IsTabInActiveSpace(&stranger));
++  EXPECT_TRUE(model.IsTabInActiveSpace(nullptr));
++}
++
+ }  // namespace
+ }  // namespace spaces
+diff --git a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+index ab919030ae2fb..2e9e16ea19dd2 100644
+--- a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
++++ b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+@@ -4,6 +4,9 @@
+ 
+ #include "chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h"
+ 
++#include "chrome/browser/ui/spaces/space_model.h"
++#include "chrome/browser/ui/views/spaces/space_tab_visibility_controller.h"
++
+ #include <algorithm>
+ #include <optional>
+ 
+@@ -756,6 +759,17 @@ void VerticalTabStripRegionView::OnTabStripViewSet() {
+   CHECK(separator_index.has_value());
+   ReorderChildView(tab_strip_view(), separator_index.value() + 1);
+ 
++  // Tabs outside the active Space are hidden the way a collapsed group hides
++  // its tabs. Only normal windows have a SpaceModel; elsewhere this stays null
++  // and every tab shows, as before.
++  if (spaces::SpaceModel* const space_model =
++          spaces::SpaceModel::From(browser_view()->browser())) {
++    space_tab_visibility_ =
++        std::make_unique<spaces::SpaceTabVisibilityController>(
++            *space_model, *browser_view()->browser()->GetTabStripModel(),
++            *tab_strip_view());
++  }
++
+   OnCollapseStateChanged(state_controller_->GetCollapseState());
+ }
+ 
+diff --git a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
+index 1cb4980b1ad55..de3ae879a00a7 100644
+--- a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
++++ b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
+@@ -32,6 +32,10 @@
+ #include "ui/views/focus/focus_manager.h"
+ 
+ class BrowserView;
++
++namespace spaces {
++class SpaceTabVisibilityController;
++}  // namespace spaces
+ class VerticalTabStripTopContainer;
+ class VerticalTabStripBottomContainer;
+ class VerticalTabStripFocusSwipeController;
+@@ -290,6 +294,10 @@ class VerticalTabStripRegionView final
+   int keep_current_state_lock_count_ = 0;
+   int keep_expanded_lock_count_ = 0;
+   std::unique_ptr<ExpandOnHoverLock> omnibox_open_lock_;
++
++  // Hides tabs that belong to a Space other than the active one. Null in a
++  // window with no Spaces.
++  std::unique_ptr<spaces::SpaceTabVisibilityController> space_tab_visibility_;
+   std::unique_ptr<ExpandOnHoverLock> link_drag_lock_;
+   base::flat_set<raw_ptr<VerticalTabStripExpandOnHoverLock>> hover_locks_;
+ 
+diff --git a/chrome/browser/ui/views/spaces/BUILD.gn b/chrome/browser/ui/views/spaces/BUILD.gn
+new file mode 100644
+index 0000000000000..ad9b31965332f
+--- /dev/null
++++ b/chrome/browser/ui/views/spaces/BUILD.gn
+@@ -0,0 +1,19 @@
++# Copyright 2026 The Stedding Authors
++# Use of this source code is governed by a BSD-style license that can be
++# found in the LICENSE file.
++
++source_set("spaces") {
++  public = [ "space_tab_visibility_controller.h" ]
++  sources = [ "space_tab_visibility_controller.cc" ]
++
++  public_deps = [
++    "//base",
++    "//chrome/browser/ui/spaces",
++    "//ui/views",
++  ]
++
++  deps = [
++    "//chrome/browser/ui/tabs:tab_strip",
++    "//components/tabs:public",
++  ]
++}
+diff --git a/chrome/browser/ui/views/spaces/space_tab_visibility_controller.cc b/chrome/browser/ui/views/spaces/space_tab_visibility_controller.cc
+new file mode 100644
+index 0000000000000..f2d7f620148f9
+--- /dev/null
++++ b/chrome/browser/ui/views/spaces/space_tab_visibility_controller.cc
+@@ -0,0 +1,66 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/views/spaces/space_tab_visibility_controller.h"
++
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "chrome/browser/ui/views/tabs/common/tab_view.h"
++#include "components/tabs/public/tab_interface.h"
++#include "ui/views/view.h"
++#include "ui/views/view_utils.h"
++
++namespace spaces {
++
++SpaceTabVisibilityController::SpaceTabVisibilityController(
++    SpaceModel& model,
++    TabStripModel& tab_strip_model,
++    views::View& tab_strip_root)
++    : model_(model),
++      tab_strip_model_(tab_strip_model),
++      tab_strip_root_(tab_strip_root) {
++  observation_.Observe(&model);
++  UpdateTabVisibility();
++}
++
++SpaceTabVisibilityController::~SpaceTabVisibilityController() = default;
++
++void SpaceTabVisibilityController::UpdateTabVisibility() {
++  UpdateSubtree(*tab_strip_root_);
++}
++
++void SpaceTabVisibilityController::UpdateSubtree(views::View& parent) {
++  for (views::View* child : parent.children()) {
++    if (auto* const tab_view = views::AsViewClass<TabView>(child)) {
++      const tabs::TabInterface* const tab = tab_view->GetTabInterface();
++      if (!tab) {
++        continue;
++      }
++      if (!model_->IsTabInActiveSpace(tab)) {
++        tab_view->SetVisible(false);
++        continue;
++      }
++      // Belongs to the active Space, but a collapsed group may still be hiding
++      // it. Asking the model rather than assuming keeps the two reasons a tab
++      // can be hidden from fighting each other.
++      const int index = tab_strip_model_->GetIndexOfTab(tab);
++      const bool collapsed = index != TabStripModel::kNoTab &&
++                             tab_strip_model_->IsTabCollapsed(index);
++      tab_view->SetVisible(!collapsed);
++      continue;
++    }
++    // Group and folder views hold tabs of their own.
++    UpdateSubtree(*child);
++  }
++}
++
++void SpaceTabVisibilityController::OnActiveSpaceChanged(const SpaceId& from,
++                                                        const SpaceId& to) {
++  UpdateTabVisibility();
++}
++
++void SpaceTabVisibilityController::OnSpaceRemoved(const SpaceId& id) {
++  UpdateTabVisibility();
++}
++
++}  // namespace spaces
+diff --git a/chrome/browser/ui/views/spaces/space_tab_visibility_controller.h b/chrome/browser/ui/views/spaces/space_tab_visibility_controller.h
+new file mode 100644
+index 0000000000000..eacbf26502295
+--- /dev/null
++++ b/chrome/browser/ui/views/spaces/space_tab_visibility_controller.h
+@@ -0,0 +1,59 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_VIEWS_SPACES_SPACE_TAB_VISIBILITY_CONTROLLER_H_
++#define CHROME_BROWSER_UI_VIEWS_SPACES_SPACE_TAB_VISIBILITY_CONTROLLER_H_
++
++#include "base/memory/raw_ref.h"
++#include "base/scoped_observation.h"
++#include "chrome/browser/ui/spaces/space_id.h"
++#include "chrome/browser/ui/spaces/space_model.h"
++
++class TabStripModel;
++
++namespace views {
++class View;
++}  // namespace views
++
++namespace spaces {
++
++// Hides the tab views that belong to a Space other than the active one.
++//
++// This is the view half of ADR 0015. Every tab stays in the tab strip model;
++// only its view is hidden, exactly as a collapsed tab group hides its tabs with
++// SetVisible(). Layout follows automatically, because every tab container
++// already skips children that `views::LayoutManagerBase::CanBeVisible()` says
++// no to, and that in turn reflects SetVisible() calls from outside layout.
++class SpaceTabVisibilityController : public SpaceModel::Observer {
++ public:
++  // `tab_strip_root` is the view whose descendants are the tab views. All three
++  // outlive this object, which is owned by the tab strip region view.
++  SpaceTabVisibilityController(SpaceModel& model,
++                               TabStripModel& tab_strip_model,
++                               views::View& tab_strip_root);
++  SpaceTabVisibilityController(const SpaceTabVisibilityController&) = delete;
++  SpaceTabVisibilityController& operator=(const SpaceTabVisibilityController&) =
++      delete;
++  ~SpaceTabVisibilityController() override;
++
++  // Applies the active Space to every tab view. Safe to call at any time; call
++  // it after tabs are added or moved.
++  void UpdateTabVisibility();
++
++  // SpaceModel::Observer:
++  void OnActiveSpaceChanged(const SpaceId& from, const SpaceId& to) override;
++  void OnSpaceRemoved(const SpaceId& id) override;
++
++ private:
++  void UpdateSubtree(views::View& parent);
++
++  const raw_ref<SpaceModel> model_;
++  const raw_ref<TabStripModel> tab_strip_model_;
++  const raw_ref<views::View> tab_strip_root_;
++  base::ScopedObservation<SpaceModel, SpaceModel::Observer> observation_{this};
++};
++
++}  // namespace spaces
++
++#endif  // CHROME_BROWSER_UI_VIEWS_SPACES_SPACE_TAB_VISIBILITY_CONTROLLER_H_

@@ -109,9 +109,9 @@ Measured against the table above, not against "looks closer".
 | Bare-host URL | Done — unfocused only; the full URL returns on focus. Verified in the capture |
 | Sign-in promo pill | Removed — Chromium advertises Google sign-in in the toolbar by default |
 | Centred URL | **Deferred, on purpose** — see below |
-| Space switcher | Not started — blocked on Spaces actually moving tabs (ADR 0015) |
+| Space switcher | Unblocking — the model half is in (patches 0008-0010): every window has a SpaceModel, tabs carry a Space, the tab strip hides tabs outside the active one, and traversal skips them. The switcher itself is next |
 | Favorites row | Partly free — pinned tabs in the vertical strip **already** lay out as a grid (`pinned_tab_container_view.cc`, 11 commits/yr). What is left is tile size: Chromium's are 32x32 centred favicons, Arc's are roughly twice that. Not yet changed, because it cannot be checked — see below |
-| Window background tinted per space | Not started — blocked on the same. `Widget::SetUserColorOverride` is the hook |
+| Window background tinted per space | Not started — now unblocked by the same patches. `Widget::SetUserColorOverride` is the hook |
 
 ## Pinned tabs cannot be seeded for a screenshot
 

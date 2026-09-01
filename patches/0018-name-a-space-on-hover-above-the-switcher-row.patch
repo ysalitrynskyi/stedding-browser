@@ -1,0 +1,203 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Mon, 31 Aug 2026 23:27:24 -0400
+Subject: name a Space on hover, above the switcher row
+
+The reference raises the Space's name above the icon row when you hover one,
+rather than labelling every icon, which would not fit in a row of them.
+
+The switcher becomes a vertical stack: a name label that is empty most of the
+time, and the row of icons beneath it. The label keeps its height whether or not
+it has text, so the icons do not jump when a name appears.
+
+A small LabelButton subclass reports enter and exit; views::LabelButton has no
+hover callback of its own.
+
+Why: without it a Space is identifiable only by colour, and the tooltip is slow
+and does not look like the reference.
+Removable when: Spaces are always given icons distinct enough to need no name.
+---
+ .../ui/views/spaces/space_switcher_view.cc    | 79 ++++++++++++++++---
+ .../ui/views/spaces/space_switcher_view.h     | 13 +++
+ 2 files changed, 83 insertions(+), 9 deletions(-)
+
+diff --git a/chrome/browser/ui/views/spaces/space_switcher_view.cc b/chrome/browser/ui/views/spaces/space_switcher_view.cc
+index 6a23c737e92e8..b0beb7443ebcd 100644
+--- a/chrome/browser/ui/views/spaces/space_switcher_view.cc
++++ b/chrome/browser/ui/views/spaces/space_switcher_view.cc
+@@ -18,6 +18,8 @@
+ #include "ui/gfx/color_utils.h"
+ #include "ui/views/background.h"
+ #include "ui/views/controls/button/label_button.h"
++#include "ui/views/controls/label.h"
++#include "ui/views/layout/box_layout.h"
+ #include "ui/views/layout/flex_layout.h"
+ #include "ui/views/layout/layout_types.h"
+ 
+@@ -29,7 +31,8 @@ namespace {
+ constexpr int kIconSize = 24;
+ constexpr int kRowSpacing = 4;
+ constexpr int kRowInset = 8;
+-constexpr int kRowHeight = kIconSize + 2 * kRowInset;
++constexpr int kNameHeight = 22;
++constexpr int kRowHeight = kIconSize + 2 * kRowInset + kNameHeight;
+ 
+ // How much of a Space's colour an inactive icon shows. The active Space is the
+ // only one that should read as selected.
+@@ -52,16 +55,57 @@ std::u16string NameFor(const Space& space, size_t index) {
+   return u"Space " + base::NumberToString16(index + 1);
+ }
+ 
++// A Space icon that reports hover, so the row can name it above.
++class SpaceIconButton : public views::LabelButton {
++  METADATA_HEADER(SpaceIconButton, views::LabelButton)
++
++ public:
++  SpaceIconButton(PressedCallback pressed,
++                  std::u16string icon,
++                  base::RepeatingCallback<void(bool)> hovered)
++      : views::LabelButton(std::move(pressed), std::move(icon)),
++        hovered_(std::move(hovered)) {}
++  ~SpaceIconButton() override = default;
++
++  void OnMouseEntered(const ui::MouseEvent& event) override {
++    views::LabelButton::OnMouseEntered(event);
++    hovered_.Run(true);
++  }
++  void OnMouseExited(const ui::MouseEvent& event) override {
++    views::LabelButton::OnMouseExited(event);
++    hovered_.Run(false);
++  }
++
++ private:
++  base::RepeatingCallback<void(bool)> hovered_;
++};
++
++BEGIN_METADATA(SpaceIconButton)
++END_METADATA
++
+ }  // namespace
+ 
+ SpaceSwitcherView::SpaceSwitcherView(SpaceModel& model) : model_(model) {
+-  auto* const layout = SetLayoutManager(std::make_unique<views::FlexLayout>());
++  SetLayoutManager(std::make_unique<views::BoxLayout>(
++      views::BoxLayout::Orientation::kVertical,
++      gfx::Insets::VH(0, kRowInset)));
++
++  auto name = std::make_unique<views::Label>();
++  name->SetHorizontalAlignment(gfx::ALIGN_LEFT);
++  name->SetPreferredSize(gfx::Size(0, kNameHeight));
++  name->SetVisible(false);
++  hovered_name_ = AddChildView(std::move(name));
++
++  auto row = std::make_unique<views::View>();
++  auto* const layout =
++      row->SetLayoutManager(std::make_unique<views::FlexLayout>());
+   layout->SetOrientation(views::LayoutOrientation::kHorizontal)
+       .SetCrossAxisAlignment(views::LayoutAlignment::kCenter)
+       .SetMainAxisAlignment(views::LayoutAlignment::kStart)
+       .SetCollapseMargins(true)
+-      .SetInteriorMargin(gfx::Insets::VH(kRowInset, kRowInset))
++      .SetInteriorMargin(gfx::Insets::VH(kRowInset, 0))
+       .SetDefault(views::kMarginsKey, gfx::Insets::VH(0, kRowSpacing / 2));
++  icon_row_ = AddChildView(std::move(row));
+ 
+   // The sidebar lays its children out vertically and stretches anything that
+   // does not declare a size. This row is exactly one icon tall.
+@@ -77,7 +121,10 @@ SpaceSwitcherView::SpaceSwitcherView(SpaceModel& model) : model_(model) {
+ SpaceSwitcherView::~SpaceSwitcherView() = default;
+ 
+ void SpaceSwitcherView::Rebuild() {
+-  RemoveAllChildViews();
++  if (!icon_row_) {
++    return;
++  }
++  icon_row_->RemoveAllChildViews();
+ 
+   const auto& spaces = model_->spaces();
+   for (size_t i = 0; i < spaces.size(); ++i) {
+@@ -86,18 +133,24 @@ void SpaceSwitcherView::Rebuild() {
+ 
+     // The icon is whatever the user chose; with none chosen the coloured chip
+     // identifies the Space on its own.
+-    auto button = std::make_unique<views::LabelButton>(
++    const std::u16string name = NameFor(space, i);
++    auto button = std::make_unique<SpaceIconButton>(
+         base::BindRepeating(&SpaceSwitcherView::OnSpacePressed,
+                             base::Unretained(this), space.id()),
+-        base::UTF8ToUTF16(space.icon()));
++        base::UTF8ToUTF16(space.icon()),
++        base::BindRepeating(
++            [](SpaceSwitcherView* view, std::u16string name, bool entered) {
++              view->ShowName(entered ? name : std::u16string());
++            },
++            base::Unretained(this), name));
+     button->SetHorizontalAlignment(gfx::ALIGN_CENTER);
+     button->SetPreferredSize(gfx::Size(kIconSize, kIconSize));
+-    button->SetTooltipText(NameFor(space, i));
++    button->SetTooltipText(name);
+     button->SetBackground(views::CreateRoundedRectBackground(
+         active ? space.color()
+                : SkColorSetA(space.color(), kInactiveAlpha),
+         kIconSize / 2));
+-    AddChildView(std::move(button));
++    icon_row_->AddChildView(std::move(button));
+   }
+ 
+   auto add = std::make_unique<views::LabelButton>(
+@@ -107,7 +160,15 @@ void SpaceSwitcherView::Rebuild() {
+   add->SetHorizontalAlignment(gfx::ALIGN_CENTER);
+   add->SetPreferredSize(gfx::Size(kIconSize, kIconSize));
+   add->SetTooltipText(u"New Space");
+-  AddChildView(std::move(add));
++  icon_row_->AddChildView(std::move(add));
++}
++
++void SpaceSwitcherView::ShowName(const std::u16string& name) {
++  if (!hovered_name_) {
++    return;
++  }
++  hovered_name_->SetText(name);
++  hovered_name_->SetVisible(!name.empty());
+ }
+ 
+ void SpaceSwitcherView::OnSpacePressed(const SpaceId& id) {
+diff --git a/chrome/browser/ui/views/spaces/space_switcher_view.h b/chrome/browser/ui/views/spaces/space_switcher_view.h
+index 2aecdd01fd9d8..4e53521b75521 100644
+--- a/chrome/browser/ui/views/spaces/space_switcher_view.h
++++ b/chrome/browser/ui/views/spaces/space_switcher_view.h
+@@ -5,6 +5,9 @@
+ #ifndef CHROME_BROWSER_UI_VIEWS_SPACES_SPACE_SWITCHER_VIEW_H_
+ #define CHROME_BROWSER_UI_VIEWS_SPACES_SPACE_SWITCHER_VIEW_H_
+ 
++#include <string>
++
++#include "base/memory/raw_ptr.h"
+ #include "base/memory/raw_ref.h"
+ #include "base/scoped_observation.h"
+ #include "chrome/browser/ui/spaces/space_id.h"
+@@ -12,6 +15,10 @@
+ #include "ui/base/metadata/metadata_header_macros.h"
+ #include "ui/views/view.h"
+ 
++namespace views {
++class Label;
++}  // namespace views
++
+ namespace spaces {
+ 
+ // The row of Space icons at the bottom of the sidebar.
+@@ -52,7 +59,13 @@ class SpaceSwitcherView : public views::View, public SpaceModel::Observer {
+   void OnSpacePressed(const SpaceId& id);
+   void OnNewSpacePressed();
+ 
++  // Raises or clears the name shown above the row. The reference names a Space
++  // on hover rather than labelling every icon, which would not fit.
++  void ShowName(const std::u16string& name);
++
+   const raw_ref<SpaceModel> model_;
++  raw_ptr<views::Label> hovered_name_ = nullptr;
++  raw_ptr<views::View> icon_row_ = nullptr;
+   base::ScopedObservation<SpaceModel, SpaceModel::Observer> observation_{this};
+ };
+ 

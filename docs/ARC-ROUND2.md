@@ -6,7 +6,7 @@ fullscreen. Each gets fixed and verified by capture; this file tracks status.
 | # | Defect | Plan | Status |
 |---|---|---|---|
 | 1 | Fullscreen: URL bar full width again | Could not reproduce: the cap holds in --start-fullscreen (289 pt) and through a real ⌘L focus cycle (465 pt, centred). What the screenshots show is consistent with the 460 cap filling a modest window; the cap is now 380 (patch 0038). Re-check on the next DMG | needs retest |
-| 2 | Space switcher broken | **Fixed** — 28 DIP chips spread across the full width with flexible spacers, + at the end; reserved name row removed (patch 0036) | done |
+| 2 | Space switcher broken | **Fixed** — 28 DIP chips spread across the full width, + at the end; hover floats the Space's name in a pill above the chip with no layout shift, verified by synthetic hover (patches 0036, 0040) | done |
 | 3 | Tab favicons repeat | **Fixed** — DrawImageInt tiled a 16 px bitmap into the 18 px slot (SkTileMode::kRepeat on src/dest mismatch); source rect is now the image's own size, verified crisp at zoom (patch 0033) | done |
 | 4 | Site icon clipped in pill | Not reproducible after the tiling fix; pill renders clean at zoom. Re-check on the next DMG | needs retest |
 | 5 | One rounded corner looks odd | **Fixed** — the card floats on a mat with all four corners rounded, via MultiContentsView's own layout so the web layer stays in step; orphaned floating corners silenced (patch 0034) | done |

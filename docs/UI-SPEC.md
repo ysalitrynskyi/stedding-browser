@@ -147,7 +147,6 @@ corrected:
 
 - The toolbar is 43 DIP, down from 46, but not as thin as the reference; the back button's own preferred size floors it.
 - A Space's icon and name can be set in the model but there is no UI to set them.
-- Restoring a session puts every tab in the active Space: the Spaces come back, but which Space each tab was in does not.
 - The divider above `New Tab` has no `Clear` affordance.
 
 ## Pinned tabs cannot be seeded for a screenshot

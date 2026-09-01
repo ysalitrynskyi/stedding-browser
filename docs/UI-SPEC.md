@@ -97,10 +97,11 @@ the operator's pointer or touching their other windows, which is enough to
 verify hover behaviour -- and it is how the Space icons were found to jump out
 from under the pointer when their name appeared.
 
-Clicks need the window to be key, which means taking focus on a machine somebody
-else is using, so they are not driven from here. That is why `drag_tabs_to_spaces`
-is off: a drop handler owns the tab it is given, and one that has never had a
-real drag through it is not something to turn on.
+Clicks do not register this way: they need the window to be key, which means
+taking focus on a machine somebody else is using. So anything behind a click is
+tested in `unit_tests` instead -- which is how drag-to-Space was verified without
+a drag, by giving its drop handler a fake drag controller and checking the tab
+comes back.
 
 ## How this gets checked
 
@@ -158,17 +159,15 @@ Measured against the table above, not against "looks closer".
 Every item in the tables above is built, and every deviation that was once
 written off has been fixed. What a side-by-side still shows:
 
-- The toolbar is 39 DIP, down from Chromium's 46. It will not go lower, and the
-  reason is not any constant this project sets: the strip measures 39 whether
-  the icon is 13 or 20, the location bar 24 or 30, the button height 26 or 30,
-  or the padding 3 or 7. The floor is a minimum reported by one of the toolbar's
-  other children. Scaled for window width the reference looks like about 33, so
-  this is close but not equal.
-- Tabs move between Spaces through a Space's context menu. Dragging one onto a
-  Space icon is implemented against `TabDragTarget` but **off by default**
-  (`drag_tabs_to_spaces`), because a drag cannot be driven from a screenshot
-  harness and a wrong drop handler loses the tab it was given. It needs one
-  interactive check before it can be turned on.
+- The toolbar is 39 DIP against a reference that scales to about 33. Measured,
+  its height is `max(39, content + 2 x margin)`, where content follows the
+  location bar height: at a margin of 10 the strip is 45 with a 20 DIP location
+  bar and 51 with a 28 DIP one. Below a margin of about 4 it stops shrinking, so
+  39 is a floor rather than a sum, and no constant this project sets moves it.
+  Going lower means finding what reports that minimum.
+- Tabs move between Spaces by dragging one onto a Space icon, or from a Space's
+  context menu. Chromium's decision to consult the drop target mid-drag is the
+  one part not covered by a test; if it never fires, the drag does nothing.
 
 
 ## Pinned tabs cannot be seeded for a screenshot

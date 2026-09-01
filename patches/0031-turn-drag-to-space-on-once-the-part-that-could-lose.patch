@@ -1,0 +1,293 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Tue, 1 Sep 2026 01:56:48 -0400
+Subject: turn drag-to-Space on, once the part that could lose a tab is tested
+
+This shipped off, on the grounds that a drop handler owns the tab it is given
+and this one had never had a real drag through it. That was the right caution
+and the wrong conclusion: the dangerous part does not need a drag to test.
+
+HandleTabDrop now takes the first dragged tab rather than reading
+DragSessionData to count them, which is what made it untestable -- a session
+cannot be built outside a real drag. Two tests with a fake drag controller cover
+it: dropping on a Space keeps the tab in the strip, moves it to that Space and
+makes that Space active; dropping on nothing leaves the tab alone.
+
+What is still not covered is Chromium's own decision to consult the target
+mid-drag. If that never fires, the drag does nothing, which is where this
+started.
+
+The switcher is now a pointer rather than a reference, because the target only
+uses it to hit-test a screen point and a caller that already knows the Space has
+no switcher to give. The first version of the test passed a null reference,
+which is undefined behaviour whether or not it is read.
+
+Why: "I cannot verify this" was true of the drag and false of the code.
+Removable when: never, short of dropping Spaces.
+---
+ chrome/browser/ui/stedding_ui_metrics.cc      |  2 +-
+ chrome/browser/ui/stedding_ui_metrics.h       |  7 +-
+ .../frame/vertical_tab_strip_region_view.cc   |  2 +-
+ chrome/browser/ui/views/spaces/BUILD.gn       | 13 +++
+ .../ui/views/spaces/space_drag_target.cc      | 12 +--
+ .../ui/views/spaces/space_drag_target.h       | 18 +++--
+ .../spaces/space_drag_target_unittest.cc      | 80 +++++++++++++++++++
+ chrome/test/BUILD.gn                          |  1 +
+ 8 files changed, 118 insertions(+), 17 deletions(-)
+ create mode 100644 chrome/browser/ui/views/spaces/space_drag_target_unittest.cc
+
+diff --git a/chrome/browser/ui/stedding_ui_metrics.cc b/chrome/browser/ui/stedding_ui_metrics.cc
+index 942720eb1cb89..fef743c6e4215 100644
+--- a/chrome/browser/ui/stedding_ui_metrics.cc
++++ b/chrome/browser/ui/stedding_ui_metrics.cc
+@@ -46,7 +46,7 @@ BASE_FEATURE_PARAM(int, kToolbarButtonIconSize, &kArcStyleWindow,
+                    "toolbar_button_icon_size", 20);
+ 
+ BASE_FEATURE_PARAM(bool, kDragTabsToSpaces, &kArcStyleWindow,
+-                   "drag_tabs_to_spaces", false);
++                   "drag_tabs_to_spaces", true);
+ 
+ BASE_FEATURE_PARAM(int, kPinTabsForTesting, &kArcStyleWindow, "pin_tabs", 0);
+ 
+diff --git a/chrome/browser/ui/stedding_ui_metrics.h b/chrome/browser/ui/stedding_ui_metrics.h
+index 6cc8074f38ef2..b4f7dc5106b98 100644
+--- a/chrome/browser/ui/stedding_ui_metrics.h
++++ b/chrome/browser/ui/stedding_ui_metrics.h
+@@ -75,9 +75,10 @@ BASE_DECLARE_FEATURE_PARAM(int, kTabFaviconSize);
+ // whether the icon is 13 or 20 -- so it stays at the upstream value.
+ BASE_DECLARE_FEATURE_PARAM(int, kToolbarButtonIconSize);
+ 
+-// Accept a tab dragged onto a Space icon. Off: it has not been verified by an
+-// actual drag, and a wrong drop handler loses the tab. The context menu on a
+-// Space does the same job and is what ships.
++// Accept a tab dragged onto a Space icon. The part that could lose a tab -- the
++// drop handler taking one and putting it back -- is covered by
++// SpaceDragTargetTest; what is not covered is Chromium's own decision to consult
++// the target mid-drag, and if that never fires the drag simply does nothing.
+ BASE_DECLARE_FEATURE_PARAM(bool, kDragTabsToSpaces);
+ 
+ // Tabs to pin when a window opens, counted from the left. Zero in normal use;
+diff --git a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+index cb042a61729d3..0cf757dca9e0b 100644
+--- a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
++++ b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+@@ -180,7 +180,7 @@ VerticalTabStripRegionView::VerticalTabStripRegionView(
+             *space_model, *browser_view->browser()));
+     if (stedding::kDragTabsToSpaces.Get()) {
+       space_drag_target_ = std::make_unique<spaces::SpaceDragTarget>(
+-          *space_model, *browser_view->browser(), *space_switcher_);
++          *space_model, *browser_view->browser(), space_switcher_);
+     }
+   }
+ 
+diff --git a/chrome/browser/ui/views/spaces/BUILD.gn b/chrome/browser/ui/views/spaces/BUILD.gn
+index 4a90612767a55..3a9d143215ff9 100644
+--- a/chrome/browser/ui/views/spaces/BUILD.gn
++++ b/chrome/browser/ui/views/spaces/BUILD.gn
+@@ -29,3 +29,16 @@ source_set("spaces") {
+     "//ui/menus",
+   ]
+ }
++
++source_set("unit_tests") {
++  testonly = true
++  sources = [ "space_drag_target_unittest.cc" ]
++  deps = [
++    ":spaces",
++    "//base",
++    "//chrome/browser/ui/spaces",
++    "//chrome/browser/ui/tabs:tab_strip",
++    "//chrome/test:test_support",
++    "//testing/gtest",
++  ]
++}
+diff --git a/chrome/browser/ui/views/spaces/space_drag_target.cc b/chrome/browser/ui/views/spaces/space_drag_target.cc
+index 7ff7a41d39691..83a47a4b64fe9 100644
+--- a/chrome/browser/ui/views/spaces/space_drag_target.cc
++++ b/chrome/browser/ui/views/spaces/space_drag_target.cc
+@@ -12,13 +12,12 @@
+ #include "chrome/browser/ui/tabs/tab_model.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "chrome/browser/ui/views/spaces/space_switcher_view.h"
+-#include "chrome/browser/ui/views/tabs/dragging/drag_session_data.h"
+ 
+ namespace spaces {
+ 
+ SpaceDragTarget::SpaceDragTarget(SpaceModel& model,
+                                  Browser& browser,
+-                                 SpaceSwitcherView& switcher)
++                                 SpaceSwitcherView* switcher)
+     : model_(model), browser_(browser), switcher_(switcher) {}
+ 
+ SpaceDragTarget::~SpaceDragTarget() {
+@@ -34,7 +33,8 @@ void SpaceDragTarget::OnTabDragEntered() {}
+ TabDragContext* SpaceDragTarget::OnTabDragUpdated(
+     TabDragTarget::DragController& controller,
+     const gfx::Point& point_in_screen) {
+-  SetHoveredSpace(switcher_->SpaceAtScreenPoint(point_in_screen));
++  SetHoveredSpace(switcher_ ? switcher_->SpaceAtScreenPoint(point_in_screen)
++                            : std::nullopt);
+   // Not a tab strip, so there is no context to attach the drag to.
+   return nullptr;
+ }
+@@ -57,11 +57,13 @@ bool SpaceDragTarget::CanDropTab() {
+ }
+ 
+ void SpaceDragTarget::HandleTabDrop(DragController& controller) {
+-  const DragSessionData& data = controller.GetSessionData();
+-  if (!hovered_ || data.tab_drag_data_.size() != 1u) {
++  if (!hovered_) {
+     return;
+   }
+ 
++  // Only the first dragged tab. Reading DragSessionData to count them would
++  // make this untestable without a real drag session, and a multi-tab drag onto
++  // a Space is not a gesture the reference has.
+   std::unique_ptr<tabs::TabModel> tab = controller.DetachTabAtForInsertion(0);
+   if (!tab) {
+     return;
+diff --git a/chrome/browser/ui/views/spaces/space_drag_target.h b/chrome/browser/ui/views/spaces/space_drag_target.h
+index 3ef55cb22f5b7..e617f651c5f42 100644
+--- a/chrome/browser/ui/views/spaces/space_drag_target.h
++++ b/chrome/browser/ui/views/spaces/space_drag_target.h
+@@ -8,6 +8,7 @@
+ #include <optional>
+ 
+ #include "base/callback_list.h"
++#include "base/memory/raw_ptr.h"
+ #include "base/memory/raw_ref.h"
+ #include "chrome/browser/ui/spaces/space_id.h"
+ #include "chrome/browser/ui/views/tabs/dragging/tab_drag_target.h"
+@@ -21,16 +22,19 @@ class SpaceSwitcherView;
+ 
+ // Accepts a tab dragged onto a Space icon, and moves it to that Space.
+ //
+-// OFF BY DEFAULT, behind stedding::kDragTabsToSpaces, because it has not been
+-// verified by an actual drag -- a drag cannot be driven from a screenshot
+-// harness. A wrong drop handler loses the tab it was given, which is not a
+-// thing to turn on unseen. The context menu on a Space does the same job and is
+-// what ships.
++// The dangerous part of this is HandleTabDrop: it takes ownership of the tab it
++// is handed, and one that fails to put the tab back has lost it. That is what
++// SpaceDragTargetTest covers, with a fake drag controller, which is why this is
++// on rather than waiting for someone to try a drag by hand.
++//
++// A Space's context menu does the same job for anyone who would rather not drag.
+ class SpaceDragTarget : public TabDragTarget {
+  public:
++  // `switcher` may be null; it is only used to hit-test a screen point, which
++  // a caller that already knows the Space can skip with SetHoveredSpace().
+   SpaceDragTarget(SpaceModel& model,
+                   Browser& browser,
+-                  SpaceSwitcherView& switcher);
++                  SpaceSwitcherView* switcher);
+   SpaceDragTarget(const SpaceDragTarget&) = delete;
+   SpaceDragTarget& operator=(const SpaceDragTarget&) = delete;
+   ~SpaceDragTarget() override;
+@@ -53,7 +57,7 @@ class SpaceDragTarget : public TabDragTarget {
+  private:
+   const raw_ref<SpaceModel> model_;
+   const raw_ref<Browser> browser_;
+-  const raw_ref<SpaceSwitcherView> switcher_;
++  const raw_ptr<SpaceSwitcherView> switcher_;
+   std::optional<SpaceId> hovered_;
+   base::OnceClosureList will_destroy_callbacks_;
+ };
+diff --git a/chrome/browser/ui/views/spaces/space_drag_target_unittest.cc b/chrome/browser/ui/views/spaces/space_drag_target_unittest.cc
+new file mode 100644
+index 0000000000000..d9ba09eb2a4a7
+--- /dev/null
++++ b/chrome/browser/ui/views/spaces/space_drag_target_unittest.cc
+@@ -0,0 +1,80 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/views/spaces/space_drag_target.h"
++
++#include <memory>
++#include <optional>
++#include <utility>
++
++#include "chrome/browser/ui/spaces/space_model.h"
++#include "chrome/browser/ui/tabs/tab_model.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "chrome/browser/ui/views/tabs/dragging/drag_session_data.h"
++#include "chrome/test/base/browser_with_test_window_test.h"
++#include "testing/gtest/include/gtest/gtest.h"
++#include "url/gurl.h"
++
++namespace spaces {
++namespace {
++
++// Stands in for the drag machinery. The only thing SpaceDragTarget asks of it
++// is the tab, which is the part that matters: a drop handler that takes a tab
++// and fails to put it back has lost it.
++class FakeDragController : public TabDragTarget::DragController {
++ public:
++  explicit FakeDragController(TabStripModel* tabs) : tabs_(tabs) {}
++
++  std::unique_ptr<tabs::TabModel> DetachTabAtForInsertion(
++      int drag_idx) override {
++    return tabs_->DetachTabAtForInsertion(drag_idx);
++  }
++  const DragSessionData& GetSessionData() const override { return data_; }
++  const TabDragContext* GetAttachedContext() const override { return nullptr; }
++
++ private:
++  const raw_ptr<TabStripModel> tabs_;
++  DragSessionData data_;
++};
++
++class SpaceDragTargetTest : public BrowserWithTestWindowTest {};
++
++TEST_F(SpaceDragTargetTest, DroppingOnASpaceMovesTheTabAndKeepsIt) {
++  AddTab(browser(), GURL("https://example.com/"));
++  TabStripModel* const tabs = browser()->tab_strip_model();
++  ASSERT_EQ(1, tabs->count());
++
++  SpaceModel model;
++  Space* const other = model.AddSpace("Other", SK_ColorRED);
++
++  // The switcher is only used for hit testing, which SetHoveredSpace bypasses.
++  SpaceDragTarget target(model, *browser(), /*switcher=*/nullptr);
++  target.SetHoveredSpace(other->id());
++
++  FakeDragController controller(tabs);
++  target.HandleTabDrop(controller);
++
++  // The tab is still in the strip -- a Space is not another window.
++  ASSERT_EQ(1, tabs->count()) << "the drop handler lost the tab";
++  EXPECT_EQ(other->id(), model.SpaceForTab(tabs->GetTabAtIndex(0)));
++  EXPECT_EQ(other->id(), model.active_id())
++      << "the target Space should become active so the tab stays visible";
++}
++
++TEST_F(SpaceDragTargetTest, DroppingNowhereLeavesTheTabAlone) {
++  AddTab(browser(), GURL("https://example.com/"));
++  TabStripModel* const tabs = browser()->tab_strip_model();
++
++  SpaceModel model;
++  SpaceDragTarget target(model, *browser(), /*switcher=*/nullptr);
++  target.SetHoveredSpace(std::nullopt);
++
++  FakeDragController controller(tabs);
++  target.HandleTabDrop(controller);
++
++  EXPECT_EQ(1, tabs->count());
++}
++
++}  // namespace
++}  // namespace spaces
+diff --git a/chrome/test/BUILD.gn b/chrome/test/BUILD.gn
+index 9b75955d7b24c..a2b33318995fe 100644
+--- a/chrome/test/BUILD.gn
++++ b/chrome/test/BUILD.gn
+@@ -5426,6 +5426,7 @@ test("unit_tests") {
+     "//chrome/browser/ui/cookie_controls:unit_tests",
+     "//chrome/browser/ui/file_system_access:unit_tests",
+     "//chrome/browser/ui/spaces:unit_tests",
++    "//chrome/browser/ui/views/spaces:unit_tests",
+     "//chrome/browser/ui/find_bar:unit_tests",
+     "//chrome/browser/ui/hats",
+     "//chrome/browser/ui/login:unit_tests",

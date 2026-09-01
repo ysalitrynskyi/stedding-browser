@@ -1,0 +1,745 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Tue, 1 Sep 2026 10:12:30 -0400
+Subject: folders, like Arc: created from a tab, nesting, collapsing, renamed
+ in place
+
+The FOLDER collection type has existed since patch 0002 with nothing able to
+construct one. Now:
+
+TabStripCollection::MoveTabsToNewFolderRecursive attaches a folder through
+AddTabCollectionImpl -- the same primitive that attaches a detached group, so
+mappings, reparent notifications and the view tree all behave -- and moves the
+tabs in with the exact loop MoveTabsRecursive uses, including collapsing
+emptied source collections. With a parent folder it appends inside it, which
+is what nesting is.
+
+TabStripModel::AddToNewFolder wraps that in MoveTabsWithNotifications, so the
+selection model and observers see a normal move. It uses grouping's destination
+rule, and when the chosen tab already lives in a folder the new folder nests
+inside that one -- using the context menu twice is how nesting happens without
+a drag. The command is in the tab context menu.
+
+FolderView grows Arc's row: a chevron-and-name header one tab-row tall, click
+to collapse, double-click to rename in place, children indented beneath. A
+collapsed folder hides its subtree from Ctrl+Tab and friends through the same
+IsTabHidden contract collapsed groups use, nested folders included.
+
+Two consequences the compiler and the browser found. The tab-strip mojo API
+converter NOTREACHED on FOLDER -- a tripwire left in patch 0002 that fired the
+moment the first folder existed, taking the browser down; folders now map to
+the plain-container variant until the mojom grows a real one. And the model
+test covers the part that could lose tabs: four tabs in, two foldered, one
+nested -- the strip still counts four.
+
+Verified by capture: an outer folder holding a tab and a nested folder with its
+own tab, both with headers, correctly indented.
+
+Why: folders are the second thing the operator names when they say Arc.
+Removable when: upstream ships folders; ours then rebases onto theirs.
+---
+ chrome/browser/ui/stedding_ui_metrics.cc      |   3 +
+ chrome/browser/ui/stedding_ui_metrics.h       |   5 +
+ chrome/browser/ui/tabs/tab_menu_model.cc      |   2 +
+ .../converters/tab_converters.cc              |  16 +-
+ chrome/browser/ui/tabs/tab_strip_model.cc     |  90 ++++++++++
+ chrome/browser/ui/tabs/tab_strip_model.h      |  10 ++
+ .../ui/tabs/tab_strip_model_unittest.cc       |  32 ++++
+ .../spaces/space_tab_visibility_controller.cc |  21 ++-
+ .../ui/views/tabs/common/folder_view.cc       | 160 +++++++++++++++++-
+ .../ui/views/tabs/common/folder_view.h        |  47 ++++-
+ components/tabs/impl/tab_strip_collection.cc  |  59 +++++++
+ components/tabs/public/tab_strip_collection.h |  12 ++
+ 12 files changed, 441 insertions(+), 16 deletions(-)
+
+diff --git a/chrome/browser/ui/stedding_ui_metrics.cc b/chrome/browser/ui/stedding_ui_metrics.cc
+index 8b83052903bd4..122fb722aa564 100644
+--- a/chrome/browser/ui/stedding_ui_metrics.cc
++++ b/chrome/browser/ui/stedding_ui_metrics.cc
+@@ -48,6 +48,9 @@ BASE_FEATURE_PARAM(int, kToolbarButtonIconSize, &kArcStyleWindow,
+ BASE_FEATURE_PARAM(bool, kDragTabsToSpaces, &kArcStyleWindow,
+                    "drag_tabs_to_spaces", true);
+ 
++BASE_FEATURE_PARAM(int, kFolderTabsForTesting, &kArcStyleWindow,
++                   "folder_tabs", 0);
++
+ BASE_FEATURE_PARAM(int, kPinTabsForTesting, &kArcStyleWindow, "pin_tabs", 0);
+ 
+ BASE_FEATURE_PARAM(int, kExtraSpacesForTesting, &kArcStyleWindow,
+diff --git a/chrome/browser/ui/stedding_ui_metrics.h b/chrome/browser/ui/stedding_ui_metrics.h
+index 627e88b60cac0..f934c495713d1 100644
+--- a/chrome/browser/ui/stedding_ui_metrics.h
++++ b/chrome/browser/ui/stedding_ui_metrics.h
+@@ -78,6 +78,11 @@ BASE_DECLARE_FEATURE_PARAM(int, kToolbarButtonIconSize);
+ // the target mid-drag, and if that never fires the drag simply does nothing.
+ BASE_DECLARE_FEATURE_PARAM(bool, kDragTabsToSpaces);
+ 
++// Wraps the first N unpinned tabs into a new folder shortly after startup,
++// then nests the last of them one level deeper, so the folder pipeline can be
++// seen and exercised without a pointer. Zero in normal use.
++BASE_DECLARE_FEATURE_PARAM(int, kFolderTabsForTesting);
++
+ // Tabs to pin when a window opens, counted from the left. Zero in normal use;
+ // this exists so the essentials row can be screenshotted, since pinning is
+ // otherwise a UI gesture.
+diff --git a/chrome/browser/ui/tabs/tab_menu_model.cc b/chrome/browser/ui/tabs/tab_menu_model.cc
+index 793876fe3b6ef..578d4688dd508 100644
+--- a/chrome/browser/ui/tabs/tab_menu_model.cc
++++ b/chrome/browser/ui/tabs/tab_menu_model.cc
+@@ -428,6 +428,8 @@ void TabMenuModel::Build(int index) {
+   if (tabs::IsVerticalTabsFeatureEnabled()) {
+     AddItem(TabStripModel::CommandSpacePin, u"Pin to This Space");
+     AddItem(TabStripModel::CommandSpaceUnpin, u"Unpin from This Space");
++    AddItem(TabStripModel::CommandMoveTabToNewFolder,
++            u"Move Tab to New Folder");
+   }
+ 
+   if (features::IsMenuSimplificationEnabled()) {
+diff --git a/chrome/browser/ui/tabs/tab_strip_api/tab_strip_model_impl/converters/tab_converters.cc b/chrome/browser/ui/tabs/tab_strip_api/tab_strip_model_impl/converters/tab_converters.cc
+index 74b6bdf743d68..9868af1114e3f 100644
+--- a/chrome/browser/ui/tabs/tab_strip_api/tab_strip_model_impl/converters/tab_converters.cc
++++ b/chrome/browser/ui/tabs/tab_strip_api/tab_strip_model_impl/converters/tab_converters.cc
+@@ -174,11 +174,17 @@ tabs_api::mojom::DataPtr BuildMojoTabCollectionData(
+       mojo_split_tab->data = *visual_data;
+       return tabs_api::mojom::Data::NewSplitTab(std::move(mojo_split_tab));
+     }
+-    // Stedding: folders have no representation in this API yet. Falls through
+-    // to the NOTREACHED below, which is correct while nothing creates folders —
+-    // and which will fail loudly the moment something does.
+-    case tabs::TabCollection::Type::FOLDER:
+-      break;
++    case tabs::TabCollection::Type::FOLDER: {
++      // Stedding: the API has no folder variant yet, and this observer runs
++      // for every mutation, so a folder must map to SOMETHING or creating one
++      // kills the browser -- which is exactly how this line got written. A
++      // folder is a plain container of tabs, which is what UnpinnedTabs is in
++      // this union; the id still identifies the node. A real Folder variant
++      // belongs in the mojom when anything consumes folder metadata.
++      auto mojo_folder = tabs_api::mojom::UnpinnedTabs::New();
++      mojo_folder->id = node_id;
++      return tabs_api::mojom::Data::NewUnpinnedTabs(std::move(mojo_folder));
++    }
+   }
+   NOTREACHED();
+ }
+diff --git a/chrome/browser/ui/tabs/tab_strip_model.cc b/chrome/browser/ui/tabs/tab_strip_model.cc
+index bfc36a1dbf0a8..0154996fc634c 100644
+--- a/chrome/browser/ui/tabs/tab_strip_model.cc
++++ b/chrome/browser/ui/tabs/tab_strip_model.cc
+@@ -100,6 +100,7 @@
+ #include "components/tabs/public/tab_collection_types.h"
+ #include "components/tabs/public/tab_group_tab_collection.h"
+ #include "components/tabs/public/tab_interface.h"
++#include "components/tabs/public/folder_tab_collection.h"
+ #include "components/tabs/public/tab_strip_collection.h"
+ #include "components/tabs/public/unpinned_tab_collection.h"
+ #include "components/web_modal/web_contents_modal_dialog_manager.h"
+@@ -1521,6 +1522,17 @@ bool TabStripModel::IsTabHidden(int index) const {
+   if (IsTabCollapsed(index)) {
+     return true;
+   }
++  // A collapsed folder hides everything inside it, nested folders included --
++  // the same contract collapsed groups have.
++  for (const tabs::TabCollection* collection =
++           GetTabAtIndex(index)->GetParentCollection();
++       collection; collection = collection->GetParentCollection()) {
++    if (collection->type() == tabs::TabCollection::Type::FOLDER &&
++        static_cast<const tabs::FolderTabCollection*>(collection)
++            ->collapsed()) {
++      return true;
++    }
++  }
+   return hidden_tab_predicate_ &&
+          hidden_tab_predicate_.Run(GetTabAtIndex(index));
+ }
+@@ -2589,6 +2601,8 @@ bool TabStripModel::IsContextMenuCommandEnabled(
+     case CommandSpacePin:
+     case CommandSpaceUnpin:
+       return false;
++    case CommandMoveTabToNewFolder:
++      return true;
+     case CommandNewTabToRight:
+     case CommandCloseTab:
+       return true;
+@@ -2702,6 +2716,11 @@ void TabStripModel::ExecuteContextMenuCommand(int context_index,
+     case CommandSpacePin:
+     case CommandSpaceUnpin:
+       break;
++    case CommandMoveTabToNewFolder: {
++      const std::vector<int> indices = GetIndicesForCommand(context_index);
++      AddToNewFolder(indices);
++      break;
++    }
+     case CommandNewTabToRight: {
+       base::UmaHistogramCounts1000(
+           "Tab.ContextMenu.NewTabToRight.SelectedTabsCount",
+@@ -4675,6 +4694,77 @@ void TabStripModel::AddToExistingGroupImpl(const std::vector<int>& indices,
+   }
+ }
+ 
++tabs::FolderTabCollection* TabStripModel::AddToNewFolder(
++    const std::vector<int> indices,
++    tabs::FolderTabCollection* parent_folder) {
++  CHECK(!indices.empty());
++  for (const int index : indices) {
++    CHECK(ContainsIndex(index));
++  }
++
++  // Same destination rule as grouping: the first spot at or after the first
++  // tab that is not pinned and not inside someone else's group.
++  int destination_index = -1;
++  for (int i = indices[0]; i <= count(); i++) {
++    if (!ContainsIndex(i)) {
++      destination_index = i;
++      break;
++    }
++    if (IsTabPinned(i)) {
++      continue;
++    }
++    std::optional<tab_groups::TabGroupId> destination_group =
++        GetTabGroupForTab(i);
++    if (!destination_group.has_value() ||
++        destination_group != GetTabGroupForTab(indices[0])) {
++      destination_index = i;
++      break;
++    }
++  }
++
++  // MoveTabsRecursive-family moves land after the moved tabs are removed, so
++  // pull the destination left by the tabs that sit before it.
++  size_t num_tabs_to_left = 0;
++  for (const int i : indices) {
++    if (i >= destination_index) {
++      break;
++    }
++    ++num_tabs_to_left;
++  }
++  const size_t adjusted_destination = destination_index - num_tabs_to_left;
++
++  // A folder made from a tab that already lives in a folder nests inside it,
++  // which is how nesting happens without a drag: use the command again inside.
++  if (!parent_folder) {
++    const tabs::TabCollection* const current_parent =
++        GetTabAtIndex(indices[0])->GetParentCollection();
++    if (current_parent &&
++        current_parent->type() == tabs::TabCollection::Type::FOLDER) {
++      parent_folder = const_cast<tabs::FolderTabCollection*>(
++          static_cast<const tabs::FolderTabCollection*>(current_parent));
++    }
++  }
++
++  auto folder = std::make_unique<tabs::FolderTabCollection>(
++      tabs::FolderId::GenerateNew(), std::string(), /*collapsed=*/false);
++  tabs::FolderTabCollection* folder_ptr = nullptr;
++
++  MoveTabsWithNotifications(
++      indices, static_cast<int>(adjusted_destination),
++      base::BindOnce(
++          [](tabs::TabStripCollection* contents,
++             const std::vector<int>& indices, size_t destination,
++             std::unique_ptr<tabs::FolderTabCollection> folder,
++             tabs::FolderTabCollection* parent,
++             tabs::FolderTabCollection** out) {
++            *out = contents->MoveTabsToNewFolderRecursive(
++                indices, destination, std::move(folder), parent);
++          },
++          contents_data_.get(), indices, adjusted_destination,
++          std::move(folder), parent_folder, &folder_ptr));
++  return folder_ptr;
++}
++
+ void TabStripModel::MoveTabsAndSetPropertiesImpl(
+     const std::vector<int>& indices,
+     int destination_index,
+diff --git a/chrome/browser/ui/tabs/tab_strip_model.h b/chrome/browser/ui/tabs/tab_strip_model.h
+index 5ff6bc4b86f3d..c0d6e3a48ffdc 100644
+--- a/chrome/browser/ui/tabs/tab_strip_model.h
++++ b/chrome/browser/ui/tabs/tab_strip_model.h
+@@ -68,6 +68,7 @@ enum class SplitTabOrientationChangeSource;
+ }  // namespace split_tabs
+ 
+ namespace tabs {
++class FolderTabCollection;
+ class SplitTabCollection;
+ class TabStripCollection;
+ class TabGroupTabCollection;
+@@ -689,6 +690,13 @@ class TabStripModel {
+   // contained in `indices`. `indices` must be sorted in ascending order.
+   tab_groups::TabGroupId AddToNewGroup(const std::vector<int> indices);
+ 
++  // Stedding: moves `indices` into a brand-new folder. With `parent_folder`
++  // null the folder is created where the first tab sits in the unpinned area;
++  // otherwise it is nested inside `parent_folder`. Returns the folder.
++  tabs::FolderTabCollection* AddToNewFolder(
++      const std::vector<int> indices,
++      tabs::FolderTabCollection* parent_folder = nullptr);
++
+   // Add the set of tabs pointed to by `indices` to the given tab group `group`.
+   // The tabs take on the pinnedness of the tabs already in the group. Tabs
+   // before the group will move to the start, while tabs after the group will
+@@ -789,6 +797,8 @@ class TabStripModel {
+     // state; exactly one is enabled at a time.
+     CommandSpacePin,
+     CommandSpaceUnpin,
++    // Stedding: move the tab into a brand-new folder.
++    CommandMoveTabToNewFolder,
+     CommandToggleGrouped,
+     CommandToggleSiteMuted,
+     CommandSendTabToSelf,
+diff --git a/chrome/browser/ui/tabs/tab_strip_model_unittest.cc b/chrome/browser/ui/tabs/tab_strip_model_unittest.cc
+index d0899d9eb873e..b430779a73c95 100644
+--- a/chrome/browser/ui/tabs/tab_strip_model_unittest.cc
++++ b/chrome/browser/ui/tabs/tab_strip_model_unittest.cc
+@@ -57,6 +57,7 @@
+ #include "components/tab_groups/tab_group_id.h"
+ #include "components/tabs/public/split_tab_data.h"
+ #include "components/tabs/public/tab_group.h"
++#include "components/tabs/public/folder_tab_collection.h"
+ #include "components/tabs/public/tab_group_tab_collection.h"
+ #include "components/tabs/public/tab_interface.h"
+ #include "components/web_modal/web_contents_modal_dialog_manager.h"
+@@ -6289,6 +6290,37 @@ TEST_F(TabStripModelTest, RemoveTabsAndSplitsFromGroup) {
+   tabstrip()->CloseAllTabs();
+ }
+ 
++// Stedding folders: tabs move into a new folder, stay in the strip, and
++// folders nest.
++TEST_F(TabStripModelTest, AddToNewFolderKeepsTabsAndNests) {
++  ASSERT_NO_FATAL_FAILURE(
++      PrepareTabstripForSelectionTest(tabstrip(), 4, 0, {0}));
++  ASSERT_EQ(4, tabstrip()->count());
++
++  tabs::TabInterface* const moved_a = tabstrip()->GetTabAtIndex(1);
++  tabs::TabInterface* const moved_b = tabstrip()->GetTabAtIndex(2);
++
++  tabs::FolderTabCollection* const folder =
++      tabstrip()->AddToNewFolder({1, 2});
++  ASSERT_NE(nullptr, folder);
++
++  // No tab was lost, and the folder holds exactly the two moved tabs.
++  EXPECT_EQ(4, tabstrip()->count());
++  EXPECT_EQ(2, folder->TabCountRecursive());
++  EXPECT_EQ(folder, moved_a->GetParentCollection());
++  EXPECT_EQ(folder, moved_b->GetParentCollection());
++
++  // Nesting: a folder created with a parent lands inside that parent.
++  tabs::FolderTabCollection* const child =
++      tabstrip()->AddToNewFolder({tabstrip()->GetIndexOfTab(moved_b)}, folder);
++  ASSERT_NE(nullptr, child);
++  EXPECT_EQ(4, tabstrip()->count());
++  EXPECT_EQ(folder, child->GetParentCollection());
++  EXPECT_EQ(child, moved_b->GetParentCollection());
++  EXPECT_EQ(2, folder->TabCountRecursive())
++      << "the nested tab still counts inside the outer folder";
++}
++
+ TEST_F(TabStripModelTest, AddToNewGroupDeletesGroup) {
+   tabstrip()->AppendWebContents(CreateWebContents(), true);
+   tabstrip()->AddToNewGroup({0});
+diff --git a/chrome/browser/ui/views/spaces/space_tab_visibility_controller.cc b/chrome/browser/ui/views/spaces/space_tab_visibility_controller.cc
+index 3ba62780a64fb..ac1df10ae0165 100644
+--- a/chrome/browser/ui/views/spaces/space_tab_visibility_controller.cc
++++ b/chrome/browser/ui/views/spaces/space_tab_visibility_controller.cc
+@@ -6,6 +6,7 @@
+ 
+ #include "chrome/browser/ui/stedding_ui_metrics.h"
+ #include <algorithm>
++#include <vector>
+ #include <optional>
+ 
+ #include "base/functional/bind.h"
+@@ -31,7 +32,8 @@ SpaceTabVisibilityController::SpaceTabVisibilityController(
+       tab_strip_root_(tab_strip_root) {
+   observation_.Observe(&model);
+ 
+-  if (stedding::kPinTabsForTesting.Get() > 0) {
++  if (stedding::kPinTabsForTesting.Get() > 0 ||
++      stedding::kFolderTabsForTesting.Get() > 0) {
+     // Deferred: this controller is built when the tab strip view is set, which
+     // is before the window's first tabs are inserted, so pinning here would
+     // find an empty strip.
+@@ -48,6 +50,23 @@ SpaceTabVisibilityController::SpaceTabVisibilityController(
+ SpaceTabVisibilityController::~SpaceTabVisibilityController() = default;
+ 
+ void SpaceTabVisibilityController::PinTabsForTesting() {
++  // Folder exercise first: wrap tabs, then nest one, so a capture shows both
++  // levels.
++  const int to_fold = std::min(stedding::kFolderTabsForTesting.Get(),
++                               tab_strip_model_->count());
++  if (to_fold >= 2) {
++    std::vector<int> indices;
++    for (int i = 0; i < to_fold; ++i) {
++      indices.push_back(i);
++    }
++    tab_strip_model_->AddToNewFolder(indices);
++    // The command on a tab already in a folder nests -- same path the context
++    // menu takes.
++    tab_strip_model_->AddToNewFolder(
++        {tab_strip_model_->GetIndexOfTab(
++            tab_strip_model_->GetTabAtIndex(to_fold - 1))});
++  }
++
+   // Pinning is a UI gesture, so the essentials row could otherwise only be
+   // looked at by hand. Zero in normal use.
+   const int to_pin =
+diff --git a/chrome/browser/ui/views/tabs/common/folder_view.cc b/chrome/browser/ui/views/tabs/common/folder_view.cc
+index c354ff21fd819..94431366e850a 100644
+--- a/chrome/browser/ui/views/tabs/common/folder_view.cc
++++ b/chrome/browser/ui/views/tabs/common/folder_view.cc
+@@ -4,17 +4,175 @@
+ 
+ #include "chrome/browser/ui/views/tabs/common/folder_view.h"
+ 
++#include <memory>
++#include <utility>
++#include <variant>
++
++#include "base/strings/utf_string_conversions.h"
++#include "chrome/browser/ui/layout_constants.h"
+ #include "chrome/browser/ui/views/tabs/common/tab_collection_node.h"
++#include "components/tabs/public/folder_tab_collection.h"
+ #include "ui/base/metadata/metadata_impl_macros.h"
++#include "ui/events/event.h"
++#include "ui/gfx/font_list.h"
++#include "ui/views/controls/label.h"
++#include "ui/views/controls/textfield/textfield.h"
+ #include "ui/views/layout/box_layout.h"
++#include "ui/views/layout/layout_provider.h"
++#include "ui/views/view_class_properties.h"
++
++namespace {
++
++constexpr int kIndent = 14;
++constexpr int kHeaderInset = 8;
++constexpr SkColor kHeaderText = SkColorSetA(SK_ColorWHITE, 0xD8);
++constexpr SkColor kChevronText = SkColorSetA(SK_ColorWHITE, 0x99);
++
++tabs::FolderTabCollection* FolderFromNode(TabCollectionNode* node) {
++  CHECK(node);
++  // The node data is const; the folder's name and collapse state are ours to
++  // change, which is the entire purpose of this view.
++  return const_cast<tabs::FolderTabCollection*>(
++      static_cast<const tabs::FolderTabCollection*>(
++          std::get<tabs::ConstDanglingUntriagedTabCollection>(
++              node->GetNodeData())));
++}
++
++}  // namespace
++
++// The header row: chevron + name. Single click collapses, double click
++// renames.
++class FolderView::HeaderView : public views::View {
++  METADATA_HEADER(HeaderView, views::View)
++
++ public:
++  explicit HeaderView(FolderView* owner) : owner_(owner) {
++    auto* const layout = SetLayoutManager(std::make_unique<views::BoxLayout>(
++        views::BoxLayout::Orientation::kHorizontal,
++        gfx::Insets::VH(0, kHeaderInset), 6));
++    layout->set_cross_axis_alignment(
++        views::BoxLayout::CrossAxisAlignment::kCenter);
++    SetPreferredSize(
++        gfx::Size(0, GetLayoutConstant(LayoutConstant::kVerticalTabHeight)));
++  }
++
++  bool OnMousePressed(const ui::MouseEvent& event) override { return true; }
++  void OnMouseReleased(const ui::MouseEvent& event) override {
++    if (!GetLocalBounds().Contains(event.location())) {
++      return;
++    }
++    if (event.GetClickCount() >= 2) {
++      owner_->BeginRename();
++    } else {
++      owner_->ToggleCollapsed();
++    }
++  }
++
++ private:
++  const raw_ptr<FolderView> owner_;
++};
+ 
+ FolderView::FolderView(TabCollectionNode* collection_node)
+     : collection_node_(collection_node) {
+-  SetLayoutManager(std::make_unique<views::BoxLayout>(
++  auto* const layout = SetLayoutManager(std::make_unique<views::BoxLayout>(
+       views::BoxLayout::Orientation::kVertical));
++  layout->SetDefaultFlex(0);
++
++  auto header = std::make_unique<HeaderView>(this);
++  chevron_ = header->AddChildView(std::make_unique<views::Label>());
++  chevron_->SetEnabledColor(kChevronText);
++  name_ = header->AddChildView(std::make_unique<views::Label>());
++  name_->SetEnabledColor(kHeaderText);
++  name_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
++
++  auto rename = std::make_unique<views::Textfield>();
++  rename->set_controller(this);
++  rename->SetVisible(false);
++  rename_field_ = header->AddChildView(std::move(rename));
++
++  header_ = AddChildView(std::move(header));
++  UpdateHeader();
+ }
+ 
+ FolderView::~FolderView() = default;
+ 
++tabs::FolderTabCollection* FolderView::folder() const {
++  return FolderFromNode(collection_node_);
++}
++
++void FolderView::ViewHierarchyChanged(
++    const views::ViewHierarchyChangedDetails& details) {
++  views::View::ViewHierarchyChanged(details);
++  if (!details.is_add || details.parent != this ||
++      details.child == header_) {
++    return;
++  }
++  // Tabs and nested folders sit indented under the header, as the reference
++  // draws them.
++  details.child->SetProperty(views::kMarginsKey,
++                             gfx::Insets::TLBR(0, kIndent, 0, 0));
++  details.child->SetVisible(!folder()->collapsed());
++}
++
++void FolderView::ToggleCollapsed() {
++  folder()->SetCollapsed(!folder()->collapsed());
++  ApplyCollapsed();
++}
++
++void FolderView::ApplyCollapsed() {
++  const bool collapsed = folder()->collapsed();
++  for (views::View* child : children()) {
++    if (child != header_) {
++      child->SetVisible(!collapsed);
++    }
++  }
++  UpdateHeader();
++  PreferredSizeChanged();
++}
++
++void FolderView::UpdateHeader() {
++  chevron_->SetText(folder()->collapsed() ? u"▸" : u"▾");
++  const std::string& title = folder()->title();
++  name_->SetText(title.empty() ? u"New Folder" : base::UTF8ToUTF16(title));
++}
++
++void FolderView::BeginRename() {
++  rename_field_->SetText(base::UTF8ToUTF16(folder()->title()));
++  chevron_->SetVisible(false);
++  name_->SetVisible(false);
++  rename_field_->SetVisible(true);
++  rename_field_->RequestFocus();
++  rename_field_->SelectAll(false);
++}
++
++void FolderView::EndRename(bool commit) {
++  if (commit) {
++    folder()->SetTitle(base::UTF16ToUTF8(rename_field_->GetText()));
++  }
++  rename_field_->SetVisible(false);
++  chevron_->SetVisible(true);
++  name_->SetVisible(true);
++  UpdateHeader();
++}
++
++bool FolderView::HandleKeyEvent(views::Textfield* sender,
++                                const ui::KeyEvent& event) {
++  if (event.type() != ui::EventType::kKeyPressed) {
++    return false;
++  }
++  if (event.key_code() == ui::VKEY_RETURN) {
++    EndRename(/*commit=*/true);
++    return true;
++  }
++  if (event.key_code() == ui::VKEY_ESCAPE) {
++    EndRename(/*commit=*/false);
++    return true;
++  }
++  return false;
++}
++
++BEGIN_METADATA(FolderView, HeaderView)
++END_METADATA
++
+ BEGIN_METADATA(FolderView)
+ END_METADATA
+diff --git a/chrome/browser/ui/views/tabs/common/folder_view.h b/chrome/browser/ui/views/tabs/common/folder_view.h
+index 9d5c7e62be221..77a4a593151a4 100644
+--- a/chrome/browser/ui/views/tabs/common/folder_view.h
++++ b/chrome/browser/ui/views/tabs/common/folder_view.h
+@@ -5,21 +5,28 @@
+ #ifndef CHROME_BROWSER_UI_VIEWS_TABS_COMMON_FOLDER_VIEW_H_
+ #define CHROME_BROWSER_UI_VIEWS_TABS_COMMON_FOLDER_VIEW_H_
+ 
++#include <string>
++
+ #include "base/memory/raw_ptr.h"
+ #include "ui/base/metadata/metadata_header_macros.h"
++#include "ui/views/controls/textfield/textfield_controller.h"
+ #include "ui/views/view.h"
+ 
+ class TabCollectionNode;
+ 
+-// Renders a FolderTabCollection in the tab strip.
+-//
+-// Deliberately minimal for now: it is a plain container that lays its children
+-// out vertically, so a folder appears in the sidebar as an indented run of its
+-// tabs. The header row, the collapse affordance and the drop target belong with
+-// the sidebar work and are not here yet — a folder that renders as a bare
+-// container is obviously unfinished, which is better than one that looks
+-// finished and behaves wrongly.
+-class FolderView : public views::View {
++namespace tabs {
++class FolderTabCollection;
++}  // namespace tabs
++
++namespace views {
++class Label;
++class Textfield;
++}  // namespace views
++
++// An Arc-style folder in the sidebar: a header row with a chevron and a name,
++// its tabs (and nested folders) indented beneath it. Clicking the header
++// collapses it; double-clicking renames it in place.
++class FolderView : public views::View, public views::TextfieldController {
+   METADATA_HEADER(FolderView, views::View)
+ 
+  public:
+@@ -28,8 +35,30 @@ class FolderView : public views::View {
+   FolderView& operator=(const FolderView&) = delete;
+   ~FolderView() override;
+ 
++  // views::View:
++  void ViewHierarchyChanged(
++      const views::ViewHierarchyChangedDetails& details) override;
++
++  // views::TextfieldController:
++  bool HandleKeyEvent(views::Textfield* sender,
++                      const ui::KeyEvent& event) override;
++
+  private:
++  class HeaderView;
++
++  tabs::FolderTabCollection* folder() const;
++
++  void ToggleCollapsed();
++  void ApplyCollapsed();
++  void BeginRename();
++  void EndRename(bool commit);
++  void UpdateHeader();
++
+   const raw_ptr<TabCollectionNode> collection_node_;
++  raw_ptr<HeaderView> header_ = nullptr;
++  raw_ptr<views::Label> chevron_ = nullptr;
++  raw_ptr<views::Label> name_ = nullptr;
++  raw_ptr<views::Textfield> rename_field_ = nullptr;
+ };
+ 
+ #endif  // CHROME_BROWSER_UI_VIEWS_TABS_COMMON_FOLDER_VIEW_H_
+diff --git a/components/tabs/impl/tab_strip_collection.cc b/components/tabs/impl/tab_strip_collection.cc
+index bfb0b512753a5..842ef11ad7622 100644
+--- a/components/tabs/impl/tab_strip_collection.cc
++++ b/components/tabs/impl/tab_strip_collection.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "components/tabs/public/tab_strip_collection.h"
+ 
++#include "components/tabs/public/folder_tab_collection.h"
++
+ #include <memory>
+ #include <optional>
+ #include <set>
+@@ -124,6 +126,63 @@ void TabStripCollection::MoveTabRecursive(
+                     retain_collection_types);
+ }
+ 
++FolderTabCollection* TabStripCollection::MoveTabsToNewFolderRecursive(
++    const std::vector<int>& tab_indices,
++    size_t destination_index,
++    std::unique_ptr<FolderTabCollection> folder,
++    FolderTabCollection* parent_folder) {
++  CHECK(folder);
++  FolderTabCollection* const folder_ptr = folder.get();
++
++  // Whole selected folders and splits move as units, exactly as splits do in
++  // MoveTabsRecursive.
++  static const TabCollection::TypeEnumSet kRetain = {
++      TabCollection::Type::SPLIT, TabCollection::Type::FOLDER};
++  ChildrenPtrs tab_or_collections =
++      GetTabsAndCollectionsForMove(tab_indices, kRetain);
++
++  // Attach the folder: in the unpinned area at the destination, or appended
++  // inside an existing folder, which is what nesting is.
++  TabCollection::Position folder_position;
++  if (parent_folder) {
++    folder_position = {parent_folder->GetHandle(),
++                       parent_folder->ChildCount()};
++  } else {
++    folder_position = GetMovePosition(tab_or_collections, destination_index,
++                                      std::nullopt, false);
++  }
++  AddTabCollectionImpl(std::move(folder), folder_position);
++
++  TabCollection::Position move_position = {folder_ptr->GetHandle(), 0};
++  for (auto& tab_or_collection : tab_or_collections) {
++    TabCollection* src_parent_collection = nullptr;
++    if (std::holds_alternative<DanglingUntriagedTabInterface>(
++            tab_or_collection)) {
++      TabInterface* tab_ptr =
++          std::get<DanglingUntriagedTabInterface>(tab_or_collection);
++      src_parent_collection = tab_ptr->GetParentCollection(GetPassKey());
++      MoveTabImpl(tab_ptr, move_position);
++    } else {
++      TabCollection* collection_ptr =
++          std::get<DanglingUntriagedTabCollection>(tab_or_collection);
++      src_parent_collection = collection_ptr->GetParentCollection();
++      MoveCollectionImpl(collection_ptr, move_position);
++    }
++
++    // Remove previous collection if needed. This also notifies the
++    // collection is removed.
++    if (src_parent_collection != unpinned_collection_ &&
++        src_parent_collection != pinned_collection_ &&
++        src_parent_collection->TabCountRecursive() == 0) {
++      RemoveTabCollectionImpl(src_parent_collection);
++    }
++
++    move_position = GetNodePosition(tab_or_collection);
++    move_position.index += 1;
++  }
++  return folder_ptr;
++}
++
+ void TabStripCollection::MoveTabsRecursive(
+     const std::vector<int>& tab_indices,
+     size_t destination_index,
+diff --git a/components/tabs/public/tab_strip_collection.h b/components/tabs/public/tab_strip_collection.h
+index 8e9717922fe77..cae983e46ee23 100644
+--- a/components/tabs/public/tab_strip_collection.h
++++ b/components/tabs/public/tab_strip_collection.h
+@@ -21,6 +21,7 @@ class TabStripModel;
+ namespace tabs {
+ 
+ class TabInterface;
++class FolderTabCollection;
+ class UnpinnedTabCollection;
+ class PinnedTabCollection;
+ class TabGroupTabCollection;
+@@ -59,6 +60,17 @@ class TabStripCollection : public TabCollection {
+                         size_t final_index,
+                         std::optional<tab_groups::TabGroupId> new_group_id,
+                         bool new_pinned_state);
++  // Stedding: creates `folder` in the tree and moves `tab_indices` inside it,
++  // through the same primitives MoveTabsRecursive uses, so counts, reparent
++  // notifications and view-tree updates all fire. With `parent_folder` null
++  // the folder lands in the unpinned area at `destination_index`; otherwise it
++  // is appended inside `parent_folder`, which is how folders nest.
++  FolderTabCollection* MoveTabsToNewFolderRecursive(
++      const std::vector<int>& tab_indices,
++      size_t destination_index,
++      std::unique_ptr<FolderTabCollection> folder,
++      FolderTabCollection* parent_folder);
++
+   void MoveTabsRecursive(
+       const std::vector<int>& tab_indices,
+       size_t destination_index,

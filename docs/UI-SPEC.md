@@ -156,33 +156,22 @@ Measured against the table above, not against "looks closer".
 
 ## Still not the reference
 
-Every item in the tables above is built, and every deviation that was once
-written off has been fixed. What a side-by-side still shows:
+Every item in the tables above is built, every deviation that was once written
+off has been fixed, and the toolbar now matches. What a side-by-side shows:
 
-- The toolbar is 39 DIP against a reference that scales to about 33.
+- The toolbar is **33 DIP**, matching the reference, down from Chromium's 46.
 
-  What is established, by measurement: the height is `max(39, content + 2 x
-  margin)`, and `content` follows the location bar. At a margin of 10 the strip
-  is 45 with a 20 DIP location bar and 51 with a 28 DIP one. Below a margin of
-  about 4 it stops shrinking. So 39 is a floor, not a sum.
+  It sat at 39 for a while because two floors were the same number. The top
+  container is sized as `max(caption-button height, its own minimum)` when the
+  window has a leading exclusion; on macOS that exclusion is 38, and the
+  toolbar's own preferred height was also 38. Every experiment changed one side
+  and so measured 39, which produced two confident and wrong explanations before
+  a probe printing `preferred_h`, `minimum_h` and `lead_excl_h` from a running
+  browser showed all three were 38.
 
-  What is **not** established is where the 39 comes from. The obvious candidate
-  was `BrowserViewLayoutImpl::GetBoundsWithExclusion()`
-  (`browser_view_layout_impl.cc:154`), which sizes against
-  `max(exclusion_height, minimum)` whenever the window has a leading exclusion —
-  the macOS traffic lights. Three separate interventions all measured 39 and
-  were reverted:
-
-  1. clearing `leading_exclusion` in `DoPreLayoutComputations`;
-  2. clearing it in `CalculateProposedLayout`;
-  3. passing `needs_exclusion = false` for the whole top container, and
-     separately patching the toolbar's own bounds in
-     `browser_view_tabbed_layout_impl.cc`.
-
-  So the exclusion is ruled out along with every toolbar constant. The cause is
-  still unknown, and finding it needs a debugger on a running browser rather
-  than more guesses. Recorded this way so the next attempt does not repeat the
-  four that failed.
+  Both sides now move: the top container skips the exclusion when a vertical tab
+  strip already covers the traffic lights, and the toolbar's content comes down
+  through the metrics parameters.
 
 - Tabs move between Spaces by dragging one onto a Space icon, or from a Space's
   context menu. Chromium's decision to consult the drop target mid-drag is the

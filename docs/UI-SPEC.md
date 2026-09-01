@@ -89,6 +89,19 @@ The results are the important part. They mix:
 So the command bar searches across every Space, which is why `TabStripModel`
 holding all Spaces' tabs (ADR 0015) is the right shape rather than a limitation.
 
+## Driving the real UI
+
+Screenshots cannot show whether something is clickable. Synthetic mouse events
+posted with `CGEventPostToPid` reach the browser's own process without moving
+the operator's pointer or touching their other windows, which is enough to
+verify hover behaviour -- and it is how the Space icons were found to jump out
+from under the pointer when their name appeared.
+
+Clicks need the window to be key, which means taking focus on a machine somebody
+else is using, so they are not driven from here. That is why `drag_tabs_to_spaces`
+is off: a drop handler owns the tab it is given, and one that has never had a
+real drag through it is not something to turn on.
+
 ## How this gets checked
 
 Screenshot the built browser at the reference window size, put it beside the Arc

@@ -146,7 +146,7 @@ Honest list of what a side-by-side still shows, after the sidebar structure was
 corrected:
 
 - The toolbar is 39 DIP, down from Chromium's 46. It does not go lower by these constants.
-- A Space can be given an icon and deleted from its context menu, but not renamed there yet.
+- A Space's colour cannot be changed; its name and icon can, from its context menu.
 - The divider above `New Tab` has no `Clear` affordance.
 
 ## Pinned tabs cannot be seeded for a screenshot

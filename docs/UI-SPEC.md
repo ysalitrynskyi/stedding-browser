@@ -131,7 +131,7 @@ Measured against the table above, not against "looks closer".
 | Sidebar width | Done — 352 px, measured in the capture |
 | Tab row height | Done — 44 px, measured in the capture (Chromium's default is 30) |
 | Active tab pill radius | Done — 10 px |
-| Favicon size | **Deliberately not done.** 16 px, not 18. `gfx::kFaviconSize` is global and the image would not scale with the slot |
+| Favicon size | **Done** — 18 px (patch 0027). The earlier claim that the image would not scale was wrong: TabIcon draws through DrawImageInt, scaled to its bounds |
 | Bare-host URL | Done — unfocused only; the full URL returns on focus. Verified in the capture |
 | Sign-in promo pill | Removed — Chromium advertises Google sign-in in the toolbar by default |
 | Command bar (⌘T) | **Done** — centred overlay, searches every Space and names the Space a result is in, opens URLs and searches (patches 0016-0017) |
@@ -142,12 +142,15 @@ Measured against the table above, not against "looks closer".
 
 ## Still not the reference
 
-Every item in the tables above is built. What a side-by-side still shows:
+Every item in the tables above is built, and every deviation that was once
+written off has been fixed. What a side-by-side still shows:
 
-- The toolbar is 39 DIP, down from Chromium's 46. It does not go lower by these
-  constants; something else floors it there.
-- Favicons are 16 DIP where the reference has 18, on purpose: `gfx::kFaviconSize`
-  is global and the image would not scale with the slot.
+- The toolbar is 39 DIP, down from Chromium's 46. Its floor is the toolbar
+  button's icon rather than any padding, so going lower means shrinking the
+  icons, which the reference does not appear to do.
+- Tabs move between Spaces through a Space's context menu, where the reference
+  drags them onto the Space.
+
 
 ## Pinned tabs cannot be seeded for a screenshot
 

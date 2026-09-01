@@ -145,8 +145,8 @@ Measured against the table above, not against "looks closer".
 Honest list of what a side-by-side still shows, after the sidebar structure was
 corrected:
 
-- The toolbar is 43 DIP, down from 46, but not as thin as the reference; the back button's own preferred size floors it.
-- A Space's icon and name can be set in the model but there is no UI to set them.
+- The toolbar is 39 DIP, down from Chromium's 46. It does not go lower by these constants.
+- A Space can be given an icon and deleted from its context menu, but not renamed there yet.
 - The divider above `New Tab` has no `Clear` affordance.
 
 ## Pinned tabs cannot be seeded for a screenshot

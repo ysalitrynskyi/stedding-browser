@@ -1,0 +1,231 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Tue, 1 Sep 2026 08:30:22 -0400
+Subject: float a Space's name above its chip on hover
+
+The reference raises a small pill with the Space's name when a chip is hovered.
+An earlier attempt reserved a row for the name and moved the icons the moment
+it appeared, which put the hovered chip out from under the pointer; this one is
+an overlay. The chip reports hover with its bounds, and the region view
+positions a layout-ignored label pill centred above it, clamped to the sidebar.
+
+Verified with synthetic mouse moves posted to the browser's own process: the
+pill reads "Space 2" above the second chip and nothing else moves.
+
+Why: the name pill is how the reference tells Spaces apart without labels.
+Removable when: never, short of dropping Spaces.
+---
+ .../frame/vertical_tab_strip_region_view.cc   | 41 ++++++++++++++
+ .../frame/vertical_tab_strip_region_view.h    |  6 +++
+ .../ui/views/spaces/space_switcher_view.cc    | 54 +++++++++++++++++--
+ .../ui/views/spaces/space_switcher_view.h     | 10 ++++
+ 4 files changed, 108 insertions(+), 3 deletions(-)
+
+diff --git a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+index 59b0052b57b52..abf5df349b8b9 100644
+--- a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
++++ b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+@@ -8,6 +8,8 @@
+ #include "chrome/browser/ui/stedding_ui_metrics.h"
+ #include "chrome/browser/ui/views/spaces/space_drag_target.h"
+ #include "chrome/browser/ui/views/spaces/space_switcher_view.h"
++#include "ui/views/background.h"
++#include "ui/views/controls/label.h"
+ #include "chrome/browser/ui/views/spaces/space_tab_visibility_controller.h"
+ 
+ #include <algorithm>
+@@ -170,6 +172,20 @@ VerticalTabStripRegionView::VerticalTabStripRegionView(
+     space_switcher_ =
+         AddChildView(std::make_unique<spaces::SpaceSwitcherView>(
+             *space_model, *browser_view->browser()));
++    space_switcher_->SetHoverCallback(
++        base::BindRepeating(&VerticalTabStripRegionView::OnSpaceChipHovered,
++                            base::Unretained(this)));
++
++    // The name pill that floats above a hovered Space chip. Ignored by the
++    // sidebar's layout and positioned by hand, so nothing moves on hover --
++    // moving the row under the pointer is the bug the first attempt had.
++    auto name_pill = std::make_unique<views::Label>();
++    name_pill->SetBackground(views::CreateRoundedRectBackground(
++        SkColorSetRGB(0x2C, 0x2D, 0x33), 8));
++    name_pill->SetEnabledColor(SkColorSetA(SK_ColorWHITE, 0xE0));
++    name_pill->SetVisible(false);
++    name_pill->SetProperty(views::kViewIgnoredByLayoutKey, true);
++    space_hover_pill_ = AddChildView(std::move(name_pill));
+     if (stedding::kDragTabsToSpaces.Get()) {
+       space_drag_target_ = std::make_unique<spaces::SpaceDragTarget>(
+           *space_model, *browser_view->browser(), space_switcher_);
+@@ -1193,6 +1209,31 @@ void VerticalTabStripRegionView::OnActiveTabChanged(
+   }
+ }
+ 
++void VerticalTabStripRegionView::OnSpaceChipHovered(
++    const std::u16string& name,
++    const gfx::Rect& chip_bounds) {
++  if (!space_hover_pill_) {
++    return;
++  }
++  if (name.empty()) {
++    space_hover_pill_->SetVisible(false);
++    return;
++  }
++  space_hover_pill_->SetText(name);
++  const gfx::Size text = space_hover_pill_->GetPreferredSize();
++  const int width = text.width() + 16;
++  const int height = text.height() + 6;
++  // Centred over the chip, floating just above the row, clamped to the
++  // sidebar.
++  int x = chip_bounds.CenterPoint().x() - width / 2;
++  x = std::clamp(x, 4, std::max(4, this->width() - width - 4));
++  const int y = chip_bounds.y() - height - 4;
++  space_hover_pill_->SetBoundsRect(gfx::Rect(x, y, width, height));
++  space_hover_pill_->SetVisible(true);
++  // Above the chips in paint order.
++  ReorderChildView(space_hover_pill_, children().size() - 1);
++}
++
+ void VerticalTabStripRegionView::ClearCurrentSpaceTabs() {
+   Browser* const browser = browser_view()->browser();
+   TabStripModel* const tabs = browser->tab_strip_model();
+diff --git a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
+index 1e46eeea8f866..bc69b6a6501e5 100644
+--- a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
++++ b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
+@@ -48,6 +48,7 @@ class VerticalTabStripStateController;
+ }  // namespace tabs
+ 
+ namespace views {
++class Label;
+ class ResizeArea;
+ class Separator;
+ class View;
+@@ -251,6 +252,7 @@ class VerticalTabStripRegionView final
+   void OnActiveTabChanged(const tabs::TabInterface* active_tab) override;
+ 
+   raw_ptr<spaces::SpaceSwitcherView> space_switcher_ = nullptr;
++  raw_ptr<views::Label> space_hover_pill_ = nullptr;
+   std::unique_ptr<spaces::SpaceDragTarget> space_drag_target_;
+   raw_ptr<VerticalTabStripTopContainer> top_button_container_ = nullptr;
+   raw_ptr<views::Separator> top_button_separator_ = nullptr;
+@@ -305,6 +307,10 @@ class VerticalTabStripRegionView final
+   // Closes the unpinned tabs of the active Space; the Clear affordance.
+   void ClearCurrentSpaceTabs();
+ 
++  // Floats the name pill above a hovered Space chip; empty name hides it.
++  void OnSpaceChipHovered(const std::u16string& name,
++                          const gfx::Rect& chip_bounds);
++
+   // Hides tabs that belong to a Space other than the active one. Null in a
+   // window with no Spaces.
+   std::unique_ptr<spaces::SpaceTabVisibilityController> space_tab_visibility_;
+diff --git a/chrome/browser/ui/views/spaces/space_switcher_view.cc b/chrome/browser/ui/views/spaces/space_switcher_view.cc
+index eefb1f2267595..43524542037db 100644
+--- a/chrome/browser/ui/views/spaces/space_switcher_view.cc
++++ b/chrome/browser/ui/views/spaces/space_switcher_view.cc
+@@ -24,6 +24,7 @@
+ #include "ui/menus/simple_menu_model.h"
+ #include "ui/views/controls/menu/menu_runner.h"
+ #include "ui/views/controls/textfield/textfield.h"
++#include "ui/gfx/geometry/rect_conversions.h"
+ #include "ui/views/layout/fill_layout.h"
+ #include "ui/views/layout/flex_layout.h"
+ #include "ui/views/layout/layout_types.h"
+@@ -77,6 +78,34 @@ std::u16string NameFor(const Space& space, size_t index) {
+   return u"Space " + base::NumberToString16(index + 1);
+ }
+ 
++// A chip that reports hover, so the row can float the Space's name above it.
++class SpaceChipButton : public views::LabelButton {
++  METADATA_HEADER(SpaceChipButton, views::LabelButton)
++
++ public:
++  SpaceChipButton(PressedCallback pressed,
++                  std::u16string icon,
++                  base::RepeatingCallback<void(bool)> hovered)
++      : views::LabelButton(std::move(pressed), std::move(icon)),
++        hovered_(std::move(hovered)) {}
++  ~SpaceChipButton() override = default;
++
++  void OnMouseEntered(const ui::MouseEvent& event) override {
++    views::LabelButton::OnMouseEntered(event);
++    hovered_.Run(true);
++  }
++  void OnMouseExited(const ui::MouseEvent& event) override {
++    views::LabelButton::OnMouseExited(event);
++    hovered_.Run(false);
++  }
++
++ private:
++  base::RepeatingCallback<void(bool)> hovered_;
++};
++
++BEGIN_METADATA(SpaceChipButton)
++END_METADATA
++
+ }  // namespace
+ 
+ SpaceSwitcherView::SpaceSwitcherView(SpaceModel& model, Browser& browser)
+@@ -130,13 +159,32 @@ void SpaceSwitcherView::Rebuild() {
+     const Space& space = *spaces[i];
+     const bool active = space.id() == model_->active_id();
+ 
+-    auto button = std::make_unique<views::LabelButton>(
++    const std::u16string name = NameFor(space, i);
++    auto button = std::make_unique<SpaceChipButton>(
+         base::BindRepeating(&SpaceSwitcherView::OnSpacePressed,
+                             base::Unretained(this), space.id()),
+-        base::UTF8ToUTF16(space.icon()));
++        base::UTF8ToUTF16(space.icon()),
++        base::BindRepeating(
++            [](SpaceSwitcherView* self, size_t chip_index,
++               std::u16string name, bool entered) {
++              if (!self->hover_callback_) {
++                return;
++              }
++              gfx::Rect bounds;
++              if (entered && chip_index < self->chips_.size()) {
++                gfx::RectF rect_f(
++                    self->chips_[chip_index].first->bounds());
++                views::View::ConvertRectToTarget(self->icon_row_,
++                                                 self->parent(), &rect_f);
++                bounds = gfx::ToEnclosingRect(rect_f);
++              }
++              self->hover_callback_.Run(entered ? name : std::u16string(),
++                                        bounds);
++            },
++            base::Unretained(this), i, name));
+     button->SetHorizontalAlignment(gfx::ALIGN_CENTER);
+     button->SetPreferredSize(gfx::Size(kIconSize, kIconSize));
+-    button->SetTooltipText(NameFor(space, i));
++    button->SetTooltipText(name);
+     button->set_context_menu_controller(this);
+     // The chip carries the Space's colour; the emoji sits on top when one is
+     // set. Inactive Spaces are muted so the row reads as one control with a
+diff --git a/chrome/browser/ui/views/spaces/space_switcher_view.h b/chrome/browser/ui/views/spaces/space_switcher_view.h
+index 38116d8903f10..5670e732172a3 100644
+--- a/chrome/browser/ui/views/spaces/space_switcher_view.h
++++ b/chrome/browser/ui/views/spaces/space_switcher_view.h
+@@ -51,6 +51,15 @@ class SpaceSwitcherView : public views::View,
+ 
+  public:
+   SpaceSwitcherView(SpaceModel& model, Browser& browser);
++
++  // Called with the hovered Space's name and the chip's bounds in the
++  // switcher's parent coordinates, and with an empty name on exit. The region
++  // view floats a pill above the row from this, as the reference does.
++  using HoverCallback =
++      base::RepeatingCallback<void(const std::u16string&, const gfx::Rect&)>;
++  void SetHoverCallback(HoverCallback callback) {
++    hover_callback_ = std::move(callback);
++  }
+   SpaceSwitcherView(const SpaceSwitcherView&) = delete;
+   SpaceSwitcherView& operator=(const SpaceSwitcherView&) = delete;
+   ~SpaceSwitcherView() override;
+@@ -110,6 +119,7 @@ class SpaceSwitcherView : public views::View,
+   // rebuilt with it; spacer views between chips make lookups by child index
+   // wrong, so hit tests and the context menu go through this instead.
+   std::vector<std::pair<views::View*, SpaceId>> chips_;
++  HoverCallback hover_callback_;
+   base::ScopedObservation<SpaceModel, SpaceModel::Observer> observation_{this};
+ };
+ 

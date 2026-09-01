@@ -1,0 +1,509 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Mon, 31 Aug 2026 23:19:14 -0400
+Subject: open a command bar on Cmd+T
+
+The reference opens a centred overlay on Cmd+T, not a blank tab: a search field
+over a list of places to go, mixing tabs in the current Space with tabs in other
+Spaces, each labelled with the Space it is in.
+
+That labelling is the payoff of ADR 0015. Because every Space's tabs stay in one
+TabStripModel, finding a tab in another Space is a loop over the strip rather
+than a search through parked trees. Switching to one makes its Space active
+first, so the tab is never activated while still hidden.
+
+Enter takes the first result, or opens what was typed -- a URL if it fixes up to
+one, and a search with the profile's own engine otherwise. Escape closes.
+
+Two Views constraints shaped this. BubbleDialogDelegateView and
+WidgetDelegateView both have private constructors and a friend list, so neither
+can be subclassed from here; the bar is a plain View set as a popup widget's
+contents view instead. That suits it anyway, since the overlay is centred over
+the window rather than anchored to any control.
+
+Cmd+T still opens a blank tab in popups and app windows, and whenever the
+Arc-style window feature is off.
+
+Why: Cmd+T is the most-used key in a browser and the reference makes it the way
+in to everything, including other Spaces.
+Removable when: never, short of dropping the command bar.
+---
+ chrome/browser/ui/BUILD.gn                    |   1 +
+ .../browser/ui/browser_command_controller.cc  |  31 +++
+ chrome/browser/ui/stedding_ui_metrics.cc      |   3 +
+ chrome/browser/ui/stedding_ui_metrics.h       |   5 +
+ chrome/browser/ui/views/commandbar/BUILD.gn   |  24 ++
+ .../ui/views/commandbar/command_bar_view.cc   | 241 ++++++++++++++++++
+ .../ui/views/commandbar/command_bar_view.h    |  86 +++++++
+ 7 files changed, 391 insertions(+)
+ create mode 100644 chrome/browser/ui/views/commandbar/BUILD.gn
+ create mode 100644 chrome/browser/ui/views/commandbar/command_bar_view.cc
+ create mode 100644 chrome/browser/ui/views/commandbar/command_bar_view.h
+
+diff --git a/chrome/browser/ui/BUILD.gn b/chrome/browser/ui/BUILD.gn
+index 473bfab8914c5..3a9a18f9b1581 100644
+--- a/chrome/browser/ui/BUILD.gn
++++ b/chrome/browser/ui/BUILD.gn
+@@ -1341,6 +1341,7 @@ static_library("ui") {
+       ":layout_constants",
+       ":stedding_ui_metrics",
+       "//chrome/browser/ui/views/spaces",
++      "//chrome/browser/ui/views/commandbar",
+       ":uma_browsing_activity_observer",
+       "//base",
+       "//chrome/app/vector_icons",
+diff --git a/chrome/browser/ui/browser_command_controller.cc b/chrome/browser/ui/browser_command_controller.cc
+index 3f62ffd338d63..e02ad5fbfe0b6 100644
+--- a/chrome/browser/ui/browser_command_controller.cc
++++ b/chrome/browser/ui/browser_command_controller.cc
+@@ -57,6 +57,10 @@
+ #include "chrome/browser/ui/browser.h"
+ #include "chrome/browser/ui/browser_actions.h"
+ #include "chrome/browser/ui/browser_commands.h"
++#include "base/task/single_thread_task_runner.h"
++#include "base/time/time.h"
++#include "chrome/browser/ui/stedding_ui_metrics.h"
++#include "chrome/browser/ui/views/commandbar/command_bar_view.h"
+ #include "chrome/browser/ui/browser_element_identifiers.h"
+ #include "chrome/browser/ui/browser_select_file_dialog_controller.h"
+ #include "chrome/browser/ui/browser_window.h"
+@@ -321,6 +325,24 @@ BrowserCommandController::BrowserCommandController(BrowserWindowInterface* bwi)
+       command_updater_(CreateCommandUpdater()),
+       scoped_unowned_user_data_(bwi->GetUnownedUserDataHost(), *this) {
+   browser_->tab_strip_model()->AddObserver(this);
++
++  if (stedding::kOpenCommandBarForTesting.Get() &&
++      browser_->GetType() == BrowserWindowInterface::Type::TYPE_NORMAL) {
++    // Deferred: the browser view does not exist yet at this point. Zero in
++    // normal use; this only exists so the overlay can be screenshotted.
++    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
++        FROM_HERE,
++        base::BindOnce(
++            [](base::WeakPtr<BrowserWindowInterface> bwi) {
++              if (bwi) {
++                stedding::CommandBarView::Show(
++                    bwi->GetBrowserForMigrationOnly());
++              }
++            },
++            browser_->GetWeakPtr()),
++        base::Seconds(2));
++  }
++
+   PrefService* local_state = g_browser_process->local_state();
+   if (local_state) {
+     local_pref_registrar_.Init(local_state);
+@@ -742,6 +764,15 @@ void BrowserCommandController::HandleCommandWithDisposition(
+       CloseWindow(browser_);
+       break;
+     case IDC_NEW_TAB: {
++      // Stedding opens the command bar here rather than a blank tab: the bar
++      // searches every Space and can still open a URL, so it is a superset of
++      // what a new tab offers. Only normal windows, and only when the Arc-style
++      // window is on.
++      if (base::FeatureList::IsEnabled(stedding::kArcStyleWindow) &&
++          browser_->GetType() == BrowserWindowInterface::Type::TYPE_NORMAL) {
++        stedding::CommandBarView::Show(browser_);
++        break;
++      }
+       NewTab(browser_, NewTabTypes::kNewTabCommand);
+       break;
+     }
+diff --git a/chrome/browser/ui/stedding_ui_metrics.cc b/chrome/browser/ui/stedding_ui_metrics.cc
+index c36d74ec94aab..1cf3edeb6389a 100644
+--- a/chrome/browser/ui/stedding_ui_metrics.cc
++++ b/chrome/browser/ui/stedding_ui_metrics.cc
+@@ -33,6 +33,9 @@ BASE_FEATURE_PARAM(int, kToolbarButtonHeight, &kArcStyleWindow,
+ BASE_FEATURE_PARAM(int, kLocationBarWidth, &kArcStyleWindow,
+                    "location_bar_width", 460);
+ 
++BASE_FEATURE_PARAM(bool, kOpenCommandBarForTesting, &kArcStyleWindow,
++                   "open_command_bar", false);
++
+ BASE_FEATURE_PARAM(int, kPinTabsForTesting, &kArcStyleWindow, "pin_tabs", 0);
+ 
+ BASE_FEATURE_PARAM(int, kExtraSpacesForTesting, &kArcStyleWindow,
+diff --git a/chrome/browser/ui/stedding_ui_metrics.h b/chrome/browser/ui/stedding_ui_metrics.h
+index d03dfccfb54e8..9862b9432a7cc 100644
+--- a/chrome/browser/ui/stedding_ui_metrics.h
++++ b/chrome/browser/ui/stedding_ui_metrics.h
+@@ -54,6 +54,11 @@ BASE_DECLARE_FEATURE_PARAM(int, kToolbarButtonHeight);
+ // take. Capping its preferred width is what makes centring possible.
+ BASE_DECLARE_FEATURE_PARAM(int, kLocationBarWidth);
+ 
++// Open the command bar as soon as a window opens. Zero in normal use; this
++// exists so the overlay can be screenshotted, since it is otherwise only
++// reachable by pressing a key.
++BASE_DECLARE_FEATURE_PARAM(bool, kOpenCommandBarForTesting);
++
+ // Tabs to pin when a window opens, counted from the left. Zero in normal use;
+ // this exists so the essentials row can be screenshotted, since pinning is
+ // otherwise a UI gesture.
+diff --git a/chrome/browser/ui/views/commandbar/BUILD.gn b/chrome/browser/ui/views/commandbar/BUILD.gn
+new file mode 100644
+index 0000000000000..4ffc17f1f99b9
+--- /dev/null
++++ b/chrome/browser/ui/views/commandbar/BUILD.gn
+@@ -0,0 +1,24 @@
++# Copyright 2026 The Stedding Authors
++# Use of this source code is governed by a BSD-style license that can be
++# found in the LICENSE file.
++
++source_set("commandbar") {
++  public = [ "command_bar_view.h" ]
++  sources = [ "command_bar_view.cc" ]
++
++  public_deps = [
++    "//base",
++    "//ui/views",
++  ]
++
++  deps = [
++    "//chrome/browser/profiles:profile",
++    "//chrome/browser/search_engines",
++    "//chrome/browser/ui/navigator",
++    "//chrome/browser/ui/spaces",
++    "//chrome/browser/ui/tabs:tab_strip",
++    "//components/search_engines",
++    "//components/url_formatter",
++    "//components/tabs:public",
++  ]
++}
+diff --git a/chrome/browser/ui/views/commandbar/command_bar_view.cc b/chrome/browser/ui/views/commandbar/command_bar_view.cc
+new file mode 100644
+index 0000000000000..21b908d8815bf
+--- /dev/null
++++ b/chrome/browser/ui/views/commandbar/command_bar_view.cc
+@@ -0,0 +1,241 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/views/commandbar/command_bar_view.h"
++
++#include <algorithm>
++#include <memory>
++#include <string>
++#include <utility>
++
++#include "base/functional/bind.h"
++#include "base/memory/ptr_util.h"
++#include "base/strings/utf_string_conversions.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/search_engines/template_url_service_factory.h"
++#include "chrome/browser/ui/browser.h"
++#include "chrome/browser/ui/navigator/browser_navigator.h"
++#include "chrome/browser/ui/navigator/browser_navigator_params.h"
++#include "chrome/browser/ui/spaces/space.h"
++#include "chrome/browser/ui/spaces/space_model.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "chrome/browser/ui/views/frame/browser_view.h"
++#include "components/search_engines/template_url.h"
++#include "components/search_engines/template_url_service.h"
++#include "components/url_formatter/url_fixer.h"
++#include "ui/base/metadata/metadata_impl_macros.h"
++#include "ui/views/border.h"
++#include "ui/views/controls/button/label_button.h"
++#include "ui/views/controls/scroll_view.h"
++#include "ui/views/controls/textfield/textfield.h"
++#include "ui/views/layout/box_layout.h"
++#include "ui/views/widget/widget.h"
++
++namespace stedding {
++namespace {
++
++constexpr int kBarWidth = 720;
++constexpr int kListHeight = 320;
++constexpr int kRowHeight = 44;
++constexpr size_t kMaxResults = 8;
++
++bool Matches(const std::u16string& haystack, const std::u16string& needle) {
++  if (needle.empty()) {
++    return true;
++  }
++  return base::ToLowerASCII(haystack).find(base::ToLowerASCII(needle)) !=
++         std::u16string::npos;
++}
++
++}  // namespace
++
++// static
++void CommandBarView::Show(Browser* browser) {
++  BrowserView* const browser_view = BrowserView::GetBrowserViewForBrowser(browser);
++  if (!browser_view) {
++    return;
++  }
++  views::Widget::InitParams params(
++      views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET,
++      views::Widget::InitParams::TYPE_POPUP);
++  params.parent = browser_view->GetWidget()->GetNativeView();
++  params.opacity = views::Widget::InitParams::WindowOpacity::kTranslucent;
++  params.activatable = views::Widget::InitParams::Activatable::kYes;
++
++  auto widget = std::make_unique<views::Widget>();
++  widget->Init(std::move(params));
++  // views::WidgetDelegateView is closed to subclassing outside its friend list,
++  // so the bar is a plain View set as the widget's contents.
++  widget->SetContentsView(std::make_unique<CommandBarView>(browser));
++
++  // Centred over the window's contents, as the reference has it, rather than
++  // anchored to any one control.
++  const gfx::Rect contents = browser_view->contents_container()->GetBoundsInScreen();
++  const gfx::Size size = widget->GetContentsView()->GetPreferredSize();
++  widget->SetBounds(gfx::Rect(
++      contents.x() + (contents.width() - size.width()) / 2,
++      contents.y() + contents.height() / 4, size.width(), size.height()));
++  widget->Show();
++  widget.release();  // Owns its native widget; closes itself.
++}
++
++CommandBarView::CommandBarView(Browser* browser) : browser_(browser) {
++  SetBorder(views::CreateEmptyBorder(gfx::Insets(12)));
++  AddAccelerator(ui::Accelerator(ui::VKEY_ESCAPE, ui::EF_NONE));
++}
++
++CommandBarView::~CommandBarView() = default;
++
++void CommandBarView::BuildContents() {
++  SetLayoutManager(std::make_unique<views::BoxLayout>(
++      views::BoxLayout::Orientation::kVertical, gfx::Insets(), 8));
++
++  auto field = std::make_unique<views::Textfield>();
++  field->set_controller(this);
++  field->SetPlaceholderText(u"Search or Enter URL...");
++  field->SetPreferredSize(gfx::Size(kBarWidth, 40));
++  field_ = AddChildView(std::move(field));
++
++  auto list = std::make_unique<views::ScrollView>();
++  list->SetContents(std::make_unique<views::View>());
++  list->ClipHeightTo(0, kListHeight);
++  list_ = AddChildView(std::move(list));
++
++  UpdateResults(std::u16string());
++}
++
++void CommandBarView::AddedToWidget() {
++  views::View::AddedToWidget();
++  if (!field_) {
++    BuildContents();
++  }
++  field_->RequestFocus();
++}
++
++bool CommandBarView::AcceleratorPressed(const ui::Accelerator& accelerator) {
++  if (accelerator.key_code() == ui::VKEY_ESCAPE) {
++    GetWidget()->CloseWithReason(views::Widget::ClosedReason::kEscKeyPressed);
++    return true;
++  }
++  return false;
++}
++
++void CommandBarView::UpdateResults(const std::u16string& query) {
++  results_.clear();
++
++  TabStripModel* const tabs = browser_->tab_strip_model();
++  spaces::SpaceModel* const spaces = spaces::SpaceModel::From(browser_);
++
++  for (int i = 0; i < tabs->count() && results_.size() < kMaxResults; ++i) {
++    tabs::TabInterface* const tab = tabs->GetTabAtIndex(i);
++    const std::u16string title(tab->GetTitle());
++    if (!Matches(title, query)) {
++      continue;
++    }
++    // Name the Space only when it is not the one the user is looking at, so
++    // the common case stays uncluttered.
++    std::u16string space_name;
++    if (spaces && !spaces->IsTabInActiveSpace(tab)) {
++      for (const auto& space : spaces->spaces()) {
++        if (space->id() == spaces->SpaceForTab(tab)) {
++          space_name = space->name().empty()
++                           ? u"Other Space"
++                           : base::UTF8ToUTF16(space->name());
++          break;
++        }
++      }
++    }
++    results_.push_back({i, title, space_name});
++  }
++
++  views::View* const contents = list_->contents();
++  contents->RemoveAllChildViews();
++  contents->SetLayoutManager(std::make_unique<views::BoxLayout>(
++      views::BoxLayout::Orientation::kVertical));
++
++  for (const Result& result : results_) {
++    const std::u16string trailing =
++        result.space.empty() ? u"Switch to Tab" : result.space;
++    auto row = std::make_unique<views::LabelButton>(
++        base::BindRepeating(&CommandBarView::GoTo, base::Unretained(this),
++                            result),
++        result.title + u"   —   " + trailing);
++    row->SetHorizontalAlignment(gfx::ALIGN_LEFT);
++    row->SetPreferredSize(gfx::Size(kBarWidth, kRowHeight));
++    contents->AddChildView(std::move(row));
++  }
++  contents->InvalidateLayout();
++}
++
++void CommandBarView::GoTo(const Result& result) {
++  if (result.tab_index >= 0) {
++    // Switching to a tab in another Space has to make that Space active first,
++    // or the tab would be activated while still hidden.
++    if (spaces::SpaceModel* const spaces =
++            spaces::SpaceModel::From(browser_)) {
++      tabs::TabInterface* const tab =
++          browser_->tab_strip_model()->GetTabAtIndex(result.tab_index);
++      spaces->SetActiveSpace(spaces->SpaceForTab(tab));
++    }
++    browser_->tab_strip_model()->ActivateTabAt(result.tab_index);
++  }
++  GetWidget()->CloseWithReason(views::Widget::ClosedReason::kAcceptButtonClicked);
++}
++
++void CommandBarView::OpenTypedText() {
++  const std::u16string text(field_->GetText());
++  if (text.empty()) {
++    return;
++  }
++
++  GURL url = url_formatter::FixupURL(base::UTF16ToUTF8(text), std::string());
++  if (!url.is_valid() || !url.has_host()) {
++    // Not a URL, so search for it with whatever the profile's search engine is.
++    TemplateURLService* const service =
++        TemplateURLServiceFactory::GetForProfile(browser_->GetProfile());
++    const TemplateURL* const provider =
++        service ? service->GetDefaultSearchProvider() : nullptr;
++    if (!provider) {
++      return;
++    }
++    url = GURL(provider->url_ref().ReplaceSearchTerms(
++        TemplateURLRef::SearchTermsArgs(text), service->search_terms_data()));
++  }
++  if (!url.is_valid()) {
++    return;
++  }
++
++  NavigateParams params(browser_, url, ui::PAGE_TRANSITION_TYPED);
++  params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
++  Navigate(&params);
++  GetWidget()->CloseWithReason(views::Widget::ClosedReason::kAcceptButtonClicked);
++}
++
++void CommandBarView::ContentsChanged(views::Textfield* sender,
++                                     const std::u16string& new_contents) {
++  UpdateResults(new_contents);
++}
++
++bool CommandBarView::HandleKeyEvent(views::Textfield* sender,
++                                    const ui::KeyEvent& event) {
++  if (event.type() != ui::EventType::kKeyPressed) {
++    return false;
++  }
++  if (event.key_code() == ui::VKEY_RETURN) {
++    // Enter takes the first result if there is one, and otherwise opens what
++    // was typed -- which is what makes an empty query still useful.
++    if (!results_.empty() && !field_->GetText().empty()) {
++      GoTo(results_.front());
++    } else {
++      OpenTypedText();
++    }
++    return true;
++  }
++  return false;
++}
++
++BEGIN_METADATA(CommandBarView)
++END_METADATA
++
++}  // namespace stedding
+diff --git a/chrome/browser/ui/views/commandbar/command_bar_view.h b/chrome/browser/ui/views/commandbar/command_bar_view.h
+new file mode 100644
+index 0000000000000..38bcdecd8eb27
+--- /dev/null
++++ b/chrome/browser/ui/views/commandbar/command_bar_view.h
+@@ -0,0 +1,86 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_VIEWS_COMMANDBAR_COMMAND_BAR_VIEW_H_
++#define CHROME_BROWSER_UI_VIEWS_COMMANDBAR_COMMAND_BAR_VIEW_H_
++
++#include <vector>
++
++#include "base/memory/raw_ptr.h"
++#include "ui/base/metadata/metadata_header_macros.h"
++#include "ui/views/view.h"
++#include "ui/views/controls/textfield/textfield_controller.h"
++
++class Browser;
++
++namespace views {
++class ScrollView;
++class Textfield;
++}  // namespace views
++
++namespace stedding {
++
++// The overlay that ⌘T opens: a search field over a list of things to go to.
++//
++// It searches every Space, not only the active one, and says which Space a
++// result is in when that is not the one you are looking at. That is the payoff
++// of ADR 0015 keeping all Spaces' tabs in one TabStripModel: finding a tab in
++// another Space costs nothing.
++class CommandBarView : public views::View,
++                       public views::TextfieldController {
++  METADATA_HEADER(CommandBarView, views::View)
++
++ public:
++  // Opens the command bar for `browser`.
++  static void Show(Browser* browser);
++
++  explicit CommandBarView(Browser* browser);
++
++  CommandBarView(const CommandBarView&) = delete;
++  CommandBarView& operator=(const CommandBarView&) = delete;
++  ~CommandBarView() override;
++
++  // views::TextfieldController:
++  void ContentsChanged(views::Textfield* sender,
++                       const std::u16string& new_contents) override;
++  bool HandleKeyEvent(views::Textfield* sender,
++                      const ui::KeyEvent& event) override;
++
++  // views::View:
++  void AddedToWidget() override;
++  bool AcceleratorPressed(const ui::Accelerator& accelerator) override;
++
++ private:
++  // One thing the user can go to.
++  struct Result {
++    // Index in the tab strip, or -1 when this is "open what you typed".
++    int tab_index;
++    std::u16string title;
++    // The Space this tab is in, shown only when it is not the active one.
++    std::u16string space;
++  };
++
++  // Builds the field and the list. Called once, from AddedToWidget().
++  void BuildContents();
++
++  // Rebuilds the result list for `query`.
++  void UpdateResults(const std::u16string& query);
++
++  // Goes to `result` and closes. Not named Accept: DialogDelegate already has
++  // a virtual of that name and this would hide it.
++  void GoTo(const Result& result);
++
++  // Opens whatever is in the field: a URL if it looks like one, a search
++  // otherwise.
++  void OpenTypedText();
++
++  const raw_ptr<Browser> browser_;
++  raw_ptr<views::Textfield> field_ = nullptr;
++  raw_ptr<views::ScrollView> list_ = nullptr;
++  std::vector<Result> results_;
++};
++
++}  // namespace stedding
++
++#endif  // CHROME_BROWSER_UI_VIEWS_COMMANDBAR_COMMAND_BAR_VIEW_H_

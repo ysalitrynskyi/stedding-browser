@@ -1,7 +1,12 @@
 # Stedding Browser
 
 A fully open-source, Chromium-based desktop browser with an Arc-style interface:
-sidebar with vertical tabs, workspaces, split view, and a command bar.
+sidebar with vertical tabs, Spaces, folders, and a command bar.
+
+![Stedding today: floating content card, essentials row, folders with nesting, Space switcher](docs/images/ui-current.png)
+
+*The screenshot is a real capture of the current build, taken by the project's
+own verification tooling — every UI claim in these docs is checked this way.*
 
 ## Why
 
@@ -28,16 +33,34 @@ right-click to open them; signing and notarisation land at M7. There is no downl
 page and no published binary — if you want one today you build it, and the steps are
 in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-The product features — Spaces, Peek, the command bar — are being built now. Folders
-and the Space model are in the tree; see [docs/PRODUCT.md](docs/PRODUCT.md) for the
-full specification and what is deliberately not in it.
+## What works today
 
-The first engineering milestone (M0) is reproducing a vanilla Chromium build on macOS
-and documenting it well enough that anyone can repeat it. See `docs/ROADMAP.md` for
-the milestone ladder and `docs/ARCHITECTURE.md` for the build.
+The tree carries a 43-patch series on Chromium stable 153. Working now, each
+verified by capture or unit test:
 
-If you are evaluating browsers to use today, this is not one yet. If you want to
-follow or shape the design before the product exists, this is the right time.
+- **Sidebar** at Arc's proportions: essentials row (pinned above every Space),
+  per-Space pinned tabs, a Clear line, 44 px tab rows with 18 px favicons.
+- **Spaces** — per-window tab sets: switcher at the sidebar's bottom with
+  floating hover names, per-Space window tint, icon/rename/colour/delete from a
+  context menu, drag-a-tab-onto-a-Space, and full persistence across restarts
+  including which Space each tab was in.
+- **Folders with nesting** — created from the tab context menu, collapse on
+  click, rename on double-click, persisted across restarts.
+- **Command bar on ⌘T** — searches open tabs across every Space (naming the
+  Space a result is in), opens URLs, falls back to search.
+- **Floating content card** — the page floats on the window ground with rounded
+  corners; dark mode is a `#21263A → #31243A` gradient, light mode warm sand.
+- **Privacy defaults** — no Google sign-in promotion; the usual no-telemetry
+  stance (`docs/PRIVACY.md`).
+- **Proprietary codecs** — H.264/AAC verified decoding real frames.
+
+**Try it:** grab the `.dmg` from
+[Releases](https://github.com/ysalitrynskyi/stedding-browser/releases). Builds
+are **unsigned until M7**: right-click the app → Open on first launch. Treat it
+as a beta — daily-driving it is brave but welcome.
+
+See `docs/ROADMAP.md` for the milestone ladder and `docs/UI-SPEC.md` +
+`docs/ARC-ROUND2.md` for the measured state of the Arc match.
 
 ## Building it
 
@@ -102,6 +125,9 @@ Details in `docs/ARCHITECTURE.md`.
 | [docs/COMPETITORS.md](docs/COMPETITORS.md) | Arc, Dia, Zen, Helium, Vivaldi, Brave, Thorium — and our gap |
 | [docs/NAMING.md](docs/NAMING.md) | The naming decision record |
 | [docs/BRAND.md](docs/BRAND.md) | Name meaning, voice, taglines, trademark hygiene |
+| [docs/HANDOFF.md](docs/HANDOFF.md) | Operational handoff: the working loop, dev parameters, traps, open items |
+| [docs/UI-SPEC.md](docs/UI-SPEC.md) | The measured Arc match, item by item |
+| [docs/ARC-ROUND2.md](docs/ARC-ROUND2.md) | Operator-feedback ledger from real builds |
 | [docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md) | How each feature is built, what upstream already provides, and what it costs |
 | [docs/EVIDENCE.md](docs/EVIDENCE.md) | What Arc switchers actually ask for, with counts |
 | [docs/decisions/](docs/decisions/) | Architecture decision records (ADRs) |

@@ -78,6 +78,11 @@ close" is not a check — the comparison image goes in the pull request.
 
 ![The Stedding window today](images/ui-current.png)
 
+With three Spaces, to show the switcher (`--features
+'SteddingArcStyleWindow:extra_spaces/2'`):
+
+![Three Spaces](images/ui-spaces.png)
+
 Captured with `tooling/capture-ui` at 1400x880. Numbers below are measured from
 that image, not estimated.
 
@@ -109,7 +114,7 @@ Measured against the table above, not against "looks closer".
 | Bare-host URL | Done — unfocused only; the full URL returns on focus. Verified in the capture |
 | Sign-in promo pill | Removed — Chromium advertises Google sign-in in the toolbar by default |
 | Centred URL | **Deferred, on purpose** — see below |
-| Space switcher | Unblocking — the model half is in (patches 0008-0010): every window has a SpaceModel, tabs carry a Space, the tab strip hides tabs outside the active one, and traversal skips them. The switcher itself is next |
+| Space switcher | **Done** — a row of pills under the sidebar buttons, active one filled in its Space's colour, plus a button that makes a new Space (patch 0011) |
 | Favorites row | Partly free — pinned tabs in the vertical strip **already** lay out as a grid (`pinned_tab_container_view.cc`, 11 commits/yr). What is left is tile size: Chromium's are 32x32 centred favicons, Arc's are roughly twice that. Not yet changed, because it cannot be checked — see below |
 | Window background tinted per space | Not started — now unblocked by the same patches. `Widget::SetUserColorOverride` is the hook |
 

@@ -145,9 +145,12 @@ Measured against the table above, not against "looks closer".
 Every item in the tables above is built, and every deviation that was once
 written off has been fixed. What a side-by-side still shows:
 
-- The toolbar is 39 DIP, down from Chromium's 46. Its floor is the toolbar
-  button's icon rather than any padding, so going lower means shrinking the
-  icons, which the reference does not appear to do.
+- The toolbar is 39 DIP, down from Chromium's 46. It will not go lower, and the
+  reason is not any constant this project sets: the strip measures 39 whether
+  the icon is 13 or 20, the location bar 24 or 30, the button height 26 or 30,
+  or the padding 3 or 7. The floor is a minimum reported by one of the toolbar's
+  other children. Scaled for window width the reference looks like about 33, so
+  this is close but not equal.
 - Tabs move between Spaces through a Space's context menu, where the reference
   drags them onto the Space.
 

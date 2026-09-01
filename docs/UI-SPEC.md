@@ -161,30 +161,29 @@ written off has been fixed. What a side-by-side still shows:
 
 - The toolbar is 39 DIP against a reference that scales to about 33.
 
-  The floor is found. `BrowserViewLayoutImpl::GetBoundsWithExclusion()`
-  (`browser_view_layout_impl.cc:154`) sizes the toolbar as
-  `max(exclusion_height, view->GetMinimumSize().height())` whenever the window
-  has a leading exclusion at all, and only falls back to the toolbar's preferred
-  height when there is none. On macOS the leading exclusion is the traffic
-  lights, and 39 is their height with padding.
+  What is established, by measurement: the height is `max(39, content + 2 x
+  margin)`, and `content` follows the location bar. At a margin of 10 the strip
+  is 45 with a 20 DIP location bar and 51 with a 28 DIP one. Below a margin of
+  about 4 it stops shrinking. So 39 is a floor, not a sum.
 
-  That explains every measurement: the strip is 39 whether the location bar is
-  24 or 30, the icon 13 or 20, or the padding 3 or 7, and only a margin of 10 —
-  which pushes `content + 2 x margin` past 39 — moves it.
+  What is **not** established is where the 39 comes from. The obvious candidate
+  was `BrowserViewLayoutImpl::GetBoundsWithExclusion()`
+  (`browser_view_layout_impl.cc:154`), which sizes against
+  `max(exclusion_height, minimum)` whenever the window has a leading exclusion —
+  the macOS traffic lights. Three separate interventions all measured 39 and
+  were reverted:
 
-  With vertical tabs the traffic lights sit over the tab strip, which already
-  leaves room for them, so the toolbar is clearing something that is not in its
-  column. Clearing `leading_exclusion` was tried from both virtual hooks a
-  subclass has — `DoPreLayoutComputations` and `CalculateProposedLayout` — and
-  neither reaches it: the layout re-derives the params from the delegate. Both
-  attempts measured 39 and were reverted rather than left in as changes that do
-  nothing.
+  1. clearing `leading_exclusion` in `DoPreLayoutComputations`;
+  2. clearing it in `CalculateProposedLayout`;
+  3. passing `needs_exclusion = false` for the whole top container, and
+     separately patching the toolbar's own bounds in
+     `browser_view_tabbed_layout_impl.cc`.
 
-  Closing the last 6 DIP means either a patch to
-  `browser_view_tabbed_layout_impl.cc` so the toolbar skips the exclusion when a
-  vertical tab strip already covers it, or a delegate that reports no leading
-  exclusion. Both are real changes to hot upstream code for 6 DIP, which is why
-  it has not been done rather than because it is not understood.
+  So the exclusion is ruled out along with every toolbar constant. The cause is
+  still unknown, and finding it needs a debugger on a running browser rather
+  than more guesses. Recorded this way so the next attempt does not repeat the
+  four that failed.
+
 - Tabs move between Spaces by dragging one onto a Space icon, or from a Space's
   context menu. Chromium's decision to consult the drop target mid-drag is the
   one part not covered by a test; if it never fires, the drag does nothing.

@@ -10,6 +10,10 @@ all of them green on all supported platforms.
 
 ## Performance budgets (relative to vanilla Chromium)
 
+Measured with `tooling/measure/harness.py all --sites local` against a vanilla build at
+the same pin; the live list (`--sites live`) serves only the two absolute budgets.
+Current numbers: `docs/perf/README.md`.
+
 Stedding is Chromium plus patches, so performance is measured as **overhead relative to
 vanilla Chromium at the same pinned version, same build configuration, same hardware**.
 Absolute numbers depend on hardware and are not promised; the overhead budgets are.

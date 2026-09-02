@@ -52,12 +52,13 @@ Same two builds, ten local pages, medians and spreads:
 | Warm startup, ten local pages restored | 0.79 s (0.77 s–0.93 s) | 0.78 s (0.70 s–0.96 s) | -2.0% | within the 10% budget |
 | Physical footprint, ten local pages after 60 s idle | 823 MB (821 MB–825 MB) | 823 MB (819 MB–824 MB) | +0.0% | within the 10% budget |
 
-With the network out of the picture the memory question has an answer: the
-Stedding build carries a real footprint overhead over vanilla, not just live-site
-noise (spreads are a few MB either way). The cold-startup gap is real too. Both are
-`S-37`'s to explain; the Stedding build measured is still the 2026-08-31 series.
-Use this pair, not the live one, for comparisons from now on; the live list stays for
-the two absolute budgets.
+With the network out of the picture every budget is met: the ten-page footprint
+is identical to the megabyte, warm startup is on par, and cold startup is within a
+few percent. The live pair's +36% memory and +12% cold startup were third-party
+frames and machine state, not the patch series (`S-37`, closed on this evidence).
+Use this pair for comparisons from now on; the live list stays for the two absolute
+budgets. The Stedding build measured is the 2026-08-31 series; the next official
+build gets measured the same way before a release (`docs/QUALITY.md` checklist).
 
 Read the memory line with care: the ten sites are live news, social and search
 pages with third-party frames, each frame is its own process under site

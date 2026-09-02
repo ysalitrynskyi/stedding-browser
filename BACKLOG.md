@@ -13,7 +13,6 @@ refer to `docs/features/<feature>.md`.
 |---|---|---|---|
 | S-17 | Signing, notarisation, updater | ROADMAP M7 | help page points at GitHub Releases until then |
 | S-18 | Proprietary-codecs licensing decision | decisions/0008 | needs a human |
-| S-37 | Perf: first vanilla pair shows cold startup +12.2% and ten-tab memory +35.9% over vanilla (`docs/perf/README.md`), both past the 10% budget; warm startup is on par | QUALITY | the harness now has `--sites local` (ten deterministic pages, spread under 1%; `docs/perf/README.md`, deterministic pair) and both gaps survive it; left: rebuild `out/official` from the current series (~4 h, needs a build budget from the operator) and find the cold-startup and footprint cost (suspects: Space/folder session restore, command-bar and sidebar construction at first paint) |
 | S-38 | Fullscreen: the top container spans the window, so back/forward/reload sit over the sidebar column; upstream's fullscreen-with-toolbar layout, needs a layout hook | ARC-ROUND2 round 4 | Not the layout's `top_offset` (0 in fullscreen already): on macOS immersive fullscreen the top container leaves the browser view for the reveal overlay widget, which spans the window; the fix is to inset that overlay by the strip width (`ImmersiveModeControllerMac` / reveal widget), platform code we have not touched yet |
 | S-36 | Sidebar and Spaces settings rows (settings T6) once those behaviours exist | settings | width, auto-archive, Space management |
 
@@ -21,6 +20,7 @@ refer to `docs/features/<feature>.md`.
 
 | Id | Item | Closed by |
 |---|---|---|
+| S-37 | Perf budgets on the first vanilla pair | Noise, not the series: on the deterministic local list the pair reads cold +2.3%, warm −2.0%, memory +0.0% (`docs/perf/README.md`); the live list's swings were third-party frames. Re-measure the next official build the same way before a release |
 | S-39 | Space tint on the sidebar ground, neutral new tab page | Blend in `stedding_color_mixer` and `SteddingWindowBackground` (patch 0007); spaces B11 |
 | S-9 | Operator retest: fullscreen URL width | Retested by capture on the 2026-09-02 release build in real fullscreen (⌃⌘F): the omnibox stays at its cap, centred, unfocused and focused (ARC-ROUND2 #1) |
 | S-10 | Operator retest: pill site icon | Same capture: the pill's site icon renders clean at 2× (ARC-ROUND2 #4) |

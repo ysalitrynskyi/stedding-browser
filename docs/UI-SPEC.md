@@ -137,11 +137,13 @@ the shipping values in the table below. See patch 0002.
 
 ## Progress
 
-Measured against the table above, not against "looks closer".
+Measured against the table above, not against "looks closer". The measurements
+that matter are probes in `tooling/probes/window.json`; `tooling/dev capture
+--assert tooling/probes/window.json` checks them against a fresh capture.
 
 | Item | State |
 |---|---|
-| Contents corner nearest the tab strip | Done — 12 px, `SteddingBrowserViewLayout`, measured at 12 pt in the capture |
+| Contents corners | Done — 12 px on all four, `SteddingBrowserViewLayout` merges its radius per corner with whatever upstream set (glass mode sets a lower-left radius every layout, which once masked the other three); probed |
 | Sidebar width | Done — 352 px, measured in the capture |
 | Tab row height | Done — 44 px, measured in the capture (Chromium's default is 30) |
 | Active tab pill radius | Done — 10 px |
@@ -209,5 +211,6 @@ file.
 ## Known gaps
 
 The sidebar's top-left still shows Chromium's collapse button (`S-27`). The new
-tab page is Chromium's local third-party page with the search engine's logo,
-not a Stedding page. Everything else in the tables above is built and measured.
+tab page is Chromium's local third-party page (dark, a Web Store shortcut), not
+a Stedding page (`S-28`). Everything else in the tables above is built and
+measured, and `tooling/probes/window.json` checks it.

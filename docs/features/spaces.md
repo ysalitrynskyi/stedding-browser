@@ -1,6 +1,6 @@
 # Feature: Spaces
 
-Status: **B1–B12 built and tested** (patch 0004); B13–B14 are untested gaps (`S-7`, `S-8`).
+Status: **B1–B13 built and tested** (patches 0004, 0005); B14 verified live only (`S-8`).
 Owner docs: `docs/decisions/0015-spaces-filter-one-tab-strip.md` (model), `docs/UI-SPEC.md`
 (pixels). Patch: `0004` (the whole feature, since the series was squashed per feature, `S-11`).
 
@@ -32,8 +32,8 @@ sidebar.
 | B10 | Per-Space pin: a tab pinned in its Space sits above the Clear line there and survives Clear. | `SpaceModelTest.SpacePin*` (patch 0004) | built |
 | B11 | Space metadata (name, icon, colour) edits persist and repaint the switcher and window tint. A Space with no icon shows a default glyph, never a blank disc. | `SpaceModelTest.*Metadata*`; capture | built |
 | B12 | Drag a tab onto a Space chip moves it there and switches to that Space. Dropping nowhere changes nothing. | `SpaceDragTargetTest.*` | built |
-| B13 | ⌘T command bar lists tabs from every Space; choosing one switches Space and activates it. | none yet | gap |
-| B14 | Popup and app windows have no Spaces and no switcher. | none yet | gap |
+| B13 | ⌘T command bar lists tabs from every Space; choosing one switches Space and activates it. | `CommandBarViewTest.*` | built |
+| B14 | Popup and app windows have no Spaces and no switcher. | live: `tooling/drive` opens a popup from a page button; no switcher in it (`S-8` for a unit test: constructing a popup in the fixture crashes) | partial |
 
 "built" means the test exists in the series and passes on the pinned tree. "gap" is a
 behaviour we ship without a test — each one is a backlog item.

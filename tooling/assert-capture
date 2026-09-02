@@ -1,0 +1,111 @@
+#!/usr/bin/env python3
+"""Assert that a window capture matches a probe spec, or record one.
+
+  tooling/assert-capture CAPTURE.png SPEC.json            check every probe
+  tooling/assert-capture CAPTURE.png SPEC.json --record   fill in expected colours
+  tooling/assert-capture CAPTURE.png SPEC.json --golden GOLDEN.png [--max-diff 0.5]
+
+A probe is a point in window DIPs and what should be there. "Measure pixels,
+don't eyeball" (docs/UI-SPEC.md) as a command: the spec is the measurement, the
+check is the eyeballing, and it never gets tired. Colours are compared with a
+per-channel tolerance; "light"/"dark" probes compare luminance only, so page
+content and favicons that vary between runs do not break structural checks.
+
+Spec format (JSON):
+  {
+    "scale": 2,                       # capture pixels per DIP (Retina: 2)
+    "probes": [
+      {"name": "sidebar ground", "x": 200, "y": 600, "rgb": [33, 38, 58], "tol": 24},
+      {"name": "content is light", "x": 700, "y": 400, "min_luma": 200},
+      {"name": "mat left of content", "x": 350, "y": 400, "max_luma": 90}
+    ]
+  }
+
+--record replaces each probe's "rgb" with the colour found in the capture (probes
+that only carry min_luma/max_luma are left alone). Exit status is the number of
+failed probes.
+"""
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+try:
+    from PIL import Image, ImageChops
+except ImportError:  # pragma: no cover
+    print("assert-capture needs Pillow: python3 -m pip install pillow", file=sys.stderr)
+    sys.exit(2)
+
+
+def luma(rgb):
+    r, g, b = rgb[:3]
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def check_probe(image, scale, probe):
+    x, y = int(probe["x"] * scale), int(probe["y"] * scale)
+    if x < 0 or y < 0 or x >= image.width or y >= image.height:
+        return f"{probe['name']}: ({probe['x']},{probe['y']}) is outside the capture"
+    rgb = image.getpixel((x, y))[:3]
+    if "rgb" in probe:
+        tol = probe.get("tol", 16)
+        if any(abs(a - b) > tol for a, b in zip(rgb, probe["rgb"])):
+            return f"{probe['name']}: got {list(rgb)}, expected {probe['rgb']} ±{tol}"
+    if "min_luma" in probe and luma(rgb) < probe["min_luma"]:
+        return f"{probe['name']}: luma {luma(rgb):.0f} < {probe['min_luma']} (got {list(rgb)})"
+    if "max_luma" in probe and luma(rgb) > probe["max_luma"]:
+        return f"{probe['name']}: luma {luma(rgb):.0f} > {probe['max_luma']} (got {list(rgb)})"
+    return None
+
+
+def golden_diff(image, golden, max_diff_percent):
+    if image.size != golden.size:
+        return f"golden: size {image.size} != {golden.size}"
+    diff = ImageChops.difference(image.convert("RGB"), golden.convert("RGB")).convert("L")
+    # A pixel counts as different when any channel moved by more than 24/255.
+    changed = sum(1 for v in diff.point(lambda v: 255 if v > 24 else 0).getdata() if v)
+    percent = 100.0 * changed / (image.width * image.height)
+    if percent > max_diff_percent:
+        return f"golden: {percent:.2f}% of pixels differ (limit {max_diff_percent}%)"
+    return None
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("capture")
+    parser.add_argument("spec")
+    parser.add_argument("--record", action="store_true", help="write the capture's colours into the spec")
+    parser.add_argument("--golden", help="also diff the whole capture against this PNG")
+    parser.add_argument("--max-diff", type=float, default=0.5, help="golden: max percent of differing pixels")
+    args = parser.parse_args()
+
+    image = Image.open(args.capture).convert("RGB")
+    spec_path = Path(args.spec)
+    spec = json.loads(spec_path.read_text())
+    scale = spec.get("scale", 2)
+
+    if args.record:
+        for probe in spec["probes"]:
+            if "rgb" in probe or not ("min_luma" in probe or "max_luma" in probe):
+                x, y = int(probe["x"] * scale), int(probe["y"] * scale)
+                probe["rgb"] = list(image.getpixel((x, y))[:3])
+        spec_path.write_text(json.dumps(spec, indent=2) + "\n")
+        print(f"recorded {len(spec['probes'])} probes into {spec_path}")
+        return 0
+
+    failures = [f for f in (check_probe(image, scale, p) for p in spec["probes"]) if f]
+    if args.golden:
+        failure = golden_diff(image, Image.open(args.golden), args.max_diff)
+        if failure:
+            failures.append(failure)
+
+    for failure in failures:
+        print(f"  FAIL {failure}")
+    total = len(spec["probes"]) + (1 if args.golden else 0)
+    print(f"{total - len(failures)}/{total} checks passed")
+    return min(len(failures), 125)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

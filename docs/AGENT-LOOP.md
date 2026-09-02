@@ -37,8 +37,11 @@ research  →  spec  →  failing test  →  implement  →  build  →  test  �
    patches are allowed to live").
 5. **Build and test.** `tooling/dev test <feature>` builds `unit_tests` and runs the
    feature's filter. `tooling/dev test all` before a commit.
-6. **Capture, if it is visual.** `tooling/dev capture --features '...'`, then measure
-   against `docs/UI-SPEC.md`. Measure pixels; do not eyeball. **Drive it, if it is
+6. **Capture, if it is visual.** `tooling/dev capture --assert tooling/probes/window.json`
+   captures the reference window state and checks every probe in the spec (edges,
+   corners, what must and must not be there). Add a probe for anything you change;
+   record new expected colours with `tooling/assert-capture <png> <spec> --record`
+   only from a capture you have looked at. Measure pixels; do not eyeball. **Drive it, if it is
    interactive.** `tooling/drive <profile> <steps>` clicks, drags, types and captures
    in the real window, and quits properly so restart checks are real. A spec row that
    says "live" names its steps file.

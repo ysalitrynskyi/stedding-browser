@@ -22,20 +22,23 @@ modifier-click) go the same way: one check at the top of chrome::Navigate()
 opens the peek and, when the renderer already created the page, the peek
 adopts that WebContents.
 
+Shift+Cmd+O (or the button) promotes the peek into a split with the tab it
+came from, through Chromium's own split view (NEW_SPLIT_VIEW).
+
 Why: the product's pinned-tab model needs Peek or pinning is a bookmark.
 Removable when: never, unless the pinned-tab model changes.
 ---
  ...ent_browser_client_navigation_throttles.cc |   3 +
  chrome/browser/ui/BUILD.gn                    |   2 +
  .../browser/ui/navigator/browser_navigator.cc |   7 +
- chrome/browser/ui/views/peek/BUILD.gn         |  46 +++
- .../ui/views/peek/peek_navigation_throttle.cc | 180 +++++++++
+ chrome/browser/ui/views/peek/BUILD.gn         |  46 ++
+ .../ui/views/peek/peek_navigation_throttle.cc | 180 ++++++++
  .../ui/views/peek/peek_navigation_throttle.h  |  82 ++++
- chrome/browser/ui/views/peek/peek_unittest.cc | 257 +++++++++++++
- chrome/browser/ui/views/peek/peek_view.cc     | 362 ++++++++++++++++++
- chrome/browser/ui/views/peek/peek_view.h      | 138 +++++++
+ chrome/browser/ui/views/peek/peek_unittest.cc | 277 ++++++++++++
+ chrome/browser/ui/views/peek/peek_view.cc     | 408 ++++++++++++++++++
+ chrome/browser/ui/views/peek/peek_view.h      | 149 +++++++
  chrome/test/BUILD.gn                          |   1 +
- 10 files changed, 1078 insertions(+)
+ 10 files changed, 1155 insertions(+)
  create mode 100644 chrome/browser/ui/views/peek/BUILD.gn
  create mode 100644 chrome/browser/ui/views/peek/peek_navigation_throttle.cc
  create mode 100644 chrome/browser/ui/views/peek/peek_navigation_throttle.h
@@ -437,10 +440,10 @@ index 0000000000000..6e80adee6353b
 +#endif  // CHROME_BROWSER_UI_VIEWS_PEEK_PEEK_NAVIGATION_THROTTLE_H_
 diff --git a/chrome/browser/ui/views/peek/peek_unittest.cc b/chrome/browser/ui/views/peek/peek_unittest.cc
 new file mode 100644
-index 0000000000000..e964db242f956
+index 0000000000000..7a03a8c7d2d9a
 --- /dev/null
 +++ b/chrome/browser/ui/views/peek/peek_unittest.cc
-@@ -0,0 +1,257 @@
+@@ -0,0 +1,277 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -696,14 +699,34 @@ index 0000000000000..e964db242f956
 +  EXPECT_EQ(GURL("https://example.org/article"), page->GetVisibleURL());
 +}
 +
++// P9: promoting into a split pairs the page with the tab the peek came
++// from; both end up in one split and the page is active.
++TEST_F(PeekViewTest, PromotingIntoASplitPairsWithTheSourceTab) {
++  AddTab(browser(), GURL("https://example.com/"));
++  tabs::TabInterface* const source = tabs().GetActiveTab();
++  auto peek = std::make_unique<PeekView>(browser());
++  peek->set_source_tab(source->GetWeakPtr());
++  peek->Load(GURL("https://example.org/article"));
++  content::WebContents* const page = peek->web_contents();
++
++  peek->PromoteToSplit();
++
++  EXPECT_EQ(nullptr, peek->web_contents());
++  ASSERT_EQ(2, tabs().count());
++  EXPECT_EQ(page, tabs().GetActiveWebContents());
++  EXPECT_TRUE(source->IsSplit());
++  EXPECT_TRUE(tabs().GetActiveTab()->IsSplit());
++  EXPECT_EQ(source->GetSplit(), tabs().GetActiveTab()->GetSplit());
++}
++
 +}  // namespace
 +}  // namespace stedding
 diff --git a/chrome/browser/ui/views/peek/peek_view.cc b/chrome/browser/ui/views/peek/peek_view.cc
 new file mode 100644
-index 0000000000000..8f99991a4fe29
+index 0000000000000..5f50b847b2304
 --- /dev/null
 +++ b/chrome/browser/ui/views/peek/peek_view.cc
-@@ -0,0 +1,362 @@
+@@ -0,0 +1,408 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -719,6 +742,7 @@ index 0000000000000..8f99991a4fe29
 +#include "chrome/browser/ui/browser.h"
 +#include "chrome/browser/ui/browser_tabstrip.h"
 +#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
 +#include "chrome/browser/ui/views/frame/browser_view.h"
 +#include "components/tabs/public/tab_interface.h"
 +#include "components/url_formatter/elide_url.h"
@@ -782,6 +806,7 @@ index 0000000000000..8f99991a4fe29
 +  peek->layer()->SetFillsBoundsOpaquely(false);
 +  peek->layer()->SetName("SteddingPeek");
 +  peek->AddedToBrowserView(browser_view);
++  peek->set_source_tab(source->GetWeakPtr());
 +  return peek;
 +}
 +
@@ -837,6 +862,8 @@ index 0000000000000..8f99991a4fe29
 +  BuildContents();
 +  AddAccelerator(ui::Accelerator(ui::VKEY_ESCAPE, ui::EF_NONE));
 +  AddAccelerator(ui::Accelerator(ui::VKEY_O, ui::EF_PLATFORM_ACCELERATOR));
++  AddAccelerator(ui::Accelerator(
++      ui::VKEY_O, ui::EF_PLATFORM_ACCELERATOR | ui::EF_SHIFT_DOWN));
 +}
 +
 +PeekView::~PeekView() {
@@ -881,6 +908,9 @@ index 0000000000000..8f99991a4fe29
 +  header->AddChildView(std::make_unique<views::MdTextButton>(
 +      base::BindRepeating(&PeekView::PromoteToTab, base::Unretained(this)),
 +      u"Open in Tab  ⌘O"));
++  header->AddChildView(std::make_unique<views::MdTextButton>(
++      base::BindRepeating(&PeekView::PromoteToSplit, base::Unretained(this)),
++      u"Open in Split  ⇧⌘O"));
 +  header->AddChildView(std::make_unique<views::MdTextButton>(
 +      base::BindRepeating(&PeekView::Close, base::Unretained(this)),
 +      u"Close  esc"));
@@ -929,6 +959,41 @@ index 0000000000000..8f99991a4fe29
 +  Close();
 +}
 +
++void PeekView::PromoteToSplit() {
++  if (closing_ || !contents_) {
++    return;
++  }
++  // The navigator pairs a NEW_SPLIT_VIEW tab with the active tab, so the
++  // source tab is made active first; a source already in a split gets a
++  // plain tab instead, as Browser::OpenURLFromTab does.
++  TabStripModel* const tabs =
++      browser_->GetBrowserForMigrationOnly()->tab_strip_model();
++  content::WebContents* source = nullptr;
++  if (source_tab_) {
++    const int index = tabs->GetIndexOfTab(source_tab_.get());
++    if (index != TabStripModel::kNoTab) {
++      tabs->ActivateTabAt(index);
++      source = source_tab_->GetContents();
++    }
++  }
++  tabs::TabInterface* const active = tabs->GetActiveTab();
++  if (!active || active->IsSplit()) {
++    PromoteToTab();
++    return;
++  }
++  web_view_->SetWebContents(nullptr);
++  Observe(nullptr);
++  contents_->SetDelegate(nullptr);
++  const GURL url = contents_->GetLastCommittedURL().is_empty()
++                       ? contents_->GetVisibleURL()
++                       : contents_->GetLastCommittedURL();
++  chrome::AddWebContents(browser_, source ? source : active->GetContents(),
++                         std::move(contents_), url,
++                         WindowOpenDisposition::NEW_SPLIT_VIEW,
++                         blink::mojom::WindowFeatures());
++  Close();
++}
++
 +void PeekView::Close() {
 +  if (closing_) {
 +    return;
@@ -957,7 +1022,11 @@ index 0000000000000..8f99991a4fe29
 +    return true;
 +  }
 +  if (accelerator.key_code() == ui::VKEY_O) {
-+    PromoteToTab();
++    if (accelerator.IsShiftDown()) {
++      PromoteToSplit();
++    } else {
++      PromoteToTab();
++    }
 +    return true;
 +  }
 +  return views::View::AcceleratorPressed(accelerator);
@@ -1068,10 +1137,10 @@ index 0000000000000..8f99991a4fe29
 +}  // namespace stedding
 diff --git a/chrome/browser/ui/views/peek/peek_view.h b/chrome/browser/ui/views/peek/peek_view.h
 new file mode 100644
-index 0000000000000..077c635f90443
+index 0000000000000..6c16011927858
 --- /dev/null
 +++ b/chrome/browser/ui/views/peek/peek_view.h
-@@ -0,0 +1,138 @@
+@@ -0,0 +1,149 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -1080,6 +1149,7 @@ index 0000000000000..077c635f90443
 +#define CHROME_BROWSER_UI_VIEWS_PEEK_PEEK_VIEW_H_
 +
 +#include <memory>
++#include <utility>
 +
 +#include "base/memory/raw_ptr.h"
 +#include "base/memory/weak_ptr.h"
@@ -1149,6 +1219,10 @@ index 0000000000000..077c635f90443
 +  // Moves the page into a new foreground tab of the browser and closes.
 +  void PromoteToTab();
 +
++  // Moves the page into a new tab split with the tab the peek came from (the
++  // active tab when there is none) and closes.
++  void PromoteToSplit();
++
 +  // Removes the peek from the window and destroys its page. Safe to call from
 +  // inside an event the peek is handling.
 +  void Close();
@@ -1157,6 +1231,10 @@ index 0000000000000..077c635f90443
 +
 +  // Hooks the peek to the browser view it was just added to.
 +  void AddedToBrowserView(BrowserView* browser_view);
++
++  void set_source_tab(base::WeakPtr<tabs::TabInterface> tab) {
++    source_tab_ = std::move(tab);
++  }
 +
 +  // views::View:
 +  bool AcceleratorPressed(const ui::Accelerator& accelerator) override;
@@ -1196,6 +1274,8 @@ index 0000000000000..077c635f90443
 +  void UpdateTitle();
 +
 +  const raw_ptr<BrowserWindowInterface> browser_;
++  // The tab whose link opened the peek; what PromoteToSplit() pairs with.
++  base::WeakPtr<tabs::TabInterface> source_tab_;
 +  std::unique_ptr<content::WebContents> contents_;
 +  raw_ptr<views::View> card_ = nullptr;
 +  raw_ptr<views::Label> title_ = nullptr;

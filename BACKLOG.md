@@ -15,13 +15,13 @@ refer to `docs/features/<feature>.md`.
 | S-18 | Proprietary-codecs licensing decision | decisions/0008 | needs a human |
 | S-37 | Perf: first vanilla pair shows cold startup +12.2% and ten-tab memory +35.9% over vanilla (`docs/perf/README.md`), both past the 10% budget; warm startup is on par | QUALITY | rebuild `out/official` from the current series (the measured one is from 2026-08-31), give the harness a deterministic local site list so memory stops swinging with third-party frames, then find the cold-startup cost (suspects: Space/folder session restore, command-bar and sidebar construction at first paint) |
 | S-38 | Fullscreen: the top container spans the window, so back/forward/reload sit over the sidebar column; upstream's fullscreen-with-toolbar layout, needs a layout hook | ARC-ROUND2 round 4 | `BrowserViewTabbedLayoutImpl` vertical strip `top_offset` |
-| S-39 | Space tint should colour the sidebar ground (Arc), not the page: blend the active Space colour into the window gradient and keep the new tab page neutral | ARC-ROUND2 round 4 | `SteddingWindowBackground`, `stedding_color_mixer`, `kColorNewTabPageBackground` |
 | S-36 | Sidebar and Spaces settings rows (settings T6) once those behaviours exist | settings | width, auto-archive, Space management |
 
 ## Done
 
 | Id | Item | Closed by |
 |---|---|---|
+| S-39 | Space tint on the sidebar ground, neutral new tab page | Blend in `stedding_color_mixer` and `SteddingWindowBackground` (patch 0007); spaces B11 |
 | S-9 | Operator retest: fullscreen URL width | Retested by capture on the 2026-09-02 release build in real fullscreen (⌃⌘F): the omnibox stays at its cap, centred, unfocused and focused (ARC-ROUND2 #1) |
 | S-10 | Operator retest: pill site icon | Same capture: the pill's site icon renders clean at 2× (ARC-ROUND2 #4) |
 | S-31 | Vanilla `official` build at the pin, measured with the same harness | `docs/perf/README.md` "The comparison": vanilla vs Stedding back to back, overheads against the QUALITY budgets. `tooling/args/vanilla.gn`; built under `--budget 60` |

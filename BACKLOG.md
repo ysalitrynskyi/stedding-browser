@@ -13,7 +13,7 @@ refer to `docs/features/<feature>.md`.
 |---|---|---|---|
 | S-17 | Signing, notarisation, updater | ROADMAP M7 | help page points at GitHub Releases until then |
 | S-18 | Proprietary-codecs licensing decision | decisions/0008 | needs a human |
-| S-36 | Sidebar and Spaces settings rows (settings T6) once those behaviours exist | settings | width, auto-archive, Space management |
+| S-36 | Settings rows for sidebar width (a slider over `vertical_tabs.uncollapsed_width`), auto-archive and Space management (settings T7) | settings | the hover row landed (T6); the other three wait for a slider row and for the behaviours to exist |
 
 ## Done
 

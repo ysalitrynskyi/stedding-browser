@@ -27,6 +27,10 @@ with whatever upstream set that pass, because glass mode sets a lower-left
 radius every layout and "set ours if upstream set none" never fired, which
 left three corners square until a pixel probe said so.
 
+In macOS immersive fullscreen the toolbar lives in the reveal overlay, which
+spans the window; the layout now starts it where the vertical tab strip ends,
+as outside fullscreen, instead of running it over the strip's top.
+
 Why: the square edge-to-edge contents, the fat toolbar, the full-width
 omnibox and the packed tab rows were the four things that most made the
 window read as Chromium; the reference is measured, not eyeballed.
@@ -34,25 +38,25 @@ Removable when: upstream's glass frame ships enabled by default and rounds the
 contents on all platforms, and the vertical tab strip's and toolbar's metrics
 are themable without a patch. Then the parameters become theme values.
 ---
- chrome/browser/ui/BUILD.gn                    | 13 ++++
- chrome/browser/ui/layout_constants.cc         | 18 +++--
- chrome/browser/ui/stedding_ui_metrics.cc      | 42 +++++++++++
- chrome/browser/ui/stedding_ui_metrics.h       | 69 +++++++++++++++++
- .../ui/tabs/vertical_tab_strip_state.h        |  2 +-
- .../chrome_location_bar_model_delegate.cc     | 17 +++++
- .../chrome_location_bar_model_delegate.h      |  1 +
- .../views/frame/layout/browser_view_layout.cc |  5 ++
- .../layout/stedding_browser_view_layout.cc    | 74 +++++++++++++++++++
- .../layout/stedding_browser_view_layout.h     | 34 +++++++++
- .../ui/views/frame/multi_contents_view.cc     | 14 +++-
- .../frame/vertical_tab_strip_region_view.h    |  2 +-
- .../tabs/common/pinned_tab_container_view.cc  | 21 +++++-
- chrome/browser/ui/views/tabs/tab/tab_icon.cc  | 38 +++++-----
- .../vertical_tab_strip_bottom_container.cc    |  4 +
- .../vertical_tab_strip_bottom_container.h     |  4 +
- .../vertical_tab_strip_top_container.cc       |  8 ++
- .../browser/ui/views/toolbar/toolbar_view.cc  | 45 ++++++++++-
- 18 files changed, 378 insertions(+), 33 deletions(-)
+ chrome/browser/ui/BUILD.gn                    |  13 +++
+ chrome/browser/ui/layout_constants.cc         |  18 +--
+ chrome/browser/ui/stedding_ui_metrics.cc      |  42 +++++++
+ chrome/browser/ui/stedding_ui_metrics.h       |  69 ++++++++++++
+ .../ui/tabs/vertical_tab_strip_state.h        |   2 +-
+ .../chrome_location_bar_model_delegate.cc     |  17 +++
+ .../chrome_location_bar_model_delegate.h      |   1 +
+ .../views/frame/layout/browser_view_layout.cc |   5 +
+ .../layout/stedding_browser_view_layout.cc    | 103 ++++++++++++++++++
+ .../layout/stedding_browser_view_layout.h     |  34 ++++++
+ .../ui/views/frame/multi_contents_view.cc     |  14 ++-
+ .../frame/vertical_tab_strip_region_view.h    |   2 +-
+ .../tabs/common/pinned_tab_container_view.cc  |  21 +++-
+ chrome/browser/ui/views/tabs/tab/tab_icon.cc  |  38 ++++---
+ .../vertical_tab_strip_bottom_container.cc    |   4 +
+ .../vertical_tab_strip_bottom_container.h     |   4 +
+ .../vertical_tab_strip_top_container.cc       |   8 ++
+ .../browser/ui/views/toolbar/toolbar_view.cc  |  45 +++++++-
+ 18 files changed, 407 insertions(+), 33 deletions(-)
  create mode 100644 chrome/browser/ui/stedding_ui_metrics.cc
  create mode 100644 chrome/browser/ui/stedding_ui_metrics.h
  create mode 100644 chrome/browser/ui/views/frame/layout/stedding_browser_view_layout.cc
@@ -372,15 +376,19 @@ index 778997a0f1aec..dfad7c27d53d2 100644
        case BrowserWindowInterface::Type::TYPE_APP:
 diff --git a/chrome/browser/ui/views/frame/layout/stedding_browser_view_layout.cc b/chrome/browser/ui/views/frame/layout/stedding_browser_view_layout.cc
 new file mode 100644
-index 0000000000000..27a150cbef21a
+index 0000000000000..1205ef57c74b1
 --- /dev/null
 +++ b/chrome/browser/ui/views/frame/layout/stedding_browser_view_layout.cc
-@@ -0,0 +1,74 @@
+@@ -0,0 +1,103 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
 +
 +#include "chrome/browser/ui/views/frame/layout/stedding_browser_view_layout.h"
++
++#include "chrome/browser/ui/immersive/immersive_mode_controller.h"
++#include "ui/gfx/geometry/insets.h"
++#include "chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h"
 +
 +#include <algorithm>
 +
@@ -411,9 +419,34 @@ index 0000000000000..27a150cbef21a
 +  // With a vertical tab strip the traffic lights sit over the tab strip, which
 +  // already leaves room for them; the top container is in a different column
 +  // and does not have to clear them.
-+  return BrowserViewTabbedLayoutImpl::CalculateTopContainerLayout(
++  // In macOS immersive fullscreen the top container lives in the reveal
++  // overlay, which spans the window, while the vertical tab strip stays in
++  // the window at full height. Start the toolbar where the strip ends, as it
++  // does outside fullscreen, instead of running it over the strip's top.
++  int strip_inset = 0;
++  if (delegate().ShouldDrawVerticalTabStrip()) {
++    const ImmersiveModeController* const immersive =
++        delegate().GetImmersiveModeController();
++    if (immersive && immersive->IsEnabled() &&
++        views().vertical_tab_strip_region_view) {
++      strip_inset =
++          views().vertical_tab_strip_region_view->width() > 0
++              ? views().vertical_tab_strip_region_view->width()
++              : views().vertical_tab_strip_region_view->uncollapsed_width();
++      params.visual_client_area.Inset(gfx::Insets::TLBR(0, strip_inset, 0, 0));
++    }
++  }
++  gfx::Rect result = BrowserViewTabbedLayoutImpl::CalculateTopContainerLayout(
 +      layout, std::move(params),
 +      needs_exclusion && !delegate().ShouldDrawVerticalTabStrip());
++  // The children were placed past the strip inside the container; the
++  // container itself still spans the overlay, or the offset would apply
++  // twice.
++  if (strip_inset > 0) {
++    result.set_x(result.x() - strip_inset);
++    result.set_width(result.width() + strip_inset);
++  }
++  return result;
 +}
 +
 +void SteddingBrowserViewLayout::DoPostLayoutVisualAdjustments(

@@ -15,7 +15,7 @@ refer to `docs/features/<feature>.md`.
 | S-10 | Operator retest: pill site icon | ARC-ROUND2 #4 | needs next DMG |
 | S-17 | Signing, notarisation, updater | ROADMAP M7 | help page points at GitHub Releases until then |
 | S-18 | Proprietary-codecs licensing decision | decisions/0008 | needs a human |
-| S-31 | Vanilla Chromium `official` build at the pin, measured with the same harness, so the QUALITY.md overheads can be computed | QUALITY | ~4 h build and ~20 GB; the checkout volume sits at the 60 GB floor (HANDOFF), so free space first; then the M1 network audit |
+| S-31 | Vanilla Chromium `official` build at the pin, measured with the same harness, so the QUALITY.md overheads can be computed | QUALITY | IN PROGRESS 2026-09-02: `out/vanilla` building from the checkout detached at the pin with branding reverted; restore with `git checkout stedding-work && tooling/apply-branding` if you find it that way; then the M1 network audit |
 | S-36 | Sidebar and Spaces settings rows (settings T6) once those behaviours exist | settings | width, auto-archive, Space management |
 
 ## Done

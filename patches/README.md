@@ -7,8 +7,9 @@ The series is organised **by feature, not by date**. A fix to Spaces amends the 
 patch it belongs to (`git commit --fixup=<sha>` in the checkout, then `git rebase
 --autosquash`); it does not become patch 0044 at the end. A series that records every
 toolbar-height change as its own patch is a changelog, and a changelog is what makes
-the next Chromium rebase expensive. The series was squashed to eight feature
-patches on 2026-09-01 (`S-11`); keep it that way.
+the next Chromium rebase expensive. The series was squashed to one patch per
+feature on 2026-09-01 (`S-11`); keep it that way: a new feature adds one patch, a fix
+amends its feature's, and `tooling/dev status` is where the count lives.
 
 Most branding is **not** here: it is asset replacement in [../branding/](../branding/),
 which costs no patches at all. A patch is the last resort, not the first.

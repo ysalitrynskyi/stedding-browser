@@ -13,7 +13,7 @@ refer to `docs/features/<feature>.md`.
 |---|---|---|---|
 | S-17 | Signing, notarisation, updater | ROADMAP M7 | help page points at GitHub Releases until then |
 | S-18 | Proprietary-codecs licensing decision | decisions/0008 | needs a human |
-| S-36 | Settings rows for sidebar width (a slider over `vertical_tabs.uncollapsed_width`), auto-archive and Space management (settings T7) | settings | the hover row landed (T6); the other three wait for a slider row and for the behaviours to exist |
+| S-36 | Settings rows for auto-archive and Space management (settings T8) | settings | the sidebar rows landed (T6 hover, T7 width); these two wait for the behaviours themselves (ROADMAP M3 auto-archive; Space management UI) |
 
 ## Done
 
@@ -24,7 +24,7 @@ refer to `docs/features/<feature>.md`.
 | S-39 | Space tint on the sidebar ground, neutral new tab page | Blend in `stedding_color_mixer` and `SteddingWindowBackground` (patch 0007); spaces B11 |
 | S-9 | Operator retest: fullscreen URL width | Retested by capture on the 2026-09-02 release build in real fullscreen (⌃⌘F): the omnibox stays at its cap, centred, unfocused and focused (ARC-ROUND2 #1) |
 | S-10 | Operator retest: pill site icon | Same capture: the pill's site icon renders clean at 2× (ARC-ROUND2 #4) |
-| S-31 | Vanilla `official` build at the pin, measured with the same harness | `docs/perf/README.md` "The comparison": vanilla vs Stedding back to back, overheads against the QUALITY budgets. `tooling/args/vanilla.gn`; built under `--budget 60` |
+| S-31 | Vanilla `official` build at the pin, measured with the same harness (tree deleted 2026-09-02 for disk; rebuild with `tooling/dev build vanilla chrome --budget 60` from the detached pin) | `docs/perf/README.md` "The comparison": vanilla vs Stedding back to back, overheads against the QUALITY budgets. `tooling/args/vanilla.gn`; built under `--budget 60` |
 | S-35 | Promote a peek into a split | ⇧⌘O and an "Open in Split" button hand the page to `chrome::AddWebContents` with `NEW_SPLIT_VIEW`; Chromium 153's split view pairs it with the source tab (peek P9, patch 0009) |
 | S-8 | Popup windows have no Spaces: unit test | `PopupSpaceTest.PopupWindowsHaveNoSpaces` (spaces B14). The SEGV was the test constructing a second Browser by hand; the fixture's typed constructor (`BrowserWithTestWindowTest(Browser::TYPE_POPUP)`, as `TestWithBrowserView` does for hosted apps) builds a popup cleanly |
 | S-34 | Peek for links that open a new tab from a pinned tab | One check at the top of `chrome::Navigate()`; `PeekNewTabTest.*` (peek P8, patch 0009) |

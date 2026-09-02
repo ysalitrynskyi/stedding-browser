@@ -19,6 +19,9 @@ The typed text is always shown as a row ("Open" for a URL, "Search"
 otherwise), so the bar never looks empty while the user types; Enter still
 takes the first tab match when there is one.
 
+CommandBarViewTest covers choosing a tab in another Space (switch, then
+activate) and filtering by title.
+
 Why: Cmd+T is the most-used key in a browser and the reference makes it the
 way in to everything, including other Spaces.
 Removable when: never, short of dropping the command bar. The surface colours
@@ -28,13 +31,15 @@ become theme ids once Stedding has its own tokens for floating surfaces.
  .../browser/ui/browser_command_controller.cc  |  31 ++
  chrome/browser/ui/stedding_ui_metrics.cc      |   3 +
  chrome/browser/ui/stedding_ui_metrics.h       |   5 +
- chrome/browser/ui/views/commandbar/BUILD.gn   |  24 ++
+ chrome/browser/ui/views/commandbar/BUILD.gn   |  38 ++
  .../ui/views/commandbar/command_bar_view.cc   | 344 ++++++++++++++++++
- .../ui/views/commandbar/command_bar_view.h    | 125 +++++++
- 7 files changed, 533 insertions(+)
+ .../ui/views/commandbar/command_bar_view.h    | 128 +++++++
+ .../commandbar/command_bar_view_unittest.cc   |  62 ++++
+ 8 files changed, 612 insertions(+)
  create mode 100644 chrome/browser/ui/views/commandbar/BUILD.gn
  create mode 100644 chrome/browser/ui/views/commandbar/command_bar_view.cc
  create mode 100644 chrome/browser/ui/views/commandbar/command_bar_view.h
+ create mode 100644 chrome/browser/ui/views/commandbar/command_bar_view_unittest.cc
 
 diff --git a/chrome/browser/ui/BUILD.gn b/chrome/browser/ui/BUILD.gn
 index 473bfab8914c5..3a9a18f9b1581 100644
@@ -136,10 +141,10 @@ index c8e5a3d5791f2..627e88b60cac0 100644
  BASE_DECLARE_FEATURE_PARAM(int, kTabFaviconSize);
 diff --git a/chrome/browser/ui/views/commandbar/BUILD.gn b/chrome/browser/ui/views/commandbar/BUILD.gn
 new file mode 100644
-index 0000000000000..4ffc17f1f99b9
+index 0000000000000..ce2c83c55934a
 --- /dev/null
 +++ b/chrome/browser/ui/views/commandbar/BUILD.gn
-@@ -0,0 +1,24 @@
+@@ -0,0 +1,38 @@
 +# Copyright 2026 The Stedding Authors
 +# Use of this source code is governed by a BSD-style license that can be
 +# found in the LICENSE file.
@@ -162,6 +167,20 @@ index 0000000000000..4ffc17f1f99b9
 +    "//components/search_engines",
 +    "//components/url_formatter",
 +    "//components/tabs:public",
++  ]
++}
++
++source_set("unit_tests") {
++  testonly = true
++  sources = [ "command_bar_view_unittest.cc" ]
++  deps = [
++    ":commandbar",
++    "//base",
++    "//chrome/browser/ui/spaces",
++    "//chrome/browser/ui/tabs:tab_strip",
++    "//chrome/test:test_support",
++    "//testing/gtest",
++    "//ui/views",
 +  ]
 +}
 diff --git a/chrome/browser/ui/views/commandbar/command_bar_view.cc b/chrome/browser/ui/views/commandbar/command_bar_view.cc
@@ -516,10 +535,10 @@ index 0000000000000..bed3d0ebf8449
 +}  // namespace stedding
 diff --git a/chrome/browser/ui/views/commandbar/command_bar_view.h b/chrome/browser/ui/views/commandbar/command_bar_view.h
 new file mode 100644
-index 0000000000000..69247f1eca8d9
+index 0000000000000..e6d517da69f83
 --- /dev/null
 +++ b/chrome/browser/ui/views/commandbar/command_bar_view.h
-@@ -0,0 +1,125 @@
+@@ -0,0 +1,128 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -584,6 +603,9 @@ index 0000000000000..69247f1eca8d9
 +  void Close();
 +
 +  views::Textfield* field_for_testing() { return field_; }
++  size_t result_count_for_testing() const { return results_.size(); }
++  // Goes to the i-th result, as clicking its row would.
++  void GoToResultForTesting(size_t index) { GoTo(results_.at(index)); }
 +
 +  // views::TextfieldController:
 +  void ContentsChanged(views::Textfield* sender,
@@ -645,3 +667,71 @@ index 0000000000000..69247f1eca8d9
 +}  // namespace stedding
 +
 +#endif  // CHROME_BROWSER_UI_VIEWS_COMMANDBAR_COMMAND_BAR_VIEW_H_
+diff --git a/chrome/browser/ui/views/commandbar/command_bar_view_unittest.cc b/chrome/browser/ui/views/commandbar/command_bar_view_unittest.cc
+new file mode 100644
+index 0000000000000..514fcde8ef769
+--- /dev/null
++++ b/chrome/browser/ui/views/commandbar/command_bar_view_unittest.cc
+@@ -0,0 +1,62 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/views/commandbar/command_bar_view.h"
++
++#include <memory>
++
++#include "chrome/browser/ui/browser.h"
++#include "chrome/browser/ui/spaces/space.h"
++#include "chrome/browser/ui/spaces/space_model.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "chrome/test/base/browser_with_test_window_test.h"
++#include "testing/gtest/include/gtest/gtest.h"
++#include "ui/views/controls/textfield/textfield.h"
++#include "url/gurl.h"
++
++namespace stedding {
++namespace {
++
++class CommandBarViewTest : public BrowserWithTestWindowTest {
++ protected:
++  spaces::SpaceModel& model() { return *spaces::SpaceModel::From(browser()); }
++  TabStripModel& tabs() { return *browser()->tab_strip_model(); }
++};
++
++// spaces B13: the bar lists tabs from every Space, and choosing one in
++// another Space switches to that Space and activates the tab.
++TEST_F(CommandBarViewTest, ChoosingATabInAnotherSpaceSwitchesToIt) {
++  const spaces::SpaceId home = model().active_id();
++  AddTab(browser(), GURL("https://example.com/"));
++  tabs::TabInterface* const in_home = tabs().GetActiveTab();
++  spaces::Space* const work = model().AddSpace("Work", SK_ColorBLUE);
++  model().SetActiveSpace(work->id());
++  AddTab(browser(), GURL("https://example.org/"));
++  tabs::TabInterface* const in_work = tabs().GetActiveTab();
++  model().SetActiveSpace(home);
++  ASSERT_EQ(in_home, tabs().GetActiveTab());
++
++  // Not shown in a window; the model half needs no widget.
++  auto bar = std::make_unique<CommandBarView>(browser());
++  // Every tab, in strip order: the fixture inserts at index 0, so the Work
++  // tabs come first. The tab the switch opened in Work is there too.
++  ASSERT_EQ(static_cast<size_t>(tabs().count()), bar->result_count_for_testing());
++
++  bar->GoToResultForTesting(
++      static_cast<size_t>(tabs().GetIndexOfTab(in_work)));
++  EXPECT_EQ(work->id(), model().active_id());
++  EXPECT_EQ(in_work, tabs().GetActiveTab());
++}
++
++// spaces B13: typing filters by title, and the field is the bar's own.
++TEST_F(CommandBarViewTest, TypingFiltersByTitle) {
++  AddTab(browser(), GURL("https://example.com/"));
++  auto bar = std::make_unique<CommandBarView>(browser());
++  ASSERT_EQ(1u, bar->result_count_for_testing());
++  bar->ContentsChanged(bar->field_for_testing(), u"no such title");
++  EXPECT_EQ(0u, bar->result_count_for_testing());
++}
++
++}  // namespace
++}  // namespace stedding

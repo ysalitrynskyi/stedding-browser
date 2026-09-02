@@ -18,13 +18,13 @@ refer to `docs/features/<feature>.md`.
 | S-18 | Proprietary-codecs licensing decision | decisions/0008 | needs a human |
 | S-31 | Vanilla Chromium `official` build at the pin, measured with the same harness, so the QUALITY.md overheads can be computed | QUALITY | ~4 h build; then the M1 network audit |
 | S-36 | Sidebar and Spaces settings rows (settings T6) once those behaviours exist | settings | width, auto-archive, Space management |
-| S-34 | Peek for links that open a new tab from a pinned tab (peek P8) | peek | needs the new-tab path (`AddNewContents` on the tab's delegate), not the throttle |
 | S-35 | Promote a peek into a split (peek P9) | peek, ROADMAP M5 | after split view exists |
 
 ## Done
 
 | Id | Item | Closed by |
 |---|---|---|
+| S-34 | Peek for links that open a new tab from a pinned tab | One check at the top of `chrome::Navigate()`; `PeekNewTabTest.*` (peek P8, patch 0009) |
 | S-15 | Settings surface | chrome://settings/stedding, first in the menu, three toggles backed by `stedding_prefs.h`; `docs/features/settings.md` (patch 0010) |
 | S-33 | New tab page: a setting to hide the shortcut row | The "Stedding" settings section's third toggle (new-tab N5) |
 | S-14 | Peek | Links leaving a pinned tab's site open over the window; Escape/click dismiss, ⌘O promotes the same page into a tab. `docs/features/peek.md`, `PeekNavigationThrottle` + `PeekView` (patch 0009) |

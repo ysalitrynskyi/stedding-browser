@@ -17,19 +17,25 @@ sides, to a different eTLD+1. PeekView is a layered child of the browser
 view, the same arrangement as the command bar, and owns its WebContents;
 promotion hands it to chrome::AddWebContents.
 
+Links that ask for a new tab instead (target=_blank, window.open, a
+modifier-click) go the same way: one check at the top of chrome::Navigate()
+opens the peek and, when the renderer already created the page, the peek
+adopts that WebContents.
+
 Why: the product's pinned-tab model needs Peek or pinning is a bookmark.
 Removable when: never, unless the pinned-tab model changes.
 ---
  ...ent_browser_client_navigation_throttles.cc |   3 +
  chrome/browser/ui/BUILD.gn                    |   2 +
- chrome/browser/ui/views/peek/BUILD.gn         |  45 +++
- .../ui/views/peek/peek_navigation_throttle.cc | 128 +++++++
- .../ui/views/peek/peek_navigation_throttle.h  |  73 ++++
- chrome/browser/ui/views/peek/peek_unittest.cc | 195 +++++++++++
- chrome/browser/ui/views/peek/peek_view.cc     | 315 ++++++++++++++++++
- chrome/browser/ui/views/peek/peek_view.h      | 126 +++++++
+ .../browser/ui/navigator/browser_navigator.cc |   7 +
+ chrome/browser/ui/views/peek/BUILD.gn         |  46 +++
+ .../ui/views/peek/peek_navigation_throttle.cc | 180 +++++++++
+ .../ui/views/peek/peek_navigation_throttle.h  |  82 ++++
+ chrome/browser/ui/views/peek/peek_unittest.cc | 257 +++++++++++++
+ chrome/browser/ui/views/peek/peek_view.cc     | 362 ++++++++++++++++++
+ chrome/browser/ui/views/peek/peek_view.h      | 138 +++++++
  chrome/test/BUILD.gn                          |   1 +
- 9 files changed, 888 insertions(+)
+ 10 files changed, 1078 insertions(+)
  create mode 100644 chrome/browser/ui/views/peek/BUILD.gn
  create mode 100644 chrome/browser/ui/views/peek/peek_navigation_throttle.cc
  create mode 100644 chrome/browser/ui/views/peek/peek_navigation_throttle.h
@@ -78,12 +84,37 @@ index b0eb9d64ccc02..5e50b0b8e1844 100644
        ":uma_browsing_activity_observer",
        "//base",
        "//chrome/app/vector_icons",
+diff --git a/chrome/browser/ui/navigator/browser_navigator.cc b/chrome/browser/ui/navigator/browser_navigator.cc
+index f8d51faf9020f..5887e43908094 100644
+--- a/chrome/browser/ui/navigator/browser_navigator.cc
++++ b/chrome/browser/ui/navigator/browser_navigator.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "chrome/browser/ui/navigator/browser_navigator.h"
+ 
++#include "chrome/browser/ui/views/peek/peek_navigation_throttle.h"
++
+ #include <algorithm>
+ #include <memory>
+ #include <optional>
+@@ -1105,6 +1107,11 @@ base::WeakPtr<content::NavigationHandle> ShowTabModalPopup(
+ }  // namespace internal
+ 
+ base::WeakPtr<content::NavigationHandle> Navigate(NavigateParams* params) {
++  // Stedding: a link from a pinned tab that wants a new tab peeks instead
++  // (docs/features/peek.md, P8).
++  if (stedding::MaybePeekInsteadOfNewTab(params)) {
++    return nullptr;
++  }
+   AdditionalParams additional_params;
+   return internal::NavigateImpl(params, additional_params);
+ }
 diff --git a/chrome/browser/ui/views/peek/BUILD.gn b/chrome/browser/ui/views/peek/BUILD.gn
 new file mode 100644
-index 0000000000000..66bac80a4fefb
+index 0000000000000..6a54c02aa3f62
 --- /dev/null
 +++ b/chrome/browser/ui/views/peek/BUILD.gn
-@@ -0,0 +1,45 @@
+@@ -0,0 +1,46 @@
 +# Copyright 2026 The Stedding Authors
 +# Use of this source code is governed by a BSD-style license that can be
 +# found in the LICENSE file.
@@ -113,6 +144,7 @@ index 0000000000000..66bac80a4fefb
 +    "//components/url_formatter",
 +    "//net",
 +    "//ui/views/controls/webview",
++    "//chrome/browser/ui/navigator",
 +  ]
 +}
 +
@@ -131,10 +163,10 @@ index 0000000000000..66bac80a4fefb
 +}
 diff --git a/chrome/browser/ui/views/peek/peek_navigation_throttle.cc b/chrome/browser/ui/views/peek/peek_navigation_throttle.cc
 new file mode 100644
-index 0000000000000..633aeeabbb0ed
+index 0000000000000..580f6651a37dd
 --- /dev/null
 +++ b/chrome/browser/ui/views/peek/peek_navigation_throttle.cc
-@@ -0,0 +1,128 @@
+@@ -0,0 +1,180 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -151,6 +183,8 @@ index 0000000000000..633aeeabbb0ed
 +#include "chrome/browser/ui/spaces/space_model.h"
 +#include "chrome/browser/ui/views/peek/peek_view.h"
 +#include "components/tabs/public/tab_interface.h"
++// Out of order on purpose: keeps this hunk clear of the settings patch.
++#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 +#include "content/public/browser/navigation_handle.h"
 +#include "content/public/browser/navigation_throttle_registry.h"
 +#include "content/public/browser/web_contents.h"
@@ -199,6 +233,56 @@ index 0000000000000..633aeeabbb0ed
 +  return !net::registry_controlled_domains::SameDomainOrHost(
 +      from, to,
 +      net::registry_controlled_domains::INCLUDE_PRIVATE_REGISTRIES);
++}
++
++bool MaybePeekInsteadOfNewTab(NavigateParams* params) {
++  if (!params->source_contents || !params->is_renderer_initiated ||
++      !params->url.is_valid()) {
++    return false;
++  }
++  if (params->disposition != WindowOpenDisposition::NEW_FOREGROUND_TAB &&
++      params->disposition != WindowOpenDisposition::NEW_BACKGROUND_TAB) {
++    return false;
++  }
++  if (!ui::PageTransitionCoreTypeIs(params->transition,
++                                    ui::PAGE_TRANSITION_LINK)) {
++    return false;
++  }
++  tabs::TabInterface* const tab =
++      tabs::TabInterface::MaybeGetFromContents(params->source_contents);
++  if (!tab) {
++    return false;
++  }
++  BrowserWindowInterface* const browser = tab->GetBrowserWindowInterface();
++  if (!browser || browser->GetType() != BrowserWindowInterface::TYPE_NORMAL) {
++    return false;
++  }
++  PeekSignals signals;
++  signals.tab_is_pinned = IsPinnedAnywhere(tab);
++  signals.renderer_initiated = true;
++  // A new tab asked for by a page is the user's doing or a popup; either way
++  // a peek is the right size for it. Script redirects are not this path.
++  signals.link_click = params->user_gesture;
++  signals.is_post = params->post_data != nullptr;
++  signals.peek_enabled =
++      Profile::FromBrowserContext(params->source_contents->GetBrowserContext())
++          ->GetPrefs()
++          ->GetBoolean(stedding::prefs::kPeekEnabled);
++  if (!ShouldPeek(signals, params->source_contents->GetLastCommittedURL(),
++                  params->url)) {
++    return false;
++  }
++  if (OpenerOverride()) {
++    OpenerOverride().Run(tab, params->url);
++    return true;
++  }
++  if (params->contents_to_insert) {
++    PeekView::ShowContents(tab, std::move(params->contents_to_insert),
++                           params->url);
++  } else {
++    PeekView::Show(tab, params->url);
++  }
++  return true;
 +}
 +
 +// static
@@ -265,10 +349,10 @@ index 0000000000000..633aeeabbb0ed
 +}  // namespace stedding
 diff --git a/chrome/browser/ui/views/peek/peek_navigation_throttle.h b/chrome/browser/ui/views/peek/peek_navigation_throttle.h
 new file mode 100644
-index 0000000000000..44e168c5ce370
+index 0000000000000..6e80adee6353b
 --- /dev/null
 +++ b/chrome/browser/ui/views/peek/peek_navigation_throttle.h
-@@ -0,0 +1,73 @@
+@@ -0,0 +1,82 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -280,6 +364,7 @@ index 0000000000000..44e168c5ce370
 +#include "content/public/browser/navigation_throttle.h"
 +
 +class GURL;
++struct NavigateParams;
 +
 +namespace content {
 +class NavigationThrottleRegistry;
@@ -313,6 +398,14 @@ index 0000000000000..44e168c5ce370
 +// tab to a different site (eTLD+1), http(s) both sides.
 +bool ShouldPeek(const PeekSignals& signals, const GURL& from, const GURL& to);
 +
++// The other way a link leaves a pinned tab: it asks for a new tab
++// (target=_blank, window.open, a modifier-click). Called at the top of
++// chrome::Navigate(); when the navigation is a renderer-initiated link from
++// a pinned tab to another site wanting a new foreground or background tab,
++// opens a peek instead and returns true, and the caller must not navigate.
++// A renderer-created WebContents in `params` is adopted by the peek.
++bool MaybePeekInsteadOfNewTab(NavigateParams* params);
++
 +// A pinned tab behaves like an app: a link that would leave its site opens a
 +// peek over the window instead of replacing the pinned page
 +// (docs/PRODUCT.md, "Peek"). This throttle is what enforces that. It is
@@ -344,19 +437,22 @@ index 0000000000000..44e168c5ce370
 +#endif  // CHROME_BROWSER_UI_VIEWS_PEEK_PEEK_NAVIGATION_THROTTLE_H_
 diff --git a/chrome/browser/ui/views/peek/peek_unittest.cc b/chrome/browser/ui/views/peek/peek_unittest.cc
 new file mode 100644
-index 0000000000000..0d0336458b5e0
+index 0000000000000..e964db242f956
 --- /dev/null
 +++ b/chrome/browser/ui/views/peek/peek_unittest.cc
-@@ -0,0 +1,195 @@
+@@ -0,0 +1,257 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
 +
 +#include <memory>
++#include <vector>
 +
 +#include "base/functional/bind.h"
 +#include "base/run_loop.h"
 +#include "chrome/browser/ui/browser.h"
++#include "chrome/browser/ui/navigator/browser_navigator.h"
++#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 +#include "chrome/browser/ui/spaces/space_model.h"
 +#include "chrome/browser/ui/tabs/tab_strip_model.h"
 +#include "chrome/browser/ui/views/peek/peek_navigation_throttle.h"
@@ -505,6 +601,65 @@ index 0000000000000..0d0336458b5e0
 +            Navigate(contents, GURL("https://example.org/")).action());
 +}
 +
++class PeekNewTabTest : public BrowserWithTestWindowTest {
++ protected:
++  TabStripModel& tabs() { return *browser()->tab_strip_model(); }
++
++  // A renderer-initiated link from the active tab that wants a new tab.
++  NavigateParams NewTabLink(const GURL& to) {
++    NavigateParams params(browser(), to, ui::PAGE_TRANSITION_LINK);
++    params.source_contents = tabs().GetActiveWebContents();
++    params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
++    params.is_renderer_initiated = true;
++    params.user_gesture = true;
++    return params;
++  }
++};
++
++// P8: a new-tab link from a pinned tab to another site peeks; no tab is
++// added.
++TEST_F(PeekNewTabTest, NewTabLinkFromPinnedTabPeeks) {
++  AddTab(browser(), GURL("https://example.com/"));
++  tabs().SetTabPinned(0, true);
++  std::vector<GURL> opened;
++  PeekNavigationThrottle::SetOpenerForTesting(base::BindRepeating(
++      [](std::vector<GURL>* opened, tabs::TabInterface*, const GURL& url) {
++        opened->push_back(url);
++      },
++      &opened));
++
++  NavigateParams params = NewTabLink(GURL("https://example.org/article"));
++  Navigate(&params);
++
++  EXPECT_EQ(1, tabs().count());
++  ASSERT_EQ(1u, opened.size());
++  EXPECT_EQ(GURL("https://example.org/article"), opened[0]);
++  PeekNavigationThrottle::SetOpenerForTesting({});
++}
++
++// P8, the other side: the same link from an unpinned tab, or to the pinned
++// site itself, opens a tab as always.
++TEST_F(PeekNewTabTest, OtherNewTabLinksOpenTabs) {
++  AddTab(browser(), GURL("https://example.com/"));
++  int opened = 0;
++  PeekNavigationThrottle::SetOpenerForTesting(base::BindRepeating(
++      [](int* opened, tabs::TabInterface*, const GURL&) { ++*opened; },
++      &opened));
++
++  NavigateParams unpinned = NewTabLink(GURL("https://example.org/"));
++  Navigate(&unpinned);
++  EXPECT_EQ(2, tabs().count());
++
++  tabs().ActivateTabAt(tabs().GetIndexOfWebContents(unpinned.source_contents));
++  tabs().SetTabPinned(tabs().active_index(), true);
++  NavigateParams same_site = NewTabLink(GURL("https://example.com/other"));
++  Navigate(&same_site);
++  EXPECT_EQ(3, tabs().count());
++
++  EXPECT_EQ(0, opened);
++  PeekNavigationThrottle::SetOpenerForTesting({});
++}
++
 +class PeekViewTest : public BrowserWithTestWindowTest {
 + protected:
 +  TabStripModel& tabs() { return *browser()->tab_strip_model(); }
@@ -545,10 +700,10 @@ index 0000000000000..0d0336458b5e0
 +}  // namespace stedding
 diff --git a/chrome/browser/ui/views/peek/peek_view.cc b/chrome/browser/ui/views/peek/peek_view.cc
 new file mode 100644
-index 0000000000000..1ab18bd4b3de4
+index 0000000000000..8f99991a4fe29
 --- /dev/null
 +++ b/chrome/browser/ui/views/peek/peek_view.cc
-@@ -0,0 +1,315 @@
+@@ -0,0 +1,362 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -602,20 +757,22 @@ index 0000000000000..1ab18bd4b3de4
 +
 +}  // namespace
 +
-+// static
-+void PeekView::Show(tabs::TabInterface* source, const GURL& url) {
++namespace {
++
++// The peek over `source`'s window, opened if there is none. Null when the
++// tab has no browser view (tests, a closing window).
++PeekView* OpenOrGet(tabs::TabInterface* source) {
 +  BrowserWindowInterface* const browser = source->GetBrowserWindowInterface();
 +  if (!browser) {
-+    return;
++    return nullptr;
 +  }
 +  BrowserView* const browser_view =
 +      BrowserView::GetBrowserViewForBrowser(browser->GetBrowserForMigrationOnly());
 +  if (!browser_view) {
-+    return;
++    return nullptr;
 +  }
-+  if (PeekView* const open = GetOpen(browser_view)) {
-+    open->Load(url);
-+    return;
++  if (PeekView* const open = PeekView::GetOpen(browser_view)) {
++    return open;
 +  }
 +  // Last child of the browser view: above the web contents once it paints to
 +  // its own layer, the same arrangement as the command bar.
@@ -624,10 +781,40 @@ index 0000000000000..1ab18bd4b3de4
 +  peek->SetPaintToLayer();
 +  peek->layer()->SetFillsBoundsOpaquely(false);
 +  peek->layer()->SetName("SteddingPeek");
-+  peek->parent_observation_.Observe(browser_view);
-+  peek->UpdateBounds();
-+  peek->Load(url);
++  peek->AddedToBrowserView(browser_view);
++  return peek;
++}
++
++}  // namespace
++
++// static
++void PeekView::Show(tabs::TabInterface* source, const GURL& url) {
++  if (PeekView* const peek = OpenOrGet(source)) {
++    peek->Load(url);
++    peek->web_view_->RequestFocus();
++  }
++}
++
++// static
++void PeekView::ShowContents(tabs::TabInterface* source,
++                            std::unique_ptr<content::WebContents> contents,
++                            const GURL& url) {
++  PeekView* const peek = OpenOrGet(source);
++  if (!peek) {
++    return;
++  }
++  peek->Adopt(std::move(contents));
++  if (url.is_valid() && !peek->contents_->GetController().GetPendingEntry() &&
++      peek->contents_->GetLastCommittedURL().is_empty()) {
++    peek->Load(url);
++  }
++  peek->UpdateTitle();
 +  peek->web_view_->RequestFocus();
++}
++
++void PeekView::AddedToBrowserView(BrowserView* browser_view) {
++  parent_observation_.Observe(browser_view);
++  UpdateBounds();
 +}
 +
 +// static
@@ -709,6 +896,21 @@ index 0000000000000..1ab18bd4b3de4
 +  params.transition_type = ui::PAGE_TRANSITION_LINK;
 +  contents_->GetController().LoadURLWithParams(params);
 +  UpdateTitle();
++}
++
++void PeekView::Adopt(std::unique_ptr<content::WebContents> contents) {
++  if (!contents) {
++    return;
++  }
++  web_view_->SetWebContents(nullptr);
++  Observe(nullptr);
++  if (contents_) {
++    contents_->SetDelegate(nullptr);
++  }
++  contents_ = std::move(contents);
++  contents_->SetDelegate(this);
++  Observe(contents_.get());
++  web_view_->SetWebContents(contents_.get());
 +}
 +
 +void PeekView::PromoteToTab() {
@@ -866,10 +1068,10 @@ index 0000000000000..1ab18bd4b3de4
 +}  // namespace stedding
 diff --git a/chrome/browser/ui/views/peek/peek_view.h b/chrome/browser/ui/views/peek/peek_view.h
 new file mode 100644
-index 0000000000000..7787b16a26916
+index 0000000000000..077c635f90443
 --- /dev/null
 +++ b/chrome/browser/ui/views/peek/peek_view.h
-@@ -0,0 +1,126 @@
+@@ -0,0 +1,138 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -924,6 +1126,12 @@ index 0000000000000..7787b16a26916
 +  // already open there.
 +  static void Show(tabs::TabInterface* source, const GURL& url);
 +
++  // As Show(), but the peek adopts `contents` (a renderer-created page,
++  // window.open's) and loads `url` into it only if nothing is loading yet.
++  static void ShowContents(tabs::TabInterface* source,
++                           std::unique_ptr<content::WebContents> contents,
++                           const GURL& url);
++
 +  // The open peek in `browser_view`, or null.
 +  static PeekView* GetOpen(BrowserView* browser_view);
 +
@@ -935,6 +1143,9 @@ index 0000000000000..7787b16a26916
 +  // Navigates the peek's own page.
 +  void Load(const GURL& url);
 +
++  // Replaces the peek's page with `contents`, which the peek then owns.
++  void Adopt(std::unique_ptr<content::WebContents> contents);
++
 +  // Moves the page into a new foreground tab of the browser and closes.
 +  void PromoteToTab();
 +
@@ -943,6 +1154,9 @@ index 0000000000000..7787b16a26916
 +  void Close();
 +
 +  content::WebContents* web_contents() { return contents_.get(); }
++
++  // Hooks the peek to the browser view it was just added to.
++  void AddedToBrowserView(BrowserView* browser_view);
 +
 +  // views::View:
 +  bool AcceleratorPressed(const ui::Accelerator& accelerator) override;

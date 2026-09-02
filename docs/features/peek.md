@@ -1,6 +1,6 @@
 # Feature: Peek
 
-Status: **P1–P7, P10 built and tested**; P8–P9 are gaps (`S-34`, `S-35`).
+Status: **P1–P8, P10 built and tested**; P9 is a gap (`S-35`).
 Owner docs: `docs/PRODUCT.md` ("Peek": what makes pinned tabs behave like apps). Patch: `0009`.
 
 A link from a pinned tab that would leave the pinned site opens in a peek: a page over the
@@ -9,7 +9,9 @@ real tab, moving the same page into the strip so nothing reloads. "Pinned" means
 Chromium-pinned (the essentials row) or pinned within a Space.
 
 The decision is a navigation throttle (`PeekNavigationThrottle`, registered from Chromium's
-throttle list for renderer-initiated main-frame navigations in pinned tabs). The overlay is
+throttle list for renderer-initiated main-frame navigations in pinned tabs) for links that
+navigate the tab, and one check at the top of `chrome::Navigate()` for links that ask for a
+new tab. The overlay is
 `PeekView`, a layered child of the browser view like the command bar; it owns its WebContents
 and hands it to the tab strip on promotion.
 
@@ -24,6 +26,6 @@ and hands it to the tab strip on promotion.
 | P5 | Only http(s) pages peek; chrome://, file: and blank pages never do. | `ShouldPeekTest.OnlyHttpPagesPeek` | built |
 | P6 | A peek owns a page of its own at the link's URL; the window's tabs are untouched while it is open. | `PeekViewTest.PeekLoadsItsOwnPage` | built |
 | P7 | Promoting (⌘O, the button) moves the very same page into a new active tab and closes the peek. | `PeekViewTest.PromotingMovesThePageIntoANewActiveTab`; live: ⌘O in the peek | built |
-| P8 | Links from a pinned tab that open a new tab (`target=_blank`, ⌘-click) also peek, as in Arc. | none yet | gap |
+| P8 | Links from a pinned tab that open a new tab (`target=_blank`, `window.open`, ⌘-click) also peek when they leave the site, as in Arc; a renderer-created page is adopted by the peek. | `PeekNewTabTest.NewTabLinkFromPinnedTabPeeks`, `PeekNewTabTest.OtherNewTabLinksOpenTabs`; live: `target=_blank` link from the pinned page | built |
 | P9 | A peek can be promoted into a split instead of a tab (needs split view, ROADMAP M5). | none yet | gap |
 | P10 | The chrome://settings "Stedding" switch turns Peek off; pinned tabs then follow links like any other. | `ShouldPeekTest.SettingOffFollowsLinks`; settings T3 | built |

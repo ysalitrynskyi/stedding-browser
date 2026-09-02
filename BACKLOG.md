@@ -13,7 +13,7 @@ refer to `docs/features/<feature>.md`.
 |---|---|---|---|
 | S-17 | Signing, notarisation, updater | ROADMAP M7 | help page points at GitHub Releases until then |
 | S-18 | Proprietary-codecs licensing decision | decisions/0008 | needs a human |
-| S-38 | Fullscreen: the top container spans the window, so back/forward/reload sit over the sidebar column; upstream's fullscreen-with-toolbar layout, needs a layout hook | ARC-ROUND2 round 4 | Not the layout's `top_offset` (0 in fullscreen already): on macOS immersive fullscreen the top container leaves the browser view for the reveal overlay widget, which spans the window; the fix is to inset that overlay by the strip width (`ImmersiveModeControllerMac` / reveal widget), platform code we have not touched yet |
+| S-38 | Fullscreen: the top container spans the window, so back/forward/reload sit over the sidebar column; upstream's fullscreen-with-toolbar layout, needs a layout hook | ARC-ROUND2 round 4 | Not the layout's `top_offset` (0 in fullscreen already): on macOS immersive fullscreen the top container leaves the browser view for the reveal overlay widget, which spans the window; the fix is to inset that overlay by the strip width (`ImmersiveModeControllerMac` / reveal widget), platform code. Tried 2026-09-02: a leading border on the top container while immersive is enabled does not move the toolbar (the overlay hosts its own toolbar layout); next attempt should look at `ImmersiveModeOverlayViewsMac` and the reveal view's frame |
 | S-36 | Sidebar and Spaces settings rows (settings T6) once those behaviours exist | settings | width, auto-archive, Space management |
 
 ## Done

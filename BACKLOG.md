@@ -14,7 +14,6 @@ refer to `docs/features/<feature>.md`.
 | S-9 | Operator retest: fullscreen URL width | ARC-ROUND2 #1 | needs next DMG |
 | S-10 | Operator retest: pill site icon | ARC-ROUND2 #4 | needs next DMG |
 | S-17 | Signing, notarisation, updater | ROADMAP M7 | help page points at GitHub Releases until then |
-| S-8 | Popup windows have no Spaces: unit test | spaces B14 | `CreateBrowser(profile, TYPE_POPUP, ...)` in `BrowserWithTestWindowTest` SEGVs before the assertion, in a release build with no symbols; find out whether that is the fixture or us |
 | S-18 | Proprietary-codecs licensing decision | decisions/0008 | needs a human |
 | S-31 | Vanilla Chromium `official` build at the pin, measured with the same harness, so the QUALITY.md overheads can be computed | QUALITY | ~4 h build; then the M1 network audit |
 | S-36 | Sidebar and Spaces settings rows (settings T6) once those behaviours exist | settings | width, auto-archive, Space management |
@@ -24,6 +23,7 @@ refer to `docs/features/<feature>.md`.
 
 | Id | Item | Closed by |
 |---|---|---|
+| S-8 | Popup windows have no Spaces: unit test | `PopupSpaceTest.PopupWindowsHaveNoSpaces` (spaces B14). The SEGV was the test constructing a second Browser by hand; the fixture's typed constructor (`BrowserWithTestWindowTest(Browser::TYPE_POPUP)`, as `TestWithBrowserView` does for hosted apps) builds a popup cleanly |
 | S-34 | Peek for links that open a new tab from a pinned tab | One check at the top of `chrome::Navigate()`; `PeekNewTabTest.*` (peek P8, patch 0009) |
 | S-15 | Settings surface | chrome://settings/stedding, first in the menu, three toggles backed by `stedding_prefs.h`; `docs/features/settings.md` (patch 0010) |
 | S-33 | New tab page: a setting to hide the shortcut row | The "Stedding" settings section's third toggle (new-tab N5) |

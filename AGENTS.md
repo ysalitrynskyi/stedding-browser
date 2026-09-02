@@ -140,6 +140,6 @@ Outstanding: `BACKLOG.md`. Unsigned (M7), no performance baselines yet.
 
 The order is `BACKLOG.md`. In one line: the operator retests `S-9`/`S-10` on
 the latest DMG in `dist/`, then `S-31` (the vanilla build to compare the
-perf baseline against) and `S-8` (the popup-window test fixture crash).
+perf baseline against). `S-35`/`S-36` wait for split view and sidebar prefs.
 `S-17` signing needs credentials and `S-18` (proprietary-codecs licensing)
 still needs a human decision.

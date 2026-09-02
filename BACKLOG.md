@@ -15,13 +15,14 @@ refer to `docs/features/<feature>.md`.
 | S-10 | Operator retest: pill site icon | ARC-ROUND2 #4 | needs next DMG |
 | S-17 | Signing, notarisation, updater | ROADMAP M7 | help page points at GitHub Releases until then |
 | S-18 | Proprietary-codecs licensing decision | decisions/0008 | needs a human |
-| S-31 | Vanilla Chromium `official` build at the pin, measured with the same harness, so the QUALITY.md overheads can be computed | QUALITY | Stopped by the operator 2026-09-02 at ~95% of objects after 3.5 h; `out/vanilla` (11 GB) is resumable: `tooling/apply-branding --revert`, `git checkout --detach <pin>`, `autoninja -C out/vanilla chrome`, then restore `stedding-work` + branding, then `tooling/measure/harness.py all --app out/vanilla/Chromium.app`; then the M1 network audit |
+| S-37 | Perf: first vanilla pair shows cold startup +12.2% and ten-tab memory +35.9% over vanilla (`docs/perf/README.md`), both past the 10% budget; warm startup is on par | QUALITY | rebuild `out/official` from the current series (the measured one is from 2026-08-31), give the harness a deterministic local site list so memory stops swinging with third-party frames, then find the cold-startup cost (suspects: Space/folder session restore, command-bar and sidebar construction at first paint) |
 | S-36 | Sidebar and Spaces settings rows (settings T6) once those behaviours exist | settings | width, auto-archive, Space management |
 
 ## Done
 
 | Id | Item | Closed by |
 |---|---|---|
+| S-31 | Vanilla `official` build at the pin, measured with the same harness | `docs/perf/README.md` "The comparison": vanilla vs Stedding back to back, overheads against the QUALITY budgets. `tooling/args/vanilla.gn`; built under `--budget 60` |
 | S-35 | Promote a peek into a split | ⇧⌘O and an "Open in Split" button hand the page to `chrome::AddWebContents` with `NEW_SPLIT_VIEW`; Chromium 153's split view pairs it with the source tab (peek P9, patch 0009) |
 | S-8 | Popup windows have no Spaces: unit test | `PopupSpaceTest.PopupWindowsHaveNoSpaces` (spaces B14). The SEGV was the test constructing a second Browser by hand; the fixture's typed constructor (`BrowserWithTestWindowTest(Browser::TYPE_POPUP)`, as `TestWithBrowserView` does for hosted apps) builds a popup cleanly |
 | S-34 | Peek for links that open a new tab from a pinned tab | One check at the top of `chrome::Navigate()`; `PeekNewTabTest.*` (peek P8, patch 0009) |

@@ -98,7 +98,9 @@ Read `docs/HANDOFF.md` before touching anything — it carries the working loop,
 every dev parameter, and the traps already paid for. `docs/ARC-ROUND2.md` is
 the operator-feedback ledger; `docs/UI-SPEC.md` the measured Arc match.
 
-Outstanding: `BACKLOG.md`. Unsigned (M7), no performance baselines yet.
+Outstanding: `BACKLOG.md`. Unsigned (M7). First vanilla perf comparison is in
+`docs/perf/README.md`: warm startup on par, cold startup and ten-tab memory over
+budget in the first pair (`S-37`).
 
 ## Map of the docs
 
@@ -139,7 +141,8 @@ Outstanding: `BACKLOG.md`. Unsigned (M7), no performance baselines yet.
 ## Current priorities (keep this list short and fresh)
 
 The order is `BACKLOG.md`. In one line: the operator retests `S-9`/`S-10` on
-the latest DMG in `dist/`, then `S-31` (the vanilla build to compare the
-perf baseline against). `S-36` waits for sidebar and Spaces preferences.
+the latest DMG in `dist/`, then `S-37` (the two perf budgets the first vanilla
+pair exceeded). `S-36` waits for sidebar and Spaces preferences;
+`S-17` signing needs credentials and `S-18` a licensing decision.
 `S-17` signing needs credentials and `S-18` (proprietary-codecs licensing)
 still needs a human decision.

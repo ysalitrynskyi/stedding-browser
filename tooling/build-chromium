@@ -7,6 +7,14 @@
 #   tooling/build-chromium                  # release build of the browser
 #   tooling/build-chromium official          # shipping configuration
 #   tooling/build-chromium release chrome unit_tests
+#   tooling/build-chromium release chrome --budget 45   # allow 45 minutes; 0 = unlimited
+#
+# Budget: a build gets 15 minutes of wall clock by default. Every minute the
+# wrapper prints elapsed time, object count and active compilers, and when the
+# budget runs out it kills the build and says so. Anything longer is a decision
+# an agent must not make alone: ask the operator, then pass --budget explicitly.
+# This exists because a 3.5 h vanilla build once ran with nobody watching but
+# a sleep loop (docs/HANDOFF.md, trap 5).
 #
 # gn args come from tooling/args/<config>.gn and are copied verbatim into the output
 # directory, so the args used for any build are recoverable from the build itself.
@@ -25,6 +33,19 @@ main() {
 
     require_macos_arm64
     add_depot_tools_to_path
+
+    BUDGET_MIN="${STEDDING_BUILD_BUDGET_MIN:-15}"
+    positional=()
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --budget) shift; BUDGET_MIN="${1:?--budget needs minutes}" ;;
+        --budget=*) BUDGET_MIN="${1#--budget=}" ;;
+        *) positional+=("$1") ;;
+      esac
+      shift
+    done
+    set -- "${positional[@]}"
+    case "$BUDGET_MIN" in ''|*[!0-9]*) die "--budget takes whole minutes, got '$BUDGET_MIN'" ;; esac
 
     CONFIG="${1:-release}"
     shift || true
@@ -124,8 +145,36 @@ main() {
     before="$(tree_fingerprint)"
 
     start=$(date +%s)
-    log "autoninja -C $OUT_DIR ${TARGETS[*]}  (this is the long one)"
-    autoninja -C "$OUT_DIR" "${TARGETS[@]}"
+    if [ "$BUDGET_MIN" -eq 0 ]; then
+      log "autoninja -C $OUT_DIR ${TARGETS[*]}  (no budget: the operator said so)"
+    else
+      log "autoninja -C $OUT_DIR ${TARGETS[*]}  (budget: $BUDGET_MIN min; progress every minute)"
+    fi
+    autoninja -C "$OUT_DIR" "${TARGETS[@]}" &
+    build_pid=$!
+    build_status=""
+    first_objects=""
+    while kill -0 "$build_pid" 2>/dev/null; do
+      sleep 60
+      kill -0 "$build_pid" 2>/dev/null || break
+      elapsed=$(( $(date +%s) - start ))
+      objects="$(find "$ABS_OUT/obj" -name '*.o' 2>/dev/null | wc -l | tr -d ' ')"
+      compilers="$(pgrep -c -f 'llvm-build/Release\+Asserts/bin/clang' 2>/dev/null || echo 0)"
+      log "progress: $((elapsed / 60)) min, $objects objects, $compilers compilers"
+      [ -n "$first_objects" ] || first_objects="$objects"
+      if [ "$BUDGET_MIN" -gt 0 ] && [ "$elapsed" -ge $((BUDGET_MIN * 60)) ]; then
+        warn "build budget of $BUDGET_MIN min exceeded at $objects objects; stopping it."
+        kill "$build_pid" 2>/dev/null
+        pkill -f "siso ninja .* -C $OUT_DIR" 2>/dev/null || true
+        wait "$build_pid" 2>/dev/null || true
+        if [ "$objects" != "$first_objects" ] || [ "$compilers" != "0" ]; then
+          die "stopped by the budget while still making progress; a rerun resumes where it stopped. Ask the operator, then rerun with --budget <minutes> (0 = unlimited)."
+        fi
+        die "stopped by the budget with no object count moving and no compiler running: treat as stuck, not slow. Look at $OUT_DIR/siso.INFO before rerunning."
+      fi
+    done
+    wait "$build_pid" || build_status=$?
+    [ -z "$build_status" ] || die "autoninja failed (exit $build_status)"
     end=$(date +%s)
 
     if [ "$(tree_fingerprint)" != "$before" ]; then

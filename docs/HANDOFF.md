@@ -91,6 +91,14 @@ perform; a param that recreates the state IS the test surface.
    once on BrowserView with sidebar/top-container/mat made *invisible, not
    removed* (a nulled background crashes: the layout dereferences it).
 
+9. **A sleep loop is not supervision.** A vanilla `official` build ran 3.5 h
+   with an agent polling for an exit line and nothing else; the operator had to
+   ask whether it was stuck (it was at 95%, but nobody could tell). Rule, now
+   in code: `build-chromium` has a 15-minute budget, prints objects and active
+   compilers every minute, and kills the build past the budget; longer runs
+   are asked for and passed as `--budget <minutes>`. Hand-written waits follow
+   the same rule (`docs/AGENT-LOOP.md`).
+
 ## Open items
 
 `BACKLOG.md` is the list; do not keep one here. First up: the operator

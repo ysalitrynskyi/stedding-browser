@@ -15,7 +15,7 @@ refer to `docs/features/<feature>.md`.
 | S-10 | Operator retest: pill site icon | ARC-ROUND2 #4 | needs next DMG |
 | S-17 | Signing, notarisation, updater | ROADMAP M7 | help page points at GitHub Releases until then |
 | S-18 | Proprietary-codecs licensing decision | decisions/0008 | needs a human |
-| S-31 | Vanilla Chromium `official` build at the pin, measured with the same harness, so the QUALITY.md overheads can be computed | QUALITY | IN PROGRESS 2026-09-02: `out/vanilla` building from the checkout detached at the pin with branding reverted; restore with `git checkout stedding-work && tooling/apply-branding` if you find it that way; then the M1 network audit |
+| S-31 | Vanilla Chromium `official` build at the pin, measured with the same harness, so the QUALITY.md overheads can be computed | QUALITY | Stopped by the operator 2026-09-02 at ~95% of objects after 3.5 h; `out/vanilla` (11 GB) is resumable: `tooling/apply-branding --revert`, `git checkout --detach <pin>`, `autoninja -C out/vanilla chrome`, then restore `stedding-work` + branding, then `tooling/measure/harness.py all --app out/vanilla/Chromium.app`; then the M1 network audit |
 | S-36 | Sidebar and Spaces settings rows (settings T6) once those behaviours exist | settings | width, auto-archive, Space management |
 
 ## Done

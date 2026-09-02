@@ -52,6 +52,11 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 SITES_FILE = HERE / "sites.txt"
+LOCAL_SITES_FILE = HERE / "sites-local.txt"
+LOCAL_SITES_DIR = HERE / "local-sites"
+# Which list read_sites() serves: "live" (sites.txt) or "local" (sites-local.txt,
+# ten pages under local-sites/ opened as file:// URLs). Set from --sites.
+SITE_LIST = "live"
 
 # Time budget for a single run before it is declared failed rather than slow.
 RUN_TIMEOUT_S = 90
@@ -230,13 +235,18 @@ def tree_footprint_bytes(root_pid: int) -> tuple[int, int]:
 
 
 def read_sites() -> list[str]:
+    source = LOCAL_SITES_FILE if SITE_LIST == "local" else SITES_FILE
     sites = [
         line.strip()
-        for line in SITES_FILE.read_text(encoding="utf-8").splitlines()
+        for line in source.read_text(encoding="utf-8").splitlines()
         if line.strip() and not line.startswith("#")
     ]
     if len(sites) != 10:
-        raise SystemExit(f"{SITES_FILE} must contain exactly 10 sites, found {len(sites)}")
+        raise SystemExit(f"{source} must contain exactly 10 sites, found {len(sites)}")
+    if SITE_LIST == "local":
+        # The same bytes every run, no network, no third-party frames: the
+        # list for comparing two builds rather than for absolute numbers.
+        sites = [(LOCAL_SITES_DIR / name).resolve().as_uri() for name in sites]
     return sites
 
 
@@ -411,6 +421,7 @@ def environment(app: Path) -> dict:
 
     return {
         "app": str(app),
+        "sites": SITE_LIST,
         "app_version": app_version(app),
         "machine": sh("sysctl", "-n", "machdep.cpu.brand_string"),
         "cpu_count": os.cpu_count(),
@@ -428,9 +439,14 @@ def main() -> int:
     parser.add_argument("--mode", choices=["cold", "warm"], default="cold")
     parser.add_argument("--runs", type=int, default=None)
     parser.add_argument("--out", type=Path, help="write results as JSON here")
+    parser.add_argument("--sites", choices=["live", "local"], default="live",
+                        help="live: the ten sites in sites.txt; local: the ten "
+                             "deterministic pages in local-sites/ (S-37)")
     args = parser.parse_args()
 
     app = args.app.resolve()
+    global SITE_LIST
+    SITE_LIST = args.sites
     if not app.is_dir():
         raise SystemExit(f"no app bundle at {app}")
     if platform.system() != "Darwin":

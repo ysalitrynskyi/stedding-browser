@@ -11,8 +11,6 @@ refer to `docs/features/<feature>.md`.
 
 | Id | Item | Feature / spec | Notes |
 |---|---|---|---|
-| S-9 | Operator retest: fullscreen URL width | ARC-ROUND2 #1 | needs next DMG |
-| S-10 | Operator retest: pill site icon | ARC-ROUND2 #4 | needs next DMG |
 | S-17 | Signing, notarisation, updater | ROADMAP M7 | help page points at GitHub Releases until then |
 | S-18 | Proprietary-codecs licensing decision | decisions/0008 | needs a human |
 | S-37 | Perf: first vanilla pair shows cold startup +12.2% and ten-tab memory +35.9% over vanilla (`docs/perf/README.md`), both past the 10% budget; warm startup is on par | QUALITY | rebuild `out/official` from the current series (the measured one is from 2026-08-31), give the harness a deterministic local site list so memory stops swinging with third-party frames, then find the cold-startup cost (suspects: Space/folder session restore, command-bar and sidebar construction at first paint) |
@@ -22,6 +20,8 @@ refer to `docs/features/<feature>.md`.
 
 | Id | Item | Closed by |
 |---|---|---|
+| S-9 | Operator retest: fullscreen URL width | Retested by capture on the 2026-09-02 release build in real fullscreen (⌃⌘F): the omnibox stays at its cap, centred, unfocused and focused (ARC-ROUND2 #1) |
+| S-10 | Operator retest: pill site icon | Same capture: the pill's site icon renders clean at 2× (ARC-ROUND2 #4) |
 | S-31 | Vanilla `official` build at the pin, measured with the same harness | `docs/perf/README.md` "The comparison": vanilla vs Stedding back to back, overheads against the QUALITY budgets. `tooling/args/vanilla.gn`; built under `--budget 60` |
 | S-35 | Promote a peek into a split | ⇧⌘O and an "Open in Split" button hand the page to `chrome::AddWebContents` with `NEW_SPLIT_VIEW`; Chromium 153's split view pairs it with the source tab (peek P9, patch 0009) |
 | S-8 | Popup windows have no Spaces: unit test | `PopupSpaceTest.PopupWindowsHaveNoSpaces` (spaces B14). The SEGV was the test constructing a second Browser by hand; the fixture's typed constructor (`BrowserWithTestWindowTest(Browser::TYPE_POPUP)`, as `TestWithBrowserView` does for hosted apps) builds a popup cleanly |

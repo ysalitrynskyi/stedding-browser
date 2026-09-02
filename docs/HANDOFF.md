@@ -93,8 +93,9 @@ perform; a param that recreates the state IS the test surface.
 
 ## Open items
 
-`BACKLOG.md` is the list; do not keep one here. First up: cut a DMG for the
-operator retests (`S-9`, `S-10`).
+`BACKLOG.md` is the list; do not keep one here. First up: the operator
+retests (`S-9`, `S-10`) on the DMG in `dist/`, which `tooling/package-dmg
+release` cuts from the current series.
 
 ## Release channel
 

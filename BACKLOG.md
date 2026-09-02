@@ -13,13 +13,13 @@ refer to `docs/features/<feature>.md`.
 |---|---|---|---|
 | S-17 | Signing, notarisation, updater | ROADMAP M7 | help page points at GitHub Releases until then |
 | S-18 | Proprietary-codecs licensing decision | decisions/0008 | needs a human |
-| S-38 | Fullscreen: the top container spans the window, so back/forward/reload sit over the sidebar column; upstream's fullscreen-with-toolbar layout, needs a layout hook | ARC-ROUND2 round 4 | Not the layout's `top_offset` (0 in fullscreen already): on macOS immersive fullscreen the top container leaves the browser view for the reveal overlay widget, which spans the window; the fix is to inset that overlay by the strip width (`ImmersiveModeControllerMac` / reveal widget), platform code. Tried 2026-09-02: a leading border on the top container while immersive is enabled does not move the toolbar (the overlay hosts its own toolbar layout); next attempt should look at `ImmersiveModeOverlayViewsMac` and the reveal view's frame |
 | S-36 | Sidebar and Spaces settings rows (settings T6) once those behaviours exist | settings | width, auto-archive, Space management |
 
 ## Done
 
 | Id | Item | Closed by |
 |---|---|---|
+| S-38 | Fullscreen toolbar over the sidebar | `SteddingBrowserViewLayout::CalculateTopContainerLayout` insets the overlay's toolbar by the strip width while immersive fullscreen is on (patch 0002); ARC-ROUND2 round 4 |
 | S-37 | Perf budgets on the first vanilla pair | Noise, not the series: on the deterministic local list the pair reads cold +2.3%, warm −2.0%, memory +0.0% (`docs/perf/README.md`); the live list's swings were third-party frames. Re-measure the next official build the same way before a release |
 | S-39 | Space tint on the sidebar ground, neutral new tab page | Blend in `stedding_color_mixer` and `SteddingWindowBackground` (patch 0007); spaces B11 |
 | S-9 | Operator retest: fullscreen URL width | Retested by capture on the 2026-09-02 release build in real fullscreen (⌃⌘F): the omnibox stays at its cap, centred, unfocused and focused (ARC-ROUND2 #1) |

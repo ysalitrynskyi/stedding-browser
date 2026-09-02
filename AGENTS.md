@@ -142,7 +142,6 @@ met (cold +2.3%, warm −2.0%, memory +0.0% over vanilla).
 
 The order is `BACKLOG.md`. In one line: the operator retests `S-9`/`S-10` on
 the latest DMG in `dist/`. `S-36` waits for sidebar and Spaces preferences;
-`S-38` (fullscreen toolbar overlay) is platform work;
 `S-17` signing needs credentials and `S-18` a licensing decision.
 `S-17` signing needs credentials and `S-18` (proprietary-codecs licensing)
 still needs a human decision.

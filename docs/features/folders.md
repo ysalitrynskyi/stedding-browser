@@ -1,6 +1,6 @@
 # Feature: Folders
 
-Status: **F1–F9 built and tested**; F10–F11 are gaps (`S-4`).
+Status: **F1–F9, F11 built and tested**; F10 is a gap.
 Owner docs: `docs/decisions/0013-folders-are-a-collection-type.md` (model). Patch: `0008` (the whole feature; the series is per feature since `S-11`).
 
 A folder is a named, collapsible container of tabs in the sidebar. Folders nest. A folder is
@@ -21,7 +21,7 @@ folder's membership cannot be overwritten by an outer group (ADR 0013).
 | F8 | Essentials (pinned) tabs never enter a folder; a pinned tab dropped on a folder goes back to the essentials row. | `FolderDragTargetTest.APinnedTabStaysPinnedAndOutOfTheFolder`, `TabStripModelTest.MoveTabsToFolderAppendsNestsAndRefusesPins` | built |
 | F9 | Tabs move into a folder one by one, so the tree stays valid even when every tab of an outer folder is moved into a folder nested inside it. | `TabStripModelTest.MoveTabsToFolderAppendsNestsAndRefusesPins` | built |
 | F10 | Dragging a tab between two tabs inside an expanded folder places it there (the strip's own reorder is folder-aware). | none yet | gap |
-| F11 | The tab-strip mojom carries a Folder variant instead of mapping FOLDER to the plain container. | none yet | gap |
+| F11 | The tab-strip mojom carries a Folder variant (id, title, collapse state) instead of mapping FOLDER to the plain container. | live: a window with nested folders under the API observer, no crash; `TabStripModelTest.AddToNewFolder*` drives the converter | built |
 
 ## Running the tests
 

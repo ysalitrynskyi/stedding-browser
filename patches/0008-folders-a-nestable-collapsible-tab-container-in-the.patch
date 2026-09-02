@@ -28,6 +28,9 @@ Folder paths are re-emitted through the session rebuild registry
 (stedding_session_rebuild.h) so they survive the log being rebuilt from
 scratch, and FolderPathForTab exposes the encoding the rebuild writes.
 
+The tab-strip API data model carries a Folder variant (id, title, collapse
+state) instead of mapping folders to the plain unpinned container.
+
 Why: folders were the highest Arc-named request on the comparable project;
 users said they would not leave Arc without them, and folders without
 drag-into are a gesture short.
@@ -51,7 +54,7 @@ container with first-class collection persistence; ours then rebases onto it.
  chrome/browser/ui/tabs/tab_model.cc           |   7 +
  .../android_tab_strip_model_adapter.cc        |   2 +
  .../android_translation_adapter.cc            |   5 +
- .../converters/tab_converters.cc              |  11 +
+ .../converters/tab_converters.cc              |  14 +
  .../tab_strip_model_adapter_impl.cc           |   4 +
  chrome/browser/ui/tabs/tab_strip_model.cc     | 135 +++++++++
  chrome/browser/ui/tabs/tab_strip_model.h      |  17 ++
@@ -72,6 +75,8 @@ container with first-class collection persistence; ours then rebases onto it.
  .../ui/views/tabs/common/tab_strip_view.cc    |   3 +
  .../tabs/dragging/tab_drag_controller.cc      |   6 +
  chrome/test/BUILD.gn                          |   2 +
+ .../tab_strip/tab_strip_api_data_model.mojom  |  14 +
+ .../utilities/tab_strip_api_utilities.cc      |   2 +
  components/tabs/BUILD.gn                      |   2 +
  components/tabs/impl/folder_tab_collection.cc |  36 +++
  components/tabs/impl/tab_strip_collection.cc  | 127 +++++++++
@@ -79,7 +84,7 @@ container with first-class collection persistence; ours then rebases onto it.
  .../tabs/public/folder_tab_collection.h       |  61 ++++
  components/tabs/public/tab_collection.h       |   6 +-
  components/tabs/public/tab_strip_collection.h |  29 ++
- 45 files changed, 1844 insertions(+), 7 deletions(-)
+ 47 files changed, 1863 insertions(+), 7 deletions(-)
  create mode 100644 chrome/browser/ui/tabs/stedding_folder_session.cc
  create mode 100644 chrome/browser/ui/tabs/stedding_folder_session.h
  create mode 100644 chrome/browser/ui/tabs/stedding_folder_session_unittest.cc
@@ -906,23 +911,33 @@ index 4aedf02ff8209..aa4f1b524e594 100644
  
    NOTREACHED();
 diff --git a/chrome/browser/ui/tabs/tab_strip_api/tab_strip_model_impl/converters/tab_converters.cc b/chrome/browser/ui/tabs/tab_strip_api/tab_strip_model_impl/converters/tab_converters.cc
-index 16da4620ecd3d..9868af1114e3f 100644
+index 16da4620ecd3d..6952dc85978aa 100644
 --- a/chrome/browser/ui/tabs/tab_strip_api/tab_strip_model_impl/converters/tab_converters.cc
 +++ b/chrome/browser/ui/tabs/tab_strip_api/tab_strip_model_impl/converters/tab_converters.cc
-@@ -174,6 +174,17 @@ tabs_api::mojom::DataPtr BuildMojoTabCollectionData(
+@@ -16,6 +16,7 @@
+ #include "components/favicon/core/favicon_driver.h"
+ #include "components/split_tabs/split_tab_visual_data.h"
+ #include "components/tab_groups/tab_group_visual_data.h"
++#include "components/tabs/public/folder_tab_collection.h"
+ #include "components/tabs/public/split_tab_collection.h"
+ #include "components/tabs/public/split_tab_data.h"
+ #include "components/tabs/public/tab_alert.h"
+@@ -174,6 +175,19 @@ tabs_api::mojom::DataPtr BuildMojoTabCollectionData(
        mojo_split_tab->data = *visual_data;
        return tabs_api::mojom::Data::NewSplitTab(std::move(mojo_split_tab));
      }
 +    case tabs::TabCollection::Type::FOLDER: {
-+      // Stedding: the API has no folder variant yet, and this observer runs
-+      // for every mutation, so a folder must map to SOMETHING or creating one
-+      // kills the browser -- which is exactly how this line got written. A
-+      // folder is a plain container of tabs, which is what UnpinnedTabs is in
-+      // this union; the id still identifies the node. A real Folder variant
-+      // belongs in the mojom when anything consumes folder metadata.
-+      auto mojo_folder = tabs_api::mojom::UnpinnedTabs::New();
++      // Stedding: folders are their own variant, with the title and collapse
++      // state the sidebar shows.
++      const auto* const folder_collection =
++          static_cast<const tabs::FolderTabCollection*>(collection);
++      auto visual = tabs_api::mojom::FolderVisualData::New();
++      visual->title = folder_collection->title();
++      visual->is_collapsed = folder_collection->collapsed();
++      auto mojo_folder = tabs_api::mojom::Folder::New();
 +      mojo_folder->id = node_id;
-+      return tabs_api::mojom::Data::NewUnpinnedTabs(std::move(mojo_folder));
++      mojo_folder->data = std::move(visual);
++      return tabs_api::mojom::Data::NewFolder(std::move(mojo_folder));
 +    }
    }
    NOTREACHED();
@@ -2203,6 +2218,51 @@ index a2b33318995fe..ca1c3529b37ec 100644
      "//chrome/browser/ui/views/spaces:unit_tests",
      "//chrome/browser/ui/find_bar:unit_tests",
      "//chrome/browser/ui/hats",
+diff --git a/components/browser_apis/tab_strip/tab_strip_api_data_model.mojom b/components/browser_apis/tab_strip/tab_strip_api_data_model.mojom
+index 2a61e87cd855c..4703fbcdc5876 100644
+--- a/components/browser_apis/tab_strip/tab_strip_api_data_model.mojom
++++ b/components/browser_apis/tab_strip/tab_strip_api_data_model.mojom
+@@ -55,6 +55,19 @@ struct UnpinnedTabs {
+   NodeId id;
+ };
+ 
++// Stedding: a Folder is a nestable, collapsible container of tabs and other
++// folders (components/tabs/public/folder_tab_collection.h). Unlike a
++// TabGroup it can contain folders and is never auto-archived.
++struct Folder {
++  NodeId id;
++  FolderVisualData data;
++};
++
++struct FolderVisualData {
++  string title;
++  bool is_collapsed;
++};
++
+ // TabGroup is a TabCollection created by the user to organize a group
+ // of tabs with an associated set of visual data.
+ struct TabGroup {
+@@ -98,6 +111,7 @@ union Data {
+   TabGroup tab_group;
+   SplitTab split_tab;
+   Window window;
++  Folder folder;
+ };
+ 
+ // Container represents a node in the tree hierarchy.
+diff --git a/components/browser_apis/tab_strip/utilities/tab_strip_api_utilities.cc b/components/browser_apis/tab_strip/utilities/tab_strip_api_utilities.cc
+index 7eaad8df5ef8d..b85062e9939cb 100644
+--- a/components/browser_apis/tab_strip/utilities/tab_strip_api_utilities.cc
++++ b/components/browser_apis/tab_strip/utilities/tab_strip_api_utilities.cc
+@@ -23,6 +23,8 @@ const tabs_api::NodeId& GetNodeId(const mojom::Data& data) {
+       return data.get_split_tab()->id;
+     case mojom::Data::Tag::kTabGroup:
+       return data.get_tab_group()->id;
++    case mojom::Data::Tag::kFolder:
++      return data.get_folder()->id;
+     case mojom::Data::Tag::kTab:
+       return data.get_tab()->id;
+     case mojom::Data::Tag::kWindow:
 diff --git a/components/tabs/BUILD.gn b/components/tabs/BUILD.gn
 index 4763201ff9130..89675905848b4 100644
 --- a/components/tabs/BUILD.gn

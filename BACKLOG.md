@@ -11,23 +11,25 @@ refer to `docs/features/<feature>.md`.
 
 | Id | Item | Feature / spec | Notes |
 |---|---|---|---|
-| S-4 | Folder variant in the tab-strip mojom (FOLDER maps to the plain container today) | folders | patch 0008 note |
 | S-9 | Operator retest: fullscreen URL width | ARC-ROUND2 #1 | needs next DMG |
 | S-10 | Operator retest: pill site icon | ARC-ROUND2 #4 | needs next DMG |
-| S-13 | Performance baselines from `out/official` | QUALITY | then the M1 network audit |
 | S-14 | Peek | ROADMAP M4 | |
 | S-15 | Settings surface | ROADMAP M5 | |
 | S-17 | Signing, notarisation, updater | ROADMAP M7 | help page points at GitHub Releases until then |
 | S-8 | Popup windows have no Spaces: unit test | spaces B14 | `CreateBrowser(profile, TYPE_POPUP, ...)` in `BrowserWithTestWindowTest` SEGVs before the assertion, in a release build with no symbols; find out whether that is the fixture or us |
 | S-18 | Proprietary-codecs licensing decision | decisions/0008 | needs a human |
-| S-29 | De-Google chrome://settings: "You and Google", "Google services", "AI in Chrome" sections still show | PRIVACY, settings | hide the sections; a Stedding section is `S-15` |
-| S-30 | "Import Bookmarks and Settings…" entry in the app menu, pointing at chrome://settings/importData | import | Chromium has the item under Bookmarks; surface it |
+| S-31 | Vanilla Chromium `official` build at the pin, measured with the same harness, so the QUALITY.md overheads can be computed | QUALITY | ~4 h build; then the M1 network audit |
+| S-32 | Branding leftovers: "About Chromium" and the Chromium logo in chrome://settings, "Chromium Helper" process names in `out/official` | branding | strings come from generated_resources, not the branded grd |
 | S-28 | A Stedding new tab page: blank or minimal, local, no Web Store tile | PRIVACY, ui-spec | replaces Chromium's third-party page |
 
 ## Done
 
 | Id | Item | Closed by |
 |---|---|---|
+| S-4 | Folder variant in the tab-strip mojom | `Folder {id, title, is_collapsed}` in the data model union; converter and utilities handle it; folder window verified live (patch 0008) |
+| S-29 | De-Google chrome://settings | "You and Google" and "AI in Chrome" hidden; landing route falls through to Autofill (patch 0003) |
+| S-30 | Import entry in the app menu | Already present: app menu → Bookmarks and lists → Import Bookmarks and Settings |
+| S-13 | Performance baselines from `out/official` | `docs/perf/2026-09-02-official.json` + `docs/perf/README.md`: cold 0.63 s, warm 0.77 s, 5.7 GB / ~107 processes for the ten-site list. Overheads need the vanilla half (`S-31`) |
 | S-20 | Folder drop highlight | `tooling/drive` `dragstart`/`dragmove`/`shot`/`dragend`: the hovered header paints its rounded highlight mid-drag; drop lands the tab inside |
 | S-16 | Import from Chrome / Arc / Firefox | Chromium's importer works as-is: chrome://settings/importData lists installed browsers (Firefox seen) and imports history, bookmarks, autofill. No Stedding code needed; a menu entry is `S-30` |
 | S-27 | Sidebar collapse button | Keep: it is Arc's sidebar toggle in the same corner; only the tab-group/tab-search combo was foreign |

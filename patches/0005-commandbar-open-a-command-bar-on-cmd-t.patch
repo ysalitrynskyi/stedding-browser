@@ -22,6 +22,9 @@ takes the first tab match when there is one.
 CommandBarViewTest covers choosing a tab in another Space (switch, then
 activate) and filtering by title.
 
+The bar takes the theme's dialog colours, a quiet text-tinted highlight
+for the chosen row instead of a block of accent colour, and larger type.
+
 Why: Cmd+T is the most-used key in a browser and the reference makes it the
 way in to everything, including other Spaces.
 Removable when: never, short of dropping the command bar. The surface colours
@@ -32,10 +35,10 @@ become theme ids once Stedding has its own tokens for floating surfaces.
  chrome/browser/ui/stedding_ui_metrics.cc      |   3 +
  chrome/browser/ui/stedding_ui_metrics.h       |   5 +
  chrome/browser/ui/views/commandbar/BUILD.gn   |  38 ++
- .../ui/views/commandbar/command_bar_view.cc   | 344 ++++++++++++++++++
- .../ui/views/commandbar/command_bar_view.h    | 128 +++++++
- .../commandbar/command_bar_view_unittest.cc   |  62 ++++
- 8 files changed, 612 insertions(+)
+ .../ui/views/commandbar/command_bar_view.cc   | 378 ++++++++++++++++++
+ .../ui/views/commandbar/command_bar_view.h    | 133 ++++++
+ .../commandbar/command_bar_view_unittest.cc   |  62 +++
+ 8 files changed, 651 insertions(+)
  create mode 100644 chrome/browser/ui/views/commandbar/BUILD.gn
  create mode 100644 chrome/browser/ui/views/commandbar/command_bar_view.cc
  create mode 100644 chrome/browser/ui/views/commandbar/command_bar_view.h
@@ -185,10 +188,10 @@ index 0000000000000..ce2c83c55934a
 +}
 diff --git a/chrome/browser/ui/views/commandbar/command_bar_view.cc b/chrome/browser/ui/views/commandbar/command_bar_view.cc
 new file mode 100644
-index 0000000000000..bed3d0ebf8449
+index 0000000000000..756efabd5032c
 --- /dev/null
 +++ b/chrome/browser/ui/views/commandbar/command_bar_view.cc
-@@ -0,0 +1,344 @@
+@@ -0,0 +1,378 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -216,6 +219,8 @@ index 0000000000000..bed3d0ebf8449
 +#include "components/search_engines/template_url.h"
 +#include "components/search_engines/template_url_service.h"
 +#include "components/url_formatter/url_fixer.h"
++#include "ui/color/color_id.h"
++#include "ui/color/color_provider.h"
 +#include "ui/base/metadata/metadata_impl_macros.h"
 +#include "ui/views/border.h"
 +#include "ui/views/controls/button/label_button.h"
@@ -233,19 +238,19 @@ index 0000000000000..bed3d0ebf8449
 +
 +constexpr int kBarWidth = 720;
 +constexpr int kListHeight = 320;
-+constexpr int kRowHeight = 48;
++constexpr int kRowHeight = 44;
 +constexpr int kFieldHeight = 52;
 +constexpr int kPanelRadius = 16;
 +constexpr int kRowRadius = 10;
-+constexpr int kPanelInset = 14;
++constexpr int kPanelInset = 12;
++constexpr int kFontSizeDelta = 3;
 +constexpr size_t kMaxResults = 8;
 +
-+// The overlay is its own surface floating over the page, so it does not take
-+// the toolbar's colours. These match the reference: a near-black panel with a
-+// slightly lighter field.
-+constexpr SkColor kPanelColor = SkColorSetRGB(0x22, 0x23, 0x27);
-+constexpr SkColor kFieldColor = SkColorSetRGB(0x2C, 0x2D, 0x33);
-+constexpr SkColor kSelectedRowColor = SkColorSetRGB(0x4B, 0x4D, 0xE8);
++// The overlay is its own surface floating over the page, so it takes the
++// dialog colours of the current theme (light panel in light mode, dark in
++// dark), never the toolbar's. The chosen row is a quiet tint of the text
++// colour, the way a menu highlights, rather than a block of accent colour.
++constexpr SkAlpha kSelectedRowAlpha = 0x1F;
 +
 +bool Matches(const std::u16string& haystack, const std::u16string& needle) {
 +  if (needle.empty()) {
@@ -256,6 +261,19 @@ index 0000000000000..bed3d0ebf8449
 +}
 +
 +}  // namespace
++
++// A result row: a LabelButton whose label is reachable, so the bar can set
++// its type. LabelButton keeps label() protected.
++class CommandBarView::ResultRow : public views::LabelButton {
++  METADATA_HEADER(ResultRow, views::LabelButton)
++
++ public:
++  using views::LabelButton::LabelButton;
++  views::Label* row_label() { return label(); }
++};
++
++BEGIN_METADATA(CommandBarView, ResultRow)
++END_METADATA
 +
 +// static
 +void CommandBarView::Show(Browser* browser) {
@@ -291,8 +309,8 @@ index 0000000000000..bed3d0ebf8449
 +}
 +
 +CommandBarView::CommandBarView(Browser* browser) : browser_(browser) {
-+  SetBackground(
-+      views::CreateRoundedRectBackground(kPanelColor, kPanelRadius));
++  SetBackground(views::CreateRoundedRectBackground(ui::kColorDialogBackground,
++                                                   kPanelRadius));
 +  SetBorder(views::CreateEmptyBorder(gfx::Insets(kPanelInset)));
 +  AddAccelerator(ui::Accelerator(ui::VKEY_ESCAPE, ui::EF_NONE));
 +  BuildContents();
@@ -308,7 +326,8 @@ index 0000000000000..bed3d0ebf8449
 +  field->set_controller(this);
 +  field->SetPlaceholderText(u"Search or Enter URL...");
 +  field->SetPreferredSize(gfx::Size(kBarWidth, kFieldHeight));
-+  field->SetBackgroundColor(kFieldColor);
++  field->SetBackgroundColor(ui::kColorTextfieldBackground);
++  field->SetFontList(field->GetFontList().DeriveWithSizeDelta(kFontSizeDelta));
 +  field->SetBorder(views::CreateEmptyBorder(gfx::Insets::VH(0, 12)));
 +  field_ = AddChildView(std::move(field));
 +
@@ -428,38 +447,56 @@ index 0000000000000..bed3d0ebf8449
 +        url_formatter::FixupURL(base::UTF16ToUTF8(query), std::string());
 +    const bool is_url = url.is_valid() && url.has_host() &&
 +                        query.find(u' ') == std::u16string::npos;
-+    auto open_row = std::make_unique<views::LabelButton>(
++    auto open_row = std::make_unique<ResultRow>(
 +        base::BindRepeating(&CommandBarView::OpenTypedText,
 +                            base::Unretained(this)),
 +        query + (is_url ? u"   —   Open" : u"   —   Search"));
-+    open_row->SetHorizontalAlignment(gfx::ALIGN_LEFT);
-+    open_row->SetPreferredSize(gfx::Size(kBarWidth, kRowHeight));
-+    if (results_.empty()) {
-+      open_row->SetBackground(
-+          views::CreateRoundedRectBackground(kSelectedRowColor, kRowRadius));
-+    }
++    StyleRow(open_row.get(), results_.empty());
 +    contents->AddChildView(std::move(open_row));
 +  }
 +
 +  for (const Result& result : results_) {
 +    const std::u16string trailing =
 +        result.space.empty() ? u"Switch to Tab" : result.space;
-+    auto row = std::make_unique<views::LabelButton>(
++    auto row = std::make_unique<ResultRow>(
 +        base::BindRepeating(&CommandBarView::GoTo, base::Unretained(this),
 +                            result),
 +        result.title + u"   —   " + trailing);
-+    row->SetHorizontalAlignment(gfx::ALIGN_LEFT);
-+    row->SetPreferredSize(gfx::Size(kBarWidth, kRowHeight));
 +    // The first tab result is what Enter takes, so it is the one shown as
 +    // chosen; the open row above it is what Enter takes only when no tab
 +    // matches.
-+    if (&result == &results_.front()) {
-+      row->SetBackground(
-+          views::CreateRoundedRectBackground(kSelectedRowColor, kRowRadius));
-+    }
++    StyleRow(row.get(), &result == &results_.front());
 +    contents->AddChildView(std::move(row));
 +  }
 +  contents->InvalidateLayout();
++}
++
++void CommandBarView::StyleRow(ResultRow* row, bool chosen) {
++  row->SetHorizontalAlignment(gfx::ALIGN_LEFT);
++  row->SetPreferredSize(gfx::Size(kBarWidth, kRowHeight));
++  row->SetBorder(views::CreateEmptyBorder(gfx::Insets::VH(0, 14)));
++  row->row_label()->SetFontList(
++      row->row_label()->font_list().DeriveWithSizeDelta(kFontSizeDelta));
++  row->SetEnabledTextColors(ui::kColorLabelForeground);
++  if (chosen) {
++    // Resolved here rather than by id: the tint is the text colour at a low
++    // alpha, and a colour id cannot carry an alpha. Before the bar is in a
++    // widget there is no provider; white is the dark-mode answer and the
++    // rows are rebuilt on the first theme pass anyway.
++    const ui::ColorProvider* const provider = GetColorProvider();
++    const SkColor text = provider
++                             ? provider->GetColor(ui::kColorLabelForeground)
++                             : SK_ColorWHITE;
++    row->SetBackground(views::CreateRoundedRectBackground(
++        SkColorSetA(text, kSelectedRowAlpha), kRowRadius));
++  }
++}
++
++void CommandBarView::OnThemeChanged() {
++  views::View::OnThemeChanged();
++  if (field_) {
++    UpdateResults(std::u16string(field_->GetText()));
++  }
 +}
 +
 +void CommandBarView::GoTo(const Result& result) {
@@ -535,10 +572,10 @@ index 0000000000000..bed3d0ebf8449
 +}  // namespace stedding
 diff --git a/chrome/browser/ui/views/commandbar/command_bar_view.h b/chrome/browser/ui/views/commandbar/command_bar_view.h
 new file mode 100644
-index 0000000000000..e6d517da69f83
+index 0000000000000..9103560333806
 --- /dev/null
 +++ b/chrome/browser/ui/views/commandbar/command_bar_view.h
-@@ -0,0 +1,128 @@
+@@ -0,0 +1,133 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -616,6 +653,7 @@ index 0000000000000..e6d517da69f83
 +  // views::View:
 +  void AddedToWidget() override;
 +  void RemovedFromWidget() override;
++  void OnThemeChanged() override;
 +  bool AcceleratorPressed(const ui::Accelerator& accelerator) override;
 +
 +  // views::FocusChangeListener:
@@ -643,6 +681,10 @@ index 0000000000000..e6d517da69f83
 +
 +  // Rebuilds the result list for `query`.
 +  void UpdateResults(const std::u16string& query);
++
++  // Gives a result row its type, padding and, when `chosen`, its tint.
++  class ResultRow;
++  void StyleRow(ResultRow* row, bool chosen);
 +
 +  // Goes to `result` and closes. Not named Accept: DialogDelegate already has
 +  // a virtual of that name and this would hide it.

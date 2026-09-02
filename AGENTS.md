@@ -91,6 +91,8 @@ Built, with tests or measured captures:
 - **Peek**: a link leaving a pinned tab's site opens over the window instead
   of navigating the tab; Escape or a click outside dismisses it, ⌘O moves the
   same page into a tab (`docs/features/peek.md`).
+- **Settings**: a "Stedding" section first in chrome://settings, one toggle
+  per Stedding preference (`docs/features/settings.md`).
 
 Read `docs/HANDOFF.md` before touching anything — it carries the working loop,
 every dev parameter, and the traps already paid for. `docs/ARC-ROUND2.md` is
@@ -137,7 +139,7 @@ Outstanding: `BACKLOG.md`. Unsigned (M7), no performance baselines yet.
 ## Current priorities (keep this list short and fresh)
 
 The order is `BACKLOG.md`. In one line: the operator retests `S-9`/`S-10` on
-the latest DMG in `dist/`, then `S-15` (a Stedding settings surface, with
-`S-33`) and `S-31` (the vanilla build to compare the perf baseline against).
+the latest DMG in `dist/`, then `S-31` (the vanilla build to compare the
+perf baseline against) and `S-34` (peek for new-tab links).
 `S-17` signing needs credentials and `S-18` (proprietary-codecs licensing)
 still needs a human decision.

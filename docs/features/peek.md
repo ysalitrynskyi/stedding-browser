@@ -1,6 +1,6 @@
 # Feature: Peek
 
-Status: **P1–P7 built and tested**; P8–P9 are gaps (`S-34`, `S-35`).
+Status: **P1–P7, P10 built and tested**; P8–P9 are gaps (`S-34`, `S-35`).
 Owner docs: `docs/PRODUCT.md` ("Peek": what makes pinned tabs behave like apps). Patch: `0009`.
 
 A link from a pinned tab that would leave the pinned site opens in a peek: a page over the
@@ -26,3 +26,4 @@ and hands it to the tab strip on promotion.
 | P7 | Promoting (⌘O, the button) moves the very same page into a new active tab and closes the peek. | `PeekViewTest.PromotingMovesThePageIntoANewActiveTab`; live: ⌘O in the peek | built |
 | P8 | Links from a pinned tab that open a new tab (`target=_blank`, ⌘-click) also peek, as in Arc. | none yet | gap |
 | P9 | A peek can be promoted into a split instead of a tab (needs split view, ROADMAP M5). | none yet | gap |
+| P10 | The chrome://settings "Stedding" switch turns Peek off; pinned tabs then follow links like any other. | `ShouldPeekTest.SettingOffFollowsLinks`; settings T3 | built |

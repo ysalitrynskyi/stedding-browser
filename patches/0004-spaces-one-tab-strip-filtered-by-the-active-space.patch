@@ -53,6 +53,9 @@ The sidebar's "+ New Tab" row sits under the Clear line above the unpinned
 tabs and opens what Cmd+T opens; the bottom "+" pill is hidden, its container
 kept as the flexible spacer that holds the Space switcher at the bottom.
 
+The Space context menu names each icon (Home, Work, ...) and shows a
+swatch beside each colour.
+
 Why: Spaces are the feature people stay in Arc for, and the workflow layer
 the sidebar exists to serve; a switcher that changes an id without moving
 the active tab is a picture of a feature.
@@ -99,7 +102,7 @@ session service can express tab sets itself. Never short of that.
  .../ui/views/spaces/space_drag_target.cc      |  89 +++
  .../ui/views/spaces/space_drag_target.h       |  67 ++
  .../spaces/space_drag_target_unittest.cc      |  80 +++
- .../ui/views/spaces/space_switcher_view.cc    | 384 ++++++++++++
+ .../ui/views/spaces/space_switcher_view.cc    | 421 +++++++++++++
  .../ui/views/spaces/space_switcher_view.h     | 128 ++++
  .../spaces/space_tab_visibility_controller.cc | 150 +++++
  .../spaces/space_tab_visibility_controller.h  |  82 +++
@@ -111,7 +114,7 @@ session service can express tab sets itself. Never short of that.
  .../ui/views/tabs/common/tab_strip_view.h     |  12 +
  .../tabs/common/tab_strip_view_layout.cc      |  26 +-
  chrome/test/BUILD.gn                          |   2 +
- 51 files changed, 3389 insertions(+), 25 deletions(-)
+ 51 files changed, 3426 insertions(+), 25 deletions(-)
  create mode 100644 chrome/browser/sessions/stedding_session_rebuild.cc
  create mode 100644 chrome/browser/sessions/stedding_session_rebuild.h
  create mode 100644 chrome/browser/ui/spaces/BUILD.gn
@@ -3102,10 +3105,10 @@ index 0000000000000..d9ba09eb2a4a7
 +}  // namespace spaces
 diff --git a/chrome/browser/ui/views/spaces/space_switcher_view.cc b/chrome/browser/ui/views/spaces/space_switcher_view.cc
 new file mode 100644
-index 0000000000000..9916967671e8f
+index 0000000000000..56d168bee6f00
 --- /dev/null
 +++ b/chrome/browser/ui/views/spaces/space_switcher_view.cc
-@@ -0,0 +1,384 @@
+@@ -0,0 +1,421 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -3128,6 +3131,10 @@ index 0000000000000..9916967671e8f
 +#include "ui/base/metadata/metadata_impl_macros.h"
 +#include "ui/gfx/color_utils.h"
 +#include "ui/views/background.h"
++#include "cc/paint/paint_flags.h"
++#include "ui/base/models/image_model.h"
++#include "ui/gfx/canvas.h"
++#include "ui/gfx/image/canvas_image_source.h"
 +#include "ui/views/controls/button/label_button.h"
 +#include "ui/menus/simple_menu_model.h"
 +#include "ui/views/controls/menu/menu_runner.h"
@@ -3163,6 +3170,26 @@ index 0000000000000..9916967671e8f
 +    "\xF0\x9F\x94\xAC",  // microscope
 +    "\xF0\x9F\x8E\xB5",  // note
 +});
++
++// The colour swatch drawn beside a colour's name in the context menu.
++constexpr int kSwatchSize = 16;
++
++class SwatchSource : public gfx::CanvasImageSource {
++ public:
++  explicit SwatchSource(SkColor color)
++      : gfx::CanvasImageSource(gfx::Size(kSwatchSize, kSwatchSize)),
++        color_(color) {}
++  void Draw(gfx::Canvas* canvas) override {
++    cc::PaintFlags flags;
++    flags.setAntiAlias(true);
++    flags.setColor(color_);
++    canvas->DrawCircle(gfx::PointF(kSwatchSize / 2.0f, kSwatchSize / 2.0f),
++                       kSwatchSize / 2.0f - 1, flags);
++  }
++
++ private:
++  const SkColor color_;
++};
 +
 +// Command ids: the icon choices occupy a block, then the rest.
 +constexpr int kFirstIconCommand = 100;
@@ -3327,9 +3354,15 @@ index 0000000000000..9916967671e8f
 +  menu_space_ = it->second;
 +
 +  menu_model_ = std::make_unique<ui::SimpleMenuModel>(this);
++  // Each icon with the word it stands for: a bare emoji in a menu row reads
++  // as a mistake.
++  static constexpr auto kIconNames = std::to_array<const char16_t*>(
++      {u"Home", u"Work", u"Study", u"Design", u"Research", u"Music"});
 +  for (size_t i = 0; i < kIconChoices.size(); ++i) {
-+    menu_model_->AddItem(kFirstIconCommand + static_cast<int>(i),
-+                         base::UTF8ToUTF16(std::string(kIconChoices.at(i))));
++    menu_model_->AddItem(
++        kFirstIconCommand + static_cast<int>(i),
++        base::UTF8ToUTF16(std::string(kIconChoices.at(i))) + u"   " +
++            kIconNames.at(i));
 +  }
 +  menu_model_->AddSeparator(ui::NORMAL_SEPARATOR);
 +  menu_model_->AddItem(kMoveTabHereCommand, u"Move Current Tab Here");
@@ -3337,8 +3370,15 @@ index 0000000000000..9916967671e8f
 +  static constexpr auto kColorNames = std::to_array<const char16_t*>({
 +      u"Slate", u"Plum", u"Moss", u"Clay", u"Rose"});
 +  for (size_t i = 0; i < kNewSpaceColors.size(); ++i) {
-+    menu_model_->AddItem(kFirstColorCommand + static_cast<int>(i),
-+                         kColorNames.at(i));
++    // A swatch of the colour beside its name.
++    const SkColor color = kNewSpaceColors.at(i);
++    menu_model_->AddItemWithIcon(
++        kFirstColorCommand + static_cast<int>(i), kColorNames.at(i),
++        // A plain image, not a generator: Cocoa's menu controller refuses
++        // generator-backed icons (NOTREACHED), and a swatch has no theme
++        // dependence anyway.
++        ui::ImageModel::FromImageSkia(
++            gfx::CanvasImageSource::MakeImageSkia<SwatchSource>(color)));
 +  }
 +  menu_model_->AddSeparator(ui::NORMAL_SEPARATOR);
 +  menu_model_->AddItem(kRenameSpaceCommand, u"Rename Space");

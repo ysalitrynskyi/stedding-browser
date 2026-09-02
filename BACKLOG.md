@@ -14,6 +14,8 @@ refer to `docs/features/<feature>.md`.
 | S-17 | Signing, notarisation, updater | ROADMAP M7 | help page points at GitHub Releases until then |
 | S-18 | Proprietary-codecs licensing decision | decisions/0008 | needs a human |
 | S-37 | Perf: first vanilla pair shows cold startup +12.2% and ten-tab memory +35.9% over vanilla (`docs/perf/README.md`), both past the 10% budget; warm startup is on par | QUALITY | rebuild `out/official` from the current series (the measured one is from 2026-08-31), give the harness a deterministic local site list so memory stops swinging with third-party frames, then find the cold-startup cost (suspects: Space/folder session restore, command-bar and sidebar construction at first paint) |
+| S-38 | Fullscreen: the top container spans the window, so back/forward/reload sit over the sidebar column; upstream's fullscreen-with-toolbar layout, needs a layout hook | ARC-ROUND2 round 4 | `BrowserViewTabbedLayoutImpl` vertical strip `top_offset` |
+| S-39 | Space tint should colour the sidebar ground (Arc), not the page: blend the active Space colour into the window gradient and keep the new tab page neutral | ARC-ROUND2 round 4 | `SteddingWindowBackground`, `stedding_color_mixer`, `kColorNewTabPageBackground` |
 | S-36 | Sidebar and Spaces settings rows (settings T6) once those behaviours exist | settings | width, auto-archive, Space management |
 
 ## Done

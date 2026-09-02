@@ -32,3 +32,17 @@ here. No fix is done until a capture shows it.
 
 Known interim: the tab-strip mojo API maps FOLDER to its plain-container
 variant until the mojom grows a Folder type (recorded in patch 0008).
+
+
+## Round 4 — visual audit (2026-09-02)
+
+A pass over every surface by capture on the release build, dark mode first.
+
+| Item | State |
+|---|---|
+| Hovered / selected tab rows turned Material blue | **Fixed** (patch 0007) — hover and select tint with the row's own text colour at a low alpha; measured (50, 52, 71) on the navy ground instead of (29, 73, 116) |
+| Command bar: saturated blue chosen row, tiny type, fixed near-black panel | **Fixed** (patch 0005) — theme dialog colours, text-tinted highlight, +3 pt type, 44 px rows |
+| Space menu: bare emoji rows, colour names without swatches | **Fixed** (patch 0004) — "🏠 Home" style labels, a circle swatch beside each colour; the first attempt used a generator-backed icon and crashed Cocoa's menu controller, so the swatch is a plain image |
+| Tab-strip background menu offered "Show Tabs Horizontally" and Google's feedback link | **Fixed** (patch 0001) — both gone in Stedding mode; Collapse and auto-expand stay |
+| Fullscreen: nav buttons sit over the sidebar column instead of over the content | Open, `S-38` |
+| Space tint lands on the page (the new tab page goes plum) rather than on the sidebar as Arc does | Open, `S-39` |

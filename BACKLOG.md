@@ -19,13 +19,14 @@ refer to `docs/features/<feature>.md`.
 | S-8 | Popup windows have no Spaces: unit test | spaces B14 | `CreateBrowser(profile, TYPE_POPUP, ...)` in `BrowserWithTestWindowTest` SEGVs before the assertion, in a release build with no symbols; find out whether that is the fixture or us |
 | S-18 | Proprietary-codecs licensing decision | decisions/0008 | needs a human |
 | S-31 | Vanilla Chromium `official` build at the pin, measured with the same harness, so the QUALITY.md overheads can be computed | QUALITY | ~4 h build; then the M1 network audit |
-| S-32 | Branding leftovers: "About Chromium" and the Chromium logo in chrome://settings, "Chromium Helper" process names in `out/official` | branding | strings come from generated_resources, not the branded grd |
-| S-28 | A Stedding new tab page: blank or minimal, local, no Web Store tile | PRIVACY, ui-spec | replaces Chromium's third-party page |
+| S-33 | New tab page: a setting to hide the shortcut row (new-tab N5) | new-tab | pairs with `S-15` |
 
 ## Done
 
 | Id | Item | Closed by |
 |---|---|---|
+| S-28 | A Stedding new tab page | The local page carries a "Press ⌘T…" hint, no Chrome Web Store tile, theme ground; `docs/features/new-tab.md`, `tooling/probes/ntp.json` (patch 0003) |
+| S-32 | Branding leftovers in chrome://settings | "About Stedding" (branding now rewrites `settings_chromium_strings.grdp`); the Stedding mark replaces Chromium's glyph in the omnibox chip, app menu and WebUI (`branding/vector_icons`, one hunk in `cr_elements/icons.html.ts`); helper processes were already "Stedding Helper" |
 | S-4 | Folder variant in the tab-strip mojom | `Folder {id, title, is_collapsed}` in the data model union; converter and utilities handle it; folder window verified live (patch 0008) |
 | S-29 | De-Google chrome://settings | "You and Google" and "AI in Chrome" hidden; landing route falls through to Autofill (patch 0003) |
 | S-30 | Import entry in the app menu | Already present: app menu → Bookmarks and lists → Import Bookmarks and Settings |

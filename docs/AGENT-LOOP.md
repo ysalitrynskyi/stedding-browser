@@ -38,7 +38,10 @@ research  →  spec  →  failing test  →  implement  →  build  →  test  �
 5. **Build and test.** `tooling/dev test <feature>` builds `unit_tests` and runs the
    feature's filter. `tooling/dev test all` before a commit.
 6. **Capture, if it is visual.** `tooling/dev capture --features '...'`, then measure
-   against `docs/UI-SPEC.md`. Measure pixels; do not eyeball.
+   against `docs/UI-SPEC.md`. Measure pixels; do not eyeball. **Drive it, if it is
+   interactive.** `tooling/drive <profile> <steps>` clicks, drags, types and captures
+   in the real window, and quits properly so restart checks are real. A spec row that
+   says "live" names its steps file.
 7. **Patch.** Commit in the checkout with the `Why:` / `Removable when:` footers. A fix
    to an existing feature is a **fixup into that feature's commit** (`git commit
    --fixup=<sha>` then `git rebase --autosquash`), not a new patch at the end of the

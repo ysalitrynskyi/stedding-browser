@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# Drive the built browser with synthetic input and capture the window after
+# steps. The harness behind every live check in docs/features/*.md.
+#
+# Usage:
+#   tooling/drive <profile-dir> <steps-file> [chromium args and URLs...]
+#
+# Launches Stedding.app with the profile (kept between runs, so restart checks
+# work), waits for first paint, runs the steps, then quits through a real
+# AppleEvent quit so session files are flushed (docs/HANDOFF.md, trap 4).
+#
+# Steps, one per line, coordinates in window points (origin top-left of the
+# window; the window is found by owner name, so never raise it by hand):
+#   activate                      make the app frontmost (clicks and keys need it)
+#   click X Y | rclick X Y | dblclick X Y | hover X Y | drag X1 Y1 X2 Y2
+#   key <name>[+cmd][+shift][+ctrl][+alt]    e.g. key t+cmd, key enter, key esc
+#   type <text>                   real key codes, modifiers explicitly cleared
+#   wait <seconds> | shot <file.png>
+#
+# Traps this harness already paid for: a created key event inherits the last
+# chord's modifiers, so "type" after "key t+cmd" used to send Cmd+e Cmd+x ...
+# (Cmd+o opened a file dialog); a Cmd+Q keystroke does not quit (warn-before-quit
+# wants it held), the AppleEvent does; the process must be frontmost for clicks.
+# Never run this while someone is using the machine: it moves the pointer.
+
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=./lib.sh
+. "$(cd "$(dirname "$0")" && pwd)/lib.sh"
+
+main() {
+  [ $# -ge 2 ] || { sed -n '2,25p' "$0"; exit 2; }
+  local profile="$1" steps="$2"
+  shift 2
+  [ -f "$steps" ] || die "no steps file at $steps"
+  mkdir -p "$profile"
+
+  local app
+  app="$(find_app_bundle "$CHROMIUM_SRC/out/release" || true)"
+  [ -n "$app" ] && [ -d "$app" ] || die "no app bundle in out/release — tooling/dev build"
+  local bin
+  bin="$app/Contents/MacOS/$(basename "$app" .app)"
+  local log="${DRIVE_LOG:-$profile/drive.log}"
+
+  "$bin" --user-data-dir="$profile" --no-first-run --no-default-browser-check \
+    --window-position=0,0 --window-size="${DRIVE_SIZE:-1400,880}" \
+    --enable-logging=stderr "$@" >/dev/null 2>"$log" &
+  local pid=$!
+  sleep "${DRIVE_SETTLE:-12}"
+
+  python3 "$STEDDING_ROOT/tooling/drive-window.py" "$steps"
+
+  osascript -e "tell application \"$app\" to quit" 2>/dev/null || true
+
+  for _ in $(seq 1 20); do
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 0.5
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    warn "browser did not quit; killing (session files may be stale)"
+    kill -9 "$pid"
+  fi
+  grep -i "fatal\|check failed" "$log" | head -5 || true
+  log "log: $log"
+}
+
+main "$@"

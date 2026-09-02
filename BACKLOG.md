@@ -11,12 +11,14 @@ refer to `docs/features/<feature>.md`.
 
 | Id | Item | Feature / spec | Notes |
 |---|---|---|---|
-| S-3 | Live restart check for Spaces and folders through a real ⌘Q | spaces B9, folders | harness must quit via the menu (HANDOFF trap 4) |
-| S-19 | Live drag harness in tooling: launch, activate, synthetic drag, capture (the scratch script that verified S-2) | tooling | `tooling/dev drag` wrapping `capture-window.py` + Quartz events; needs the window key, so never on a machine someone is using |
-| S-20 | Folder drop highlight: capture mid-drag to verify the header tint | folders F7 | needs S-19 |
+| S-20 | Folder drop highlight: capture mid-drag to verify the header tint | folders F7 | `tooling/drive` with a shot between `drag` steps needs a mid-drag hook |
+| S-21 | De-Google the new tab page and omnibox: Google NTP with AI Mode, "Ask Google" placeholder, "Press tab then enter to ask AI" | PRIVACY, degoogle | a Stedding NTP (blank or minimal) and no AI Mode entry point |
+| S-22 | Essentials as a grid of ~150×50 cards, not one full-width tile per pinned tab | ui-spec | |
+| S-23 | Sidebar top row still Chromium's: collapse button, tab-group and tab-search combo buttons | ui-spec "Known gaps" | Arc has none of these |
+| S-24 | Default Space chips are plain circles; a new Space should get a default glyph or its initial | spaces B11 | |
+| S-25 | Command bar: no "open what you typed" row when nothing matches; the list is empty until Enter | commandbar | show the typed text as the first row |
 | S-4 | Folder variant in the tab-strip mojom (FOLDER maps to the plain container today) | folders | patch 0008 note |
 | S-5 | New Tab row under the Clear line, above unpinned | ui-spec | Arc order |
-| S-6 | Session-compaction audit for per-tab extra data | spaces, folders | ADR 0015 carries the reasoning |
 | S-7 | Command bar: choosing a tab in another Space switches and activates it (test) | spaces B13 | behaviour exists, untested |
 | S-8 | Popup and app windows have no switcher (test) | spaces B14 | |
 | S-9 | Operator retest: fullscreen URL width | ARC-ROUND2 #1 | needs next DMG |
@@ -33,6 +35,9 @@ refer to `docs/features/<feature>.md`.
 
 | Id | Item | Closed by |
 |---|---|---|
+| S-3 | Live restart check for Spaces and folders through a real quit | `tooling/drive` scenario: quit via AppleEvent, three relaunches, list intact (spaces B9) |
+| S-6 | Session-compaction audit | Found the bug: the rebuild dropped every Stedding extra-data command; fixed by the rebuild provider registry plus writing the Space list on the first insert (`SessionRebuildTest.*`, `FolderSessionTest.RebuildReemitsFolderPaths`) |
+| S-19 | Live drag/click/key harness as a tool | `tooling/drive` + `tooling/drive-window.py` |
 | S-11 | Squash the patch series into per-feature patches | 45 chronological patches → 8 feature patches (tabs, ui, sign-in, spaces, commandbar, updater, colours, folders); final tree byte-identical; old branch kept as `stedding-work-pre-squash` |
 | S-2 | Drag a tab onto a folder header to move it in | patch 0008, `folder_drag_target_unittest.cc` (folders F7–F9), verified live by synthetic drag |
 | S-1 | Spaces core semantics: membership on insert, active tab follows the switch, empty Space opens a tab, delete moves tabs | patch 0004, `space_model_window_unittest.cc` (spaces B1–B8) |

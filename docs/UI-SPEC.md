@@ -205,11 +205,8 @@ file.
 ## Known gaps
 
 The sidebar's top area still holds Chromium's collapse button and the tab-group
-and tab-search combo buttons, where Arc has the space switcher. The toolbar is
-still Chromium's, left-aligned, with the omnibox pill. There is no favorites
-grid and no bottom app-icon row.
-
-The space switcher is deliberately not built yet. A row of pills that changes an
-active id without moving any tabs would be a picture of a feature, and this
-project ships features complete or not at all — see the mandate in AGENTS.md.
-It lands with the tab-parking work, not before.
+and tab-search combo buttons (`S-23`); the essentials are one full-width tile
+per pinned tab rather than a grid of cards (`S-22`); the New Tab row sits under
+the list rather than above the unpinned tabs (`S-5`); a new Space's chip is a
+plain circle (`S-24`); and the new tab page is Google's (`S-21`). Everything
+else in the tables above is built and measured.

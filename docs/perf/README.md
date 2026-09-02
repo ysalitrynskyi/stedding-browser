@@ -67,3 +67,6 @@ comparison decides whether anything here is ours.
 
 To regenerate: `tooling/measure/harness.py all --app <app> --out docs/perf/<date>-<config>.json`
 on an otherwise idle machine, never while a build runs.
+
+`out/official`'s intermediate objects were deleted on 2026-09-02 to make room; its
+`Chromium.app` is still there and still measurable. A rebuild is a fresh ~4 h job.

@@ -81,8 +81,10 @@ Built, with tests or measured captures:
 - **Folders with nesting**: create from tab context menu, drop a dragged tab
   on a folder header (patch 0008), collapse, inline rename, session
   persistence; the close-path use-after-free is fixed and regression-tested.
-- **⌘T command bar** across Spaces. Stedding colours (sand light, blue→plum
-  gradient dark). Codecs verified. Sign-in promo removed. Mac updater stubbed
+- **⌘T command bar** across Spaces, also behind the sidebar's New Tab row.
+  Stedding colours (sand light, blue→plum gradient dark). Codecs verified.
+  Sign-in promo removed; DuckDuckGo default search, so the new tab page is
+  local and the omnibox has no Google entry points. Mac updater stubbed
   (no Keystone) pointing at GitHub Releases.
 
 Read `docs/HANDOFF.md` before touching anything — it carries the working loop,

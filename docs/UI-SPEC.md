@@ -152,6 +152,10 @@ Measured against the table above, not against "looks closer".
 | Centred URL | **Done** — capped by a flex rule, spacers either side; measured centre 890 against a content centre of 876 (patch 0002) |
 | Space switcher | **Done** — a row of icons at the **bottom** of the sidebar, active one full strength, plus a button that makes a new Space (patch 0004). The first attempt put named pills at the top, which was wrong |
 | Essentials row | **Done** — pinned tabs are exempt from the Space filter, so they sit above all Spaces, and their tiles are 50 DIP tall so they read as cards (patch 0004) |
+| Essentials grid | **Done** — two cards per row at the sidebar width, ~165 DIP wide, 50 tall; a lone card stays card-sized (patch 0002) |
+| New Tab row | **Done** — "+ New Tab", muted, one tab-row tall, under the Clear line and above the unpinned tabs; opens the command bar; the bottom "+" pill is gone (patch 0002) |
+| Sidebar top row | **Done** — Chromium's tab-group/tab-search combo and the hairline under the row are hidden; only the collapse button remains (`S-27`) (patch 0002) |
+| Toolbar right cluster | **Done** — no profile avatar; the app menu only (patch 0002) |
 | Window background tinted per space | **Done** — `Widget::SetUserColorOverride` from the active Space's colour, and the colour is settable from the Space's context menu (patch 0004). A window with one Space is left untinted |
 
 ## Still not the reference
@@ -204,9 +208,6 @@ file.
 
 ## Known gaps
 
-The sidebar's top area still holds Chromium's collapse button and the tab-group
-and tab-search combo buttons (`S-23`); the essentials are one full-width tile
-per pinned tab rather than a grid of cards (`S-22`); the New Tab row sits under
-the list rather than above the unpinned tabs (`S-5`); a new Space's chip is a
-plain circle (`S-24`); and the new tab page is Google's (`S-21`). Everything
-else in the tables above is built and measured.
+The sidebar's top-left still shows Chromium's collapse button (`S-27`). The new
+tab page is Chromium's local third-party page with the search engine's logo,
+not a Stedding page. Everything else in the tables above is built and measured.

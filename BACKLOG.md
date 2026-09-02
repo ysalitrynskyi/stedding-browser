@@ -12,13 +12,7 @@ refer to `docs/features/<feature>.md`.
 | Id | Item | Feature / spec | Notes |
 |---|---|---|---|
 | S-20 | Folder drop highlight: capture mid-drag to verify the header tint | folders F7 | `tooling/drive` with a shot between `drag` steps needs a mid-drag hook |
-| S-21 | De-Google the new tab page and omnibox: Google NTP with AI Mode, "Ask Google" placeholder, "Press tab then enter to ask AI" | PRIVACY, degoogle | a Stedding NTP (blank or minimal) and no AI Mode entry point |
-| S-22 | Essentials as a grid of ~150×50 cards, not one full-width tile per pinned tab | ui-spec | |
-| S-23 | Sidebar top row still Chromium's: collapse button, tab-group and tab-search combo buttons | ui-spec "Known gaps" | Arc has none of these |
-| S-24 | Default Space chips are plain circles; a new Space should get a default glyph or its initial | spaces B11 | |
-| S-25 | Command bar: no "open what you typed" row when nothing matches; the list is empty until Enter | commandbar | show the typed text as the first row |
 | S-4 | Folder variant in the tab-strip mojom (FOLDER maps to the plain container today) | folders | patch 0008 note |
-| S-5 | New Tab row under the Clear line, above unpinned | ui-spec | Arc order |
 | S-7 | Command bar: choosing a tab in another Space switches and activates it (test) | spaces B13 | behaviour exists, untested |
 | S-8 | Popup and app windows have no switcher (test) | spaces B14 | |
 | S-9 | Operator retest: fullscreen URL width | ARC-ROUND2 #1 | needs next DMG |
@@ -30,11 +24,19 @@ refer to `docs/features/<feature>.md`.
 | S-16 | Import from Chrome / Arc | ROADMAP M6 | |
 | S-17 | Signing, notarisation, updater | ROADMAP M7 | help page points at GitHub Releases until then |
 | S-18 | Proprietary-codecs licensing decision | decisions/0008 | needs a human |
+| S-26 | First-run search engine chooser (PRIVACY.md); DuckDuckGo is the interim default | PRIVACY | randomised order, no preselection |
+| S-27 | Sidebar collapse button at the top-left: keep or drop to match the reference | ui-spec | the only Chromium control left in the sidebar's top row |
 
 ## Done
 
 | Id | Item | Closed by |
 |---|---|---|
+| S-21 | De-Google the new tab page and omnibox | DuckDuckGo is the prepopulated default (patch 0003): chrome://newtab routes to Chromium's local third-party page, no "Ask Google", no AI Mode. A first-run chooser (`S-26`) supersedes the fixed default |
+| S-22 | Essentials as a grid of cards | two cards per row at the sidebar width, a lone card stays card-sized (patch 0002) |
+| S-23 | Sidebar top row: Chromium's tab-group/tab-search combo and the hairline under it are gone; the toolbar's profile avatar too (patch 0002) |
+| S-24 | Default Space chip glyph | an un-iconed Space shows a glyph from the menu's list (patch 0004) |
+| S-5 | New Tab row above the unpinned tabs, under the Clear line; the bottom "+" pill is gone. The row opens the command bar (patch 0002) |
+| S-25 | Command bar shows the typed text as an "Open"/"Search" row (patch 0005) |
 | S-3 | Live restart check for Spaces and folders through a real quit | `tooling/drive` scenario: quit via AppleEvent, three relaunches, list intact (spaces B9) |
 | S-6 | Session-compaction audit | Found the bug: the rebuild dropped every Stedding extra-data command; fixed by the rebuild provider registry plus writing the Space list on the first insert (`SessionRebuildTest.*`, `FolderSessionTest.RebuildReemitsFolderPaths`) |
 | S-19 | Live drag/click/key harness as a tool | `tooling/drive` + `tooling/drive-window.py` |

@@ -11,6 +11,7 @@ Branding section of [docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md).
 | `mac/AppIcon.icon` | `chrome/app/theme/chromium/mac/AppIcon.icon` |
 | `mac/Assets.car` | `chrome/app/theme/chromium/mac/Assets.car` |
 | `product_logo/*` | `chrome/app/theme/chromium/product_logo*` (the About page, the Dock, the installer) |
+| `product_logo/scaled_100/*`, `scaled_200/*` | `chrome/app/theme/default_{100,200}_percent/chromium/product_logo_{16,32,name_22,name_22_white}.png` (the scaled logos WebUI serves as `chrome://theme/current-channel-logo`: settings header, About page, profile picker) |
 | `vector_icons/chrome_product.icon` | `components/omnibox/browser/vector_icons/chrome_product.icon` (the chrome:// page chip, the app menu) |
 | `webui_images/chrome_logo_dark.svg` | `ui/webui/resources/images/chrome_logo_dark.svg` (the white product logo WebUI pages show: settings header, history, downloads) |
 

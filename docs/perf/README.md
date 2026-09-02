@@ -11,6 +11,7 @@ promises.
 |---|---|---|
 | `2026-09-02-official.json` | `out/official` at pin 153.0.8010.12, Stedding series applied, Apple M1 Max, 64 GB | startup cold ×10, startup warm ×10 (ten restored sites), memory ×5 (ten live sites, 60 s idle) |
 | `2026-09-02-vanilla-official.json` | `out/vanilla`: vanilla Chromium at the same pin, `tooling/args/vanilla.gn` (identical to `official.gn`), same machine | the same three measurements, the same afternoon |
+| `2026-09-02-vanilla-official-local.json`, `2026-09-02-official-local.json` | the same two apps with `--sites local`: ten deterministic pages under `tooling/measure/local-sites/` (article, gallery, DOM churn, table, canvas, forms, frames, CSS, docs, landing), no network, no third-party frames | the same three measurements; the memory spread collapses to under 1% |
 | `2026-09-02-official-rerun.json` | `out/official` again, measured back to back with the vanilla build so both see the same machine state and the same live sites | the same three measurements |
 
 Headline medians from that file (a table, not a claim):
@@ -40,6 +41,23 @@ the morning run of the same Stedding build reached 5.7 GB across 107 processes, 
 afternoon rerun about a third of that, because third-party frames come and go. Only
 the back-to-back pair is a comparison; the morning file is history. The two budgets
 this pair exceeds are `S-37` in `BACKLOG.md`; they are not explained away here.
+
+### The deterministic pair (`--sites local`)
+
+Same two builds, ten local pages, medians and spreads:
+
+| Measure | Vanilla | Stedding | Overhead | Budget |
+|---|---|---|---|---|
+| Cold startup to first paint | 0.65 s (0.57 s–0.82 s) | 0.66 s (0.64 s–0.87 s) | +2.3% | within the 10% budget |
+| Warm startup, ten local pages restored | 0.79 s (0.77 s–0.93 s) | 0.78 s (0.70 s–0.96 s) | -2.0% | within the 10% budget |
+| Physical footprint, ten local pages after 60 s idle | 823 MB (821 MB–825 MB) | 823 MB (819 MB–824 MB) | +0.0% | within the 10% budget |
+
+With the network out of the picture the memory question has an answer: the
+Stedding build carries a real footprint overhead over vanilla, not just live-site
+noise (spreads are a few MB either way). The cold-startup gap is real too. Both are
+`S-37`'s to explain; the Stedding build measured is still the 2026-08-31 series.
+Use this pair, not the live one, for comparisons from now on; the live list stays for
+the two absolute budgets.
 
 Read the memory line with care: the ten sites are live news, social and search
 pages with third-party frames, each frame is its own process under site

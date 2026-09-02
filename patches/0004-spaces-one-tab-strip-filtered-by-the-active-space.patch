@@ -46,6 +46,13 @@ it left off by default, since the arrangement lives in the session. The
 restored active Space's tint shows from the first frame. Every surface names
 an unnamed Space the same way ("Space N").
 
+A Space the user has not given an icon still shows a glyph, taken from the
+same list the context menu offers, so chips are never blank discs.
+
+The sidebar's "+ New Tab" row sits under the Clear line above the unpinned
+tabs and opens what Cmd+T opens; the bottom "+" pill is hidden, its container
+kept as the flexible spacer that holds the Space switcher at the bottom.
+
 Why: Spaces are the feature people stay in Arc for, and the workflow layer
 the sidebar exists to serve; a switcher that changes an id without moving
 the active tab is a picture of a feature.
@@ -86,13 +93,13 @@ session service can express tab sets itself. Never short of that.
  chrome/browser/ui/tabs/tab_menu_model.cc      |   8 +
  chrome/browser/ui/tabs/tab_strip_model.cc     |  38 +-
  chrome/browser/ui/tabs/tab_strip_model.h      |  23 +
- .../frame/vertical_tab_strip_region_view.cc   | 124 ++++
+ .../frame/vertical_tab_strip_region_view.cc   | 145 +++++
  .../frame/vertical_tab_strip_region_view.h    |  24 +
  chrome/browser/ui/views/spaces/BUILD.gn       |  42 ++
  .../ui/views/spaces/space_drag_target.cc      |  89 +++
  .../ui/views/spaces/space_drag_target.h       |  67 ++
  .../spaces/space_drag_target_unittest.cc      |  80 +++
- .../ui/views/spaces/space_switcher_view.cc    | 378 +++++++++++
+ .../ui/views/spaces/space_switcher_view.cc    | 384 ++++++++++++
  .../ui/views/spaces/space_switcher_view.h     | 128 ++++
  .../spaces/space_tab_visibility_controller.cc | 150 +++++
  .../spaces/space_tab_visibility_controller.h  |  82 +++
@@ -100,11 +107,11 @@ session service can express tab sets itself. Never short of that.
  .../views/tabs/common/clear_tabs_separator.cc | 100 +++
  .../views/tabs/common/clear_tabs_separator.h  |  43 ++
  .../common/tab_strip_collection_controller.cc |  33 +
- .../ui/views/tabs/common/tab_strip_view.cc    |  12 +-
- .../ui/views/tabs/common/tab_strip_view.h     |   4 +
- .../tabs/common/tab_strip_view_layout.cc      |   9 +-
+ .../ui/views/tabs/common/tab_strip_view.cc    |  33 +-
+ .../ui/views/tabs/common/tab_strip_view.h     |  12 +
+ .../tabs/common/tab_strip_view_layout.cc      |  26 +-
  chrome/test/BUILD.gn                          |   2 +
- 51 files changed, 3300 insertions(+), 25 deletions(-)
+ 51 files changed, 3373 insertions(+), 25 deletions(-)
  create mode 100644 chrome/browser/sessions/stedding_session_rebuild.cc
  create mode 100644 chrome/browser/sessions/stedding_session_rebuild.h
  create mode 100644 chrome/browser/ui/spaces/BUILD.gn
@@ -2534,15 +2541,17 @@ index eb02a95efe49d..5ff6bc4b86f3d 100644
  
    // TODO(crbug.com/483152816): Investigate if this can be made non-reentrant.
 diff --git a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
-index ab919030ae2fb..abf5df349b8b9 100644
+index ab919030ae2fb..f4c86d1dd7ee6 100644
 --- a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
 +++ b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
-@@ -4,6 +4,14 @@
+@@ -4,6 +4,16 @@
  
  #include "chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h"
  
 +#include "chrome/browser/ui/spaces/space_model.h"
 +#include "chrome/browser/ui/stedding_ui_metrics.h"
++#include "chrome/app/chrome_command_ids.h"
++#include "chrome/browser/ui/browser_commands.h"
 +#include "chrome/browser/ui/views/spaces/space_drag_target.h"
 +#include "chrome/browser/ui/views/spaces/space_switcher_view.h"
 +#include "ui/views/background.h"
@@ -2552,7 +2561,7 @@ index ab919030ae2fb..abf5df349b8b9 100644
  #include <algorithm>
  #include <optional>
  
-@@ -156,6 +164,34 @@ VerticalTabStripRegionView::VerticalTabStripRegionView(
+@@ -156,6 +166,34 @@ VerticalTabStripRegionView::VerticalTabStripRegionView(
                LayoutConstant::kVerticalTabStripCollapsedVerticalPadding),
            region_horizontal_padding, 0, region_horizontal_padding));
  
@@ -2587,7 +2596,7 @@ index ab919030ae2fb..abf5df349b8b9 100644
    gemini_button_ = AddChildView(std::make_unique<views::View>());
  
    resize_area_ = AddChildView(std::make_unique<views::ResizeArea>(this));
-@@ -756,9 +792,42 @@ void VerticalTabStripRegionView::OnTabStripViewSet() {
+@@ -756,9 +794,61 @@ void VerticalTabStripRegionView::OnTabStripViewSet() {
    CHECK(separator_index.has_value());
    ReorderChildView(tab_strip_view(), separator_index.value() + 1);
  
@@ -2598,6 +2607,25 @@ index ab919030ae2fb..abf5df349b8b9 100644
 +        ->SetSeparatorClearCallback(base::BindRepeating(
 +            &VerticalTabStripRegionView::ClearCurrentSpaceTabs,
 +            base::Unretained(this)));
++    // The New Tab row opens what Cmd+T opens, and the bottom "+" pill goes:
++    // the reference has the row above the list and nothing at the bottom
++    // but the Space switcher.
++    static_cast<TabStripView*>(tab_strip_view())
++        ->SetNewTabCallback(base::BindRepeating(
++            [](VerticalTabStripRegionView* self) {
++              chrome::ExecuteCommand(self->browser_view()->browser(),
++                                     IDC_NEW_TAB);
++            },
++            base::Unretained(this)));
++    // The container itself stays: it is the flexible spacer that keeps the
++    // Space switcher at the bottom of the sidebar.
++    if (bottom_button_container_) {
++      bottom_button_container_->SetNewTabButtonVisible(false);
++    }
++    // No hairline under the traffic lights either.
++    if (top_button_separator_) {
++      top_button_separator_->SetVisible(false);
++    }
 +  }
 +
 +  // Tabs outside the active Space are hidden the way a collapsed group hides
@@ -2630,7 +2658,7 @@ index ab919030ae2fb..abf5df349b8b9 100644
  void VerticalTabStripRegionView::OnTabStripViewWillClear() {
    on_animation_update_subscription_.reset();
    expand_on_hover_enabled_changed_subscription_.reset();
-@@ -1140,5 +1209,60 @@ void VerticalTabStripRegionView::OnActiveTabChanged(
+@@ -1140,5 +1230,60 @@ void VerticalTabStripRegionView::OnActiveTabChanged(
    }
  }
  
@@ -3058,10 +3086,10 @@ index 0000000000000..d9ba09eb2a4a7
 +}  // namespace spaces
 diff --git a/chrome/browser/ui/views/spaces/space_switcher_view.cc b/chrome/browser/ui/views/spaces/space_switcher_view.cc
 new file mode 100644
-index 0000000000000..a2073ba2e3348
+index 0000000000000..9916967671e8f
 --- /dev/null
 +++ b/chrome/browser/ui/views/spaces/space_switcher_view.cc
-@@ -0,0 +1,378 @@
+@@ -0,0 +1,384 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -3215,10 +3243,16 @@ index 0000000000000..a2073ba2e3348
 +    const bool active = space.id() == model_->active_id();
 +
 +    const std::u16string name = model_->DisplayName(space.id());
++    // A Space the user has not given an icon still gets a glyph, taken from
++    // the same list the context menu offers, so chips are never blank discs.
++    const std::string glyph =
++        space.icon().empty()
++            ? std::string(kIconChoices.at(i % kIconChoices.size()))
++            : space.icon();
 +    auto button = std::make_unique<SpaceChipButton>(
 +        base::BindRepeating(&SpaceSwitcherView::OnSpacePressed,
 +                            base::Unretained(this), space.id()),
-+        base::UTF8ToUTF16(space.icon()),
++        base::UTF8ToUTF16(glyph),
 +        base::BindRepeating(
 +            [](SpaceSwitcherView* self, size_t chip_index,
 +               std::u16string name, bool entered) {
@@ -4052,19 +4086,21 @@ index 1ad01e47e1a71..283d671a72b11 100644
  }
  
 diff --git a/chrome/browser/ui/views/tabs/common/tab_strip_view.cc b/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
-index 11077328391e5..c0a6c4eee61d5 100644
+index 11077328391e5..cf15a100a77ee 100644
 --- a/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
 +++ b/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
-@@ -4,6 +4,8 @@
+@@ -4,6 +4,10 @@
  
  #include "chrome/browser/ui/views/tabs/common/tab_strip_view.h"
  
 +#include "chrome/browser/ui/views/tabs/common/clear_tabs_separator.h"
++#include "ui/views/border.h"
++#include "ui/views/controls/button/label_button.h"
 +
  #include "base/callback_list.h"
  #include "base/functional/bind.h"
  #include "base/memory/raw_ptr.h"
-@@ -184,8 +186,9 @@ TabStripView::TabStripView(TabCollectionNode* collection_node)
+@@ -184,8 +188,22 @@ TabStripView::TabStripView(TabCollectionNode* collection_node)
        views::ScrollView::ScrollWithLayers::kEnabled));
    SetScrollViewProperties(pinned_tabs_scroll_view_);
  
@@ -4073,10 +4109,23 @@ index 11077328391e5..c0a6c4eee61d5 100644
 +  // Stedding: the separator carries the Clear affordance when the region view
 +  // wires one up; with no callback it paints as the stock hairline.
 +  tabs_separator_ = AddChildView(std::make_unique<ClearTabsSeparator>());
++
++  // Stedding: "+ New Tab" above the unpinned tabs. Muted, one tab-row tall,
++  // text inset to the favicon column so it reads as the first row of the list.
++  auto new_tab_row = std::make_unique<views::LabelButton>(
++      views::Button::PressedCallback(), u"+   New Tab");
++  new_tab_row->SetHorizontalAlignment(gfx::ALIGN_LEFT);
++  new_tab_row->SetEnabledTextColors(SkColorSetA(SK_ColorWHITE, 0x99));
++  new_tab_row->SetBorder(views::CreateEmptyBorder(gfx::Insets::VH(0, 16)));
++  new_tab_row->SetPreferredSize(
++      gfx::Size(0, GetLayoutConstant(LayoutConstant::kVerticalTabHeight)));
++  new_tab_row->SetTooltipText(u"New Tab (⌘T)");
++  new_tab_row->SetVisible(false);
++  new_tab_row_ = AddChildView(std::move(new_tab_row));
  
    unpinned_tabs_scroll_view_ = AddChildView(std::make_unique<views::ScrollView>(
        views::ScrollView::ScrollWithLayers::kEnabled));
-@@ -207,6 +210,11 @@ TabStripView::TabStripView(TabCollectionNode* collection_node)
+@@ -207,6 +225,17 @@ TabStripView::TabStripView(TabCollectionNode* collection_node)
  
  TabStripView::~TabStripView() = default;
  
@@ -4085,14 +4134,28 @@ index 11077328391e5..c0a6c4eee61d5 100644
 +      ->SetClearCallback(std::move(callback));
 +}
 +
++void TabStripView::SetNewTabCallback(base::RepeatingClosure callback) {
++  new_tab_row_->SetCallback(std::move(callback));
++  new_tab_row_->SetVisible(true);
++  InvalidateLayout();
++}
++
  void TabStripView::AddedToWidget() {
    views::Widget* const widget = GetWidget();
    paint_as_active_subscription_ = widget->RegisterPaintAsActiveChangedCallback(
 diff --git a/chrome/browser/ui/views/tabs/common/tab_strip_view.h b/chrome/browser/ui/views/tabs/common/tab_strip_view.h
-index bca3e9acc58f9..221fd4678fb6c 100644
+index bca3e9acc58f9..028582139a8f3 100644
 --- a/chrome/browser/ui/views/tabs/common/tab_strip_view.h
 +++ b/chrome/browser/ui/views/tabs/common/tab_strip_view.h
-@@ -37,6 +37,10 @@ class TabStripView final : public views::View,
+@@ -17,6 +17,7 @@ class PinnedTabContainerView;
+ class UnpinnedTabContainerView;
+ 
+ namespace views {
++class LabelButton;
+ class ScrollView;
+ class Separator;
+ }  // namespace views
+@@ -37,6 +38,16 @@ class TabStripView final : public views::View,
  
    views::Separator* GetTabsSeparator() const { return tabs_separator_; }
  
@@ -4100,14 +4163,36 @@ index bca3e9acc58f9..221fd4678fb6c 100644
 +  // runs `callback`. See ClearTabsSeparator.
 +  void SetSeparatorClearCallback(base::RepeatingClosure callback);
 +
++  // Stedding: the "New Tab" row that sits above the unpinned tabs, as the
++  // reference has it. Hidden until a callback is set, so windows without the
++  // Arc-style sidebar are unchanged.
++  void SetNewTabCallback(base::RepeatingClosure callback);
++  views::LabelButton* GetNewTabRow() const { return new_tab_row_; }
++
    PinnedTabContainerView* GetPinnedTabsContainer() const;
    UnpinnedTabContainerView* GetUnpinnedTabsContainer() const;
  
+@@ -131,6 +142,7 @@ class TabStripView final : public views::View,
+   raw_ptr<views::ScrollView> pinned_tabs_scroll_view_ = nullptr;
+   raw_ptr<PinnedTabContainerView> pinned_tabs_container_view_ = nullptr;
+   raw_ptr<views::Separator> tabs_separator_ = nullptr;
++  raw_ptr<views::LabelButton> new_tab_row_ = nullptr;
+   raw_ptr<views::ScrollView> unpinned_tabs_scroll_view_ = nullptr;
+   raw_ptr<UnpinnedTabContainerView> unpinned_tabs_container_view_ = nullptr;
+   bool is_collapsed_ = false;
 diff --git a/chrome/browser/ui/views/tabs/common/tab_strip_view_layout.cc b/chrome/browser/ui/views/tabs/common/tab_strip_view_layout.cc
-index db53e40e59129..c8299b65da443 100644
+index db53e40e59129..80f31e1550abb 100644
 --- a/chrome/browser/ui/views/tabs/common/tab_strip_view_layout.cc
 +++ b/chrome/browser/ui/views/tabs/common/tab_strip_view_layout.cc
-@@ -158,7 +158,6 @@ views::ProposedLayout TabStripViewLayout::CalculateVerticalLayout(
+@@ -12,6 +12,7 @@
+ #include "chrome/browser/ui/views/tabs/common/tab_strip_view.h"
+ #include "chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h"
+ #include "ui/views/controls/scroll_view.h"
++#include "ui/views/controls/button/label_button.h"
+ #include "ui/views/controls/separator.h"
+ #include "ui/views/view_utils.h"
+ 
+@@ -158,7 +159,6 @@ views::ProposedLayout TabStripViewLayout::CalculateVerticalLayout(
    views::ScrollView* unpinned_tabs_scroll_view =
        tab_strip_view->unpinned_tabs_scroll_view();
    views::Separator* tabs_separator = tab_strip_view->GetTabsSeparator();
@@ -4115,7 +4200,7 @@ index db53e40e59129..c8299b65da443 100644
  
    if (!size_bounds.width().is_bounded()) {
      return layouts;
-@@ -182,9 +181,11 @@ views::ProposedLayout TabStripViewLayout::CalculateVerticalLayout(
+@@ -182,9 +182,11 @@ views::ProposedLayout TabStripViewLayout::CalculateVerticalLayout(
    const int unpinned_preferred_height =
        unpinned_tabs_scroll_view->GetPreferredSize(size_bounds).height();
  
@@ -4130,6 +4215,29 @@ index db53e40e59129..c8299b65da443 100644
  
    // If the height is bounded, calculate the available space for laying out the
    // pinned and unpinned containers.
+@@ -244,6 +246,22 @@ views::ProposedLayout TabStripViewLayout::CalculateVerticalLayout(
+   layouts.child_layouts.emplace_back(tabs_separator, should_show_separator,
+                                      separator_bounds);
+ 
++  // Stedding: the "New Tab" row, above the unpinned tabs.
++  if (views::LabelButton* const new_tab_row = tab_strip_view->GetNewTabRow()) {
++    gfx::Rect row_bounds;
++    if (new_tab_row->GetVisible()) {
++      const int row_height = new_tab_row->GetPreferredSize().height();
++      row_bounds = gfx::Rect(region_horizontal_padding, y,
++                             size_bounds.width().value() -
++                                 2 * region_horizontal_padding,
++                             row_height);
++      y += row_height;
++      remaining_height -= row_height;
++    }
++    layouts.child_layouts.emplace_back(new_tab_row, new_tab_row->GetVisible(),
++                                       row_bounds);
++  }
++
+   // Place the unpinned container using the entire available width, we do not
+   // inset the x value by `region_horizontal_padding` here because, when the tab
+   // strip is collapsed, tab groups need to draw the group colored line in this
 diff --git a/chrome/test/BUILD.gn b/chrome/test/BUILD.gn
 index 62e11c5a7a4f2..a2b33318995fe 100644
 --- a/chrome/test/BUILD.gn

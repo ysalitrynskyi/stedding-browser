@@ -208,7 +208,7 @@ inert without Google branding and API keys. `enable_updater` is literally
 |---|---|
 | Search suggestions off until the user opts in | `search.suggest_enabled` defaults to **true**; flip the default |
 | No Google New Tab Page network | `kNtpLogo`, `kNtpOneGoogleBar`, `kNtpMiddleSlotPromo` are enabled by default; disable or replace the NTP |
-| Default search engine chosen by the user | stock Chromium preselects Google; needs a real first-run chooser |
+| Default search engine chosen by the user | interim: DuckDuckGo is the prepopulated default (patch 0003), which also keeps the new tab page local; the first-run chooser is `S-26` |
 | Global Privacy Control on | currently off — `IsGlobalPrivacyControlEnabled()` is gated behind a Force/Test feature flag, and the pref path is an unfinished upstream TODO |
 | Translate off by default | `translate.enabled` defaults to true |
 | No navigation prediction / preconnect | `net.network_prediction_options` defaults to standard preloading |

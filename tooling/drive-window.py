@@ -4,6 +4,7 @@
 Usage: drive-window.py <steps-file>. Coordinates are window points; the window
 is found by owner name and never raised. See tooling/drive for the step grammar."""
 #   click X Y | rclick X Y | dblclick X Y | hover X Y | drag X1 Y1 X2 Y2
+#   dragstart X Y | dragmove X Y | dragend      a drag in steps, so a shot can land mid-drag
 #   key <name>[+cmd][+shift]   (names: t, l, w, enter, esc, tab, left, right, up, down, a-z, 0-9)
 #   type <text> | wait <sec> | shot <file.png> | activate
 import sys, time, subprocess, Quartz
@@ -63,6 +64,20 @@ def click(x,y,button=Quartz.kCGMouseButtonLeft,clicks=1):
     mouse(Quartz.kCGEventMouseMoved,sx,sy); time.sleep(0.2)
     for i in range(clicks):
         mouse(down,sx,sy,button,i+1); time.sleep(0.08); mouse(up,sx,sy,button,i+1); time.sleep(0.12)
+def drag_start(x,y):
+    sx,sy=to_screen(x,y)
+    mouse(Quartz.kCGEventMouseMoved,sx,sy); time.sleep(0.3)
+    mouse(Quartz.kCGEventLeftMouseDown,sx,sy); time.sleep(0.3)
+    for dx,dy in ((1,1),(2,3),(3,6),(4,9)):
+        mouse(Quartz.kCGEventLeftMouseDragged,sx+dx,sy+dy); time.sleep(0.1)
+    drag_start.at=(sx+4,sy+9)
+def drag_move(x,y):
+    sx1,sy1=drag_start.at; sx2,sy2=to_screen(x,y)
+    for i in range(1,31):
+        t=i/30; mouse(Quartz.kCGEventLeftMouseDragged,sx1+(sx2-sx1)*t,sy1+(sy2-sy1)*t); time.sleep(0.05)
+    drag_start.at=(sx2,sy2); time.sleep(0.5)
+def drag_end():
+    sx,sy=drag_start.at; mouse(Quartz.kCGEventLeftMouseUp,sx,sy)
 def drag(x1,y1,x2,y2):
     sx1,sy1=to_screen(x1,y1); sx2,sy2=to_screen(x2,y2)
     mouse(Quartz.kCGEventMouseMoved,sx1,sy1); time.sleep(0.3)
@@ -82,6 +97,9 @@ for raw in open(sys.argv[1]):
     elif op=='dblclick': click(a[0],a[1],clicks=2)
     elif op=='hover': sx,sy=to_screen(a[0],a[1]); mouse(Quartz.kCGEventMouseMoved,sx,sy)
     elif op=='drag': drag(*a[:4])
+    elif op=='dragstart': drag_start(a[0],a[1])
+    elif op=='dragmove': drag_move(a[0],a[1])
+    elif op=='dragend': drag_end()
     elif op=='key': key(arg)
     elif op=='type': type_text(arg)
     elif op=='wait': time.sleep(float(arg))

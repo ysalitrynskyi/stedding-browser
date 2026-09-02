@@ -83,8 +83,10 @@ Built, with tests or measured captures:
   persistence; the close-path use-after-free is fixed and regression-tested.
 - **⌘T command bar** across Spaces, also behind the sidebar's New Tab row.
   Stedding colours (sand light, blue→plum gradient dark). Codecs verified.
-  Sign-in promo removed; DuckDuckGo default search, so the new tab page is
-  local and the omnibox has no Google entry points. Mac updater stubbed
+  Sign-in promo removed; DuckDuckGo default search; the new tab page is
+  local (hint line, no Web Store tile) and the omnibox has no Google entry
+  points; chrome://settings has no Google or AI sections and carries the
+  Stedding mark. Mac updater stubbed
   (no Keystone) pointing at GitHub Releases.
 
 Read `docs/HANDOFF.md` before touching anything — it carries the working loop,

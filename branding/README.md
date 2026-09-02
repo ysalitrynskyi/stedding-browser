@@ -10,6 +10,9 @@ Branding section of [docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md).
 | `mac/app.icns` | `chrome/app/theme/chromium/mac/app.icns` |
 | `mac/AppIcon.icon` | `chrome/app/theme/chromium/mac/AppIcon.icon` |
 | `mac/Assets.car` | `chrome/app/theme/chromium/mac/Assets.car` |
+| `product_logo/*` | `chrome/app/theme/chromium/product_logo*` (the About page, the Dock, the installer) |
+| `vector_icons/chrome_product.icon` | `components/omnibox/browser/vector_icons/chrome_product.icon` (the chrome:// page chip, the app menu) |
+| `webui_images/chrome_logo_dark.svg` | `ui/webui/resources/images/chrome_logo_dark.svg` (the white product logo WebUI pages show: settings header, history, downloads) |
 
 Upstream's branding switch is boolean — `chromium/` or `google_chrome/` — and grit
 includes hardcode `chromium/`, so there is no third directory to add. Our files

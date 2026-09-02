@@ -33,6 +33,19 @@ and tests because a headless harness cannot pin or switch.
 docs/features/spaces.md is the definition of done (B1-B14); the window-level
 tests live in space_model_window_unittest.cc.
 
+Persistence has to survive Chromium's own session-log rebuild. The session
+service rebuilds the log from the live browser at startup and every 250
+writes, and knows nothing about extra data features wrote; a window with
+three Spaces came back with one on the second restart. A small provider
+registry in chrome/browser/sessions (stedding_session_rebuild.h) lets a
+feature re-emit its per-window and per-tab extra data during the rebuild,
+and the model also writes its Space list once the window is tracked (on the
+first tab insert), because a run in which the user never touches Spaces
+would otherwise write a log with no Spaces in it. Startup continues where
+it left off by default, since the arrangement lives in the session. The
+restored active Space's tint shows from the first frame. Every surface names
+an unnamed Space the same way ("Space N").
+
 Why: Spaces are the feature people stay in Arc for, and the workflow layer
 the sidebar exists to serve; a switcher that changes an id without moving
 the active tab is a picture of a feature.
@@ -40,7 +53,12 @@ Removable when: the tab collection tree grows a first-class notion of tab
 sets and Spaces become a collection type (ADR 0015, option C), and the
 session service can express tab sets itself. Never short of that.
 ---
+ chrome/browser/prefs/session_startup_pref.cc  |  12 +-
+ chrome/browser/sessions/BUILD.gn              |   2 +
  chrome/browser/sessions/session_restore.cc    |   6 +
+ .../browser/sessions/session_service_base.cc  |   7 +
+ .../sessions/stedding_session_rebuild.cc      |  48 ++
+ .../sessions/stedding_session_rebuild.h       |  49 ++
  chrome/browser/ui/BUILD.gn                    |   1 +
  chrome/browser/ui/browser_init_state.cc       |   1 +
  chrome/browser/ui/browser_init_state.h        |   5 +
@@ -52,14 +70,15 @@ session service can express tab sets itself. Never short of that.
  .../public/create_browser_window.h            |   4 +
  .../public/embedder_browser_window_features.h |  11 +
  chrome/browser/ui/layout_constants.cc         |   2 +-
- chrome/browser/ui/spaces/BUILD.gn             |  52 ++
+ chrome/browser/ui/spaces/BUILD.gn             |  56 ++
+ .../ui/spaces/session_rebuild_unittest.cc     | 136 ++++
  chrome/browser/ui/spaces/space.cc             |  28 +
  chrome/browser/ui/spaces/space.h              |  56 ++
  chrome/browser/ui/spaces/space_id.h           |  22 +
- chrome/browser/ui/spaces/space_model.cc       | 529 ++++++++++++++++++
- chrome/browser/ui/spaces/space_model.h        | 186 ++++++
- .../browser/ui/spaces/space_model_unittest.cc | 232 ++++++++
- .../ui/spaces/space_model_window_unittest.cc  | 267 +++++++++
+ chrome/browser/ui/spaces/space_model.cc       | 592 ++++++++++++++++++
+ chrome/browser/ui/spaces/space_model.h        | 199 ++++++
+ .../browser/ui/spaces/space_model_unittest.cc | 232 +++++++
+ .../ui/spaces/space_model_window_unittest.cc  | 267 ++++++++
  .../ui/spaces/tab_space_restore_data.cc       |  38 ++
  .../ui/spaces/tab_space_restore_data.h        |  56 ++
  chrome/browser/ui/stedding_ui_metrics.cc      |  11 +
@@ -71,22 +90,25 @@ session service can express tab sets itself. Never short of that.
  .../frame/vertical_tab_strip_region_view.h    |  24 +
  chrome/browser/ui/views/spaces/BUILD.gn       |  42 ++
  .../ui/views/spaces/space_drag_target.cc      |  89 +++
- .../ui/views/spaces/space_drag_target.h       |  67 +++
+ .../ui/views/spaces/space_drag_target.h       |  67 ++
  .../spaces/space_drag_target_unittest.cc      |  80 +++
- .../ui/views/spaces/space_switcher_view.cc    | 387 +++++++++++++
- .../ui/views/spaces/space_switcher_view.h     | 128 +++++
- .../spaces/space_tab_visibility_controller.cc | 142 +++++
+ .../ui/views/spaces/space_switcher_view.cc    | 378 +++++++++++
+ .../ui/views/spaces/space_switcher_view.h     | 128 ++++
+ .../spaces/space_tab_visibility_controller.cc | 150 +++++
  .../spaces/space_tab_visibility_controller.h  |  82 +++
  chrome/browser/ui/views/tabs/common/BUILD.gn  |   2 +
- .../views/tabs/common/clear_tabs_separator.cc | 100 ++++
+ .../views/tabs/common/clear_tabs_separator.cc | 100 +++
  .../views/tabs/common/clear_tabs_separator.h  |  43 ++
- .../common/tab_strip_collection_controller.cc |  33 ++
+ .../common/tab_strip_collection_controller.cc |  33 +
  .../ui/views/tabs/common/tab_strip_view.cc    |  12 +-
  .../ui/views/tabs/common/tab_strip_view.h     |   4 +
  .../tabs/common/tab_strip_view_layout.cc      |   9 +-
  chrome/test/BUILD.gn                          |   2 +
- 45 files changed, 2973 insertions(+), 19 deletions(-)
+ 51 files changed, 3300 insertions(+), 25 deletions(-)
+ create mode 100644 chrome/browser/sessions/stedding_session_rebuild.cc
+ create mode 100644 chrome/browser/sessions/stedding_session_rebuild.h
  create mode 100644 chrome/browser/ui/spaces/BUILD.gn
+ create mode 100644 chrome/browser/ui/spaces/session_rebuild_unittest.cc
  create mode 100644 chrome/browser/ui/spaces/space.cc
  create mode 100644 chrome/browser/ui/spaces/space.h
  create mode 100644 chrome/browser/ui/spaces/space_id.h
@@ -107,6 +129,44 @@ session service can express tab sets itself. Never short of that.
  create mode 100644 chrome/browser/ui/views/tabs/common/clear_tabs_separator.cc
  create mode 100644 chrome/browser/ui/views/tabs/common/clear_tabs_separator.h
 
+diff --git a/chrome/browser/prefs/session_startup_pref.cc b/chrome/browser/prefs/session_startup_pref.cc
+index 0159cee9db245..020e01e8ef3e0 100644
+--- a/chrome/browser/prefs/session_startup_pref.cc
++++ b/chrome/browser/prefs/session_startup_pref.cc
+@@ -63,14 +63,14 @@ void SessionStartupPref::RegisterProfilePrefs(
+ 
+ // static
+ SessionStartupPref::Type SessionStartupPref::GetDefaultStartupType() {
+-#if BUILDFLAG(IS_CHROMEOS)
++#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || \
++    BUILDFLAG(IS_MAC)
++  // Stedding: Spaces and folders live in the session, so a browser that opens
++  // a blank page instead of restoring would forget the user's arrangement on
++  // every launch. The reference always continues where it left off. Upstream
++  // gates the desktop platforms on kSetDefaultToContinueSession.
+   return SessionStartupPref::LAST;
+ #else
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC)
+-  if (features::kSetDefaultToContinueSession.Get()) {
+-    return SessionStartupPref::LAST;
+-  }
+-#endif
+   return SessionStartupPref::DEFAULT;
+ #endif
+ }
+diff --git a/chrome/browser/sessions/BUILD.gn b/chrome/browser/sessions/BUILD.gn
+index fa6092e432690..fea9dcbf54e47 100644
+--- a/chrome/browser/sessions/BUILD.gn
++++ b/chrome/browser/sessions/BUILD.gn
+@@ -119,6 +119,8 @@ source_set("impl") {
+       "session_service_log.cc",
+       "session_service_lookup.cc",
+       "session_service_utils.cc",
++      "stedding_session_rebuild.cc",
++      "stedding_session_rebuild.h",
+     ]
+ 
+     deps += [
 diff --git a/chrome/browser/sessions/session_restore.cc b/chrome/browser/sessions/session_restore.cc
 index 31cc627e9a6f9..d8915ae127108 100644
 --- a/chrome/browser/sessions/session_restore.cc
@@ -131,6 +191,140 @@ index 31cc627e9a6f9..d8915ae127108 100644
      if (base::FeatureList::IsEnabled(features::kTabGroupsFocusing)) {
        auto it = extra_data.find(
            tabs::TabStripModelSelectionState::kFocusedTabGroupIdKey);
+diff --git a/chrome/browser/sessions/session_service_base.cc b/chrome/browser/sessions/session_service_base.cc
+index 39fd08b4211e8..1bc84ef0adfb4 100644
+--- a/chrome/browser/sessions/session_service_base.cc
++++ b/chrome/browser/sessions/session_service_base.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "chrome/browser/sessions/session_service_base.h"
+ 
++#include "chrome/browser/sessions/stedding_session_rebuild.h"
++
+ #include <stddef.h>
+ 
+ #include <memory>
+@@ -784,6 +786,11 @@ void SessionServiceBase::BuildCommandsForBrowser(
+     index++;
+   }
+ 
++  // Stedding: extra data that features wrote into the log (Spaces, folders)
++  // is not in the tab strip and would otherwise be dropped by this rebuild.
++  command_storage_manager()->AppendRebuildCommands(
++      stedding::CollectSessionRebuildCommands(browser));
++
+   windows_to_track->insert(browser->GetSessionID());
+ }
+ 
+diff --git a/chrome/browser/sessions/stedding_session_rebuild.cc b/chrome/browser/sessions/stedding_session_rebuild.cc
+new file mode 100644
+index 0000000000000..555d11b920a4c
+--- /dev/null
++++ b/chrome/browser/sessions/stedding_session_rebuild.cc
+@@ -0,0 +1,48 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/sessions/stedding_session_rebuild.h"
++
++#include <string>
++#include <utility>
++
++#include "base/no_destructor.h"
++#include "components/sessions/core/session_command.h"
++
++namespace stedding {
++
++namespace {
++
++struct Provider {
++  std::string name;
++  SessionRebuildProvider callback;
++};
++
++std::vector<Provider>& Providers() {
++  static base::NoDestructor<std::vector<Provider>> providers;
++  return *providers;
++}
++
++}  // namespace
++
++void AddSessionRebuildProvider(std::string_view name,
++                               SessionRebuildProvider provider) {
++  for (Provider& existing : Providers()) {
++    if (existing.name == name) {
++      existing.callback = std::move(provider);
++      return;
++    }
++  }
++  Providers().push_back({std::string(name), std::move(provider)});
++}
++
++SessionRebuildCommands CollectSessionRebuildCommands(BrowserWindowInterface* browser) {
++  SessionRebuildCommands commands;
++  for (const Provider& provider : Providers()) {
++    provider.callback.Run(browser, &commands);
++  }
++  return commands;
++}
++
++}  // namespace stedding
+diff --git a/chrome/browser/sessions/stedding_session_rebuild.h b/chrome/browser/sessions/stedding_session_rebuild.h
+new file mode 100644
+index 0000000000000..4d9fd3779d251
+--- /dev/null
++++ b/chrome/browser/sessions/stedding_session_rebuild.h
+@@ -0,0 +1,49 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_SESSIONS_STEDDING_SESSION_REBUILD_H_
++#define CHROME_BROWSER_SESSIONS_STEDDING_SESSION_REBUILD_H_
++
++#include <memory>
++#include <string_view>
++#include <vector>
++
++#include "base/functional/callback.h"
++
++class BrowserWindowInterface;
++
++namespace sessions {
++class SessionCommand;
++}  // namespace sessions
++
++namespace stedding {
++
++using SessionRebuildCommands =
++    std::vector<std::unique_ptr<sessions::SessionCommand>>;
++
++// Adds commands that re-emit a feature's per-window and per-tab session extra
++// data for `browser`.
++using SessionRebuildProvider =
++    base::RepeatingCallback<void(BrowserWindowInterface* browser,
++                                 SessionRebuildCommands* commands)>;
++
++// The session service does not only append commands. Every kWritesPerReset
++// writes, and at every startup, it rebuilds the log from the live browser --
++// and it knows nothing about the extra data features wrote into the old log.
++// Anything not re-emitted here survives exactly one restart and then vanishes
++// with no error, which is how a window with three Spaces came back with one.
++//
++// A feature that writes extra data registers a provider under a stable name
++// (registering the same name again replaces the earlier provider), and the
++// rebuild asks every provider for its commands after Chromium's own.
++void AddSessionRebuildProvider(std::string_view name,
++                               SessionRebuildProvider provider);
++
++// The commands every registered provider adds for `browser`, in registration
++// order.
++SessionRebuildCommands CollectSessionRebuildCommands(BrowserWindowInterface* browser);
++
++}  // namespace stedding
++
++#endif  // CHROME_BROWSER_SESSIONS_STEDDING_SESSION_REBUILD_H_
 diff --git a/chrome/browser/ui/BUILD.gn b/chrome/browser/ui/BUILD.gn
 index d43e1dc4bb864..473bfab8914c5 100644
 --- a/chrome/browser/ui/BUILD.gn
@@ -358,10 +552,10 @@ index 03feba43d85b3..819a4ce19b727 100644
      case LayoutConstant::kVerticalTabStripHorizontalPadding:
 diff --git a/chrome/browser/ui/spaces/BUILD.gn b/chrome/browser/ui/spaces/BUILD.gn
 new file mode 100644
-index 0000000000000..e968d134fafbe
+index 0000000000000..685b6fa7ba2bb
 --- /dev/null
 +++ b/chrome/browser/ui/spaces/BUILD.gn
-@@ -0,0 +1,52 @@
+@@ -0,0 +1,56 @@
 +# Copyright 2026 The Stedding Authors
 +# Use of this source code is governed by a BSD-style license that can be
 +# found in the LICENSE file.
@@ -400,12 +594,16 @@ index 0000000000000..e968d134fafbe
 +source_set("unit_tests") {
 +  testonly = true
 +  sources = [
++    "session_rebuild_unittest.cc",
 +    "space_model_unittest.cc",
 +    "space_model_window_unittest.cc",
 +  ]
 +  deps = [
 +    ":spaces",
 +    "//base",
++    "//chrome/browser/sessions",
++    "//components/sessions",
++    "//components/sessions:test_support",
 +    "//chrome/browser/ui/tabs:tab_strip",
 +    "//chrome/test:test_support",
 +    "//components/tabs:test_support",
@@ -414,6 +612,148 @@ index 0000000000000..e968d134fafbe
 +    "//testing/gtest",
 +  ]
 +}
+diff --git a/chrome/browser/ui/spaces/session_rebuild_unittest.cc b/chrome/browser/ui/spaces/session_rebuild_unittest.cc
+new file mode 100644
+index 0000000000000..7a78f98bf4bbb
+--- /dev/null
++++ b/chrome/browser/ui/spaces/session_rebuild_unittest.cc
+@@ -0,0 +1,136 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++// The session log is rebuilt from the live browser at startup and every
++// kWritesPerReset writes. Everything Stedding keeps in session extra data --
++// the Space list, each tab's Space and per-Space pin, each tab's folder path
++// -- has to be re-emitted by that rebuild or it survives one restart only.
++// spaces B9 depends on this; the folder half is in
++// stedding_folder_session_unittest.cc.
++
++#include <map>
++#include <memory>
++#include <string>
++#include <utility>
++#include <vector>
++
++#include "chrome/browser/sessions/stedding_session_rebuild.h"
++#include "chrome/browser/ui/browser.h"
++#include "chrome/browser/ui/spaces/space.h"
++#include "chrome/browser/ui/spaces/space_model.h"
++#include "chrome/browser/ui/spaces/tab_space_restore_data.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "chrome/test/base/browser_with_test_window_test.h"
++#include "components/sessions/content/session_tab_helper.h"
++#include "components/sessions/core/serialized_navigation_entry_test_helper.h"
++#include "components/sessions/core/session_command.h"
++#include "components/sessions/core/session_service_commands.h"
++#include "components/sessions/core/session_types.h"
++#include "testing/gtest/include/gtest/gtest.h"
++#include "url/gurl.h"
++
++namespace spaces {
++namespace {
++
++class SessionRebuildTest : public BrowserWithTestWindowTest {
++ protected:
++  SpaceModel& model() { return *SpaceModel::From(browser()); }
++  TabStripModel& tabs() { return *browser()->tab_strip_model(); }
++
++  // Replays what the rebuild would write, plus the minimum of Chromium's own
++  // commands for the window to be considered valid, and returns the window as
++  // restore would see it.
++  std::unique_ptr<sessions::SessionWindow> RebuildAndRestore() {
++    std::vector<std::unique_ptr<sessions::SessionCommand>> commands;
++    const SessionID window_id = browser()->GetSessionID();
++    commands.push_back(sessions::CreateSetWindowTypeCommand(
++        window_id, sessions::SessionWindow::TYPE_NORMAL));
++    for (int i = 0; i < tabs().count(); ++i) {
++      const SessionID tab_id = sessions::SessionTabHelper::IdForTab(
++          tabs().GetTabAtIndex(i)->GetContents());
++      commands.push_back(sessions::CreateSetTabWindowCommand(window_id, tab_id));
++      commands.push_back(sessions::CreateSetTabIndexInWindowCommand(tab_id, i));
++      commands.push_back(sessions::CreateUpdateTabNavigationCommand(
++          tab_id,
++          sessions::SerializedNavigationEntryTestHelper::
++              CreateNavigationForTest()));
++    }
++    commands.push_back(sessions::CreateSetSelectedTabInWindowCommand(window_id, 0));
++
++    for (auto& command : stedding::CollectSessionRebuildCommands(browser())) {
++      commands.push_back(std::move(command));
++    }
++
++    std::vector<std::unique_ptr<sessions::SessionWindow>> windows;
++    SessionID active = SessionID::InvalidValue();
++    std::string platform_session_id;
++    std::set<SessionID> discarded;
++    sessions::RestoreSessionFromCommands(commands, &windows, &active,
++                                         &platform_session_id, &discarded);
++    CHECK_EQ(1u, windows.size()) << "the rebuilt window must survive restore";
++    return std::move(windows[0]);
++  }
++
++  static const std::string& ExtraData(
++      const std::map<std::string, std::string>& data,
++      const std::string& key) {
++    static const std::string kNone;
++    const auto it = data.find(key);
++    return it == data.end() ? kNone : it->second;
++  }
++};
++
++// B9: the Space list and the active Space come back through a rebuild.
++TEST_F(SessionRebuildTest, RebuildReemitsTheSpaceList) {
++  AddTab(browser(), GURL("https://example.com/"));
++  Space* const work = model().AddSpace("Work", SK_ColorBLUE);
++  model().SetActiveSpace(work->id());
++
++  const std::unique_ptr<sessions::SessionWindow> window = RebuildAndRestore();
++  const std::string& spaces = ExtraData(window->extra_data, kSessionSpacesKey);
++  ASSERT_FALSE(spaces.empty()) << "the window's Space list was dropped";
++
++  SpaceModel replay;
++  replay.RestoreFrom(spaces);
++  EXPECT_EQ(2u, replay.size());
++  EXPECT_EQ(work->id(), replay.active_id());
++  EXPECT_EQ("Work", replay.GetSpace(work->id())->name());
++}
++
++// B9: every tab's Space and per-Space pin come back through a rebuild.
++TEST_F(SessionRebuildTest, RebuildReemitsEachTabsSpaceAndPin) {
++  const SpaceId home = model().active_id();
++  AddTab(browser(), GURL("https://example.com/"));
++  tabs::TabInterface* const in_home = tabs().GetActiveTab();
++  Space* const work = model().AddSpace("Work", SK_ColorBLUE);
++  model().SetActiveSpace(work->id());
++  AddTab(browser(), GURL("https://example.org/"));
++  tabs::TabInterface* const in_work = tabs().GetActiveTab();
++  model().SetSpacePinned(in_work, true);
++
++  const std::unique_ptr<sessions::SessionWindow> window = RebuildAndRestore();
++  ASSERT_EQ(static_cast<size_t>(tabs().count()), window->tabs.size());
++
++  for (const auto& tab : window->tabs) {
++    const std::string& space = ExtraData(tab->extra_data, kSessionTabSpaceKey);
++    const std::string& pin = ExtraData(tab->extra_data, kSessionTabSpacePinKey);
++    // Match the restored tab back to the live one by session id.
++    if (tab->tab_id == sessions::SessionTabHelper::IdForTab(
++                           in_home->GetContents())) {
++      EXPECT_EQ(home.ToString(), space);
++      EXPECT_TRUE(pin.empty());
++    } else if (tab->tab_id == sessions::SessionTabHelper::IdForTab(
++                                  in_work->GetContents())) {
++      EXPECT_EQ(work->id().ToString(), space);
++      EXPECT_EQ("1", pin);
++    } else {
++      // The tab the switch to the empty Work Space opened (B3).
++      EXPECT_EQ(work->id().ToString(), space);
++      EXPECT_TRUE(pin.empty());
++    }
++  }
++}
++
++}  // namespace
++}  // namespace spaces
 diff --git a/chrome/browser/ui/spaces/space.cc b/chrome/browser/ui/spaces/space.cc
 new file mode 100644
 index 0000000000000..a78f0f7ba7c80
@@ -540,10 +880,10 @@ index 0000000000000..3697eda4d5126
 +#endif  // CHROME_BROWSER_UI_SPACES_SPACE_ID_H_
 diff --git a/chrome/browser/ui/spaces/space_model.cc b/chrome/browser/ui/spaces/space_model.cc
 new file mode 100644
-index 0000000000000..c70a0399e1c3d
+index 0000000000000..649769b3e69da
 --- /dev/null
 +++ b/chrome/browser/ui/spaces/space_model.cc
-@@ -0,0 +1,529 @@
+@@ -0,0 +1,592 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -551,6 +891,7 @@ index 0000000000000..c70a0399e1c3d
 +#include "chrome/browser/ui/spaces/space_model.h"
 +
 +#include <algorithm>
++#include <tuple>
 +#include <optional>
 +#include <utility>
 +#include <vector>
@@ -560,6 +901,8 @@ index 0000000000000..c70a0399e1c3d
 +#include "base/json/json_reader.h"
 +#include "base/json/json_writer.h"
 +#include "base/task/single_thread_task_runner.h"
++#include "base/strings/string_number_conversions.h"
++#include "base/strings/utf_string_conversions.h"
 +#include "base/token.h"
 +#include "base/values.h"
 +#include "chrome/browser/sessions/session_service.h"
@@ -574,6 +917,7 @@ index 0000000000000..c70a0399e1c3d
 +#include "chrome/browser/ui/tabs/tab_strip_user_gesture_details.h"
 +#include "chrome/common/webui_url_constants.h"
 +#include "components/sessions/content/session_tab_helper.h"
++#include "components/sessions/core/session_service_commands.h"
 +#include "content/public/browser/web_contents.h"
 +#include "url/gurl.h"
 +
@@ -605,6 +949,16 @@ index 0000000000000..c70a0399e1c3d
 +
 +SpaceModel::SpaceModel(BrowserWindowInterface& browser) : SpaceModel() {
 +  scoped_user_data_.emplace(browser.GetUnownedUserDataHost(), *this);
++
++  // Once per process: the session log is rebuilt from the live browser at
++  // startup and periodically, and Spaces must be re-emitted into it or they
++  // survive exactly one restart (stedding_session_rebuild.h).
++  static const bool registered = [] {
++    stedding::AddSessionRebuildProvider(
++        "spaces", base::BindRepeating(&SpaceModel::AppendRebuildCommands));
++    return true;
++  }();
++  std::ignore = registered;
 +
 +  // Spaces written into the session on a previous run come back here, before
 +  // anything can ask which Space a tab is in.
@@ -674,6 +1028,46 @@ index 0000000000000..c70a0399e1c3d
 +  auto it = std::ranges::find_if(
 +      spaces_, [&id](const std::unique_ptr<Space>& s) { return s->id() == id; });
 +  return it == spaces_.end() ? nullptr : it->get();
++}
++
++std::u16string SpaceModel::DisplayName(const SpaceId& id) const {
++  for (size_t i = 0; i < spaces_.size(); ++i) {
++    if (spaces_[i]->id() != id) {
++      continue;
++    }
++    if (!spaces_[i]->name().empty()) {
++      return base::UTF8ToUTF16(spaces_[i]->name());
++    }
++    return u"Space " + base::NumberToString16(i + 1);
++  }
++  return std::u16string();
++}
++
++// static
++void SpaceModel::AppendRebuildCommands(
++    BrowserWindowInterface* browser,
++    stedding::SessionRebuildCommands* commands) {
++  SpaceModel* const model = From(browser);
++  if (!model) {
++    return;
++  }
++  commands->push_back(sessions::CreateAddWindowExtraDataCommand(
++      browser->GetSessionID(), kSessionSpacesKey, model->Serialize()));
++  TabStripModel* const tabs = browser->GetTabStripModel();
++  for (int i = 0; i < tabs->count(); ++i) {
++    tabs::TabInterface* const tab = tabs->GetTabAtIndex(i);
++    const SessionID tab_id =
++        sessions::SessionTabHelper::IdForTab(tab->GetContents());
++    if (!tab_id.is_valid()) {
++      continue;
++    }
++    commands->push_back(sessions::CreateAddTabExtraDataCommand(
++        tab_id, kSessionTabSpaceKey, model->SpaceForTab(tab).ToString()));
++    if (model->IsSpacePinned(tab)) {
++      commands->push_back(sessions::CreateAddTabExtraDataCommand(
++          tab_id, kSessionTabSpacePinKey, "1"));
++    }
++  }
 +}
 +
 +Space* SpaceModel::AddSpace(std::string name, SkColor color) {
@@ -814,6 +1208,15 @@ index 0000000000000..c70a0399e1c3d
 +  }
 +
 +  if (change.type() == TabStripModelChange::Type::kInserted) {
++    // The session service only writes the Space list when something changes
++    // it, and it drops the previous run's log at startup. A run in which the
++    // user never touched Spaces would therefore leave a log with no Spaces in
++    // it. The window is tracked by the time its first tab arrives, so this is
++    // the earliest moment the list can be written for the new log.
++    if (!wrote_window_state_) {
++      wrote_window_state_ = true;
++      SaveToSession();
++    }
 +    for (const TabStripModelChange::ContentsWithIndex& inserted :
 +         change.GetInsert()->contents) {
 +      // First ask decides membership: restored Space if any, else active.
@@ -1075,10 +1478,10 @@ index 0000000000000..c70a0399e1c3d
 +}  // namespace spaces
 diff --git a/chrome/browser/ui/spaces/space_model.h b/chrome/browser/ui/spaces/space_model.h
 new file mode 100644
-index 0000000000000..cee03bad0e48d
+index 0000000000000..e6cb8e45e9ab7
 --- /dev/null
 +++ b/chrome/browser/ui/spaces/space_model.h
-@@ -0,0 +1,186 @@
+@@ -0,0 +1,199 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -1097,6 +1500,7 @@ index 0000000000000..cee03bad0e48d
 +#include "base/memory/weak_ptr.h"
 +#include "base/observer_list.h"
 +#include "base/observer_list_types.h"
++#include "chrome/browser/sessions/stedding_session_rebuild.h"
 +#include "chrome/browser/ui/spaces/space.h"
 +#include "chrome/browser/ui/spaces/space_id.h"
 +#include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
@@ -1104,6 +1508,7 @@ index 0000000000000..cee03bad0e48d
 +#include "components/tabs/public/tab_interface.h"
 +#include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
 +
++class Browser;
 +class BrowserWindowInterface;
 +class SessionService;
 +class TabStripModel;
@@ -1170,6 +1575,16 @@ index 0000000000000..cee03bad0e48d
 +
 +  // Null if no Space carries this id.
 +  Space* GetSpace(const SpaceId& id);
++
++  // The name to show for `id`: the Space's own name, or "Space N" (1-based
++  // position) for a Space the user has not named. Every surface that names a
++  // Space uses this, so the hover pill and the command bar agree.
++  std::u16string DisplayName(const SpaceId& id) const;
++
++  // Session rebuild provider (stedding_session_rebuild.h): the window's Space
++  // list and every tab's membership and per-Space pin.
++  static void AppendRebuildCommands(BrowserWindowInterface* browser,
++                                    stedding::SessionRebuildCommands* commands);
 +
 +  Space* AddSpace(std::string name, SkColor color);
 +
@@ -1256,6 +1671,7 @@ index 0000000000000..cee03bad0e48d
 +  // lands where they left it rather than on whichever tab sorts first.
 +  std::map<SpaceId, tabs::TabHandle> last_active_;
 +  raw_ptr<TabStripModel> tab_strip_model_ = nullptr;
++  bool wrote_window_state_ = false;
 +  raw_ptr<SessionService> session_service_ = nullptr;
 +  SessionID session_id_ = SessionID::InvalidValue();
 +  std::optional<ui::ScopedUnownedUserData<SpaceModel>> scoped_user_data_;
@@ -1948,10 +2364,10 @@ index 93887808ad816..c8e5a3d5791f2 100644
  
  #endif  // CHROME_BROWSER_UI_STEDDING_UI_METRICS_H_
 diff --git a/chrome/browser/ui/tabs/tab_menu_model.cc b/chrome/browser/ui/tabs/tab_menu_model.cc
-index 85b8f3eb6302b..793876fe3b6ef 100644
+index 6957a78aa5b40..2d7643862de09 100644
 --- a/chrome/browser/ui/tabs/tab_menu_model.cc
 +++ b/chrome/browser/ui/tabs/tab_menu_model.cc
-@@ -422,6 +422,14 @@ void TabMenuModel::Build(int index) {
+@@ -424,6 +424,14 @@ void TabMenuModel::Build(int index) {
        TabStripModel::CommandTogglePinned,
        will_pin ? IDS_TAB_CXMENU_PIN_TAB : IDS_TAB_CXMENU_UNPIN_TAB);
  
@@ -2642,10 +3058,10 @@ index 0000000000000..d9ba09eb2a4a7
 +}  // namespace spaces
 diff --git a/chrome/browser/ui/views/spaces/space_switcher_view.cc b/chrome/browser/ui/views/spaces/space_switcher_view.cc
 new file mode 100644
-index 0000000000000..43524542037db
+index 0000000000000..a2073ba2e3348
 --- /dev/null
 +++ b/chrome/browser/ui/views/spaces/space_switcher_view.cc
-@@ -0,0 +1,387 @@
+@@ -0,0 +1,378 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -2716,15 +3132,6 @@ index 0000000000000..43524542037db
 +    SkColorSetRGB(0x5B, 0x8C, 0x74), SkColorSetRGB(0x8C, 0x6B, 0x5B),
 +    SkColorSetRGB(0x8C, 0x5B, 0x63),
 +});
-+
-+// The name shown on hover. A Space is unnamed until the user names it, and an
-+// empty tooltip would say nothing at all.
-+std::u16string NameFor(const Space& space, size_t index) {
-+  if (!space.name().empty()) {
-+    return base::UTF8ToUTF16(space.name());
-+  }
-+  return u"Space " + base::NumberToString16(index + 1);
-+}
 +
 +// A chip that reports hover, so the row can float the Space's name above it.
 +class SpaceChipButton : public views::LabelButton {
@@ -2807,7 +3214,7 @@ index 0000000000000..43524542037db
 +    const Space& space = *spaces[i];
 +    const bool active = space.id() == model_->active_id();
 +
-+    const std::u16string name = NameFor(space, i);
++    const std::u16string name = model_->DisplayName(space.id());
 +    auto button = std::make_unique<SpaceChipButton>(
 +        base::BindRepeating(&SpaceSwitcherView::OnSpacePressed,
 +                            base::Unretained(this), space.id()),
@@ -3169,10 +3576,10 @@ index 0000000000000..5670e732172a3
 +#endif  // CHROME_BROWSER_UI_VIEWS_SPACES_SPACE_SWITCHER_VIEW_H_
 diff --git a/chrome/browser/ui/views/spaces/space_tab_visibility_controller.cc b/chrome/browser/ui/views/spaces/space_tab_visibility_controller.cc
 new file mode 100644
-index 0000000000000..a915ee0063d96
+index 0000000000000..21f03349a6fcb
 --- /dev/null
 +++ b/chrome/browser/ui/views/spaces/space_tab_visibility_controller.cc
-@@ -0,0 +1,142 @@
+@@ -0,0 +1,150 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -3219,6 +3626,14 @@ index 0000000000000..a915ee0063d96
 +  }
 +
 +  UpdateTabVisibility();
++  // The restored active Space's colour must show from the first frame, not
++  // from the first switch. The widget may not exist yet, so try now and again
++  // one turn later.
++  UpdateWindowTint();
++  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
++      FROM_HERE,
++      base::BindOnce(&SpaceTabVisibilityController::UpdateWindowTint,
++                     weak_factory_.GetWeakPtr()));
 +}
 +
 +SpaceTabVisibilityController::~SpaceTabVisibilityController() {

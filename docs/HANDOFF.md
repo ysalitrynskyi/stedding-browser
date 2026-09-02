@@ -66,10 +66,17 @@ perform; a param that recreates the state IS the test surface.
    System Events first, then post HID-tap mouse events; a tab drag needs a few
    slow moves past the threshold before the long move). Never drive the
    user's real pointer while they are at the machine. `tooling/capture-window.py`
-   captures one window by id — never the screen. `S-19` turns this into a tool.
+   captures one window by id — never the screen. `tooling/drive` is the tool:
+   its header lists the traps (a created key event inherits the last chord's
+   modifiers, so clear them; a Cmd+Q keystroke does not quit, the AppleEvent
+   does).
 4. **SIGTERM does not reliably flush Chromium session files** from a raw binary
-   launch — live restore tests via kill are meaningless; use unit tests or a
-   real menu quit.
+   launch — live restore tests via kill are meaningless; `tooling/drive` quits
+   through an AppleEvent, which does flush. And the session log is **rebuilt
+   from the live browser** at startup and every 250 writes: anything a feature
+   keeps in session extra data must be re-emitted through
+   `stedding_session_rebuild.h` *and* written once the window is tracked, or
+   it survives exactly one restart.
 5. **macOS bash is 3.2** (no mapfile); `tooling/check-shell` runs a pinned
    shellcheck because versions disagree about real findings.
 6. **Chromium API drift in this tree**: `base::Value::Dict/List` are

@@ -1,0 +1,640 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Wed, 2 Sep 2026 23:18:04 -0400
+Subject: archive: unpinned tabs idle past a threshold leave the sidebar
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Auto-archive, as Arc does it: a per-window TabArchiver sweeps every five
+minutes and closes unpinned tabs outside folders that nobody has looked at
+for longer than stedding.archive.idle_hours (12 by default, 0 = off), into
+the recently-closed list so Shift-Cmd-T brings one back. Pinned tabs in
+either tier, folder tabs and the active tab are never touched. The idle
+clock is the archiver's own (opened or activated as it saw it), so a tab
+opened in the background counts from when it appeared. A dropdown in the
+Stedding settings section sets the threshold.
+
+Why: PRODUCT.md, "Unpinned Tabs — auto-archived when idle"; the sidebar
+stays a working set instead of a graveyard. docs/features/archive.md A1-A6.
+
+Removable when: never; this is product behaviour.
+---
+ .../api/settings_private/prefs_util.cc        |   2 +
+ .../stedding_page/stedding_page.html.ts       |  17 ++
+ .../settings/stedding_page/stedding_page.ts   |   1 +
+ chrome/browser/ui/archive/BUILD.gn            |  39 +++++
+ chrome/browser/ui/archive/tab_archiver.cc     | 146 ++++++++++++++++++
+ chrome/browser/ui/archive/tab_archiver.h      |  84 ++++++++++
+ .../ui/archive/tab_archiver_unittest.cc       | 134 ++++++++++++++++
+ .../ui/browser_window/internal/BUILD.gn       |   1 +
+ .../internal/browser_window_features.cc       |   4 +
+ .../public/browser_window_features.h          |   5 +
+ chrome/browser/ui/stedding/stedding_prefs.cc  |   1 +
+ chrome/browser/ui/stedding/stedding_prefs.h   |   4 +
+ .../browser/ui/webui/settings/settings_ui.cc  |  11 ++
+ chrome/test/BUILD.gn                          |   1 +
+ 14 files changed, 450 insertions(+)
+ create mode 100644 chrome/browser/ui/archive/BUILD.gn
+ create mode 100644 chrome/browser/ui/archive/tab_archiver.cc
+ create mode 100644 chrome/browser/ui/archive/tab_archiver.h
+ create mode 100644 chrome/browser/ui/archive/tab_archiver_unittest.cc
+
+diff --git a/chrome/browser/extensions/api/settings_private/prefs_util.cc b/chrome/browser/extensions/api/settings_private/prefs_util.cc
+index 8206d253632bc..f4eada189e68d 100644
+--- a/chrome/browser/extensions/api/settings_private/prefs_util.cc
++++ b/chrome/browser/extensions/api/settings_private/prefs_util.cc
+@@ -307,6 +307,8 @@ const PrefsUtil::TypedPrefMap& PrefsUtil::GetAllowlistedKeys() {
+       settings_api::PrefType::kBoolean;
+   (*s_allowlist)[stedding::prefs::kNewTabShowShortcuts] =
+       settings_api::PrefType::kBoolean;
++  (*s_allowlist)[stedding::prefs::kArchiveIdleHours] =
++      settings_api::PrefType::kNumber;
+   (*s_allowlist)[stedding::prefs::kPeekEnabled] =
+       settings_api::PrefType::kBoolean;
+   (*s_allowlist)[contextual_search::kDriveConsentState] =
+diff --git a/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts b/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
+index db5db1465a15b..198848f493bca 100644
+--- a/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
++++ b/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
+@@ -41,6 +41,23 @@ export function getHtml(this: SettingsSteddingPageElement) {
+         label-min="126" label-max="480">
+     </settings-slider>
+   </div>
++  <div class="hr settings-box">
++    <div class="start" id="archiveLabel">
++      <div class="label">$i18n{steddingArchiveLabel}</div>
++      <div class="secondary">$i18n{steddingArchiveSubLabel}</div>
++    </div>
++    <settings-dropdown-menu id="archiveIdleHours"
++        pref-key="stedding.archive.idle_hours"
++        label="$i18n{steddingArchiveLabel}"
++        .menuOptions="${[
++          {value: 0, name: '$i18n{steddingArchiveNever}'},
++          {value: 6, name: '$i18n{steddingArchive6h}'},
++          {value: 12, name: '$i18n{steddingArchive12h}'},
++          {value: 24, name: '$i18n{steddingArchive1d}'},
++          {value: 72, name: '$i18n{steddingArchive3d}'},
++        ]}">
++    </settings-dropdown-menu>
++  </div>
+   <settings-toggle-button
+       id="newTabHint"
+       class="hr"
+diff --git a/chrome/browser/resources/settings/stedding_page/stedding_page.ts b/chrome/browser/resources/settings/stedding_page/stedding_page.ts
+index aeb531da5527e..0760b0b9a4126 100644
+--- a/chrome/browser/resources/settings/stedding_page/stedding_page.ts
++++ b/chrome/browser/resources/settings/stedding_page/stedding_page.ts
+@@ -8,6 +8,7 @@
+  * behaviours this browser adds on top of Chromium, each backed by one
+  * profile preference (chrome/browser/ui/stedding/stedding_prefs.h).
+  */
++import '../controls/settings_dropdown_menu.js';
+ import '../controls/settings_slider.js';
+ import '../controls/settings_toggle_button.js';
+ import '../settings_page/settings_section.js';
+diff --git a/chrome/browser/ui/archive/BUILD.gn b/chrome/browser/ui/archive/BUILD.gn
+new file mode 100644
+index 0000000000000..38d8b0bf24193
+--- /dev/null
++++ b/chrome/browser/ui/archive/BUILD.gn
+@@ -0,0 +1,39 @@
++# Copyright 2026 The Stedding Authors
++# Use of this source code is governed by a BSD-style license that can be
++# found in the LICENSE file.
++
++# Auto-archive: unpinned tabs idle past a threshold leave the sidebar into the
++# recently-closed list (docs/features/archive.md).
++source_set("archive") {
++  public = [ "tab_archiver.h" ]
++  sources = [ "tab_archiver.cc" ]
++  public_deps = [
++    "//base",
++    "//chrome/browser/ui/tabs:tab_strip",
++    "//components/prefs",
++    "//components/tabs:public",
++  ]
++  deps = [
++    "//chrome/browser/ui/browser_window",
++    "//chrome/browser/ui/spaces",
++    "//chrome/browser/ui/stedding:prefs",
++    "//content/public/browser",
++  ]
++}
++
++source_set("unit_tests") {
++  testonly = true
++  sources = [ "tab_archiver_unittest.cc" ]
++  deps = [
++    ":archive",
++    "//base",
++    "//base/test:test_support",
++    "//chrome/browser/ui/spaces",
++    "//chrome/browser/ui/stedding:prefs",
++    "//chrome/browser/ui/tabs:tab_strip",
++    "//chrome/test:test_support",
++    "//components/prefs",
++    "//components/tabs:public",
++    "//testing/gtest",
++  ]
++}
+diff --git a/chrome/browser/ui/archive/tab_archiver.cc b/chrome/browser/ui/archive/tab_archiver.cc
+new file mode 100644
+index 0000000000000..f70263c5fe574
+--- /dev/null
++++ b/chrome/browser/ui/archive/tab_archiver.cc
+@@ -0,0 +1,146 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/archive/tab_archiver.h"
++
++#include <vector>
++
++#include "base/functional/bind.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/spaces/space_model.h"
++#include "chrome/browser/ui/stedding/stedding_prefs.h"
++#include "chrome/browser/ui/tabs/tab_enums.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "components/prefs/pref_service.h"
++#include "components/tabs/public/tab_collection.h"
++
++namespace stedding {
++
++TabArchiver::TabArchiver(BrowserWindowInterface& browser, PrefService& prefs)
++    : browser_(browser), prefs_(prefs) {
++  TabStripModel* const model = browser_->GetTabStripModel();
++  model->AddObserver(this);
++  for (int i = 0; i < model->count(); ++i) {
++    Touch(model->GetTabAtIndex(i));
++  }
++  pref_registrar_.Init(&*prefs_);
++  pref_registrar_.Add(prefs::kArchiveIdleHours,
++                      base::BindRepeating(&TabArchiver::UpdateTimer,
++                                          base::Unretained(this)));
++  UpdateTimer();
++}
++
++TabArchiver::~TabArchiver() {
++  if (TabStripModel* const model = browser_->GetTabStripModel()) {
++    model->RemoveObserver(this);
++  }
++}
++
++void TabArchiver::Sweep() {
++  const base::TimeDelta threshold = IdleThreshold();
++  if (threshold.is_zero()) {
++    return;
++  }
++  TabStripModel* const model = browser_->GetTabStripModel();
++  const base::TimeTicks now = Now();
++
++  // Collect first, close after: closing shifts indices.
++  std::vector<tabs::TabHandle> idle;
++  for (int i = 0; i < model->count(); ++i) {
++    tabs::TabInterface* const tab = model->GetTabAtIndex(i);
++    if (IsProtected(tab)) {
++      continue;
++    }
++    const auto it = last_active_.find(tab->GetHandle());
++    const base::TimeTicks since = it == last_active_.end() ? now : it->second;
++    if (now - since >= threshold) {
++      idle.push_back(tab->GetHandle());
++    }
++  }
++  for (const tabs::TabHandle handle : idle) {
++    tabs::TabInterface* const tab = handle.Get();
++    // Never close the window's last tab: that closes the window.
++    if (!tab || model->count() <= 1) {
++      break;
++    }
++    const int index = model->GetIndexOfTab(tab);
++    if (index == TabStripModel::kNoTab) {
++      continue;
++    }
++    // Into the recently-closed list, so ⇧⌘T brings it back.
++    model->CloseWebContentsAt(index, TabCloseTypes::CLOSE_CREATE_HISTORICAL_TAB);
++  }
++}
++
++base::TimeTicks TabArchiver::last_active_for_testing(
++    const tabs::TabInterface* tab) const {
++  const auto it = last_active_.find(tab->GetHandle());
++  return it == last_active_.end() ? base::TimeTicks() : it->second;
++}
++
++void TabArchiver::OnTabStripModelChanged(
++    TabStripModel* tab_strip_model,
++    const TabStripModelChange& change,
++    const TabStripSelectionChange& selection) {
++  // GetInsert()/GetRemove() CHECK the change type, so ask first.
++  if (change.type() == TabStripModelChange::kInserted) {
++    for (const auto& contents : change.GetInsert()->contents) {
++      Touch(contents.tab);
++    }
++  } else if (change.type() == TabStripModelChange::kRemoved) {
++    for (const auto& removed : change.GetRemove()->contents) {
++      last_active_.erase(removed.tab->GetHandle());
++    }
++  }
++  if (selection.active_tab_changed() && selection.new_tab) {
++    Touch(selection.new_tab);
++  }
++}
++
++base::TimeDelta TabArchiver::IdleThreshold() const {
++  const int hours = prefs_->GetInteger(prefs::kArchiveIdleHours);
++  return hours > 0 ? base::Hours(hours) : base::TimeDelta();
++}
++
++bool TabArchiver::IsProtected(const tabs::TabInterface* tab) const {
++  if (tab->IsActivated() || tab->IsPinned()) {
++    return true;
++  }
++  if (const spaces::SpaceModel* const spaces =
++          spaces::SpaceModel::From(&*browser_);
++      spaces && spaces->IsSpacePinned(tab)) {
++    return true;
++  }
++  for (const tabs::TabCollection* collection = tab->GetParentCollection();
++       collection; collection = collection->GetParentCollection()) {
++    if (collection->type() == tabs::TabCollection::Type::FOLDER) {
++      return true;
++    }
++  }
++  return false;
++}
++
++void TabArchiver::Touch(tabs::TabInterface* tab) {
++  if (tab) {
++    last_active_[tab->GetHandle()] = Now();
++  }
++}
++
++base::TimeTicks TabArchiver::Now() const {
++  return clock_ ? clock_->NowTicks() : base::TimeTicks::Now();
++}
++
++void TabArchiver::UpdateTimer() {
++  if (IdleThreshold().is_zero()) {
++    timer_.Stop();
++    return;
++  }
++  if (!timer_.IsRunning()) {
++    timer_.Start(FROM_HERE, kSweepInterval,
++                 base::BindRepeating(&TabArchiver::Sweep,
++                                     base::Unretained(this)));
++  }
++}
++
++}  // namespace stedding
+diff --git a/chrome/browser/ui/archive/tab_archiver.h b/chrome/browser/ui/archive/tab_archiver.h
+new file mode 100644
+index 0000000000000..fbaff6acaaf51
+--- /dev/null
++++ b/chrome/browser/ui/archive/tab_archiver.h
+@@ -0,0 +1,84 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_ARCHIVE_TAB_ARCHIVER_H_
++#define CHROME_BROWSER_UI_ARCHIVE_TAB_ARCHIVER_H_
++
++#include <map>
++
++#include "base/memory/raw_ptr.h"
++#include "base/time/tick_clock.h"
++#include "base/time/time.h"
++#include "base/timer/timer.h"
++#include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
++#include "components/prefs/pref_change_registrar.h"
++#include "components/tabs/public/tab_interface.h"
++
++class BrowserWindowInterface;
++class PrefService;
++class TabStripModel;
++
++namespace stedding {
++
++// Auto-archive (docs/features/archive.md): closes unpinned tabs nobody has
++// looked at for longer than the profile's idle threshold, into the
++// recently-closed list so they can come back. One per normal window, owned by
++// BrowserWindowFeatures next to the SpaceModel.
++//
++// Idle time is tracked here rather than read from WebContents, so a tab opened
++// in the background counts from when it was opened and a test window (whose
++// contents are never shown) behaves like a real one.
++class TabArchiver : public TabStripModelObserver {
++ public:
++  // How often the sweep runs. The threshold is hours, so this is generous.
++  static constexpr base::TimeDelta kSweepInterval = base::Minutes(5);
++
++  TabArchiver(BrowserWindowInterface& browser, PrefService& prefs);
++  TabArchiver(const TabArchiver&) = delete;
++  TabArchiver& operator=(const TabArchiver&) = delete;
++  ~TabArchiver() override;
++
++  // Closes every tab that qualifies right now. Public so tests and a future
++  // "archive now" command can call it; the timer calls it too.
++  void Sweep();
++
++  // The moment `tab` was last opened or activated, as this archiver saw it.
++  base::TimeTicks last_active_for_testing(const tabs::TabInterface* tab) const;
++
++  // Tests hand in a clock they can advance by hours without driving every
++  // timer in the process through a mock task environment.
++  void set_tick_clock_for_testing(const base::TickClock* clock) {
++    clock_ = clock;
++  }
++
++  // TabStripModelObserver:
++  void OnTabStripModelChanged(
++      TabStripModel* tab_strip_model,
++      const TabStripModelChange& change,
++      const TabStripSelectionChange& selection) override;
++
++ private:
++  // Threshold from the preference; zero means the feature is off.
++  base::TimeDelta IdleThreshold() const;
++
++  // True when `tab` must never be archived: pinned in either tier, in a
++  // folder, or the tab the user is looking at.
++  bool IsProtected(const tabs::TabInterface* tab) const;
++
++  void Touch(tabs::TabInterface* tab);
++  void UpdateTimer();
++
++  base::TimeTicks Now() const;
++
++  const raw_ref<BrowserWindowInterface> browser_;
++  const raw_ref<PrefService> prefs_;
++  raw_ptr<const base::TickClock> clock_ = nullptr;
++  std::map<tabs::TabHandle, base::TimeTicks> last_active_;
++  PrefChangeRegistrar pref_registrar_;
++  base::RepeatingTimer timer_;
++};
++
++}  // namespace stedding
++
++#endif  // CHROME_BROWSER_UI_ARCHIVE_TAB_ARCHIVER_H_
+diff --git a/chrome/browser/ui/archive/tab_archiver_unittest.cc b/chrome/browser/ui/archive/tab_archiver_unittest.cc
+new file mode 100644
+index 0000000000000..02c3e2239a447
+--- /dev/null
++++ b/chrome/browser/ui/archive/tab_archiver_unittest.cc
+@@ -0,0 +1,134 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++// docs/features/archive.md, behaviours A1–A5.
++
++#include "chrome/browser/ui/archive/tab_archiver.h"
++
++#include "base/test/simple_test_tick_clock.h"
++#include "base/test/task_environment.h"
++#include "base/time/time.h"
++#include "chrome/browser/ui/browser.h"
++#include "chrome/browser/ui/spaces/space_model.h"
++#include "chrome/browser/ui/stedding/stedding_prefs.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "chrome/test/base/browser_with_test_window_test.h"
++#include "components/prefs/pref_service.h"
++#include "testing/gtest/include/gtest/gtest.h"
++#include "url/gurl.h"
++
++namespace stedding {
++namespace {
++
++class TabArchiverTest : public BrowserWithTestWindowTest {
++ public:
++  TabArchiverTest()
++      : BrowserWithTestWindowTest(
++            base::test::TaskEnvironment::TimeSource::MOCK_TIME) {}
++
++ protected:
++  void SetUp() override {
++    BrowserWithTestWindowTest::SetUp();
++    prefs()->SetInteger(prefs::kArchiveIdleHours, 12);
++    clock_.SetNowTicks(base::TimeTicks::Now());
++    archiver_ = std::make_unique<TabArchiver>(*browser(), *prefs());
++    archiver_->set_tick_clock_for_testing(&clock_);
++  }
++  void TearDown() override {
++    archiver_.reset();
++    BrowserWithTestWindowTest::TearDown();
++  }
++
++  PrefService* prefs() { return profile()->GetPrefs(); }
++  TabStripModel& tabs() { return *browser()->tab_strip_model(); }
++  TabArchiver& archiver() { return *archiver_; }
++
++  // Three tabs; the first one added ends up last and active after AddTab's
++  // insert-at-front, so activate index 0 explicitly to keep things readable.
++  void AddThreeTabs() {
++    AddTab(browser(), GURL("https://a.example/"));
++    AddTab(browser(), GURL("https://b.example/"));
++    AddTab(browser(), GURL("https://c.example/"));
++    tabs().ActivateTabAt(0);
++  }
++
++  // Hours pass on the archiver's clock only; the task environment stays put
++  // so Chromium's own periodic timers do not have to run through a day.
++  void Idle(base::TimeDelta delta) { clock_.Advance(delta); }
++
++ private:
++  base::SimpleTestTickClock clock_;
++  std::unique_ptr<TabArchiver> archiver_;
++};
++
++// A1: idle unpinned tabs go; the active tab stays.
++TEST_F(TabArchiverTest, ArchivesIdleUnpinnedTabs) {
++  AddThreeTabs();
++  ASSERT_EQ(3, tabs().count());
++  Idle(base::Hours(13));
++  archiver().Sweep();
++  EXPECT_EQ(1, tabs().count());
++  EXPECT_EQ(0, tabs().active_index());
++}
++
++// A1 (negative): nothing goes before the threshold.
++TEST_F(TabArchiverTest, KeepsTabsUnderTheThreshold) {
++  AddThreeTabs();
++  Idle(base::Hours(11));
++  archiver().Sweep();
++  EXPECT_EQ(3, tabs().count());
++}
++
++// A2: the active tab is never archived, and activating a tab resets its clock.
++TEST_F(TabArchiverTest, NeverArchivesTheActiveTab) {
++  AddThreeTabs();
++  Idle(base::Hours(13));
++  tabs().ActivateTabAt(2);  // looked at just now
++  archiver().Sweep();
++  // The old active tab (0) was touched when it became active at t=0 and is
++  // now idle; tab 2 is active; tab 1 is idle.
++  EXPECT_EQ(1, tabs().count());
++  EXPECT_TRUE(tabs().GetActiveTab()->IsActivated());
++}
++
++// A3: pinned in either tier survives.
++TEST_F(TabArchiverTest, KeepsPinnedTabs) {
++  AddThreeTabs();
++  tabs().SetTabPinned(1, true);  // essentials
++  spaces::SpaceModel::From(browser())->SetSpacePinned(tabs().GetTabAtIndex(2),
++                                                     true);
++  Idle(base::Hours(13));
++  archiver().Sweep();
++  EXPECT_EQ(3, tabs().count());
++}
++
++// A4: tabs in a folder survive.
++TEST_F(TabArchiverTest, KeepsFolderTabs) {
++  AddThreeTabs();
++  tabs().AddToNewFolder({2});
++  Idle(base::Hours(13));
++  archiver().Sweep();
++  EXPECT_EQ(2, tabs().count());  // tab 1 archived, tab 2 kept in its folder
++}
++
++// A5: zero hours turns the sweep off.
++TEST_F(TabArchiverTest, ZeroHoursDisables) {
++  AddThreeTabs();
++  prefs()->SetInteger(prefs::kArchiveIdleHours, 0);
++  Idle(base::Hours(48));
++  archiver().Sweep();
++  EXPECT_EQ(3, tabs().count());
++}
++
++// A1 by the timer rather than an explicit sweep: the idle hours pass on the
++// archiver's clock, then one sweep interval passes for real.
++TEST_F(TabArchiverTest, TimerSweeps) {
++  AddThreeTabs();
++  Idle(base::Hours(13));
++  task_environment()->FastForwardBy(TabArchiver::kSweepInterval);
++  EXPECT_EQ(1, tabs().count());
++}
++
++}  // namespace
++}  // namespace stedding
+diff --git a/chrome/browser/ui/browser_window/internal/BUILD.gn b/chrome/browser/ui/browser_window/internal/BUILD.gn
+index 6f6ffb4dcffcb..d4f3ce437eb77 100644
+--- a/chrome/browser/ui/browser_window/internal/BUILD.gn
++++ b/chrome/browser/ui/browser_window/internal/BUILD.gn
+@@ -19,6 +19,7 @@ source_set("internal") {
+     "//chrome/browser/ui/browser_window",
+     "//chrome/browser/ui/browser_window:create_browser_window",
+     "//chrome/browser/ui/spaces",
++    "//chrome/browser/ui/archive",
+     "//components/sessions:session_id",
+     "//components/tabs:public",
+     "//ui/base",
+diff --git a/chrome/browser/ui/browser_window/internal/browser_window_features.cc b/chrome/browser/ui/browser_window/internal/browser_window_features.cc
+index 88d33dea18df7..cdaa60c6025f0 100644
+--- a/chrome/browser/ui/browser_window/internal/browser_window_features.cc
++++ b/chrome/browser/ui/browser_window/internal/browser_window_features.cc
+@@ -3,6 +3,7 @@
+ // found in the LICENSE file.
+ 
+ #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
++#include "chrome/browser/ui/archive/tab_archiver.h"
+ #include "chrome/browser/ui/spaces/space_model.h"
+ #include "chrome/browser/ui/tabs/stedding_folder_session.h"
+ 
+@@ -274,6 +275,9 @@ void BrowserWindowFeatures::Init(BrowserWindowInterface* browser) {
+   // normal windows get them; a popup or an app window has nothing to filter.
+   if (browser->GetType() == BrowserWindowInterface::Type::TYPE_NORMAL) {
+     space_model_ = std::make_unique<spaces::SpaceModel>(*browser);
++    // Auto-archive follows the Space model: it asks it which tabs are pinned.
++    tab_archiver_ = std::make_unique<stedding::TabArchiver>(
++        *browser, *browser->GetProfile()->GetPrefs());
+     folder_session_ = std::make_unique<stedding::FolderSessionService>(
+         *browser->GetBrowserForMigrationOnly());
+   }
+diff --git a/chrome/browser/ui/browser_window/public/browser_window_features.h b/chrome/browser/ui/browser_window/public/browser_window_features.h
+index 0dbf1520ef57b..1d3f033984c62 100644
+--- a/chrome/browser/ui/browser_window/public/browser_window_features.h
++++ b/chrome/browser/ui/browser_window/public/browser_window_features.h
+@@ -117,6 +117,10 @@ class UnloadController;
+ 
+ namespace spaces {
+ class SpaceModel;
++}
++
++namespace stedding {
++class TabArchiver;
+ }  // namespace spaces
+ 
+ namespace stedding {
+@@ -560,6 +564,7 @@ class BrowserWindowFeatures {
+   // Members owned by all browser window types.
+   std::unique_ptr<UnloadController> unload_controller_;
+   std::unique_ptr<spaces::SpaceModel> space_model_;
++  std::unique_ptr<stedding::TabArchiver> tab_archiver_;
+   std::unique_ptr<stedding::FolderSessionService> folder_session_;
+   std::unique_ptr<ActorBorderViewController> actor_border_view_controller_;
+   std::unique_ptr<ttc::AiOverlayDialogController> ai_overlay_dialog_controller_;
+diff --git a/chrome/browser/ui/stedding/stedding_prefs.cc b/chrome/browser/ui/stedding/stedding_prefs.cc
+index 8c0281e4bbec8..746c95b0da9f3 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs.cc
++++ b/chrome/browser/ui/stedding/stedding_prefs.cc
+@@ -12,6 +12,7 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
+   registry->RegisterBooleanPref(kNewTabShowHint, true);
+   registry->RegisterBooleanPref(kNewTabShowShortcuts, true);
+   registry->RegisterBooleanPref(kPeekEnabled, true);
++  registry->RegisterIntegerPref(kArchiveIdleHours, 12);
+ }
+ 
+ }  // namespace stedding::prefs
+diff --git a/chrome/browser/ui/stedding/stedding_prefs.h b/chrome/browser/ui/stedding/stedding_prefs.h
+index 2935a29907289..b1111d2832f7d 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs.h
++++ b/chrome/browser/ui/stedding/stedding_prefs.h
+@@ -23,6 +23,10 @@ inline constexpr char kNewTabShowShortcuts[] =
+ // Links that leave a pinned tab's site open in a peek (peek P1, P10).
+ inline constexpr char kPeekEnabled[] = "stedding.peek.enabled";
+ 
++// Hours an unpinned tab may sit unlooked-at before auto-archive closes it
++// into the recently-closed list (docs/features/archive.md). 0 turns it off.
++inline constexpr char kArchiveIdleHours[] = "stedding.archive.idle_hours";
++
+ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
+ 
+ }  // namespace stedding::prefs
+diff --git a/chrome/browser/ui/webui/settings/settings_ui.cc b/chrome/browser/ui/webui/settings/settings_ui.cc
+index 319e149bc1ec3..24084424e0c98 100644
+--- a/chrome/browser/ui/webui/settings/settings_ui.cc
++++ b/chrome/browser/ui/webui/settings/settings_ui.cc
+@@ -677,6 +677,17 @@ SettingsUI::SettingsUI(content::WebUI* web_ui)
+   html_source->AddString(
+       "steddingSidebarWidthSubLabel",
+       "Dragging the sidebar's edge sets the same value.");
++  html_source->AddString("steddingArchiveLabel",
++                         "Archive tabs nobody has looked at for");
++  html_source->AddString(
++      "steddingArchiveSubLabel",
++      "Unpinned tabs outside folders close into the recently closed list "
++      "(\u21E7\u2318T brings one back).");
++  html_source->AddString("steddingArchiveNever", "Never");
++  html_source->AddString("steddingArchive6h", "6 hours");
++  html_source->AddString("steddingArchive12h", "12 hours");
++  html_source->AddString("steddingArchive1d", "1 day");
++  html_source->AddString("steddingArchive3d", "3 days");
+   html_source->AddString("steddingNewTabHintLabel",
+                          "Show the command-bar hint on the new tab page");
+   html_source->AddString("steddingNewTabHintSubLabel",
+diff --git a/chrome/test/BUILD.gn b/chrome/test/BUILD.gn
+index faadb8bd89c3c..0165ec5178f3a 100644
+--- a/chrome/test/BUILD.gn
++++ b/chrome/test/BUILD.gn
+@@ -5426,6 +5426,7 @@ test("unit_tests") {
+     "//chrome/browser/ui/cookie_controls:unit_tests",
+     "//chrome/browser/ui/file_system_access:unit_tests",
+     "//chrome/browser/ui/spaces:unit_tests",
++    "//chrome/browser/ui/archive:unit_tests",
+     "//chrome/browser/ui/views/commandbar:unit_tests",
+     "//chrome/browser/ui/stedding:unit_tests",
+     "//chrome/browser/ui/views/peek:unit_tests",

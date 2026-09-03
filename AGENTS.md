@@ -91,8 +91,11 @@ Built, with tests or measured captures:
 - **Peek**: a link leaving a pinned tab's site opens over the window instead
   of navigating the tab; Escape or a click outside dismisses it, ⌘O moves the
   same page into a tab (`docs/features/peek.md`).
-- **Settings**: a "Stedding" section first in chrome://settings, one toggle
+- **Settings**: a "Stedding" section first in chrome://settings, one control
   per Stedding preference (`docs/features/settings.md`).
+- **Auto-archive**: unpinned tabs outside folders that nobody has looked at
+  for 12 hours (a setting) close into the recently-closed list
+  (`docs/features/archive.md`).
 
 Read `docs/HANDOFF.md` before touching anything — it carries the working loop,
 every dev parameter, and the traps already paid for. `docs/ARC-ROUND2.md` is

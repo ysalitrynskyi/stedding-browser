@@ -1,0 +1,437 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Wed, 2 Sep 2026 23:29:50 -0400
+Subject: settings: manage the window's Spaces from chrome://settings
+
+A "Spaces" list in the Stedding section shows this window's Spaces with
+their swatch and icon. Typing a new name renames the Space (the switcher
+follows at once), the bin deletes one and is disabled for the last, and the
+list refreshes whenever the sidebar adds, renames or removes a Space. A
+SettingsPageUIHandler finds the window that hosts the settings tab, observes
+its SpaceModel and pushes the list.
+
+Why: docs/features/settings.md T9; the sidebar's context menu is the only
+other place a Space can be renamed or deleted, and settings is where users
+look for it.
+
+Removable when: never; this is product behaviour.
+---
+ .../settings/stedding_page/stedding_page.css  |  20 +++
+ .../stedding_page/stedding_page.html.ts       |  21 +++
+ .../settings/stedding_page/stedding_page.ts   |  49 +++++-
+ chrome/browser/ui/webui/settings/BUILD.gn     |   4 +
+ .../browser/ui/webui/settings/settings_ui.cc  |   9 ++
+ .../webui/settings/stedding_spaces_handler.cc | 142 ++++++++++++++++++
+ .../webui/settings/stedding_spaces_handler.h  |  52 +++++++
+ 7 files changed, 295 insertions(+), 2 deletions(-)
+ create mode 100644 chrome/browser/ui/webui/settings/stedding_spaces_handler.cc
+ create mode 100644 chrome/browser/ui/webui/settings/stedding_spaces_handler.h
+
+diff --git a/chrome/browser/resources/settings/stedding_page/stedding_page.css b/chrome/browser/resources/settings/stedding_page/stedding_page.css
+index a14f889e5d002..3f1bde4390bd6 100644
+--- a/chrome/browser/resources/settings/stedding_page/stedding_page.css
++++ b/chrome/browser/resources/settings/stedding_page/stedding_page.css
+@@ -12,3 +12,23 @@
+ #intro {
+   padding-bottom: 8px;
+ }
++
++.space-row {
++  align-items: center;
++  gap: 12px;
++}
++
++.space-swatch {
++  align-items: center;
++  border-radius: 50%;
++  display: inline-flex;
++  flex: none;
++  font-size: 13px;
++  height: 24px;
++  justify-content: center;
++  width: 24px;
++}
++
++.space-name {
++  flex: 1;
++}
+diff --git a/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts b/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
+index 198848f493bca..00533da7690b1 100644
+--- a/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
++++ b/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
+@@ -58,6 +58,27 @@ export function getHtml(this: SettingsSteddingPageElement) {
+         ]}">
+     </settings-dropdown-menu>
+   </div>
++  <div class="hr cr-row" id="spacesHeader">
++    <div class="flex">
++      <div class="label">$i18n{steddingSpacesTitle}</div>
++      <div class="secondary">$i18n{steddingSpacesIntro}</div>
++    </div>
++  </div>
++  ${this.spaces_.map(space => html`
++    <div class="settings-box continuation space-row">
++      <span class="space-swatch" style="background: ${space.color}"
++          aria-hidden="true">${space.icon}</span>
++      <cr-input class="space-name" data-id="${space.id}"
++          .value="${space.name}" placeholder="${space.displayName}"
++          aria-label="${space.displayName}"
++          @change="${this.onSpaceNameChange_}">
++      </cr-input>
++      <cr-icon-button class="icon-delete-gray" data-id="${space.id}"
++          title="$i18n{steddingDeleteSpace}"
++          ?disabled="${this.spaces_.length <= 1}"
++          @click="${this.onDeleteSpaceClick_}">
++      </cr-icon-button>
++    </div>`)}
+   <settings-toggle-button
+       id="newTabHint"
+       class="hr"
+diff --git a/chrome/browser/resources/settings/stedding_page/stedding_page.ts b/chrome/browser/resources/settings/stedding_page/stedding_page.ts
+index 0760b0b9a4126..227c03762a8b7 100644
+--- a/chrome/browser/resources/settings/stedding_page/stedding_page.ts
++++ b/chrome/browser/resources/settings/stedding_page/stedding_page.ts
+@@ -8,11 +8,16 @@
+  * behaviours this browser adds on top of Chromium, each backed by one
+  * profile preference (chrome/browser/ui/stedding/stedding_prefs.h).
+  */
++import 'chrome://resources/cr_elements/cr_icon_button/cr_icon_button.js';
++import 'chrome://resources/cr_elements/cr_input/cr_input.js';
+ import '../controls/settings_dropdown_menu.js';
+ import '../controls/settings_slider.js';
+ import '../controls/settings_toggle_button.js';
+ import '../settings_page/settings_section.js';
+ 
++import type {CrInputElement} from 'chrome://resources/cr_elements/cr_input/cr_input.js';
++import {WebUiListenerMixinLit} from 'chrome://resources/cr_elements/web_ui_listener_mixin_lit.js';
++import {sendWithPromise} from 'chrome://resources/js/cr.js';
+ import {CrLitElement} from 'chrome://resources/lit/v3_0/lit.rollup.js';
+ 
+ import {getSearchManager} from '../search_settings.js';
+@@ -21,8 +26,20 @@ import type {SettingsPlugin} from '../settings_main/settings_plugin.js';
+ import {getCss} from './stedding_page.css.js';
+ import {getHtml} from './stedding_page.html.js';
+ 
+-export class SettingsSteddingPageElement extends CrLitElement implements
+-    SettingsPlugin {
++/** One Space of the window this page is in, as the browser reports it. */
++export interface SteddingSpace {
++  id: string;
++  name: string;
++  displayName: string;
++  icon: string;
++  color: string;
++  active: boolean;
++}
++
++const SettingsSteddingPageElementBase = WebUiListenerMixinLit(CrLitElement);
++
++export class SettingsSteddingPageElement extends
++    SettingsSteddingPageElementBase implements SettingsPlugin {
+   static get is() {
+     return 'settings-stedding-page';
+   }
+@@ -35,6 +52,34 @@ export class SettingsSteddingPageElement extends CrLitElement implements
+     return getHtml.bind(this)();
+   }
+ 
++  static override get properties() {
++    return {
++      spaces_: {type: Array},
++    };
++  }
++
++  protected accessor spaces_: SteddingSpace[] = [];
++
++  override connectedCallback() {
++    super.connectedCallback();
++    this.addWebUiListener(
++        'stedding-spaces-changed',
++        (spaces: SteddingSpace[]) => this.spaces_ = spaces);
++    sendWithPromise('steddingGetSpaces').then((spaces: unknown) => {
++      this.spaces_ = spaces as SteddingSpace[];
++    });
++  }
++
++  protected onSpaceNameChange_(e: Event) {
++    const input = e.target as CrInputElement;
++    chrome.send('steddingRenameSpace', [input.dataset['id'], input.value]);
++  }
++
++  protected onDeleteSpaceClick_(e: Event) {
++    const id = (e.currentTarget as HTMLElement).dataset['id'];
++    chrome.send('steddingDeleteSpace', [id]);
++  }
++
+   // SettingsPlugin implementation
+   async searchContents(query: string) {
+     const searchRequest = await getSearchManager().search(query, this);
+diff --git a/chrome/browser/ui/webui/settings/BUILD.gn b/chrome/browser/ui/webui/settings/BUILD.gn
+index fc817a0be4151..56283a85db100 100644
+--- a/chrome/browser/ui/webui/settings/BUILD.gn
++++ b/chrome/browser/ui/webui/settings/BUILD.gn
+@@ -143,6 +143,8 @@ source_set("impl") {
+     "captions_handler.cc",
+     "custom_home_pages_table_model.cc",
+     "dictation_handler.cc",
++    "stedding_spaces_handler.cc",
++    "stedding_spaces_handler.h",
+     "downloads_handler.cc",
+     "font_handler.cc",
+     "glic_handler.cc",
+@@ -259,6 +261,7 @@ source_set("impl") {
+     "//chrome/browser/ui/signin",
+     "//chrome/browser/ui/sync",
+     "//chrome/browser/ui/tabs:tab_strip",
++    "//chrome/browser/ui/spaces",
+     "//chrome/browser/ui/tabs/saved_tab_groups",
+     "//chrome/browser/ui/toasts",
+     "//chrome/browser/ui/toasts/api:toasts",
+@@ -448,6 +451,7 @@ source_set("browser_tests") {
+     "//chrome/browser/ui/side_panel:side_panel_views_dependent",
+     "//chrome/browser/ui/signin",
+     "//chrome/browser/ui/tabs:tab_strip",
++    "//chrome/browser/ui/spaces",
+     "//chrome/browser/ui/toasts",
+     "//chrome/browser/ui/toolbar/pinned_toolbar",
+     "//chrome/common",
+diff --git a/chrome/browser/ui/webui/settings/settings_ui.cc b/chrome/browser/ui/webui/settings/settings_ui.cc
+index 24084424e0c98..46efc5b29feab 100644
+--- a/chrome/browser/ui/webui/settings/settings_ui.cc
++++ b/chrome/browser/ui/webui/settings/settings_ui.cc
+@@ -66,6 +66,7 @@
+ #include "chrome/browser/ui/webui/settings/appearance_handler.h"
+ #include "chrome/browser/ui/webui/settings/browser_lifetime_handler.h"
+ #include "chrome/browser/ui/webui/settings/dictation_handler.h"
++#include "chrome/browser/ui/webui/settings/stedding_spaces_handler.h"
+ #include "chrome/browser/ui/webui/settings/downloads_handler.h"
+ #include "chrome/browser/ui/webui/settings/font_handler.h"
+ #include "chrome/browser/ui/webui/settings/glic_handler.h"
+@@ -242,6 +243,7 @@ SettingsUI::SettingsUI(content::WebUI* web_ui)
+       "worker-src blob: chrome://resources 'self';");
+ 
+   AddSettingsPageUIHandler(std::make_unique<AppearanceHandler>(web_ui));
++  AddSettingsPageUIHandler(std::make_unique<SteddingSpacesHandler>());
+ 
+ #if BUILDFLAG(IS_CHROMEOS)
+   AddSettingsPageUIHandler(std::make_unique<LanguagesHandler>(profile));
+@@ -677,6 +679,13 @@ SettingsUI::SettingsUI(content::WebUI* web_ui)
+   html_source->AddString(
+       "steddingSidebarWidthSubLabel",
+       "Dragging the sidebar's edge sets the same value.");
++  html_source->AddString("steddingSpacesTitle", "Spaces");
++  html_source->AddString(
++      "steddingSpacesIntro",
++      "This window's Spaces. Rename here; the sidebar's + adds one and its "
++      "context menu sets icon and colour.");
++  html_source->AddString("steddingSpaceNamePlaceholder", "Space name");
++  html_source->AddString("steddingDeleteSpace", "Delete Space");
+   html_source->AddString("steddingArchiveLabel",
+                          "Archive tabs nobody has looked at for");
+   html_source->AddString(
+diff --git a/chrome/browser/ui/webui/settings/stedding_spaces_handler.cc b/chrome/browser/ui/webui/settings/stedding_spaces_handler.cc
+new file mode 100644
+index 0000000000000..dc599a3e52f0f
+--- /dev/null
++++ b/chrome/browser/ui/webui/settings/stedding_spaces_handler.cc
+@@ -0,0 +1,142 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/webui/settings/stedding_spaces_handler.h"
++
++#include <optional>
++#include <string>
++#include <utility>
++
++#include "base/functional/bind.h"
++#include "base/strings/stringprintf.h"
++#include "base/strings/utf_string_conversions.h"
++#include "base/token.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
++#include "chrome/browser/ui/spaces/space.h"
++#include "chrome/browser/ui/spaces/space_id.h"
++#include "content/public/browser/web_ui.h"
++#include "third_party/skia/include/core/SkColor.h"
++
++namespace {
++
++std::optional<spaces::SpaceId> ParseId(const base::Value& value) {
++  if (!value.is_string()) {
++    return std::nullopt;
++  }
++  const std::optional<base::Token> token =
++      base::Token::FromString(value.GetString());
++  if (!token) {
++    return std::nullopt;
++  }
++  return spaces::SpaceId::FromRawToken(*token);
++}
++
++}  // namespace
++
++SteddingSpacesHandler::SteddingSpacesHandler() = default;
++SteddingSpacesHandler::~SteddingSpacesHandler() = default;
++
++void SteddingSpacesHandler::RegisterMessages() {
++  web_ui()->RegisterMessageCallback(
++      "steddingGetSpaces",
++      base::BindRepeating(&SteddingSpacesHandler::HandleGetSpaces,
++                          base::Unretained(this)));
++  web_ui()->RegisterMessageCallback(
++      "steddingRenameSpace",
++      base::BindRepeating(&SteddingSpacesHandler::HandleRenameSpace,
++                          base::Unretained(this)));
++  web_ui()->RegisterMessageCallback(
++      "steddingDeleteSpace",
++      base::BindRepeating(&SteddingSpacesHandler::HandleDeleteSpace,
++                          base::Unretained(this)));
++}
++
++void SteddingSpacesHandler::OnJavascriptAllowed() {
++  if (spaces::SpaceModel* const model = GetModel()) {
++    observation_.Observe(model);
++  }
++}
++
++void SteddingSpacesHandler::OnJavascriptDisallowed() {
++  observation_.Reset();
++}
++
++void SteddingSpacesHandler::OnSpaceAdded(const spaces::SpaceId& id) {
++  PushSpaces();
++}
++void SteddingSpacesHandler::OnSpaceRemoved(const spaces::SpaceId& id) {
++  PushSpaces();
++}
++void SteddingSpacesHandler::OnActiveSpaceChanged(const spaces::SpaceId& from,
++                                                 const spaces::SpaceId& to) {
++  PushSpaces();
++}
++void SteddingSpacesHandler::OnSpaceMetadataChanged(const spaces::SpaceId& id) {
++  PushSpaces();
++}
++
++spaces::SpaceModel* SteddingSpacesHandler::GetModel() {
++  BrowserWindowInterface* const browser =
++      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
++          web_ui()->GetWebContents());
++  return spaces::SpaceModel::From(browser);
++}
++
++base::ListValue SteddingSpacesHandler::ListSpaces() {
++  base::ListValue list;
++  spaces::SpaceModel* const model = GetModel();
++  if (!model) {
++    return list;
++  }
++  for (const auto& space : model->spaces()) {
++    base::DictValue entry;
++    entry.Set("id", space->id().ToString());
++    entry.Set("name", space->name());
++    entry.Set("displayName", model->DisplayName(space->id()));
++    entry.Set("icon", space->icon());
++    entry.Set("color", base::StringPrintf("#%02X%02X%02X",
++                                          SkColorGetR(space->color()),
++                                          SkColorGetG(space->color()),
++                                          SkColorGetB(space->color())));
++    entry.Set("active", space->id() == model->active_id());
++    list.Append(std::move(entry));
++  }
++  return list;
++}
++
++void SteddingSpacesHandler::PushSpaces() {
++  if (IsJavascriptAllowed()) {
++    FireWebUIListener("stedding-spaces-changed", ListSpaces());
++  }
++}
++
++void SteddingSpacesHandler::HandleGetSpaces(const base::ListValue& args) {
++  CHECK_EQ(1U, args.size());
++  AllowJavascript();
++  ResolveJavascriptCallback(args[0], ListSpaces());
++}
++
++void SteddingSpacesHandler::HandleRenameSpace(const base::ListValue& args) {
++  CHECK_EQ(2U, args.size());
++  AllowJavascript();
++  const std::optional<spaces::SpaceId> id = ParseId(args[0]);
++  spaces::SpaceModel* const model = GetModel();
++  if (!id || !model || !args[1].is_string() || !model->GetSpace(*id)) {
++    return;
++  }
++  model->SetSpaceName(*id, args[1].GetString());
++}
++
++void SteddingSpacesHandler::HandleDeleteSpace(const base::ListValue& args) {
++  CHECK_EQ(1U, args.size());
++  AllowJavascript();
++  const std::optional<spaces::SpaceId> id = ParseId(args[0]);
++  spaces::SpaceModel* const model = GetModel();
++  // The last Space stays: a window always has one (SpaceModel's invariant).
++  if (!id || !model || model->size() <= 1) {
++    return;
++  }
++  model->RemoveSpace(*id);
++}
+diff --git a/chrome/browser/ui/webui/settings/stedding_spaces_handler.h b/chrome/browser/ui/webui/settings/stedding_spaces_handler.h
+new file mode 100644
+index 0000000000000..72a648ec02195
+--- /dev/null
++++ b/chrome/browser/ui/webui/settings/stedding_spaces_handler.h
+@@ -0,0 +1,52 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_WEBUI_SETTINGS_STEDDING_SPACES_HANDLER_H_
++#define CHROME_BROWSER_UI_WEBUI_SETTINGS_STEDDING_SPACES_HANDLER_H_
++
++#include "base/scoped_observation.h"
++#include "base/values.h"
++#include "chrome/browser/ui/spaces/space_model.h"
++#include "chrome/browser/ui/webui/settings/settings_page_ui_handler.h"
++
++// Space management for chrome://settings/stedding: lists the Spaces of the
++// window the settings tab is in, renames and deletes them, and pushes a fresh
++// list whenever the sidebar changes one (docs/features/settings.md T9).
++class SteddingSpacesHandler : public settings::SettingsPageUIHandler,
++                              public spaces::SpaceModel::Observer {
++ public:
++  SteddingSpacesHandler();
++  SteddingSpacesHandler(const SteddingSpacesHandler&) = delete;
++  SteddingSpacesHandler& operator=(const SteddingSpacesHandler&) = delete;
++  ~SteddingSpacesHandler() override;
++
++  // SettingsPageUIHandler:
++  void RegisterMessages() override;
++  void OnJavascriptAllowed() override;
++  void OnJavascriptDisallowed() override;
++
++  // spaces::SpaceModel::Observer:
++  void OnSpaceAdded(const spaces::SpaceId& id) override;
++  void OnSpaceRemoved(const spaces::SpaceId& id) override;
++  void OnActiveSpaceChanged(const spaces::SpaceId& from,
++                            const spaces::SpaceId& to) override;
++  void OnSpaceMetadataChanged(const spaces::SpaceId& id) override;
++
++ private:
++  // The Space model of the window this settings page lives in, or null for a
++  // page hosted somewhere without Spaces (a popup, a detached tab).
++  spaces::SpaceModel* GetModel();
++
++  base::ListValue ListSpaces();
++  void PushSpaces();
++
++  void HandleGetSpaces(const base::ListValue& args);
++  void HandleRenameSpace(const base::ListValue& args);
++  void HandleDeleteSpace(const base::ListValue& args);
++
++  base::ScopedObservation<spaces::SpaceModel, spaces::SpaceModel::Observer>
++      observation_{this};
++};
++
++#endif  // CHROME_BROWSER_UI_WEBUI_SETTINGS_STEDDING_SPACES_HANDLER_H_

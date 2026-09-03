@@ -13,7 +13,7 @@ refer to `docs/features/<feature>.md`.
 |---|---|---|---|
 | S-17 | Signing, notarisation, updater | ROADMAP M7 | help page points at GitHub Releases until then |
 | S-18 | Proprietary-codecs licensing decision | decisions/0008 | needs a human |
-| S-36 | Settings rows for auto-archive and Space management (settings T8) | settings | the sidebar rows landed (T6 hover, T7 width); these two wait for the behaviours themselves (ROADMAP M3 auto-archive; Space management UI) |
+| S-36 | Space management from settings (settings T9): list, rename, reorder, delete Spaces of the current window | settings, spaces | needs a settings handler with a window's SpaceModel; the sidebar context menu already does rename/delete |
 
 ## Done
 

@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# Publish the DMG in dist/ as a GitHub pre-release.
+#
+# Usage:
+#   tooling/publish-release --check      # what would be published; touches nothing
+#   tooling/publish-release              # create the release (asks gh; needs `repo`)
+#
+# The tag is v<VERSION> (the VERSION file at the repository root). Per ADR 0014 the
+# tag is what the browser's updater compares against, so its shape is checked here:
+# v<major>.<minor>.<patch>[-beta.<n>]. Notes come from docs/release-notes/<tag>.md,
+# written by hand in the register docs/BRAND.md asks for; nothing is generated from
+# commits. The DMG and its .sha256 are the only assets.
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=./lib.sh
+. "$(cd "$(dirname "$0")" && pwd)/lib.sh"
+
+main() {
+    CHECK=0
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --check)   CHECK=1; shift ;;
+        -h|--help) sed -n '2,13p' "$0"; exit 0 ;;
+        *)         die "unknown argument: $1" ;;
+      esac
+    done
+
+    version="$(tr -d '[:space:]' < "$STEDDING_ROOT/VERSION")"
+    tag="v$version"
+    printf '%s' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-beta\.[0-9]+)?$' \
+      || die "tag '$tag' does not match v<major>.<minor>.<patch>[-beta.<n>] (ADR 0014)"
+    notes="$STEDDING_ROOT/docs/release-notes/$tag.md"
+    dmg="$(find "$STEDDING_ROOT/dist" -maxdepth 1 -name '*.dmg' 2>/dev/null | sort | head -1 || true)"
+    missing=0
+    report() { printf '  %-16s %s\n' "$1" "$2" >&2; }
+
+    if gh auth status 2>/dev/null | grep -q "Logged in to github.com account ysalitrynskyi"; then
+      report "gh" "logged in as ysalitrynskyi"
+    else
+      report "gh" "MISSING: gh auth login as ysalitrynskyi"; missing=1
+    fi
+    if [ -n "$dmg" ] && [ -f "$dmg.sha256" ]; then
+      report "dmg" "$dmg ($(du -sh "$dmg" | cut -f1))"
+    else
+      report "dmg" "MISSING: tooling/package-dmg release"; missing=1
+    fi
+    if [ -f "$notes" ]; then
+      report "notes" "$notes"
+    else
+      report "notes" "MISSING: $notes"; missing=1
+    fi
+    if gh release view "$tag" >/dev/null 2>&1; then
+      report "tag" "$tag ALREADY RELEASED"; missing=1
+    else
+      report "tag" "$tag (new)"
+    fi
+    if [ -z "$(git -C "$STEDDING_ROOT" status --short)" ]; then
+      report "repo" "clean"
+    else
+      report "repo" "DIRTY: commit first"; missing=1
+    fi
+    if [ "$CHECK" -eq 1 ]; then
+      if [ "$missing" -eq 0 ]; then log "ready to publish $tag"; else warn "not ready"; fi
+      exit "$missing"
+    fi
+    [ "$missing" -eq 0 ] || die "not ready; run with --check for the list"
+
+    title="Stedding $(printf '%s' "$version" | sed 's/-beta\./ beta /')"
+    log "publishing $tag: $title"
+    gh release create "$tag" \
+      --repo ysalitrynskyi/stedding-browser \
+      --prerelease \
+      --title "$title" \
+      --notes-file "$notes" \
+      "$dmg" "$dmg.sha256" || die "gh release create failed"
+    git -C "$STEDDING_ROOT" tag -f "$tag" >/dev/null
+    log "published: $(gh release view "$tag" --json url -q .url)"
+}
+
+main "$@"

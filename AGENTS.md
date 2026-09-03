@@ -92,7 +92,8 @@ Built, with tests or measured captures:
   of navigating the tab; Escape or a click outside dismisses it, ⌘O moves the
   same page into a tab (`docs/features/peek.md`).
 - **Settings**: a "Stedding" section first in chrome://settings, one control
-  per Stedding preference (`docs/features/settings.md`).
+  per Stedding preference, plus the window's Spaces to rename or delete
+  (`docs/features/settings.md`).
 - **Auto-archive**: unpinned tabs outside folders that nobody has looked at
   for 12 hours (a setting) close into the recently-closed list
   (`docs/features/archive.md`).
@@ -144,7 +145,7 @@ met (cold +2.3%, warm −2.0%, memory +0.0% over vanilla).
 ## Current priorities (keep this list short and fresh)
 
 The order is `BACKLOG.md`. In one line: the operator retests `S-9`/`S-10` on
-the latest DMG in `dist/`. `S-36` waits for sidebar and Spaces preferences;
-`S-17` signing needs credentials and `S-18` a licensing decision.
+the latest DMG in `dist/`. `S-17` signing needs credentials and `S-18` a
+licensing decision; nothing else is open.
 `S-17` signing needs credentials and `S-18` (proprietary-codecs licensing)
 still needs a human decision.

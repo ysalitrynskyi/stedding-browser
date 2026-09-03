@@ -33,6 +33,9 @@ sidebar.
 | B11 | Space metadata (name, icon, colour) edits persist and repaint the switcher and the window tint: with two or more Spaces the active one's colour tints the sidebar ground (30% dark, 22% light) and never the page; the new tab page stays neutral. A Space with no icon shows a default glyph, never a blank disc. | `SpaceModelTest.*Metadata*`; capture (dark and light, two Spaces, 2026-09-02) | built |
 | B12 | Drag a tab onto a Space chip moves it there and switches to that Space. Dropping nowhere changes nothing. | `SpaceDragTargetTest.*` | built |
 | B13 | ⌘T command bar lists tabs from every Space; choosing one switches Space and activates it. | `CommandBarViewTest.*` | built |
+| B15 | A two-finger horizontal swipe across the sidebar activates the next (swipe left) or previous Space; the ends do not wrap. | `SpaceModelTest.SwitchToNeighbourWalksTheSwitcherOrderWithoutWrapping`; live | built |
+| B16 | With two or more Spaces the active Space's icon and name head the tab list, above its pinned tabs; pressing the row opens the Space menu (icon, colour, rename, delete). | live: `tooling/drive` 2026-09-03 | built |
+| B17 | Space-pinned tabs sit under the title with the Clear line beneath them, then "+ New Tab", then the rest; pinning moves the tab into that run at once and the line appears only when both a pinned run and unpinned tabs exist. | live: `tooling/drive` 2026-09-03 (pin from the context menu) | built |
 | B14 | Popup and app windows have no Spaces and no switcher. | `PopupSpaceTest.PopupWindowsHaveNoSpaces`; live: `tooling/drive` opens a popup from a page button; no switcher in it | built |
 
 "built" means the test exists in the series and passes on the pinned tree. "gap" is a

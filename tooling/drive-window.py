@@ -20,6 +20,10 @@ def origin():
     return best["X"], best["Y"]
 def mouse(kind, x, y, button=Quartz.kCGMouseButtonLeft, clicks=1):
     e=Quartz.CGEventCreateMouseEvent(None, kind, (x,y), button)
+    # A created mouse event inherits the last chord's modifiers too (trap 3
+    # in docs/HANDOFF.md): after Ctrl-Cmd-F a plain click became Ctrl-click,
+    # which macOS treats as a right-click.
+    Quartz.CGEventSetFlags(e, 0)  # mouse
     Quartz.CGEventSetIntegerValueField(e, Quartz.kCGMouseEventClickState, clicks)
     Quartz.CGEventPost(Quartz.kCGHIDEventTap, e)
 KEYS={'a':0,'s':1,'d':2,'f':3,'h':4,'g':5,'z':6,'x':7,'c':8,'v':9,'b':11,'q':12,'w':13,'e':14,'r':15,'y':16,'t':17,

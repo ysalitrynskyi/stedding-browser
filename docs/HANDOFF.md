@@ -99,6 +99,11 @@ perform; a param that recreates the state IS the test surface.
    are asked for and passed as `--budget <minutes>`. Hand-written waits follow
    the same rule (`docs/AGENT-LOOP.md`).
 
+- **Trap 5 — synthetic mouse events inherit modifiers too.** After a `key f+ctrl+cmd`
+  the harness's next plain click carried Ctrl, which macOS reads as a right-click:
+  context menus opened where a click was meant. `tooling/drive-window.py` clears the
+  flags on every mouse event now; if a "click" ever opens a menu, check this first.
+
 ## Open items
 
 `BACKLOG.md` is the list; do not keep one here. First up: the operator

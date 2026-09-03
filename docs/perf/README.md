@@ -24,6 +24,11 @@ Headline medians from that file (a table, not a claim):
 
 ## The comparison (`S-31`)
 
+Both build directories measured here (`out/official`, `out/vanilla`) were deleted on
+2026-09-03 to free disk; the numbers stand, and either directory rebuilds from its args
+file in about four hours when the next comparison is due.
+
+
 Medians from the back-to-back pair, overhead = (Stedding − vanilla) / vanilla:
 
 | Measure | Vanilla | Stedding | Overhead | Budget (`docs/QUALITY.md`) |

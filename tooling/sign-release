@@ -12,8 +12,14 @@
 #                            "--keychain-profile=stedding-notary" after a one-time
 #                            `xcrun notarytool store-credentials stedding-notary`
 #
+# --development signs with an "Apple Development" identity from the keychain
+# instead (no notarisation): the app runs on this machine without the
+# first-launch Keychain hang (docs/ARCHITECTURE.md), but Gatekeeper still
+# stops it elsewhere. Releases need the Developer ID path above.
 # --check reports what is present and what is missing and changes nothing.
-# Output: dist/signed/<Product>.app, ready for tooling/package-dmg --app.
+# Output: dist/signed/stable/<Product>.app, ready for tooling/package-dmg --app.
+# A --development build is for this machine only: its signature names the
+# developer's own Apple ID, so never publish it.
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=./lib.sh
 . "$(cd "$(dirname "$0")" && pwd)/lib.sh"
@@ -23,9 +29,11 @@ main() {
 
     CONFIG=official
     CHECK=0
+    DEVELOPMENT=0
     while [ $# -gt 0 ]; do
       case "$1" in
         --check)   CHECK=1; shift ;;
+        --development) DEVELOPMENT=1; shift ;;
         -h|--help) sed -n '2,16p' "$0"; exit 0 ;;
         -*)        die "unknown argument: $1" ;;
         *)         CONFIG="$1"; shift ;;
@@ -37,6 +45,13 @@ main() {
     identity="${STEDDING_SIGN_IDENTITY:-}"
     notary_args="${STEDDING_NOTARY_ARGS:-}"
     missing=0
+    if [ "$DEVELOPMENT" -eq 1 ]; then
+      # Any Apple Development identity will do for a local build; notarisation
+      # does not apply to one, so the notary arguments are not required.
+      [ -n "$identity" ] || identity="$(security find-identity -v -p codesigning 2>/dev/null \
+        | sed -n 's/.*"\(Apple Development: [^"]*\)".*/\1/p' | head -1)"
+      notary_args="${notary_args:-(not needed for --development)}"
+    fi
 
     report() { printf '  %-28s %s\n' "$1" "$2" >&2; }
 
@@ -93,20 +108,22 @@ main() {
     log "signing and notarising from $OUT (this waits on Apple's notary service)"
     # --disable-packaging: tooling/package-dmg makes the image, so the layout
     # and the release notes stay in one place.
-    # shellcheck disable=SC2086  # notary args are a list by design
-    python3 "$packaging/sign_chrome.py" \
-      --input "$OUT" \
-      --output "$signed" \
-      --identity "$identity" \
-      --notarize staple \
-      --notary-arg $notary_args \
-      --disable-packaging \
-      || die "signing failed"
+    sign_args=(--input "$OUT" --output "$signed" --identity "$identity" --disable-packaging)
+    if [ "$DEVELOPMENT" -eq 1 ]; then
+      sign_args+=(--development --notarize none)
+    else
+      # shellcheck disable=SC2206  # notary args are a list by design
+      sign_args+=(--notarize staple --notary-arg $notary_args)
+    fi
+    python3 "$packaging/sign_chrome.py" "${sign_args[@]}" || die "signing failed"
 
-    out_app="$(find_app_bundle "$signed" || true)"
+    # The signer files the app under its channel ("stable/").
+    out_app="$(find "$signed" -maxdepth 2 -type d -name '*.app' | head -1 || true)"
     [ -n "$out_app" ] || die "signing produced no app bundle under $signed"
     codesign --verify --deep --strict --verbose=2 "$out_app" 2>&1 | tail -2 >&2
-    spctl --assess --type execute --verbose=2 "$out_app" 2>&1 | tail -1 >&2
+    if [ "$DEVELOPMENT" -eq 0 ]; then
+      spctl --assess --type execute --verbose=2 "$out_app" 2>&1 | tail -1 >&2
+    fi
     log "signed app: $out_app"
     log "next: tooling/package-dmg $CONFIG --app '$out_app'"
 }

@@ -72,13 +72,13 @@ for `../PRIVACY.md` to declare.
 
 ## Consequences
 
-- Until this is resolved, every Stedding build behaves like vanilla Chromium on
-  H.264 and AAC, and `tooling/verify-build` reports that as an expected note rather
-  than a failure.
-- If option 1 is chosen, it is a documented product limitation with user-visible
-  consequences, and `../PRODUCT.md` and the release notes must say so plainly rather
-  than let users discover it on a broken page.
-- If option 2 is chosen, licensing terms and cost belong in this ADR before the flag
-  is flipped, and the flag change is its own commit referencing them.
-- Whichever is chosen, this ADR is superseded by one that records the outcome; per
-  `README.md` in this directory, a superseded ADR is not edited.
+- `proprietary_codecs = true` and `ffmpeg_branding = "Chrome"` in every configuration
+  under `tooling/args/`; `tooling/verify-build` treats H.264+AAC playback as a pass
+  condition, not a note.
+- The patent-licensing obligation (Via LA, AVC/H.264 and AAC) attaches at the first
+  public release. Terms and cost are **TBD** and are recorded in a superseding ADR
+  before the 1.0 release checklist in `../QUALITY.md` passes; unsigned pre-release
+  betas to testers are made in the meantime with this obligation stated in their
+  release notes.
+- Chromium branding plus our own, never Google Chrome's, so no Google licence is
+  implied; codecs are compiled in, so `../PRIVACY.md` has nothing new to declare.

@@ -145,7 +145,7 @@ met (cold +2.3%, warm −2.0%, memory +0.0% over vanilla).
 ## Current priorities (keep this list short and fresh)
 
 The order is `BACKLOG.md`. In one line: the operator retests `S-9`/`S-10` on
-the latest DMG in `dist/`. `S-17` signing needs credentials and `S-18` a
-licensing decision; nothing else is open.
+the latest DMG in `dist/`. `S-17` waits on a Developer ID certificate and a
+notary profile (the signing pipeline itself is verified); nothing else is open.
 `S-17` signing needs credentials and `S-18` (proprietary-codecs licensing)
 still needs a human decision.

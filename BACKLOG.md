@@ -11,14 +11,14 @@ refer to `docs/features/<feature>.md`.
 
 | Id | Item | Feature / spec | Notes |
 |---|---|---|---|
-| S-17 | Signing, notarisation, updater | ROADMAP M7 | Everything but the secrets is in place: `tooling/sign-release --check` lists what is missing; with `STEDDING_SIGN_IDENTITY` and `STEDDING_NOTARY_ARGS` set it signs through Chromium's own pipeline and `tooling/package-dmg --app dist/signed/...` makes the image without the Gatekeeper note. Needs the operator's Developer ID and a notarytool keychain profile |
-| S-18 | Proprietary-codecs licensing decision | decisions/0008 | needs a human |
+| S-17 | Signing, notarisation, updater | ROADMAP M7 | Pipeline verified end to end 2026-09-03: `tooling/sign-release release --development` signed and verified the app through Chromium's own signer with the Apple Development identity in this keychain (local use only; it carries a personal Apple ID). A public release needs a Developer ID Application certificate and a notarytool keychain profile: `export STEDDING_SIGN_IDENTITY=... STEDDING_NOTARY_ARGS=--keychain-profile=...` then `tooling/sign-release release`. The updater is decided (ADR 0014, GitHub Releases; stub in patch 0006) |
 
 ## Done
 
 | Id | Item | Closed by |
 |---|---|---|
 | S-38 | Fullscreen toolbar over the sidebar | `SteddingBrowserViewLayout::CalculateTopContainerLayout` insets the overlay's toolbar by the strip width while immersive fullscreen is on (patch 0002); ARC-ROUND2 round 4 |
+| S-18 | Proprietary-codecs licensing decision | Decided 2026-08-31 (ADR 0008, Accepted): ship H.264/AAC in every configuration; the licence itself is a 1.0 release-checklist item (`docs/QUALITY.md`), not a code gap |
 | S-36 | Sidebar and Spaces settings rows | Sidebar hover (T6), width slider applied live (T7), auto-archive threshold (T8, patch 0011), Spaces list with rename and delete (T9, patch 0012); the rest in patch 0010, the archiver in 0011 |
 | S-37 | Perf budgets on the first vanilla pair | Noise, not the series: on the deterministic local list the pair reads cold +2.3%, warm −2.0%, memory +0.0% (`docs/perf/README.md`); the live list's swings were third-party frames. Re-measure the next official build the same way before a release |
 | S-39 | Space tint on the sidebar ground, neutral new tab page | Blend in `stedding_color_mixer` and `SteddingWindowBackground` (patch 0007); spaces B11 |

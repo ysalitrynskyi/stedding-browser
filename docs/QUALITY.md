@@ -163,6 +163,8 @@ Applies from M7 (first auto-updating release) onward.
 
 ## Release checklist
 
+- Codec licence terms recorded per `decisions/0008-proprietary-codecs.md` (a superseding ADR) before any public 1.0 release.
+
 Every public release, from M7 on, ships only after each item is checked off and the
 completed checklist is stored with the release records. Pre-M7 releases use the
 applicable subset.

@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+# Sign and notarise a built Stedding.app with Chromium's own signing pipeline
+# (chrome/installer/mac/signing: every helper gets its entitlements, the app
+# gets the hardened runtime, notarytool submits, the ticket is stapled).
+#
+# Usage:
+#   tooling/sign-release [official|release] [--check]
+#
+# Needs, from the operator's environment (never from this repo):
+#   STEDDING_SIGN_IDENTITY   "Developer ID Application: Name (TEAMID)"
+#   STEDDING_NOTARY_ARGS     arguments for `xcrun notarytool`, usually
+#                            "--keychain-profile=stedding-notary" after a one-time
+#                            `xcrun notarytool store-credentials stedding-notary`
+#
+# --check reports what is present and what is missing and changes nothing.
+# Output: dist/signed/<Product>.app, ready for tooling/package-dmg --app.
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=./lib.sh
+. "$(cd "$(dirname "$0")" && pwd)/lib.sh"
+
+main() {
+    require_macos_arm64
+
+    CONFIG=official
+    CHECK=0
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --check)   CHECK=1; shift ;;
+        -h|--help) sed -n '2,16p' "$0"; exit 0 ;;
+        -*)        die "unknown argument: $1" ;;
+        *)         CONFIG="$1"; shift ;;
+      esac
+    done
+
+    OUT="$CHROMIUM_SRC/out/$CONFIG"
+    packaging="$(find "$OUT" -maxdepth 1 -type d -name '* Packaging' 2>/dev/null | head -1 || true)"
+    identity="${STEDDING_SIGN_IDENTITY:-}"
+    notary_args="${STEDDING_NOTARY_ARGS:-}"
+    missing=0
+
+    report() { printf '  %-28s %s\n' "$1" "$2" >&2; }
+
+    if [ -n "$packaging" ] && [ -f "$packaging/sign_chrome.py" ]; then
+      report "packaging dir" "$packaging"
+    else
+      report "packaging dir" "MISSING: build it with tooling/dev build $CONFIG chrome/installer/mac:mac"
+      missing=1
+    fi
+    app="$(find_app_bundle "$OUT" 2>/dev/null || true)"
+    if [ -n "$app" ]; then
+      report "app" "$app"
+    else
+      report "app" "MISSING: tooling/dev build $CONFIG chrome"
+      missing=1
+    fi
+    if [ -n "$identity" ]; then
+      if security find-identity -v -p codesigning 2>/dev/null | grep -Fq "$identity"; then
+        report "signing identity" "present in the keychain"
+      else
+        report "signing identity" "SET BUT NOT IN THE KEYCHAIN: $identity"
+        missing=1
+      fi
+    else
+      report "signing identity" "MISSING: export STEDDING_SIGN_IDENTITY"
+      missing=1
+    fi
+    if [ -n "$notary_args" ]; then
+      report "notary args" "$notary_args"
+    else
+      report "notary args" "MISSING: export STEDDING_NOTARY_ARGS (e.g. --keychain-profile=stedding-notary)"
+      missing=1
+    fi
+    if xcrun --find notarytool >/dev/null 2>&1; then
+      report "notarytool" "$(xcrun --find notarytool)"
+    else
+      report "notarytool" "MISSING: install Xcode command line tools"
+      missing=1
+    fi
+
+    if [ "$CHECK" -eq 1 ]; then
+      if [ "$missing" -eq 0 ]; then
+        log "ready to sign"
+      else
+        warn "not ready; see above"
+      fi
+      exit "$missing"
+    fi
+    [ "$missing" -eq 0 ] || die "not ready to sign; run with --check for the list"
+
+    signed="$STEDDING_ROOT/dist/signed"
+    rm -rf "$signed"
+    mkdir -p "$signed"
+    log "signing and notarising from $OUT (this waits on Apple's notary service)"
+    # --disable-packaging: tooling/package-dmg makes the image, so the layout
+    # and the release notes stay in one place.
+    # shellcheck disable=SC2086  # notary args are a list by design
+    python3 "$packaging/sign_chrome.py" \
+      --input "$OUT" \
+      --output "$signed" \
+      --identity "$identity" \
+      --notarize staple \
+      --notary-arg $notary_args \
+      --disable-packaging \
+      || die "signing failed"
+
+    out_app="$(find_app_bundle "$signed" || true)"
+    [ -n "$out_app" ] || die "signing produced no app bundle under $signed"
+    codesign --verify --deep --strict --verbose=2 "$out_app" 2>&1 | tail -2 >&2
+    spctl --assess --type execute --verbose=2 "$out_app" 2>&1 | tail -1 >&2
+    log "signed app: $out_app"
+    log "next: tooling/package-dmg $CONFIG --app '$out_app'"
+}
+
+main "$@"

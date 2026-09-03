@@ -26,6 +26,7 @@ its configuration from `chromium-version` — never from a value typed twice.
 | `update-patches` | Turns those commits back into `../patches/`. |
 | `repair-checkout` | Rewrites git cache paths after a checkout is moved. |
 | `update-pin` | Moves the Chromium pin to the newest stable and checks the series still applies. |
+| `sign-release` | Sign and notarise a built app with Chromium's signing pipeline; `--check` lists what is missing (identity, notary profile, packaging dir) |
 | `package-dmg` | Packages a built app into an installable `.dmg`. |
 | `brand/generate.py` | Regenerates the whole brand system from one geometry file. |
 | `check-repo` | Repository hygiene: shell portability, links, ADRs, patch series, the pin, no machine paths. |

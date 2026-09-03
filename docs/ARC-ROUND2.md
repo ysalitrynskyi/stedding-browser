@@ -49,3 +49,28 @@ A pass over every surface by capture on the release build, dark mode first.
 | Fullscreen: nav buttons sit over the sidebar column instead of over the content | **Fixed** (patch 0002) — in immersive fullscreen the layout starts the overlay's toolbar where the strip ends; captured in real fullscreen (⌃⌘F): nav buttons right of the sidebar, omnibox centred over the content |
 | Space tint lands on the page (the new tab page goes plum) rather than on the sidebar as Arc does | **Fixed** (patch 0007) — the active Space's colour blends into the window ground; the new tab page keeps a neutral ground; verified with two Spaces in dark and light |
 | Light mode: hairline between toolbar and the content card | **Fixed** (patch 0007) — separator takes the toolbar colour |
+
+
+## Round 4 sign-off (2026-09-02, release build, captures via `tooling/drive`)
+
+Every surface looked at in both modes; "holds" means no defect found against
+`docs/UI-SPEC.md` and the Arc reference at 2× zoom.
+
+| Surface | Dark | Light | Verdict |
+|---|---|---|---|
+| Window ground, sidebar, mat, content card corners | captured | captured | holds; probes 14/14 |
+| Tab rows: active, inactive, hover, selected, favicon, close glyph | captured | captured | holds after the neutral hover/select tint |
+| "+ New Tab" row, essentials grid, Clear line | captured | captured | holds |
+| Tab context menu, strip background menu | captured | captured | holds; no horizontal-tabs or feedback items |
+| Space switcher: chips, hover name pill, context menu (icons, swatches) | captured | captured | holds; menu no longer crashes |
+| Space tint (two Spaces) on the ground; new tab page neutral | captured | captured | holds |
+| Command bar: panel, field, rows, chosen row | captured | captured | holds |
+| New tab page: hint line, shortcuts, neutral ground | captured | captured (earlier in the day) | holds |
+| Peek: card, header, buttons, scrim | captured | captured | holds |
+| chrome://settings: Stedding section, landing page, header logo, About | captured | captured | holds; logo branded in both modes |
+| Fullscreen: toolbar placement, omnibox cap, pill icon | captured | — | holds after patch 0002's overlay inset |
+| Toolbar/content hairline | — | captured | gone |
+
+Not changed on purpose: the light-mode sand (`#C8B377`) is the operator's
+colour choice (round 3); a softer sand is a one-constant change in patch 0007
+if ever wanted.

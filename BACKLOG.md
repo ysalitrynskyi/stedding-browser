@@ -11,7 +11,7 @@ refer to `docs/features/<feature>.md`.
 
 | Id | Item | Feature / spec | Notes |
 |---|---|---|---|
-| S-17 | Signing, notarisation, updater | ROADMAP M7 | help page points at GitHub Releases until then |
+| S-17 | Signing, notarisation, updater | ROADMAP M7 | Everything but the secrets is in place: `tooling/sign-release --check` lists what is missing; with `STEDDING_SIGN_IDENTITY` and `STEDDING_NOTARY_ARGS` set it signs through Chromium's own pipeline and `tooling/package-dmg --app dist/signed/...` makes the image without the Gatekeeper note. Needs the operator's Developer ID and a notarytool keychain profile |
 | S-18 | Proprietary-codecs licensing decision | decisions/0008 | needs a human |
 
 ## Done

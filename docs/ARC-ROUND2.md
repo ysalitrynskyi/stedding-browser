@@ -121,3 +121,13 @@ Passed as they are: everything above except the four below.
 Noted, not changed: with two Spaces the light ground blends the Space colour at 22%,
 which turns sand olive under the default slate; the round-4 sign-off accepted it. A
 Space-pinned tab that joins a split leaves the pinned run for the split's row.
+
+## Beta 2 feedback (2026-09-04)
+
+Three things from the operator's first look at beta 2, each fixed and captured:
+
+| Found | Fix |
+|---|---|
+| "Everything in the address bar is broken or doesn't fit": the chrome:// chip ("Stedding") drew as a white box with the mark cut off. The 25 DIP location bar left the chip 15 DIP tall around a 16 DIP icon. | The chip's vertical padding is 2 (Chromium's 5), so it keeps 21 DIP (patch 0013, `layout_constants.cc`). |
+| "Not changing colour like Arc": only pages with a `theme-color` coloured the row; chrome://settings, Wikipedia and most sites left it on the ground. | The page's own background is the fallback (`WebContents::GetBackgroundColor`), the way Safari tints its bar; the scheme-match rule stays (toolbar T3/T4). |
+| "Spaces very weirdly centred at the bottom": the chips were spread evenly across the row. | Chips sit together in the middle with a fixed gap, "+" at the right, downloads at the left (spaces B11). |

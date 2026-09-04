@@ -153,10 +153,10 @@ met (cold +2.3%, warm −2.0%, memory +0.0% over vanilla).
 
 ## Current priorities (keep this list short and fresh)
 
-The order is `BACKLOG.md`. `v0.2.0-beta.2` (unsigned) carries round 5 of the
-Arc parity work, screenshots, the welcome flow and the fixes from the visual
-audit of every surface (`docs/ARC-ROUND2.md`); the operator retests it
-against Arc. `S-17` signing waits on Apple's organisation enrolment (then
+The order is `BACKLOG.md`. `v0.2.0-beta.3` (unsigned) carries round 5 of the
+Arc parity work, screenshots, the welcome flow, the fixes from the visual
+audit of every surface and from the first look at beta 2 (`docs/ARC-ROUND2.md`);
+the operator retests it against Arc. `S-17` signing waits on Apple's organisation enrolment (then
 `tooling/sign-release` and a signed re-release), `S-18` on a licensing
 decision; `S-40`–`S-43` are the small gaps found while verifying round 5
 (capture toast, download progress on the sidebar button, a Space colour on

@@ -100,3 +100,24 @@ capture or test before it is marked done; the release that carries them is
 | 14 | One pinned essential took half the row | **Fixed** (patch 0013) — a lone card spans the row, two share it |
 | 15 | Sidebar edge cannot be dragged | **Fixed** (patch 0013) — 12 DIP handle at the strip's right edge; verified live by dragging to 260 |
 | 16 | Swipe on the sidebar switches Spaces | **Fixed** (patch 0013) — two-finger horizontal swipe, no wrap; `SpaceModelTest.SwitchToNeighbour*` |
+
+## Round 5 audit (2026-09-04, release build, every surface in dark and light)
+
+Captured through `tooling/drive` on a profile with an essential, a Space-pinned tab,
+two Spaces, a folder, a split, and a peek: the window, the command bar (empty and
+typed), the tab and Space context menus, a chip hover, a tab hover with its card,
+peek, the collapsed sidebar, the app menu, a narrowed sidebar, the settings and
+About pages, and macOS fullscreen. Then the same in light.
+
+Passed as they are: everything above except the four below.
+
+| Found | Fix |
+|---|---|
+| The Space name pill drew at the top of the sidebar on chip hover: the switcher now sits in the bottom row, and the pill was placed with row-relative bounds. | Converted into the sidebar's coordinates first (patch 0013). |
+| An essential's hover card opened below the card, over the Space title and the first rows (Chromium's placement for pinned tabs). | Every vertical tab's card opens beside the sidebar (patch 0013, `TabView::GetAnchorPosition`). |
+| Welcome step 5 and the settings hint named ⇧⌘L, which is bound to nothing. | ⌘S is the collapse key; the step lists ⌥⌘N (split) instead (patches 0013, 0015). |
+| The About page says "Developer Build" after the Chromium version. | Open as `S-43`. |
+
+Noted, not changed: with two Spaces the light ground blends the Space colour at 22%,
+which turns sand olive under the default slate; the round-4 sign-off accepted it. A
+Space-pinned tab that joins a split leaves the pinned run for the split's row.

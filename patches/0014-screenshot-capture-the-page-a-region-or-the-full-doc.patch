@@ -1,0 +1,486 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Fri, 4 Sep 2026 00:12:59 -0400
+Subject: screenshot: capture the page, a region, or the full document
+
+Shift-Cmd-2 captures the visible page, Option-Shift-Cmd-2 a rectangle the
+user drags out (Chromium's ScreenshotFlow), Shift-Cmd-1 the whole document
+through the DevTools protocol from a trusted in-browser client. Every mode
+writes "Stedding <host> <time>.png" to the Downloads folder and puts the same
+image on the clipboard. docs/features/screenshot.md C1-C4. Shift-Cmd-3 to 6
+are macOS's own screenshot keys and never reach an application.
+
+Why: Arc's Capture is one of the things a switcher misses first; extensions
+that do it want the pages they see.
+
+Removable when: never; this is product behaviour.
+---
+ chrome/app/chrome_command_ids.h               |   5 +
+ .../browser/global_keyboard_shortcuts_mac.mm  |   8 +
+ chrome/browser/ui/BUILD.gn                    |   1 +
+ .../browser/ui/browser_command_controller.cc  |  14 +
+ .../browser/ui/stedding/screenshot/BUILD.gn   |  28 ++
+ .../stedding/screenshot/screenshot_capture.cc | 297 ++++++++++++++++++
+ .../stedding/screenshot/screenshot_capture.h  |  28 ++
+ 7 files changed, 381 insertions(+)
+ create mode 100644 chrome/browser/ui/stedding/screenshot/BUILD.gn
+ create mode 100644 chrome/browser/ui/stedding/screenshot/screenshot_capture.cc
+ create mode 100644 chrome/browser/ui/stedding/screenshot/screenshot_capture.h
+
+diff --git a/chrome/app/chrome_command_ids.h b/chrome/app/chrome_command_ids.h
+index 65b9ce9bc44ce..9404685e27d5d 100644
+--- a/chrome/app/chrome_command_ids.h
++++ b/chrome/app/chrome_command_ids.h
+@@ -564,6 +564,11 @@
+ // otherwise it'll conflict. Unbounded menus must also avoid conflicting with
+ // each other, by only using every Nth id (where N is the number of unbounded
+ // menus).
++// Stedding: built-in screenshots (docs/features/screenshot.md).
++#define IDC_STEDDING_CAPTURE_VISIBLE   55100
++#define IDC_STEDDING_CAPTURE_REGION    55101
++#define IDC_STEDDING_CAPTURE_FULL_PAGE 55102
++
+ #define IDC_FIRST_UNBOUNDED_MENU COMMAND_ID_FIRST_UNBOUNDED
+ // LINT.ThenChange(//chrome/browser/ui/actions/chrome_action_id.h)
+ 
+diff --git a/chrome/browser/global_keyboard_shortcuts_mac.mm b/chrome/browser/global_keyboard_shortcuts_mac.mm
+index 1bbe4c5fab656..54b8bff8196db 100644
+--- a/chrome/browser/global_keyboard_shortcuts_mac.mm
++++ b/chrome/browser/global_keyboard_shortcuts_mac.mm
+@@ -114,6 +114,14 @@ const std::vector<KeyboardShortcutData>& GetShortcutsNotPresentInMainMenu() {
+     std::vector<KeyboardShortcutData> keys({
+     // cmd    shift  cntrl  option vkeycode               command
+     // ---    -----  -----  ------ --------               -------
++      // Stedding: screenshots. Shift-Cmd-2 the page, 3 a region, 4 the
++      // whole document.
++      // Stedding captures. Shift-Cmd-3 to 6 belong to macOS's own screenshot
++      // keys and never reach an app, so the region and full-page captures
++      // sit on Option-Shift-Cmd-2 and Shift-Cmd-1.
++      {true,  true,  false, false, kVK_ANSI_2,            IDC_STEDDING_CAPTURE_VISIBLE},
++      {true,  true,  false, true,  kVK_ANSI_2,            IDC_STEDDING_CAPTURE_REGION},
++      {true,  true,  false, false, kVK_ANSI_1,            IDC_STEDDING_CAPTURE_FULL_PAGE},
+       {true,  true,  false, false, kVK_ANSI_RightBracket, IDC_SELECT_NEXT_TAB},
+       {true,  true,  false, false, kVK_ANSI_LeftBracket,  IDC_SELECT_PREVIOUS_TAB},
+       {false, false, true,  false, kVK_PageDown,          IDC_SELECT_NEXT_TAB},
+diff --git a/chrome/browser/ui/BUILD.gn b/chrome/browser/ui/BUILD.gn
+index edd075979283e..927c47db262ac 100644
+--- a/chrome/browser/ui/BUILD.gn
++++ b/chrome/browser/ui/BUILD.gn
+@@ -1347,6 +1347,7 @@ static_library("ui") {
+       "//chrome/browser/ui/views/spaces",
+       "//chrome/browser/ui/views/commandbar",
+       "//chrome/browser/ui/views/peek",
++      "//chrome/browser/ui/stedding/screenshot",
+       "//chrome/browser/ui/stedding/theme",
+       ":uma_browsing_activity_observer",
+       "//base",
+diff --git a/chrome/browser/ui/browser_command_controller.cc b/chrome/browser/ui/browser_command_controller.cc
+index e02ad5fbfe0b6..8c75eeb1bb391 100644
+--- a/chrome/browser/ui/browser_command_controller.cc
++++ b/chrome/browser/ui/browser_command_controller.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "chrome/browser/ui/browser_command_controller.h"
+ 
++#include "chrome/browser/ui/stedding/screenshot/screenshot_capture.h"
++
+ #include <stddef.h>
+ 
+ #include <algorithm>
+@@ -884,6 +886,15 @@ void BrowserCommandController::HandleCommandWithDisposition(
+       PromptToNameWindow(browser_);
+       break;
+ 
++    case IDC_STEDDING_CAPTURE_VISIBLE:
++      stedding::CaptureScreenshot(browser_, stedding::CaptureMode::kVisible);
++      break;
++    case IDC_STEDDING_CAPTURE_REGION:
++      stedding::CaptureScreenshot(browser_, stedding::CaptureMode::kRegion);
++      break;
++    case IDC_STEDDING_CAPTURE_FULL_PAGE:
++      stedding::CaptureScreenshot(browser_, stedding::CaptureMode::kFullPage);
++      break;
+ #if BUILDFLAG(IS_CHROMEOS)
+     case IDC_TAKE_SCREENSHOT:
+       TakeScreenshot();
+@@ -1953,6 +1964,9 @@ void BrowserCommandController::InitCommandState() {
+         (!guest_session && !profile()->IsSystemProfile()));
+   }
+ 
++  command_updater_->UpdateCommandEnabled(IDC_STEDDING_CAPTURE_VISIBLE, true);
++  command_updater_->UpdateCommandEnabled(IDC_STEDDING_CAPTURE_REGION, true);
++  command_updater_->UpdateCommandEnabled(IDC_STEDDING_CAPTURE_FULL_PAGE, true);
+ #if BUILDFLAG(IS_CHROMEOS)
+   command_updater_->UpdateCommandEnabled(IDC_TAKE_SCREENSHOT, true);
+   // Chrome OS uses the system tray menu to handle multi-profiles. Avatar menu
+diff --git a/chrome/browser/ui/stedding/screenshot/BUILD.gn b/chrome/browser/ui/stedding/screenshot/BUILD.gn
+new file mode 100644
+index 0000000000000..2f7e8fe4b3267
+--- /dev/null
++++ b/chrome/browser/ui/stedding/screenshot/BUILD.gn
+@@ -0,0 +1,28 @@
++# Copyright 2026 The Stedding Authors
++# Use of this source code is governed by a BSD-style license that can be
++# found in the LICENSE file.
++
++# Built-in screenshots: the visible page, a region of it, or the full page
++# (docs/features/screenshot.md). PNG to the Downloads folder and the clipboard.
++source_set("screenshot") {
++  public = [ "screenshot_capture.h" ]
++  sources = [ "screenshot_capture.cc" ]
++  public_deps = [
++    "//base",
++    "//chrome/browser/ui/browser_window",
++  ]
++  deps = [
++    "//chrome/browser/download",
++    "//chrome/browser/image_editor",
++    "//chrome/browser/profiles:profile",
++    "//chrome/browser/ui/tabs:tab_strip",
++    "//components/tabs:public",
++    "//components/viz/common",
++    "//content/public/browser",
++    "//skia",
++    "//ui/base",
++    "//ui/base/clipboard",
++    "//ui/gfx",
++    "//ui/gfx/codec",
++  ]
++}
+diff --git a/chrome/browser/ui/stedding/screenshot/screenshot_capture.cc b/chrome/browser/ui/stedding/screenshot/screenshot_capture.cc
+new file mode 100644
+index 0000000000000..3528f8bc7f275
+--- /dev/null
++++ b/chrome/browser/ui/stedding/screenshot/screenshot_capture.cc
+@@ -0,0 +1,297 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/stedding/screenshot/screenshot_capture.h"
++
++#include <memory>
++#include <optional>
++#include <string>
++#include <utility>
++#include <vector>
++
++#include "base/base64.h"
++#include "base/files/file_path.h"
++#include "base/files/file_util.h"
++#include "base/logging.h"
++#include "base/functional/bind.h"
++#include "base/functional/callback.h"
++#include "base/functional/callback_helpers.h"
++#include "base/strings/string_number_conversions.h"
++#include "base/i18n/time_formatting.h"
++#include "base/json/json_reader.h"
++#include "base/json/json_writer.h"
++#include "base/memory/weak_ptr.h"
++#include "base/strings/utf_string_conversions.h"
++#include "base/task/bind_post_task.h"
++#include "base/task/sequenced_task_runner.h"
++#include "base/task/thread_pool.h"
++#include "base/time/time.h"
++#include "base/values.h"
++#include "chrome/browser/download/download_prefs.h"
++#include "chrome/browser/image_editor/screenshot_flow.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "components/tabs/public/tab_interface.h"
++#include "content/public/browser/devtools_agent_host.h"
++#include "content/public/browser/devtools_agent_host_client.h"
++#include "content/public/browser/render_widget_host_view.h"
++#include "components/viz/common/frame_sinks/copy_output_result.h"
++#include "content/public/browser/web_contents.h"
++#include "third_party/skia/include/core/SkBitmap.h"
++#include "ui/base/clipboard/clipboard_buffer.h"
++#include "ui/base/clipboard/scoped_clipboard_writer.h"
++#include "ui/gfx/codec/png_codec.h"
++#include "ui/gfx/geometry/rect.h"
++#include "ui/gfx/image/image.h"
++#include "url/gurl.h"
++
++namespace stedding {
++
++namespace {
++
++// A file name from the page: "Stedding example.org 2026-09-03 14.05.12.png".
++base::FilePath FileNameFor(content::WebContents* contents) {
++  std::string host =
++      contents ? std::string(contents->GetLastCommittedURL().host()) : "";
++  if (host.empty()) {
++    host = "page";
++  }
++  const std::string stamp = base::UnlocalizedTimeFormatWithPattern(
++      base::Time::Now(), "yyyy-MM-dd HH.mm.ss");
++  return base::FilePath("Stedding " + host + " " + stamp + ".png");
++}
++
++// Writes `png` under `directory`, choosing a free name.
++void WritePng(const base::FilePath& directory,
++              const base::FilePath& name,
++              std::vector<uint8_t> png) {
++  base::CreateDirectory(directory);
++  base::FilePath path = directory.Append(name);
++  for (int i = 2; base::PathExists(path) && i < 100; ++i) {
++    path = directory.Append(name.InsertBeforeExtensionASCII(" " + base::NumberToString(i)));
++  }
++  base::WriteFile(path, png);
++}
++
++// The shared ending: clipboard, then Downloads.
++void Deliver(Profile* profile,
++             content::WebContents* contents,
++             const SkBitmap& bitmap) {
++  VLOG(1) << "Deliver bitmap " << bitmap.width() << "x" << bitmap.height();
++  if (bitmap.drawsNothing()) {
++    return;
++  }
++  ui::ScopedClipboardWriter(ui::ClipboardBuffer::kCopyPaste).WriteImage(bitmap);
++  std::optional<std::vector<uint8_t>> png =
++      gfx::PNGCodec::EncodeBGRASkBitmap(bitmap, /*discard_transparency=*/false);
++  if (!png) {
++    return;
++  }
++  const base::FilePath directory =
++      DownloadPrefs::FromBrowserContext(profile)->DownloadPath();
++  base::ThreadPool::PostTask(
++      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
++      base::BindOnce(&WritePng, directory, FileNameFor(contents),
++                     std::move(*png)));
++}
++
++void DeliverPng(Profile* profile,
++                content::WebContents* contents,
++                std::vector<uint8_t> png) {
++  if (png.empty()) {
++    return;
++  }
++  const SkBitmap bitmap = gfx::PNGCodec::Decode(png);
++  if (!bitmap.drawsNothing()) {
++    ui::ScopedClipboardWriter(ui::ClipboardBuffer::kCopyPaste)
++        .WriteImage(bitmap);
++  }
++  const base::FilePath directory =
++      DownloadPrefs::FromBrowserContext(profile)->DownloadPath();
++  base::ThreadPool::PostTask(
++      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
++      base::BindOnce(&WritePng, directory, FileNameFor(contents),
++                     std::move(png)));
++}
++
++// Copies the visible surface of `contents`, optionally cropped to `region`
++// (in view coordinates), and hands the bitmap to `done`.
++void CopyVisible(content::WebContents* contents,
++                 const gfx::Rect& region,
++                 base::OnceCallback<void(const SkBitmap&)> done) {
++  content::RenderWidgetHostView* const view =
++      contents ? contents->GetRenderWidgetHostView() : nullptr;
++  if (!view) {
++    std::move(done).Run(SkBitmap());
++    return;
++  }
++  // Keep the renderer producing frames while we copy (the precedent in
++  // tab_contextualization_controller.cc does the same); the runner releases
++  // it when the callback is destroyed.
++  base::ScopedClosureRunner capturing = contents->IncrementCapturerCount(
++      gfx::Size(), /*stay_hidden=*/true, /*stay_awake=*/false,
++      /*is_activity=*/false);
++  view->CopyFromSurface(
++      region, gfx::Size(), base::TimeDelta(),
++      base::BindPostTask(
++          base::SequencedTaskRunner::GetCurrentDefault(),
++          base::BindOnce(
++              [](base::ScopedClosureRunner capturing,
++                 base::OnceCallback<void(const SkBitmap&)> done,
++                 const content::CopyFromSurfaceResult& result) {
++                std::move(done).Run(result.has_value() ? result->bitmap
++                                                       : SkBitmap());
++              },
++              std::move(capturing), std::move(done))));
++}
++
++// The full document through the DevTools protocol: attach a trusted client,
++// ask for Page.captureScreenshot beyond the viewport, detach. No infobar:
++// this is the browser itself, not an extension or a remote debugger.
++class FullPageCapturer : public content::DevToolsAgentHostClient {
++ public:
++  static void Start(content::WebContents* contents,
++                    base::OnceCallback<void(std::vector<uint8_t>)> done) {
++    // Deletes itself when the reply arrives or the host goes away.
++    new FullPageCapturer(contents, std::move(done));
++  }
++
++  // content::DevToolsAgentHostClient:
++  void DispatchProtocolMessage(content::DevToolsAgentHost* host,
++                               base::span<const uint8_t> message) override {
++    std::optional<base::DictValue> parsed = base::JSONReader::ReadDict(
++        std::string_view(reinterpret_cast<const char*>(message.data()),
++                         message.size()),
++        base::JSON_PARSE_RFC);
++    if (!parsed) {
++      return;
++    }
++    const base::DictValue& dict = *parsed;
++    if (dict.FindInt("id") != kRequestId) {
++      return;  // an event, not our reply
++    }
++    std::vector<uint8_t> png;
++    if (const base::DictValue* result = dict.FindDict("result")) {
++      if (const std::string* data = result->FindString("data")) {
++        std::optional<std::vector<uint8_t>> bytes = base::Base64Decode(*data);
++        if (bytes) {
++          png = std::move(*bytes);
++        }
++      }
++    }
++    Finish(std::move(png));
++  }
++  void AgentHostClosed(content::DevToolsAgentHost* host) override {
++    Finish({});
++  }
++  bool IsTrusted() override { return true; }
++  bool MayWriteLocalFiles() override { return false; }
++  bool AllowUnsafeOperations() override { return false; }
++  std::string GetTypeForMetrics() override { return "Stedding"; }
++
++ private:
++  static constexpr int kRequestId = 1;
++
++  FullPageCapturer(content::WebContents* contents,
++                   base::OnceCallback<void(std::vector<uint8_t>)> done)
++      : done_(std::move(done)) {
++    host_ = content::DevToolsAgentHost::GetOrCreateFor(contents);
++    if (!host_ || !host_->AttachClient(this)) {
++      Finish({});
++      return;
++    }
++    base::DictValue params;
++    params.Set("format", "png");
++    params.Set("captureBeyondViewport", true);
++    params.Set("fromSurface", true);
++    base::DictValue request;
++    request.Set("id", kRequestId);
++    request.Set("method", "Page.captureScreenshot");
++    request.Set("params", std::move(params));
++    std::optional<std::string> json = base::WriteJson(request);
++    host_->DispatchProtocolMessage(this, base::as_byte_span(*json));
++  }
++  ~FullPageCapturer() override = default;
++
++  void Finish(std::vector<uint8_t> png) {
++    if (host_) {
++      host_->DetachClient(this);
++      host_ = nullptr;
++    }
++    if (done_) {
++      std::move(done_).Run(std::move(png));
++    }
++    delete this;
++  }
++
++  scoped_refptr<content::DevToolsAgentHost> host_;
++  base::OnceCallback<void(std::vector<uint8_t>)> done_;
++};
++
++// Holds the region-selection flow alive until the user finishes.
++class RegionCapture {
++ public:
++  static void Start(Profile* profile, content::WebContents* contents) {
++    new RegionCapture(profile, contents);
++  }
++
++ private:
++  RegionCapture(Profile* profile, content::WebContents* contents)
++      : profile_(profile),
++        contents_(contents->GetWeakPtr()),
++        flow_(std::make_unique<image_editor::ScreenshotFlow>(contents)) {
++    flow_->StartForRegionSelection(base::BindOnce(
++        &RegionCapture::OnRegion, base::Unretained(this)));
++  }
++
++  void OnRegion(const image_editor::RegionSelectionResult& result) {
++    content::WebContents* const contents = contents_.get();
++    if (!contents || result.selected_rect.IsEmpty()) {
++      delete this;
++      return;
++    }
++    CopyVisible(contents, result.selected_rect,
++                base::BindOnce(
++                    [](RegionCapture* self, const SkBitmap& bitmap) {
++                      Deliver(self->profile_, self->contents_.get(), bitmap);
++                      delete self;
++                    },
++                    this));
++  }
++
++  const raw_ptr<Profile> profile_;
++  base::WeakPtr<content::WebContents> contents_;
++  std::unique_ptr<image_editor::ScreenshotFlow> flow_;
++};
++
++}  // namespace
++
++void CaptureScreenshot(BrowserWindowInterface* browser, CaptureMode mode) {
++  VLOG(1) << "CaptureScreenshot mode=" << static_cast<int>(mode);
++  if (!browser) {
++    return;
++  }
++  tabs::TabInterface* const tab = browser->GetTabStripModel()->GetActiveTab();
++  content::WebContents* const contents = tab ? tab->GetContents() : nullptr;
++  if (!contents) {
++    return;
++  }
++  Profile* const profile = browser->GetProfile();
++  switch (mode) {
++    case CaptureMode::kVisible:
++      CopyVisible(contents, gfx::Rect(),
++                  base::BindOnce(&Deliver, profile, contents));
++      break;
++    case CaptureMode::kRegion:
++      RegionCapture::Start(profile, contents);
++      break;
++    case CaptureMode::kFullPage:
++      FullPageCapturer::Start(contents,
++                              base::BindOnce(&DeliverPng, profile, contents));
++      break;
++  }
++}
++
++}  // namespace stedding
+diff --git a/chrome/browser/ui/stedding/screenshot/screenshot_capture.h b/chrome/browser/ui/stedding/screenshot/screenshot_capture.h
+new file mode 100644
+index 0000000000000..54f17d5df91cf
+--- /dev/null
++++ b/chrome/browser/ui/stedding/screenshot/screenshot_capture.h
+@@ -0,0 +1,28 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_STEDDING_SCREENSHOT_SCREENSHOT_CAPTURE_H_
++#define CHROME_BROWSER_UI_STEDDING_SCREENSHOT_SCREENSHOT_CAPTURE_H_
++
++class BrowserWindowInterface;
++
++namespace stedding {
++
++// What to capture of the active tab. Every mode ends the same way: a PNG in
++// the profile's Downloads folder named after the page, and the same image on
++// the clipboard (docs/features/screenshot.md).
++enum class CaptureMode {
++  // The page as shown, viewport only.
++  kVisible,
++  // The user drags out a rectangle over the page first.
++  kRegion,
++  // The whole document, past the viewport, through the DevTools protocol.
++  kFullPage,
++};
++
++void CaptureScreenshot(BrowserWindowInterface* browser, CaptureMode mode);
++
++}  // namespace stedding
++
++#endif  // CHROME_BROWSER_UI_STEDDING_SCREENSHOT_SCREENSHOT_CAPTURE_H_

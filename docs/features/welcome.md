@@ -26,5 +26,5 @@ leaves the machine.
 | W3 | Step 2 lists the browsers Chromium's importer finds on this Mac; Import copies bookmarks, history and passwords (each optional) through `ImportDataHandler`. | live: Import from Chrome shows "Imported" | built |
 | W4 | Step 3 sets the colour scheme (system, light, dark) through the theme service, at once. | live | built |
 | W5 | Step 4 shows whether Stedding is the default browser and asks macOS to make it so. | live | built |
-| W6 | Step 5 lists the five shortcuts (⌘T, ⌘S, ⌘O, ⇧⌘L, ⇧⌘2) and the Space swipe; Finish closes the dialog. | live | built |
+| W6 | Step 5 lists the five shortcuts (⌘T, ⌘S, ⌘O, ⌥⌘N, ⇧⌘2) and the Space swipe; Finish closes the dialog. (⇧⌘L was listed until 2026-09-04; nothing is bound to it — ⌘S is the collapse key.) | live | built |
 | W7 | A Space-colour picker on step 3 (the first Space's tint). | none yet | gap |

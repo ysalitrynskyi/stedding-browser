@@ -38,9 +38,13 @@ fixed pixel counts, except where a constant is genuinely constant.
 | Contents background | the page's own; the browser draws no frame around it |
 
 The single most important difference from stock Chromium: **the web contents do
-not meet the top-left corner of the window.** They are inset below a toolbar
-strip and rounded, so the window background reads as a mat around the page. That
-one change accounts for most of "looks like Arc".
+not meet the top-left corner of the window.** They sit on a rounded card below the
+address row, with the window background as a mat at the sides and the bottom. Since
+round 5 (`docs/ARC-ROUND2.md`) the card starts directly under the row — no gap, no
+hairline — and the row takes the page's theme colour when the page declares one that
+suits the colour scheme, so the row reads as the top of the page; otherwise it stays
+on the window ground and the card's top corners show the mat. That one change
+accounts for most of "looks like Arc".
 
 ## Sidebar
 

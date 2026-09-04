@@ -104,6 +104,31 @@ perform; a param that recreates the state IS the test surface.
   context menus opened where a click was meant. `tooling/drive-window.py` clears the
   flags on every mouse event now; if a "click" ever opens a menu, check this first.
 
+6. **A floating window from another app can sit over the capture harness's
+   click targets** (2026-09-03: Arc's mini player parked at the screen's
+   top-left corner swallowed every click on the sidebar's first rows, so a
+   pinned tab looked as if it had no context menu). Window captures never
+   show it. Before blaming a view, list what is on screen there:
+   `python3 -c 'import Quartz; ...CGWindowListCopyWindowInfo(...)'` or a
+   full-screen `screencapture -x`, and move our window with
+   `--window-position` on a fresh profile (a restored session keeps its old
+   bounds).
+
+7. **`tooling/drive`'s `shot` photographs the browser window's rectangle, not
+   every window Stedding owns.** Menus, bubbles and sheets are in it; the
+   welcome dialog (a separate child window) is not, so a check of it needs a
+   full-screen `screencapture -x` while the run is parked on a `wait`, or a
+   `CGWindowListCopyWindowInfo` listing to prove the window exists and where.
+
+8. **A fold that stashes the branding and then fails leaves the stash
+   unpopped** (2026-09-04: an autosquash rebase conflicted, `git rebase
+   --abort` restored the tree, but `git stash list` still held the branding).
+   The next `tooling/dev build` then produces `Chromium.app`, and
+   `tooling/drive` keeps launching the stale `Stedding.app`, so every "fix"
+   looks ineffective. After any failed fold run `git stash list`; scripts that
+   stash must pop in an EXIT trap; `ls out/release/*.app` says which product
+   the last build made.
+
 ## Open items
 
 `BACKLOG.md` is the list; do not keep one here. First up: the operator

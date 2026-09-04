@@ -84,19 +84,19 @@ capture or test before it is marked done; the release that carries them is
 
 | # | Item | Status |
 |---|---|---|
-| 1 | First-run screen: a Stedding welcome flow (search engine, import, appearance, default browser, shortcuts) | in progress |
-| 2 | ⌘T treated random text as a URL | **Fixed** (patch 0005) — the omnibox classifier decides; verified live: "dfsfsfsdfdsfcvv3233" searches DuckDuckGo |
-| 3 | ⌘S toggles the sidebar; Save Page moves to ⇧⌘S | **Fixed** (patch 0001) — verified live |
-| 4 | Tab hover/selected/active highlights | **Fixed** (patch 0007) — every state a tint of the row's text colour; active a translucent pill in dark, white card in light; favicon column widened to the 18 px icon |
-| 5 | Address row must sit on the page and take its colour | **Fixed** (patches 0002/0007) — no gap, page-colour bar painted by the window background, transparent omnibox; see `docs/features/toolbar.md` |
-| 6 | Space icons: no discs, centred emoji, like Arc | **Fixed** (patch 0004) — bare 16 px emoji, inactive at 50 %, even spacing |
-| 7 | Pin to this Space showed nothing; Clear line missing | **Fixed** (patch 0004) — the pinned run sits under the Space title with the Clear line beneath it, then "+ New Tab", then the rest; verified live |
-| 8 | Split view like Arc | see below |
-| 9 | Screenshots | see below |
-| 10 | Fullscreen: sidebar toggle below the address row | **Partly** — the strip's top row is now as compact as windowed; the 33 DIP above it is the macOS immersive overlay, outside the window's content view (`docs/features/toolbar.md` T6) |
+| 1 | First-run screen: a Stedding welcome flow (search engine, import, appearance, default browser, shortcuts) | **Fixed** (patch 0015) — `chrome://stedding-welcome` in a child window over a profile's first window; five steps with Skip and Back; verified live 2026-09-03: engines listed outside the chooser regions too, Light applied at once, Skip records the flow, Quit works with it open, no return on relaunch. `--stedding-welcome` forces it, `--no-first-run` suppresses it |
+| 2 | ⌘T treated random text as a URL | **Fixed** (patch 0013) — the omnibox classifier decides; verified live: "dfsfsfsdfdsfcvv3233" searches DuckDuckGo |
+| 3 | ⌘S toggles the sidebar; Save Page moves to ⇧⌘S | **Fixed** (patch 0013) — verified live |
+| 4 | Tab hover/selected/active highlights | **Fixed** (patch 0013) — every state a tint of the row's text colour; active a translucent pill in dark, white card in light; favicon column widened to the 18 px icon |
+| 5 | Address row must sit on the page and take its colour | **Fixed** (patch 0013) — no gap above the content card, a bar in the page's theme colour painted by the window background when the page declares one that suits the colour scheme (github.com in dark), the ground otherwise (example.com); transparent omnibox; verified live 2026-09-03; see `docs/features/toolbar.md` |
+| 6 | Space icons: no discs, centred emoji, like Arc | **Fixed** (patch 0013) — bare 16 px emoji, inactive at 50 %, even spacing |
+| 7 | Pin to this Space showed nothing; Clear line missing | **Fixed** (patch 0013) — the pinned run sits under the Space title with the Clear line beneath it, then "+ New Tab", then the rest; verified live |
+| 8 | Split view like Arc | **Verified** (Chromium 153 split view, no Stedding code) — a tab's context menu "Add Tab to New Split View" pairs it with the active tab, the panes take the card look, the sidebar shows the pair as one row; ⇧⌘O promotes a peek into a split (peek P9); checked live 2026-09-03 |
+| 9 | Screenshots | **Fixed** (patch 0014) — ⇧⌘2 the visible page, ⌥⇧⌘2 a dragged region, ⇧⌘1 the full document; PNG to Downloads and the clipboard; verified live 2026-09-03 (2064×1678, a 600×400 crop, 2064×7712 for the Wikipedia main page). ⇧⌘3–6 are macOS's own screenshot keys and never reach an application, hence the other two keys; `docs/features/screenshot.md` |
+| 10 | Fullscreen: sidebar toggle below the address row | **Partly** (patch 0013) — the strip's top row is now as compact as windowed; the 33 DIP above it is the macOS immersive overlay, outside the window's content view (`docs/features/toolbar.md` T6) |
 | 11 | General design drift from Arc | addressed by 4–7, 12–16 |
-| 12 | Downloads at the bottom-left | **Fixed** (patch 0002) — a downloads button next to the Space row; the bubble opens from it |
-| 13 | Space name above the tabs | **Fixed** (patch 0004) — icon + name row above the pinned tabs once there are two Spaces; click opens the Space menu |
-| 14 | One pinned essential took half the row | **Fixed** (patch 0002) — a lone card spans the row, two share it |
-| 15 | Sidebar edge cannot be dragged | **Fixed** (patch 0002) — 12 DIP handle at the strip's right edge; verified live by dragging to 260 |
-| 16 | Swipe on the sidebar switches Spaces | **Fixed** (patch 0004) — two-finger horizontal swipe, no wrap; `SpaceModelTest.SwitchToNeighbour*` |
+| 12 | Downloads at the bottom-left | **Fixed** (patch 0013) — a downloads button at the left of the Space row (icon and tooltip from `kActionShowDownloads`, a press runs the toolbar controller's `InvokeUI`, so the bubble opens above the button; the anchor is resolved lazily because the sidebar is built before the download controller exists); verified live 2026-09-03 |
+| 13 | Space name above the tabs | **Fixed** (patch 0013) — icon + name row above the pinned tabs once there are two Spaces; click opens the Space menu |
+| 14 | One pinned essential took half the row | **Fixed** (patch 0013) — a lone card spans the row, two share it |
+| 15 | Sidebar edge cannot be dragged | **Fixed** (patch 0013) — 12 DIP handle at the strip's right edge; verified live by dragging to 260 |
+| 16 | Swipe on the sidebar switches Spaces | **Fixed** (patch 0013) — two-finger horizontal swipe, no wrap; `SpaceModelTest.SwitchToNeighbour*` |

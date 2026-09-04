@@ -97,6 +97,15 @@ Built, with tests or measured captures:
 - **Auto-archive**: unpinned tabs outside folders that nobody has looked at
   for 12 hours (a setting) close into the recently-closed list
   (`docs/features/archive.md`).
+- **Round 5 Arc parity** (`docs/ARC-ROUND2.md`): the bar sits on the page and
+  takes its colour, the Space title heads the list with its pinned run and
+  the Clear line, ⌘S toggles the sidebar, ⌘T classifies and suggests,
+  downloads at the bottom-left, the sidebar edge drags, a swipe changes Space.
+- **Screenshots**: ⇧⌘2 the page, ⌥⇧⌘2 a region, ⇧⌘1 the full document; PNG
+  to Downloads and the clipboard (`docs/features/screenshot.md`).
+- **Welcome flow**: `chrome://stedding-welcome` over a profile's first window:
+  search engine, import, appearance, default browser, shortcuts
+  (`docs/features/welcome.md`).
 
 Read `docs/HANDOFF.md` before touching anything — it carries the working loop,
 every dev parameter, and the traps already paid for. `docs/ARC-ROUND2.md` is
@@ -144,8 +153,10 @@ met (cold +2.3%, warm −2.0%, memory +0.0% over vanilla).
 
 ## Current priorities (keep this list short and fresh)
 
-The order is `BACKLOG.md`. In one line: the operator retests `S-9`/`S-10` on
-the latest DMG in `dist/`. `S-17` waits on a Developer ID certificate and a
-notary profile (the signing pipeline itself is verified); nothing else is open.
-`S-17` signing needs credentials and `S-18` (proprietary-codecs licensing)
-still needs a human decision.
+The order is `BACKLOG.md`. `v0.2.0-beta.1` (unsigned) carries round 5 of the
+Arc parity work, screenshots and the welcome flow; the operator retests it
+against Arc. `S-17` signing waits on Apple's organisation enrolment (then
+`tooling/sign-release` and a signed re-release), `S-18` on a licensing
+decision; `S-40`–`S-42` are the small gaps found while verifying round 5
+(capture toast, download progress on the sidebar button, a Space colour on
+the welcome flow).

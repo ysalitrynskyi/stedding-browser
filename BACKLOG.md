@@ -11,6 +11,9 @@ refer to `docs/features/<feature>.md`.
 
 | Id | Item | Feature / spec | Notes |
 |---|---|---|---|
+| S-40 | Capture toast | `docs/features/screenshot.md` C5 | A brief toast with a thumbnail and "Copied · Saved to Downloads" after ⇧⌘2 / ⌥⇧⌘2 / ⇧⌘1; today the only feedback is the file and the clipboard |
+| S-41 | Download progress on the sidebar button | `docs/features/toolbar.md` (downloads, round 5 item 12) | The bottom-left button shows the static icon; Chromium's progress ring and the "download started" animation still target the toolbar button, which appears at the top right during a download |
+| S-42 | Space colour on the welcome flow | `docs/features/welcome.md` W7 | A colour picker on the appearance step that tints the first Space |
 | S-17 | Signing, notarisation, updater | ROADMAP M7 | Pipeline verified end to end 2026-09-03: `tooling/sign-release release --development` signed and verified the app through Chromium's own signer with the Apple Development identity in this keychain (local use only; it carries a personal Apple ID). A public release needs a Developer ID Application certificate and a notarytool keychain profile: `export STEDDING_SIGN_IDENTITY=... STEDDING_NOTARY_ARGS=--keychain-profile=...` then `tooling/sign-release release`. The updater is decided (ADR 0014, GitHub Releases; stub in patch 0006) |
 
 ## Done

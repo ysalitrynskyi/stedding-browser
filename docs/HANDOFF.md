@@ -46,7 +46,9 @@ decodes real frames), and navigation.
 `toolbar_vertical_margin`, `toolbar_button_height`, `toolbar_button_inset`,
 `toolbar_button_icon_size`, `tab_favicon_size` — metrics.
 `extra_spaces/N` — start with N extra Spaces. `pin_tabs/N` — pin first N tabs
-(the essentials row). `folder_tabs/N` — wrap first N tabs in a folder and nest
+(the essentials row). `space_pin_tabs/N` — pin the first N tabs in their Space,
+their URL as home; `drift_tabs/N` — then send the first N of those to the next
+tab's page (a drifted pin, for pins H4 and H12). `folder_tabs/N` — wrap first N tabs in a folder and nest
 one (exercises the whole folder pipeline). `open_command_bar/true` — open ⌘T
 overlay at startup. `drag_tabs_to_spaces` — on by default.
 
@@ -233,6 +235,25 @@ perform; a param that recreates the state IS the test surface.
     `extra_spaces` feature param adds a Space to every new window, and with
     the registry that Space is shared: make the second Space through the
     sidebar's "+" when capturing a second window.
+22. **Never drive the machine while the operator is at it — and an app launched
+    under lldb is never key for the harness.** A `drive-window.py` run against a
+    browser started by `lldb --batch` could not activate it; every synthetic key
+    went to the frontmost app, which was the operator's chat (2026-09-05). The
+    input-free path covers almost everything: `tooling/capture-ui` (a window
+    capture by id, no focus change) with feature params for the state
+    (`folder_tabs/N` does exist, whatever trap 20 says; `pin_tabs/N`,
+    `extra_spaces/N`, `space_pin_tabs/N`, `drift_tabs/N`; the collapsed rail is
+    a profile preference, `vertical_tabs.collapsed_state`, seeded into a fresh
+    profile's `Default/Preferences`), and `osascript -e 'tell application "…/Stedding.app" to
+    quit'` for a clean quit — which is also how the folder quit crash was
+    reproduced under `lldb --batch -o run -k "bt 40"` with a symbolised stack
+    (the release build keeps its symbol table; `symbol_level=0` drops only the
+    line tables). Drives wait for an empty chair.
+23. **An apply script's anchors die at the first clang-format.** The pipeline
+    formats after applying, so a re-run fails on any anchor or guard that
+    clang-format rewrapped, and stops before the build. Re-run the pipeline
+    with a no-op apply once the edits are in, and write guards on lines
+    clang-format will not touch.
 
 ## Open items
 

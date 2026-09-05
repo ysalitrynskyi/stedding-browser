@@ -1,7 +1,7 @@
 # Feature: Folders
 
-Status: **F1–F9, F11 built and tested**; F10 is a gap.
-Owner docs: `docs/decisions/0013-folders-are-a-collection-type.md` (model). Patch: `0008` (the whole feature; the series is per feature since `S-11`).
+Status: **F1–F9, F11, F12 built and tested**; F10 is a gap. F12 is round 7 (`docs/ARC-ROUND2.md`, 2026-09-05).
+Owner docs: `docs/decisions/0013-folders-are-a-collection-type.md` (model). Patches: `0008` (the whole feature; the series is per feature since `S-11`), `0037` (F12, round 7).
 
 A folder is a named, collapsible container of tabs in the sidebar. Folders nest. A folder is
 a collection type in the tab tree, not a tab group, so Chrome's groups keep working and a
@@ -22,6 +22,7 @@ folder's membership cannot be overwritten by an outer group (ADR 0013).
 | F9 | Tabs move into a folder one by one, so the tree stays valid even when every tab of an outer folder is moved into a folder nested inside it. | `TabStripModelTest.MoveTabsToFolderAppendsNestsAndRefusesPins` | built |
 | F10 | Dragging a tab between two tabs inside an expanded folder places it there (the strip's own reorder is folder-aware). | none yet | gap |
 | F11 | The tab-strip mojom carries a Folder variant (id, title, collapse state) instead of mapping FOLDER to the plain container. | live: a window with nested folders under the API observer, no crash; `TabStripModelTest.AddToNewFolder*` drives the converter | built |
+| F12 | Arc's folder row: a folder glyph (closed, or open with the folder) in place of the chevron, a semibold title, and the tab rows' hover tint and radius on the header. The header never reads a folder that has left the tree: a node that no longer names a collection gives no folder, and the window's page-colour re-theme is posted one turn after the tab strip's change instead of running inside it (closing every tab at quit reached a header whose folder was gone and aborted on the variant, 2026-09-05). | `FolderViewTest.HeaderShowsAFolderGlyphAndASemiboldTitle`, `FolderViewTest.HeaderSurvivesANodeThatIsNotAFolder`, `PageThemeColorControllerTest.*`; live: `r7_folder` (the glyph and the title; pending: the screen was locked when this landed on 2026-09-05; taken at the next unlock); a `folder_tabs/2` launch quit through the AppleEvent under lldb with no abort (done, 2026-09-05 18:02) | built |
 
 ## Running the tests
 

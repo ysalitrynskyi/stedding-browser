@@ -21,6 +21,7 @@ refer to `docs/features/<feature>.md`.
 
 | Id | Item | Closed by |
 |---|---|---|
+| S-46 | Round 7: the operator's look at beta 3 | `docs/ARC-ROUND2.md` round 7 (2026-09-05): the row is the page's colour exactly, square under it, the star and the cluster centred (toolbar T15–T18); the collapsed rail centred and its toggle clear of the traffic lights (sidebar Y6–Y7); Arc's folder and drifted-pin rows (folders F12, pins H12); the folder quit crash (F12); Arc's history and passwords in one click (import I6, I21–I23, welcome W8). Patches 0037 (round 7 across features, as 0013 was for round 5) and 0038 (Arc's data) |
 | S-43 | About page version label | chrome://settings/help reads "Stedding <VERSION> · Chromium <pin> (arm64)" through `stedding::AboutVersionString` and a `stedding_version` GN argument `tooling/build-chromium` writes from `VERSION` (patch 0018); settings T10, verified live 2026-09-05 |
 | S-40 | Capture toast | `ToastId::kSteddingCaptureSaved` on Chromium's toast framework, "Copied · Saved to Downloads" with Show in Finder, dialog colours (patch 0017); screenshot C5–C6, verified live 2026-09-05 |
 | S-38 | Fullscreen toolbar over the sidebar | `SteddingBrowserViewLayout::CalculateTopContainerLayout` insets the overlay's toolbar by the strip width while immersive fullscreen is on (patch 0002); ARC-ROUND2 round 4 |

@@ -131,3 +131,21 @@ Three things from the operator's first look at beta 2, each fixed and captured:
 | "Everything in the address bar is broken or doesn't fit": the chrome:// chip ("Stedding") drew as a white box with the mark cut off. The 25 DIP location bar left the chip 15 DIP tall around a 16 DIP icon. | The chip's vertical padding is 2 (Chromium's 5), so it keeps 21 DIP (patch 0013, `layout_constants.cc`). |
 | "Not changing colour like Arc": only pages with a `theme-color` coloured the row; chrome://settings, Wikipedia and most sites left it on the ground. | The page's own background is the fallback (`WebContents::GetBackgroundColor`), the way Safari tints its bar; the scheme-match rule stays (toolbar T3/T4). |
 | "Spaces very weirdly centred at the bottom": the chips were spread evenly across the row. | Chips sit together in the middle with a fixed gap, "+" at the right, downloads at the left (spaces B11). |
+
+## Round 7 — the operator's look at beta 3 (2026-09-05)
+
+Six things from real use, and a crash found while capturing them. Each is fixed,
+tested and captured without a hand on the machine: `tooling/capture-ui` with feature
+params for the state, and an AppleEvent quit (the operator was at the keyboard, and a
+synthetic key that missed the browser once landed in their chat — `docs/HANDOFF.md`,
+trap 22).
+
+| # | Found | Fix |
+|---|---|---|
+| 1 | The address row was a different colour from the page: even a plain white page got a grey row (the page colour was blended 85% over the ground). | The row is the page's colour exactly, with one hairline where it meets the page (toolbar T15: `PageBarColorSupplier`, `PaintPageBar`). |
+| 2 | The page's top corners were rounded under the row, showing the row's colour through them wherever a page's header is not its theme colour. | Square top corners on the content whenever the row shows; the row keeps the card's rounded top (toolbar T16). |
+| 3 | The address text sat off-centre and the star was nearly invisible. | The star and the row's page actions take the bar's contrast colour (T17); the location bar sizes to its content and sits on the row's centre, so chip, address and star read as one centred cluster (T18). |
+| 4 | Collapsed, the rail's rows sat a little left of centre, the toggle sat too low, and the toggle could pass under the traffic lights. | Rows centred against the card's edge, gutter included (sidebar Y6); the toggle clears the traffic lights by their own height and never crosses the caption row, expand-on-hover's exit included (Y7). |
+| 5 | Folders did not look like Arc's. | Folder glyph (closed / open), semibold title, the rows' hover tint (folders F12); a drifted pin shows Arc's slash between favicon and title (pins H12). |
+| 6 | Moving from Arc should be one click. | The welcome flow's Arc block moves Spaces, pins, folders, tabs, history and passwords with one button; the settings row and the ⌘T action move everything too (import I6, I21–I23, patch 0038). |
+| — | Quitting with a folder in the sidebar aborted (`bad_variant_access`): the page-colour re-theme ran inside the tab strip's close-all notification and reached a folder header whose folder was already gone. | The re-theme is posted after the change and skipped while the window empties; the header gives no folder for a node that is not one (folders F12). |

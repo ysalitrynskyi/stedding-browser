@@ -149,6 +149,12 @@ Built, with tests or measured captures:
   presets and a text size (`docs/features/sidebar.md`); imported bookmarks
   become pins, and sidebar backups, export and restore in the importer's
   format (`docs/features/import.md` I13–I20).
+- **Round 7** (2026-09-05, `docs/ARC-ROUND2.md`; patches 0037 and 0038): the row is the page's colour exactly,
+  square under it, the star and the address cluster centred (toolbar T15–T18);
+  the collapsed rail centred with its toggle clear of the traffic lights
+  (sidebar Y6–Y7); Arc's folder and drifted-pin rows (folders F12, pins H12);
+  the folder quit crash; Arc's history and passwords in one click from the
+  welcome flow (import I6, I21–I23, welcome W8).
 
 Read `docs/HANDOFF.md` before touching anything — it carries the working loop,
 every dev parameter, and the traps already paid for. `docs/ARC-ROUND2.md` is
@@ -216,4 +222,7 @@ Privacy block) as 0030, R6-27 (sidebar density) as 0031, R6-28 (bookmarks to
 pins) as 0032 and R6-29 (sidebar backups) as 0033: wave 3 is complete. Wave 4
 opened with R6-32 (the private coat) as 0034 and ADR 0016, then R6-30 (the
 little window) as 0035 and R6-31 (the registry) as 0036: round 6 is complete
-apart from the rows each spec marks as gaps.
+apart from the rows each spec marks as gaps. Round 7 (`S-46`, 2026-09-05) took
+the operator's six from beta 3 and the folder quit crash as patch 0037, and Arc's
+history and passwords as patch 0038; the next round waits on the operator's
+look at beta 4.

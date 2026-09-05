@@ -9,7 +9,11 @@ patch it belongs to (`git commit --fixup=<sha>` in the checkout, then `git rebas
 toolbar-height change as its own patch is a changelog, and a changelog is what makes
 the next Chromium rebase expensive. The series was squashed to one patch per
 feature on 2026-09-01 (`S-11`); keep it that way: a new feature adds one patch, a fix
-amends its feature's, and `tooling/dev status` is where the count lives.
+amends its feature's, and `tooling/dev status` is where the count lives. The one
+exception: a round of operator feedback that touches many features at once lands as
+one patch (0013 for round 5, 0037 for round 7) when its fixups would conflict with
+every later patch that touched the same lines; the next rebase folds them where they
+belong.
 
 Most branding is **not** here: it is asset replacement in [../branding/](../branding/),
 which costs no patches at all. A patch is the last resort, not the first.

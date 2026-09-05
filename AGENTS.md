@@ -131,6 +131,10 @@ Built, with tests or measured captures:
   Google's rows, Import, Screenshot and Spaces in the app menu, a menu per
   row kind and for the folder header, Move to Space; a chip drag reorders
   the Spaces; a split's panes take a Space, a pin and a sleep together.
+- **Round 6, wave 3** (patches 0026–0027 so far): Import from Arc — Spaces,
+  essentials, pins and folders from Arc's sidebar file, every tab unloaded
+  (`docs/features/import.md`); routing — a site opens in the Space it is
+  routed to, with a toast that undoes it (`docs/features/routing.md`).
 
 Read `docs/HANDOFF.md` before touching anything — it carries the working loop,
 every dev parameter, and the traps already paid for. `docs/ARC-ROUND2.md` is
@@ -191,5 +195,6 @@ beyond (four waves, decisions recorded): wave 1 landed 2026-09-05 (patches
 0016–0018) and most of wave 2 the same night (patches 0019–0022, the command
 bar's actions mode included), every row verified live or by unit test, notes
 in the plan, the ⌃⇥ switcher (R6-12) as 0023, the menus (R6-14) as 0024
-and the last rows (B27, J4, T14) as 0025: wave 2 is complete; waves 3–4
-follow in order under the operator's overnight mandate.
+and the last rows (B27, J4, T14) as 0025: wave 2 is complete. Wave 3 opened
+with R6-22 (Import from Arc) as 0026 and R6-23 (routing) as 0027; the rest
+of waves 3–4 follow in order under the operator's overnight mandate.

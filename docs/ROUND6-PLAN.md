@@ -291,9 +291,20 @@ said otherwise. Each is also in the item's spec.
   off (X5); the shortcut reference lists the four chords and the divergence; the
   bar carries "Go to the Most Recent Tab". The recent list counts a split once
   (splits J2, the ⌃⇥ half). Patch 0023.
-- **Not in this pass.** R6-14 M2, M3, M7 (page and app menus; the five row-kind
-  menus), R6-15 R7 (folder dim), R6-16 H10–H11, R6-19's other J rows, B27's
-  drag, T14's download capture. Each keeps its row.
+- **Part J, R6-14 (the menus), the same morning.** The page menu hides Lens, the
+  Gemini rows, the QR code and reading mode under the short-menus setting (M2);
+  the app menu hides the Google account, Glic, send-to-self, Customize Chrome and
+  Payment rows, the tab-groups and reading-list submenus and the bookmarks-bar and
+  side-panel rows, and gains Import, a Screenshot submenu and a Spaces submenu
+  after Downloads (M3); the tab menu shows the rows that apply to the row's kind
+  through a visibility question the collection controller answers, a split row
+  arranges its panes, and the folder header gains Rename, Collapse or Expand, Move
+  Tabs Out and Close Folder's Tabs (M7); "Move to Space" lists the other Spaces
+  after Rename (M1's missing row). Patch 0024. Not taken: Move to Folder ▸ with
+  existing folders (M1, TBD), and a browser test of the built app menu (the model
+  needs a real window; the id set is unit-tested and the menu captured).
+- **Not in this pass.** R6-15 R7 (folder dim), R6-16 H10–H11, R6-19's other J
+  rows, B27's drag, T14's download capture. Each keeps its row.
 
 #### R6-01 · Shortcut reference block in chrome://settings/stedding
 

@@ -1,6 +1,6 @@
 # Feature: Command bar
 
-Status: **K1–K11, K13–K15, K17 built**; **K12, K16 partial** (round 6, `docs/ROUND6-PLAN.md` R6-11, patch 0022).
+Status: **K1–K11, K13–K17 built**; **K12 partial** (round 6, `docs/ROUND6-PLAN.md` R6-11, patch 0022).
 Owner docs: `docs/PRODUCT.md` ("Command bar"). Patch: `0005`.
 
 ⌘T opens a bar over the page. It lists open tabs from every Space, then the omnibox's own
@@ -25,7 +25,7 @@ suggestions; typing a URL opens it, anything else searches with the default engi
 | K13 | ⇥ with text already typed filters that text against actions (Arc); ⇧⇥ returns to tabs mode with the text kept. | CommandBarViewTest.TabWithTextFiltersActions | built |
 | K14 | Escape in actions mode returns to tabs mode; a second Escape closes the bar. | CommandBarViewTest.EscapeLeavesActionsModeThenCloses | built |
 | K15 | In private and popup windows the actions list holds Chromium's actions only: no Space, pin, folder or archive rows (B14, V2). | `CommandBarViewTest.PopupWindowsListChromiumActionsOnly` | built |
-| K16 | A row whose target is absent is hidden: Move to Space for an essentials tab, tab-scoped rows while a peek is open. | `CommandBarViewTest.RowsWithoutATargetAreHidden` | partial · the essentials case (`CommandBarViewTest.RowsWithoutATargetAreHidden`); the peek case is not handled yet |
+| K16 | A row whose target is absent is hidden: Move to Space for an essentials tab, tab-scoped rows while a peek is open. | `CommandBarViewTest.RowsWithoutATargetAreHidden` (the essentials case), `CommandBarViewTest.TabRowsStepAsideWhileAPeekIsOpen` (the peek case, through a seam the test window needs; live: `w2_bar_peek`). | built |
 | K17 | A dropdown preference appears as one cycling row ("Archive after: 12 hours ▸"): Enter advances to the next value and the row re-reads. | CommandBarViewTest.DropdownPrefRowCycles | built |
 
 ## Notes from the live check (2026-09-05)

@@ -1,6 +1,6 @@
 # Feature: Tab rows
 
-Status: **R1–R3, R18 planned** (round 6, `docs/ROUND6-PLAN.md` R6-03); **R4–R8, R10–R17, R19–R22 planned** (wave 2: R6-13, R6-15, R6-17, R6-20).
+Status: **R1–R3, R18 planned** (round 6, `docs/ROUND6-PLAN.md` R6-03); **R4–R8, R10–R17, R19–R22 built, R22 partial** (wave 2: R6-13, R6-15, R6-17, R6-20).
 Owner docs: `docs/UI-SPEC.md`. Patch: TBD.
 
 The rows of the sidebar follow Arc: the close glyph appears only while the pointer is
@@ -19,7 +19,7 @@ glyph appears, and an essentials card that plays audio keeps its favicon.
 | R4 | A discarded row (TabData::is_tab_discarded) draws its favicon greyscale at 45% and its title at 55% alpha of the row's text colour (so Space tints and light mode follow) and hides the close glyph until hover; Chromium's discard ring is not drawn in the Stedding window. It returns to full strength on activation without extra plumbing (SetData → UpdateColors). | TabViewTest.DiscardedRowDimsTitleAndIcon asserts the title colour alpha on a discarded WebContents; capture of a restored session before and after loading. | built |
 | R5 | Tab context menu 'Sleep Tab' and 'Sleep Other Tabs in This Space' (new ContextMenuCommand entries beside CommandSpacePin) and matching ⌘T actions call resource_coordinator::TabLifecycleUnitExternal::DiscardTab with the external reason; Sleep Tab on the active row (a right-click activates the row it opens on) activates the nearest visible row that stays awake first; Sleep Others never takes the active row. | TabStripModelTest.SleepOthersInSpaceSkipsActiveAndOtherSpaces with a fake lifecycle unit. | built |
 | R6 | 'Put a Space to sleep after leaving it' (Never / 5 min / 15 min / 1 h): a timer started from SpaceModel::Observer::OnActiveSpaceChanged, cancelled on return; essentials are exempt (SetAutoDiscardable(false)); Space-pinned tabs sleep too. | SpaceSleepTest.TimerSleepsLeftSpaceExceptEssentials. | built |
-| R7 | A folder whose every tab sleeps dims its header the same way. | capture. | planned |
+| R7 | A folder whose every tab sleeps dims its header the same way. | live: `w2_folder_dim` (the folder's only tab put to sleep; the header dims to the slept title colour). `FolderView::UpdateSleptLook`, called by each row as its own look changes. | built |
 | R8 | Setting: the dropdown above; the look itself has no switch (it is one visual state of the row). | SteddingPrefsTest default. | built |
 | R10 | chrome::SelectNumberedTab and SelectLastTab skip TabStripModel::IsTabHidden tabs (Space predicate, collapsed folders) and count in sidebar order: essentials, the Space-pinned run, then the rest; ⌘9 is the last visible tab. Today IsTabSelectable (browser_commands.cc:549) never asks IsTabHidden, so ⌘2 in Space B can activate a tab of Space A. | SpaceWindowTest.NumberedTabSkipsOtherSpaces, SpaceWindowTest.LastTabIsLastVisible (hidden tabs first in the strip). | built |
 | R11 | Holding ⌘ for 250 ms shows a 1–9 badge in the close-button slot of the first nine visible rows and a ⌃N badge on each Space chip; the badges fade in over 80 ms (motion gate, item 24) and vanish on key-up; favicons never move. Modifier-only presses reach the strip through a ui::EventMonitor on the browser widget. | `TabRowRulesTest.NumberBadgePlacement` (where the number goes); live: `tooling/drive` holds ⌘ (`keydown cmd`), shot, releases | built |

@@ -1,6 +1,6 @@
 # Feature: Pinned tabs
 
-Status: **H1–H11 planned** (round 6, `docs/ROUND6-PLAN.md` R6-16).
+Status: **H1–H11 built** (round 6, `docs/ROUND6-PLAN.md` R6-16; patches 0020 and 0024).
 Owner docs: `docs/PRODUCT.md` §1, `docs/features/spaces.md` (the two tiers). Patch: TBD.
 
 Arc's pinned-tab lifecycle: a pin remembers its home page, ⌘W puts it to sleep
@@ -17,7 +17,7 @@ instead of closing it, a drifted pin shows a dot and resets from its favicon.
 | H5 | A click on the favicon column of a pinned tab (not the row) loads home; ⌥-click also reloads. | live: tooling/drive click on the favicon of a drifted pin, URL read back. | built |
 | H6 | Tab context menu 'Reset to Pinned Page' and 'Make This the Pinned Page'; both are ⌘T actions. | `TabMenuModelTest.SteddingOrder` lists both rows; the collection controller enables them on a pinned row | built |
 | H7 | Peek reads the stored home URL's eTLD+1 as the pinned site (P2), so a drifted pin stops peeking the wrong site. | ShouldPeekTest.UsesTheStoredPinnedSite. | built |
-| H8 | The hover card of a pinned tab gains a line 'Pinned in <Space> · home <host>' (no thumbnail). | capture. | planned |
+| H8 | The hover card of a pinned tab gains a line 'Pinned in <Space> · home <host>' (no thumbnail). | TabHoverCardBubbleViewTest.SteddingPinLineJoinsTheDomain (the line joins the domain row, eliding at the tail); live: `w2_hovercard_screen` (a Space-pinned row: "Pinned in Space 1 · home example.com"). | built |
 | H9 | Setting off returns ⌘W to closing (Unpin implied). | SpaceWindowTest.CloseSleepsSettingOffCloses. | built |
-| H10 | A click on a drifted essentials card activates it; the reset control appears on hover of the card (Arc), and a click on it loads home (D8). The critic's unsure line asks for a side-by-side check in Arc before H5 and H10 are written; do it first. | live: tooling/drive click on a drifted card (activates), hover, click the reset (URL read back) | planned · D8 |
-| H11 | ⌘W on the last visible tab of a Space that holds only pins sleeps it and the Space shows its new-tab row (B4): intended (D8). | SpaceWindowTest.CloseOnLastPinnedTabSleepsItAndShowsTheNewTabRow | planned · D8 |
+| H10 | A click on a drifted essentials card activates it; the reset control appears on hover of the card (Arc), and a click on it loads home (D8). The critic's unsure line asks for a side-by-side check in Arc before H5 and H10 are written; do it first. | live: `w2_card_reset_hover` (the ↺ control in the card's corner once it drifted, while the pointer rests on it), `w2_card_reset_after` (a click loads home). Option-click on the favicon still works (H5). | built |
+| H11 | ⌘W on the last visible tab of a Space that holds only pins sleeps it and the Space shows its new-tab row (B4): intended (D8). | SpaceWindowTest.CloseOnLastPinnedTabSleepsItAndShowsTheNewTabRow. | built |

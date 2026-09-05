@@ -332,6 +332,13 @@ said otherwise. Each is also in the item's spec.
   (import I1–I4, I8–I12); rows on the welcome flow and the settings page, and a
   bar action. Patch 0026. Not taken: I5 (the 400-tab budget run), I6 (history and
   passwords), I7 (splits and the archive, which wait for J1 and A8).
+- **Part O, the archived view (R6-24).** A mark on the closing tab and the Space
+  name in the closed tab's data (A8), `chrome://stedding-archive` behind an
+  Archived row above the switcher and a bar action (A7), the page's day groups,
+  Space filter, search and Restore that re-creates a missing Space (A9), archived
+  rows in the bar (A10), the retention dropdown and the list's cap at 500 (A11).
+  Patch 0028. Not taken: restore acting on the page's own selection (TBD in the
+  plan), and Floating History's Library panel.
 - **Not in this pass.** R6-19's other J rows (J1, J3, J5, J6 keep their rows for
   the splits pass), and the menus' Move to Folder ▸ with existing folders.
 
@@ -895,7 +902,7 @@ From the critic: #11 (owner).
 |---|---|---|---|---|---|---|
 | R6-22 | Import from Arc (StorableSidebar.json): Spaces, pins, folders, favorites | idea "Import from Arc" (judges 8.33, build×3) | M | button "Import from Arc…"; welcome row | none; ⌘T "Import from Arc" | built (0026) |
 | R6-23 | Air Traffic Control: route sites to Spaces | idea "Air Traffic Control" (judges 7.33, build×3) | M | per-Space Routes list; stedding.spaces.external_default | none | built (0027) |
-| R6-24 | Archived view: what auto-archive and Clear closed, restorable to its Space | idea "Archived view" (judges 7.33, build×3); Floating History's Library panel deferred to grow around this data layer | M | stedding.archive.keep_days | none; ⌘T "Show archived tabs" | planned |
+| R6-24 | Archived view: what auto-archive and Clear closed, restorable to its Space | idea "Archived view" (judges 7.33, build×3); Floating History's Library panel deferred to grow around this data layer | M | stedding.archive.keep_days | none; ⌘T "Show archived tabs" | built (0028) |
 | R6-25 | The address row hides with the sidebar; ⇧⌘D shows it on its own | idea "The bar goes with the sidebar" (judges 7, build×2, maybe×1); mod "Hide Toolbar" (judges 6, maybe×2, build×1), merged: ⇧⌘D, the localhost exception | M (T8 first; T10 and T13 are the second half) | stedding.toolbar.hide_with_sidebar | ⌘S; ⇧⌘D | planned |
 | R6-26 | Tracker-free defaults as one Privacy block | idea "Tracker-free defaults as one settings block" (judges 7.67, build×3); mod "No Top Sites" (judges 5.67, build×1, maybe×2): the kSearchSuggestEnabled default flip merged as Q7 | M (Q4 is the M-sized piece; the rest is default flips) | Privacy block (Chromium prefs + stedding.privacy.gpc) | none | planned |
 | R6-27 | Sidebar density presets with one text-size step | idea "Sidebar density presets with one text-size step" (judges 6, maybe×3); mods Customize Font Size, Tab Text Size, Lean's compact rows, merged | M | stedding.sidebar.density; stedding.sidebar.text_size | none | planned |

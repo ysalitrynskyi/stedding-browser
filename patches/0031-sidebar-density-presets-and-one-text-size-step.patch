@@ -1,0 +1,1330 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Sat, 5 Sep 2026 14:15:12 -0400
+Subject: sidebar: density presets and one text-size step
+
+The sidebar's layout constants read a process-wide preset (Comfortable,
+the measured Arc match and the feature params; Compact 36/40/16/8; Dense
+30/34/16/6 for the row, the essentials card, the favicon and the corner
+radius) and a text size (12-15, or the label font as it is); a row is never
+shorter than its text with the pill's insets. Both are local-state
+preferences: SidebarDensity fills the metrics at the first window and on
+every change, and a change re-lays out every window through a theme
+change (the fonts, in each row's UpdateColors) and a toolbar-size change
+(the heights). Two dropdowns in chrome://settings/stedding under the width
+slider, and three bar actions (docs/features/sidebar.md Y1-Y5).
+
+Why: docs/ROUND6-PLAN.md wave 3, R6-27: the Zen mods' compact rows and
+font sizes, as one preset and one step.
+Removable when: Chromium's vertical tab strip has a density setting.
+---
+ .../api/settings_private/prefs_util.cc        |   4 +
+ .../stedding_page/stedding_page.html.ts       |  32 +++
+ chrome/browser/ui/BUILD.gn                    |  10 +
+ chrome/browser/ui/layout_constants.cc         |  14 +-
+ chrome/browser/ui/spaces/BUILD.gn             |   2 +
+ chrome/browser/ui/spaces/space_model.cc       |   7 +
+ chrome/browser/ui/stedding/BUILD.gn           |  15 ++
+ chrome/browser/ui/stedding/sidebar_density.cc |  97 +++++++++
+ chrome/browser/ui/stedding/sidebar_density.h  |  22 ++
+ chrome/browser/ui/stedding/stedding_prefs.cc  |   2 +
+ chrome/browser/ui/stedding/stedding_prefs.h   |   4 +
+ chrome/browser/ui/stedding_ui_metrics.cc      | 200 ++++++++++++++----
+ chrome/browser/ui/stedding_ui_metrics.h       |  32 ++-
+ .../ui/stedding_ui_metrics_unittest.cc        |  60 ++++++
+ chrome/browser/ui/views/commandbar/BUILD.gn   |   2 +
+ .../ui/views/commandbar/command_bar_view.cc   |  18 ++
+ .../commandbar/command_bar_view_unittest.cc   |  19 ++
+ .../frame/vertical_tab_strip_region_view.cc   |  32 ++-
+ .../frame/vertical_tab_strip_region_view.h    |   1 +
+ .../views/tabs/common/clear_tabs_separator.cc |  40 ++--
+ .../ui/views/tabs/common/folder_view.cc       |  11 +
+ .../ui/views/tabs/common/folder_view.h        |   1 +
+ .../ui/views/tabs/common/sidebar_font.h       |  26 +++
+ .../ui/views/tabs/common/tab_strip_view.cc    |  46 +++-
+ .../ui/views/tabs/common/tab_strip_view.h     |   6 +-
+ .../browser/ui/views/tabs/common/tab_view.cc  |   4 +
+ .../tabs/common/tab_view_vertical_layout.cc   |  10 +-
+ .../browser/ui/webui/settings/settings_ui.cc  |  13 ++
+ chrome/test/BUILD.gn                          |   1 +
+ 29 files changed, 645 insertions(+), 86 deletions(-)
+ create mode 100644 chrome/browser/ui/stedding/sidebar_density.cc
+ create mode 100644 chrome/browser/ui/stedding/sidebar_density.h
+ create mode 100644 chrome/browser/ui/stedding_ui_metrics_unittest.cc
+ create mode 100644 chrome/browser/ui/views/tabs/common/sidebar_font.h
+
+diff --git a/chrome/browser/extensions/api/settings_private/prefs_util.cc b/chrome/browser/extensions/api/settings_private/prefs_util.cc
+index 73648ab9b46fa..6d7aaa4649814 100644
+--- a/chrome/browser/extensions/api/settings_private/prefs_util.cc
++++ b/chrome/browser/extensions/api/settings_private/prefs_util.cc
+@@ -316,6 +316,10 @@ const PrefsUtil::TypedPrefMap& PrefsUtil::GetAllowlistedKeys() {
+   // privacy Q4, Q5: the rows Chromium's own pages do not carry.
+   (*s_allowlist)[stedding::prefs::kGlobalPrivacyControl] =
+       settings_api::PrefType::kBoolean;
++  (*s_allowlist)[stedding::prefs::kSidebarDensity] =
++      settings_api::PrefType::kNumber;
++  (*s_allowlist)[stedding::prefs::kSidebarTextSize] =
++      settings_api::PrefType::kNumber;
+   (*s_allowlist)[::prefs::kEnableQuietGeolocationPermissionUi] =
+       settings_api::PrefType::kBoolean;
+   (*s_allowlist)[::prefs::kHttpsFirstBalancedMode] =
+diff --git a/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts b/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
+index fd7a78d98c843..85dd953927a61 100644
+--- a/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
++++ b/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
+@@ -90,6 +90,38 @@ export function getHtml(this: SettingsSteddingPageElement) {
+         label-min="126" label-max="480">
+     </settings-slider>
+   </div>
++  <div class="settings-box continuation">
++    <div class="start" id="sidebarDensityLabel">
++      <div class="label">$i18n{steddingDensityLabel}</div>
++      <div class="secondary">$i18n{steddingDensitySubLabel}</div>
++    </div>
++    <settings-dropdown-menu id="sidebarDensity"
++        pref-key="stedding.sidebar.density"
++        label="$i18n{steddingDensityLabel}"
++        .menuOptions="${[
++          {value: 0, name: '$i18n{steddingDensityComfortable}'},
++          {value: 1, name: '$i18n{steddingDensityCompact}'},
++          {value: 2, name: '$i18n{steddingDensityDense}'},
++        ]}">
++    </settings-dropdown-menu>
++  </div>
++  <div class="settings-box continuation">
++    <div class="start" id="sidebarTextSizeLabel">
++      <div class="label">$i18n{steddingTextSizeLabel}</div>
++      <div class="secondary">$i18n{steddingTextSizeSubLabel}</div>
++    </div>
++    <settings-dropdown-menu id="sidebarTextSize"
++        pref-key="stedding.sidebar.text_size"
++        label="$i18n{steddingTextSizeLabel}"
++        .menuOptions="${[
++          {value: 0, name: '$i18n{steddingTextSizeDefault}'},
++          {value: 12, name: '12'},
++          {value: 13, name: '13'},
++          {value: 14, name: '14'},
++          {value: 15, name: '15'},
++        ]}">
++    </settings-dropdown-menu>
++  </div>
+   <div class="hr settings-box">
+     <div class="start" id="archiveLabel">
+       <div class="label">$i18n{steddingArchiveLabel}</div>
+diff --git a/chrome/browser/ui/BUILD.gn b/chrome/browser/ui/BUILD.gn
+index 591938a0576f8..08ceba437c87b 100644
+--- a/chrome/browser/ui/BUILD.gn
++++ b/chrome/browser/ui/BUILD.gn
+@@ -3812,6 +3812,16 @@ source_set("stedding_ui_metrics") {
+   deps = [ "//base" ]
+ }
+ 
++source_set("stedding_ui_metrics_unit_tests") {
++  testonly = true
++  sources = [ "stedding_ui_metrics_unittest.cc" ]
++  deps = [
++    ":stedding_ui_metrics",
++    "//base",
++    "//testing/gtest",
++  ]
++}
++
+ source_set("layout_constants") {
+   sources = [
+     "layout_constants.cc",
+diff --git a/chrome/browser/ui/layout_constants.cc b/chrome/browser/ui/layout_constants.cc
+index 021fffe1655be..63d57aba46285 100644
+--- a/chrome/browser/ui/layout_constants.cc
++++ b/chrome/browser/ui/layout_constants.cc
+@@ -3,10 +3,10 @@
+ // found in the LICENSE file.
+ 
+ #include "chrome/browser/ui/layout_constants.h"
+-#include "chrome/browser/ui/stedding_ui_metrics.h"
+ 
+ #include "base/notreached.h"
+ #include "build/build_config.h"
++#include "chrome/browser/ui/stedding_ui_metrics.h"
+ #include "chrome/browser/ui/tabs/features.h"
+ #include "chrome/browser/ui/ui_features.h"
+ #include "components/omnibox/common/omnibox_features.h"
+@@ -151,11 +151,11 @@ int GetLayoutConstant(LayoutConstant constant) {
+     case LayoutConstant::kToolbarCornerRadius:
+       return 8;
+     case LayoutConstant::kVerticalTabCornerRadius:
+-      return stedding::kVerticalTabCornerRadius.Get();
++      return stedding::SidebarCornerRadius();
+     case LayoutConstant::kVerticalTabHeight:
+-      return stedding::kVerticalTabHeight.Get();
++      return stedding::SidebarRowHeight();
+     case LayoutConstant::kVerticalTabPinnedHeight:
+-      return stedding::kVerticalTabPinnedHeight.Get();
++      return stedding::SidebarPinnedHeight();
+     case LayoutConstant::kVerticalTabMinWidth:
+       return 32;
+     case LayoutConstant::kVerticalTabStripHorizontalPadding:
+@@ -236,9 +236,9 @@ gfx::Insets GetLayoutInsets(LayoutInset inset) {
+       }
+ 
+     case TOOLBAR_INTERIOR_MARGIN:
+-      return touch_ui ? gfx::Insets::VH(4, 0)
+-                      : gfx::Insets::VH(stedding::kToolbarVerticalMargin.Get(),
+-                                        6);
++      return touch_ui
++                 ? gfx::Insets::VH(4, 0)
++                 : gfx::Insets::VH(stedding::kToolbarVerticalMargin.Get(), 6);
+ 
+     case WEBUI_TAB_STRIP_TOOLBAR_INTERIOR_MARGIN:
+       return gfx::Insets::VH(4, 0);
+diff --git a/chrome/browser/ui/spaces/BUILD.gn b/chrome/browser/ui/spaces/BUILD.gn
+index 49d9cc2b1c1f1..074e96e4297eb 100644
+--- a/chrome/browser/ui/spaces/BUILD.gn
++++ b/chrome/browser/ui/spaces/BUILD.gn
+@@ -47,6 +47,8 @@ source_set("spaces") {
+     "//chrome/app:command_ids",
+     "//chrome/browser/ui/archive:mark",
+     "//chrome/browser/ui/stedding:address_row",
++    "//chrome/browser/ui/stedding:sidebar_density",
++    "//chrome/browser:browser_process",
+     "//chrome/browser/profiles:profile",
+     "//chrome/browser/ui:stedding_ui_metrics",
+     "//chrome/browser/ui/stedding/theme",
+diff --git a/chrome/browser/ui/spaces/space_model.cc b/chrome/browser/ui/spaces/space_model.cc
+index ddc16462f3dbf..d2a36ee3e7d05 100644
+--- a/chrome/browser/ui/spaces/space_model.cc
++++ b/chrome/browser/ui/spaces/space_model.cc
+@@ -19,6 +19,7 @@
+ #include "base/task/single_thread_task_runner.h"
+ #include "base/token.h"
+ #include "base/values.h"
++#include "chrome/browser/browser_process.h"
+ #include "chrome/browser/sessions/session_service.h"
+ #include "chrome/browser/sessions/session_service_factory.h"
+ #include "chrome/browser/ui/archive/archive_mark.h"
+@@ -29,6 +30,7 @@
+ #include "chrome/browser/ui/spaces/space_router.h"
+ #include "chrome/browser/ui/spaces/tab_space_restore_data.h"
+ #include "chrome/browser/ui/stedding/address_row.h"
++#include "chrome/browser/ui/stedding/sidebar_density.h"
+ #include "chrome/browser/ui/stedding/sleep_tabs.h"
+ #include "chrome/browser/ui/stedding/stedding_prefs.h"
+ #include "chrome/browser/ui/stedding/tab_names.h"
+@@ -79,6 +81,11 @@ SpaceModel::SpaceModel(BrowserWindowInterface& browser) : SpaceModel() {
+   page_theme_color_ =
+       std::make_unique<stedding::PageThemeColorController>(browser);
+   address_row_ = std::make_unique<stedding::AddressRow>(browser);
++  // sidebar Y1: the process-wide metrics, filled before this window's first
++  // layout.
++  if (g_browser_process) {
++    stedding::EnsureSidebarDensityInstalled(g_browser_process->local_state());
++  }
+   // import I4: the bar's "Import from Arc" row needs to know by the first
+   // opening whether the file exists.
+   PrimeArcSidebarPresence();
+diff --git a/chrome/browser/ui/stedding/BUILD.gn b/chrome/browser/ui/stedding/BUILD.gn
+index d00859d4c206a..e0dcc11c8cd32 100644
+--- a/chrome/browser/ui/stedding/BUILD.gn
++++ b/chrome/browser/ui/stedding/BUILD.gn
+@@ -169,6 +169,21 @@ source_set("privacy_defaults") {
+   ]
+ }
+ 
++# docs/features/sidebar.md Y1: local state to the process-wide sidebar
++# metrics, and every window re-laid out on a change.
++source_set("sidebar_density") {
++  public = [ "sidebar_density.h" ]
++  sources = [ "sidebar_density.cc" ]
++  deps = [
++    ":prefs",
++    "//base",
++    "//chrome/browser/ui:stedding_ui_metrics",
++    "//chrome/browser/ui/browser_window",
++    "//components/prefs",
++    "//ui/views",
++  ]
++}
++
+ source_set("menu_rules") {
+   public = [ "menu_rules.h" ]
+   sources = [ "menu_rules.cc" ]
+diff --git a/chrome/browser/ui/stedding/sidebar_density.cc b/chrome/browser/ui/stedding/sidebar_density.cc
+new file mode 100644
+index 0000000000000..c38d95b2e24f9
+--- /dev/null
++++ b/chrome/browser/ui/stedding/sidebar_density.cc
+@@ -0,0 +1,97 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/stedding/sidebar_density.h"
++
++#include <algorithm>
++#include <memory>
++
++#include "base/functional/bind.h"
++#include "base/no_destructor.h"
++#include "chrome/browser/ui/browser_window.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
++#include "chrome/browser/ui/browser_window_theme_observer.h"
++#include "chrome/browser/ui/stedding/stedding_prefs.h"
++#include "chrome/browser/ui/stedding_ui_metrics.h"
++#include "components/prefs/pref_change_registrar.h"
++#include "components/prefs/pref_service.h"
++#include "ui/views/view.h"
++#include "ui/views/widget/widget.h"
++
++namespace stedding {
++
++namespace {
++
++void ApplyFromLocalState(PrefService* local_state) {
++  const int density =
++      std::clamp(local_state->GetInteger(prefs::kSidebarDensity), 0, 2);
++  SetSidebarDensity(static_cast<SidebarDensity>(density));
++  const int text = local_state->GetInteger(prefs::kSidebarTextSize);
++  SetSidebarTextSize(text >= 12 && text <= 15 ? text : 0);
++}
++
++// Every layout in the tree recomputed: the row layouts read the metrics
++// each pass, but keep their last result until told otherwise.
++void InvalidateEveryLayout(views::View* view) {
++  view->InvalidateLayout();
++  for (views::View* child : view->children()) {
++    InvalidateEveryLayout(child);
++  }
++}
++
++// A theme change re-runs every row's OnThemeChanged (the fonts, the rows
++// with a fixed height), then every layout is recomputed (the heights).
++void RelayoutEveryWindow() {
++  ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
++      [](BrowserWindowInterface* window) {
++        if (BrowserWindowThemeObserver* const observer =
++                BrowserWindowThemeObserver::From(window)) {
++          observer->NotifyThemeChanged(BrowserThemeChangeType::kWebAppTheme);
++        }
++        BrowserWindow* const browser_window =
++            BrowserWindow::FromBrowser(window);
++        if (!browser_window) {
++          return true;
++        }
++        if (views::Widget* const widget =
++                views::Widget::GetWidgetForNativeWindow(
++                    browser_window->GetNativeWindow())) {
++          InvalidateEveryLayout(widget->GetRootView());
++        }
++        browser_window->ToolbarSizeChanged(/*is_animating=*/false);
++        return true;
++      });
++}
++
++void OnPrefChanged(PrefService* local_state) {
++  ApplyFromLocalState(local_state);
++  RelayoutEveryWindow();
++}
++
++}  // namespace
++
++void EnsureSidebarDensityInstalled(PrefService* local_state) {
++  static base::NoDestructor<std::unique_ptr<PrefChangeRegistrar>> registrar;
++  if (!local_state || *registrar) {
++    return;
++  }
++  *registrar = std::make_unique<PrefChangeRegistrar>();
++  (*registrar)->Init(local_state);
++  (*registrar)
++      ->Add(prefs::kSidebarDensity,
++            base::BindRepeating(&OnPrefChanged, local_state));
++  (*registrar)
++      ->Add(prefs::kSidebarTextSize,
++            base::BindRepeating(&OnPrefChanged, local_state));
++  ApplyFromLocalState(local_state);
++}
++
++void SetSidebarDensityPref(PrefService* local_state, int density) {
++  if (local_state) {
++    local_state->SetInteger(prefs::kSidebarDensity, std::clamp(density, 0, 2));
++  }
++}
++
++}  // namespace stedding
+diff --git a/chrome/browser/ui/stedding/sidebar_density.h b/chrome/browser/ui/stedding/sidebar_density.h
+new file mode 100644
+index 0000000000000..82fc33ddcdf23
+--- /dev/null
++++ b/chrome/browser/ui/stedding/sidebar_density.h
+@@ -0,0 +1,22 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_STEDDING_SIDEBAR_DENSITY_H_
++#define CHROME_BROWSER_UI_STEDDING_SIDEBAR_DENSITY_H_
++
++class PrefService;
++
++namespace stedding {
++
++// docs/features/sidebar.md Y1, Y2: fills the process-wide sidebar metrics
++// from local state, once, and keeps them filled: every change re-lays out
++// every window. Safe to call from every window's construction.
++void EnsureSidebarDensityInstalled(PrefService* local_state);
++
++// The same, for a change made now (the bar's actions, Y4).
++void SetSidebarDensityPref(PrefService* local_state, int density);
++
++}  // namespace stedding
++
++#endif  // CHROME_BROWSER_UI_STEDDING_SIDEBAR_DENSITY_H_
+diff --git a/chrome/browser/ui/stedding/stedding_prefs.cc b/chrome/browser/ui/stedding/stedding_prefs.cc
+index 9c5e691d70ada..3d30309dd1c22 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs.cc
++++ b/chrome/browser/ui/stedding/stedding_prefs.cc
+@@ -32,5 +32,7 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
+ 
+ void RegisterLocalStatePrefs(PrefRegistrySimple* registry) {
+   registry->RegisterBooleanPref(kGlobalPrivacyControl, true);
++  registry->RegisterIntegerPref(kSidebarDensity, 0);
++  registry->RegisterIntegerPref(kSidebarTextSize, 0);
+ }
+ }  // namespace stedding::prefs
+diff --git a/chrome/browser/ui/stedding/stedding_prefs.h b/chrome/browser/ui/stedding/stedding_prefs.h
+index 73a9a32b78c28..2bfb66daf30b1 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs.h
++++ b/chrome/browser/ui/stedding/stedding_prefs.h
+@@ -36,6 +36,10 @@ inline constexpr char kToolbarHideWithSidebar[] =
+ // privacy Q4: Global Privacy Control, in local state because it becomes a
+ // process-wide feature at startup (Sec-GPC: 1, navigator.globalPrivacyControl).
+ inline constexpr char kGlobalPrivacyControl[] = "stedding.privacy.gpc";
++// sidebar Y1, Y2: browser-wide, since a window's rows do not differ by
++// profile. Density 0/1/2; text size 0 (default) or 12-15.
++inline constexpr char kSidebarDensity[] = "stedding.sidebar.density";
++inline constexpr char kSidebarTextSize[] = "stedding.sidebar.text_size";
+ 
+ // True once the first-run welcome flow was finished or skipped
+ // (docs/features/welcome.md).
+diff --git a/chrome/browser/ui/stedding_ui_metrics.cc b/chrome/browser/ui/stedding_ui_metrics.cc
+index 182f123cb07be..34c0dec2ae679 100644
+--- a/chrome/browser/ui/stedding_ui_metrics.cc
++++ b/chrome/browser/ui/stedding_ui_metrics.cc
+@@ -4,59 +4,175 @@
+ 
+ #include "chrome/browser/ui/stedding_ui_metrics.h"
+ 
++#include <algorithm>
++
+ namespace stedding {
+ 
+-BASE_FEATURE(kArcStyleWindow, "SteddingArcStyleWindow",
++BASE_FEATURE(kArcStyleWindow,
++             "SteddingArcStyleWindow",
+              base::FEATURE_ENABLED_BY_DEFAULT);
+ 
+-BASE_FEATURE_PARAM(int, kContentsCornerRadius, &kArcStyleWindow,
+-                   "contents_corner_radius", 12);
++BASE_FEATURE_PARAM(int,
++                   kContentsCornerRadius,
++                   &kArcStyleWindow,
++                   "contents_corner_radius",
++                   12);
+ 
+ BASE_FEATURE_PARAM(int, kCardGutter, &kArcStyleWindow, "card_gutter", 6);
+-BASE_FEATURE_PARAM(int, kVerticalTabHeight, &kArcStyleWindow,
+-                   "vertical_tab_height", 44);
+-
+-BASE_FEATURE_PARAM(int, kVerticalTabCornerRadius, &kArcStyleWindow,
+-                   "vertical_tab_corner_radius", 10);
+-
+-BASE_FEATURE_PARAM(int, kVerticalTabPinnedHeight, &kArcStyleWindow,
+-                   "vertical_tab_pinned_height", 50);
+-
+-BASE_FEATURE_PARAM(int, kLocationBarHeight, &kArcStyleWindow,
+-                   "location_bar_height", 25);
+-
+-BASE_FEATURE_PARAM(int, kToolbarVerticalMargin, &kArcStyleWindow,
+-                   "toolbar_vertical_margin", 3);
+-
+-BASE_FEATURE_PARAM(int, kToolbarButtonInset, &kArcStyleWindow,
+-                   "toolbar_button_inset", 4);
+-
+-BASE_FEATURE_PARAM(int, kToolbarButtonHeight, &kArcStyleWindow,
+-                   "toolbar_button_height", 28);
+-
+-BASE_FEATURE_PARAM(int, kLocationBarWidth, &kArcStyleWindow,
+-                   "location_bar_width", 380);
+-
+-BASE_FEATURE_PARAM(bool, kOpenCommandBarForTesting, &kArcStyleWindow,
+-                   "open_command_bar", false);
+-
+-BASE_FEATURE_PARAM(int, kTabFaviconSize, &kArcStyleWindow, "tab_favicon_size",
++BASE_FEATURE_PARAM(int,
++                   kVerticalTabHeight,
++                   &kArcStyleWindow,
++                   "vertical_tab_height",
++                   44);
++
++BASE_FEATURE_PARAM(int,
++                   kVerticalTabCornerRadius,
++                   &kArcStyleWindow,
++                   "vertical_tab_corner_radius",
++                   10);
++
++BASE_FEATURE_PARAM(int,
++                   kVerticalTabPinnedHeight,
++                   &kArcStyleWindow,
++                   "vertical_tab_pinned_height",
++                   50);
++
++BASE_FEATURE_PARAM(int,
++                   kLocationBarHeight,
++                   &kArcStyleWindow,
++                   "location_bar_height",
++                   25);
++
++BASE_FEATURE_PARAM(int,
++                   kToolbarVerticalMargin,
++                   &kArcStyleWindow,
++                   "toolbar_vertical_margin",
++                   3);
++
++BASE_FEATURE_PARAM(int,
++                   kToolbarButtonInset,
++                   &kArcStyleWindow,
++                   "toolbar_button_inset",
++                   4);
++
++BASE_FEATURE_PARAM(int,
++                   kToolbarButtonHeight,
++                   &kArcStyleWindow,
++                   "toolbar_button_height",
++                   28);
++
++BASE_FEATURE_PARAM(int,
++                   kLocationBarWidth,
++                   &kArcStyleWindow,
++                   "location_bar_width",
++                   380);
++
++BASE_FEATURE_PARAM(bool,
++                   kOpenCommandBarForTesting,
++                   &kArcStyleWindow,
++                   "open_command_bar",
++                   false);
++
++BASE_FEATURE_PARAM(int,
++                   kTabFaviconSize,
++                   &kArcStyleWindow,
++                   "tab_favicon_size",
+                    18);
+ 
+-BASE_FEATURE_PARAM(int, kToolbarButtonIconSize, &kArcStyleWindow,
+-                   "toolbar_button_icon_size", 18);
++BASE_FEATURE_PARAM(int,
++                   kToolbarButtonIconSize,
++                   &kArcStyleWindow,
++                   "toolbar_button_icon_size",
++                   18);
+ 
+-BASE_FEATURE_PARAM(bool, kDragTabsToSpaces, &kArcStyleWindow,
+-                   "drag_tabs_to_spaces", true);
++BASE_FEATURE_PARAM(bool,
++                   kDragTabsToSpaces,
++                   &kArcStyleWindow,
++                   "drag_tabs_to_spaces",
++                   true);
+ 
+-BASE_FEATURE_PARAM(int, kFolderTabsForTesting, &kArcStyleWindow,
+-                   "folder_tabs", 0);
++BASE_FEATURE_PARAM(int,
++                   kFolderTabsForTesting,
++                   &kArcStyleWindow,
++                   "folder_tabs",
++                   0);
+ 
+ BASE_FEATURE_PARAM(int, kPinTabsForTesting, &kArcStyleWindow, "pin_tabs", 0);
+ 
+-BASE_FEATURE_PARAM(int, kExtraSpacesForTesting, &kArcStyleWindow,
+-                   "extra_spaces", 0);
+-BASE_FEATURE_PARAM(bool, kReduceMotionForTesting, &kArcStyleWindow,
+-                   "reduce_motion", false);
+-
++BASE_FEATURE_PARAM(int,
++                   kExtraSpacesForTesting,
++                   &kArcStyleWindow,
++                   "extra_spaces",
++                   0);
++BASE_FEATURE_PARAM(bool,
++                   kReduceMotionForTesting,
++                   &kArcStyleWindow,
++                   "reduce_motion",
++                   false);
++
++namespace {
++
++SidebarDensity& DensityInForce() {
++  static SidebarDensity density = SidebarDensity::kComfortable;
++  return density;
++}
++
++int& TextSizeInForce() {
++  static int size = 0;
++  return size;
++}
++
++// The vertical room a row needs around its text: the pill's insets and a
++// little air, so a larger title never clips (Y2).
++constexpr int kRowTextInsets = 22;
++
++}  // namespace
++
++SidebarMetrics MetricsForDensity(SidebarDensity density) {
++  switch (density) {
++    case SidebarDensity::kComfortable:
++      return {kVerticalTabHeight.Get(), kVerticalTabPinnedHeight.Get(),
++              kTabFaviconSize.Get(), kVerticalTabCornerRadius.Get()};
++    case SidebarDensity::kCompact:
++      return {36, 40, 16, 8};
++    case SidebarDensity::kDense:
++      return {30, 34, 16, 6};
++  }
++  return {kVerticalTabHeight.Get(), kVerticalTabPinnedHeight.Get(),
++          kTabFaviconSize.Get(), kVerticalTabCornerRadius.Get()};
++}
++
++void SetSidebarDensity(SidebarDensity density) {
++  DensityInForce() = density;
++}
++
++SidebarDensity GetSidebarDensity() {
++  return DensityInForce();
++}
++
++void SetSidebarTextSize(int size) {
++  TextSizeInForce() = size > 0 ? size : 0;
++}
++
++int GetSidebarTextSize() {
++  return TextSizeInForce();
++}
++
++int SidebarRowHeight() {
++  const int preset = MetricsForDensity(DensityInForce()).row_height;
++  const int text = TextSizeInForce();
++  return text > 0 ? std::max(preset, text + kRowTextInsets) : preset;
++}
++
++int SidebarPinnedHeight() {
++  return MetricsForDensity(DensityInForce()).pinned_height;
++}
++
++int SidebarFaviconSize() {
++  return MetricsForDensity(DensityInForce()).favicon_size;
++}
++
++int SidebarCornerRadius() {
++  return MetricsForDensity(DensityInForce()).corner_radius;
++}
+ }  // namespace stedding
+diff --git a/chrome/browser/ui/stedding_ui_metrics.h b/chrome/browser/ui/stedding_ui_metrics.h
+index 4deed16d987f9..abce46e678541 100644
+--- a/chrome/browser/ui/stedding_ui_metrics.h
++++ b/chrome/browser/ui/stedding_ui_metrics.h
+@@ -33,6 +33,33 @@ BASE_DECLARE_FEATURE_PARAM(int, kContentsCornerRadius);
+ // no gutter: the card meets the sidebar's own edge.
+ BASE_DECLARE_FEATURE_PARAM(int, kCardGutter);
+ 
++// docs/features/sidebar.md Y1, Y2: the sidebar's density preset and text
++// size, set from local state (SidebarDensity in chrome/browser/ui/stedding)
++// and read by the layout constants below. Comfortable is the feature params
++// as measured against Arc; the others are Stedding's own.
++enum class SidebarDensity { kComfortable = 0, kCompact = 1, kDense = 2 };
++
++struct SidebarMetrics {
++  int row_height;
++  int pinned_height;
++  int favicon_size;
++  int corner_radius;
++};
++
++SidebarMetrics MetricsForDensity(SidebarDensity density);
++void SetSidebarDensity(SidebarDensity density);
++SidebarDensity GetSidebarDensity();
++// 0 means the default label font.
++void SetSidebarTextSize(int size);
++int GetSidebarTextSize();
++
++// The metrics in force: the preset, and a row never shorter than its text
++// with the row's insets (Y2).
++int SidebarRowHeight();
++int SidebarPinnedHeight();
++int SidebarFaviconSize();
++int SidebarCornerRadius();
++
+ // Height of one tab row in the vertical tab strip, in DIPs.
+ BASE_DECLARE_FEATURE_PARAM(int, kVerticalTabHeight);
+ 
+@@ -80,8 +107,9 @@ BASE_DECLARE_FEATURE_PARAM(int, kToolbarButtonIconSize);
+ 
+ // Accept a tab dragged onto a Space icon. The part that could lose a tab -- the
+ // drop handler taking one and putting it back -- is covered by
+-// SpaceDragTargetTest; what is not covered is Chromium's own decision to consult
+-// the target mid-drag, and if that never fires the drag simply does nothing.
++// SpaceDragTargetTest; what is not covered is Chromium's own decision to
++// consult the target mid-drag, and if that never fires the drag simply does
++// nothing.
+ BASE_DECLARE_FEATURE_PARAM(bool, kDragTabsToSpaces);
+ 
+ // Wraps the first N unpinned tabs into a new folder shortly after startup,
+diff --git a/chrome/browser/ui/stedding_ui_metrics_unittest.cc b/chrome/browser/ui/stedding_ui_metrics_unittest.cc
+new file mode 100644
+index 0000000000000..72da0c412c9f8
+--- /dev/null
++++ b/chrome/browser/ui/stedding_ui_metrics_unittest.cc
+@@ -0,0 +1,60 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/stedding_ui_metrics.h"
++
++#include "testing/gtest/include/gtest/gtest.h"
++
++namespace stedding {
++namespace {
++
++class SidebarDensityTest : public testing::Test {
++ protected:
++  ~SidebarDensityTest() override {
++    SetSidebarDensity(SidebarDensity::kComfortable);
++    SetSidebarTextSize(0);
++  }
++};
++
++// Y1: the three presets, Comfortable being the measured feature params.
++TEST_F(SidebarDensityTest, PresetsGiveTheMeasuredMetrics) {
++  const SidebarMetrics comfortable =
++      MetricsForDensity(SidebarDensity::kComfortable);
++  EXPECT_EQ(kVerticalTabHeight.Get(), comfortable.row_height);
++  EXPECT_EQ(kTabFaviconSize.Get(), comfortable.favicon_size);
++  EXPECT_EQ(44, comfortable.row_height);
++  EXPECT_EQ(18, comfortable.favicon_size);
++  const SidebarMetrics compact = MetricsForDensity(SidebarDensity::kCompact);
++  EXPECT_EQ(36, compact.row_height);
++  EXPECT_EQ(40, compact.pinned_height);
++  EXPECT_EQ(16, compact.favicon_size);
++  const SidebarMetrics dense = MetricsForDensity(SidebarDensity::kDense);
++  EXPECT_EQ(30, dense.row_height);
++  EXPECT_EQ(34, dense.pinned_height);
++  EXPECT_EQ(6, dense.corner_radius);
++
++  EXPECT_EQ(44, SidebarRowHeight());
++  SetSidebarDensity(SidebarDensity::kDense);
++  EXPECT_EQ(SidebarDensity::kDense, GetSidebarDensity());
++  EXPECT_EQ(30, SidebarRowHeight());
++  EXPECT_EQ(34, SidebarPinnedHeight());
++  EXPECT_EQ(16, SidebarFaviconSize());
++  EXPECT_EQ(6, SidebarCornerRadius());
++}
++
++// Y2: a row is never shorter than its text and insets.
++TEST_F(SidebarDensityTest, RowsNeverClipTheText) {
++  SetSidebarDensity(SidebarDensity::kDense);
++  EXPECT_EQ(30, SidebarRowHeight());
++  SetSidebarTextSize(15);
++  EXPECT_EQ(15, GetSidebarTextSize());
++  EXPECT_EQ(37, SidebarRowHeight()) << "15 + 22 > 30";
++  SetSidebarDensity(SidebarDensity::kComfortable);
++  EXPECT_EQ(44, SidebarRowHeight()) << "44 > 37: the preset holds";
++  SetSidebarTextSize(0);
++  EXPECT_EQ(44, SidebarRowHeight());
++}
++
++}  // namespace
++}  // namespace stedding
+diff --git a/chrome/browser/ui/views/commandbar/BUILD.gn b/chrome/browser/ui/views/commandbar/BUILD.gn
+index a768fdc0f8ff9..d00cd6f8ff6bf 100644
+--- a/chrome/browser/ui/views/commandbar/BUILD.gn
++++ b/chrome/browser/ui/views/commandbar/BUILD.gn
+@@ -12,6 +12,8 @@ source_set("commandbar") {
+   ]
+ 
+   deps = [
++    "//chrome/browser:browser_process",
++    "//chrome/browser/ui/stedding:sidebar_density",
+     "//components/sessions",
+     "//chrome/browser/sessions",
+     "//chrome/browser/ui/archive",
+diff --git a/chrome/browser/ui/views/commandbar/command_bar_view.cc b/chrome/browser/ui/views/commandbar/command_bar_view.cc
+index ef45eefebda65..f3c45e2fbb534 100644
+--- a/chrome/browser/ui/views/commandbar/command_bar_view.cc
++++ b/chrome/browser/ui/views/commandbar/command_bar_view.cc
+@@ -20,6 +20,7 @@
+ #include "chrome/browser/autocomplete/autocomplete_classifier_factory.h"
+ #include "chrome/browser/autocomplete/chrome_autocomplete_provider_client.h"
+ #include "chrome/browser/autocomplete/chrome_autocomplete_scheme_classifier.h"
++#include "chrome/browser/browser_process.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/search_engines/template_url_service_factory.h"
+ #include "chrome/browser/sessions/tab_restore_service_factory.h"
+@@ -37,6 +38,7 @@
+ #include "chrome/browser/ui/spaces/space_colors.h"
+ #include "chrome/browser/ui/spaces/space_commands.h"
+ #include "chrome/browser/ui/spaces/space_model.h"
++#include "chrome/browser/ui/stedding/sidebar_density.h"
+ #include "chrome/browser/ui/stedding/sleep_tabs.h"
+ #include "chrome/browser/ui/stedding/stedding_command_ids.h"
+ #include "chrome/browser/ui/stedding/stedding_prefs.h"
+@@ -330,6 +332,22 @@ void CommandBarView::BuildActions() {
+                               },
+                               base::Unretained(browser_))});
+     }
++    // sidebar Y4: the density presets.
++    for (const auto& [name, value] :
++         {std::pair{u"Sidebar Density: Comfortable", 0},
++          std::pair{u"Sidebar Density: Compact", 1},
++          std::pair{u"Sidebar Density: Dense", 2}}) {
++      actions_.push_back({std::u16string(name), std::u16string(),
++                          base::BindRepeating(
++                              [](int density) {
++                                stedding::SetSidebarDensityPref(
++                                    g_browser_process
++                                        ? g_browser_process->local_state()
++                                        : nullptr,
++                                    density);
++                              },
++                              value)});
++    }
+     // archive A7: the archived view.
+     actions_.push_back({u"Show Archived Tabs", std::u16string(),
+                         base::BindRepeating(
+diff --git a/chrome/browser/ui/views/commandbar/command_bar_view_unittest.cc b/chrome/browser/ui/views/commandbar/command_bar_view_unittest.cc
+index ae7e981a31af3..2110fcd9ae74a 100644
+--- a/chrome/browser/ui/views/commandbar/command_bar_view_unittest.cc
++++ b/chrome/browser/ui/views/commandbar/command_bar_view_unittest.cc
+@@ -10,6 +10,7 @@
+ 
+ #include "base/functional/bind.h"
+ #include "chrome/app/chrome_command_ids.h"
++#include "chrome/browser/browser_process.h"
+ #include "chrome/browser/search_engines/template_url_service_factory.h"
+ #include "chrome/browser/ui/archive/archived_tabs.h"
+ #include "chrome/browser/ui/browser.h"
+@@ -341,6 +342,24 @@ TEST_F(CommandBarViewTest, ArchivedRowRestoresToItsSpace) {
+   EXPECT_EQ(41, restored[0].id());
+   EXPECT_TRUE(bar->closing_for_testing());
+ }
++
++// sidebar Y4: the three presets are actions; each writes local state.
++TEST_F(CommandBarViewTest, DensityActionsSetThePreset) {
++  auto bar = std::make_unique<CommandBarView>(browser());
++  bar->SetModeForTesting(CommandBarView::Mode::kActions);
++  bar->PrefillForTesting(u"Sidebar Density");
++  ASSERT_EQ(3u, bar->action_count_for_testing());
++  EXPECT_EQ(u"Sidebar Density: Comfortable", bar->action_title_for_testing(0));
++  bar->RunActionForTesting(2);
++  EXPECT_EQ(2, g_browser_process->local_state()->GetInteger(
++                   stedding::prefs::kSidebarDensity));
++  bar = std::make_unique<CommandBarView>(browser());
++  bar->SetModeForTesting(CommandBarView::Mode::kActions);
++  bar->PrefillForTesting(u"Sidebar Density");
++  bar->RunActionForTesting(0);
++  EXPECT_EQ(0, g_browser_process->local_state()->GetInteger(
++                   stedding::prefs::kSidebarDensity));
++}
+ }  // namespace
+ 
+ // With no omnibox classifier in the fixture, typed text falls back to a
+diff --git a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+index ae5bc05d7aa9f..5a0eddc8df203 100644
+--- a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
++++ b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+@@ -56,6 +56,7 @@
+ #include "chrome/browser/ui/views/tabs/common/folder_view.h"
+ #include "chrome/browser/ui/views/tabs/common/pinned_tab_container_view.h"
+ #include "chrome/browser/ui/views/tabs/common/root_tab_collection_node.h"
++#include "chrome/browser/ui/views/tabs/common/sidebar_font.h"
+ #include "chrome/browser/ui/views/tabs/common/tab_collection_node.h"
+ #include "chrome/browser/ui/views/tabs/common/tab_drag_handler.h"
+ #include "chrome/browser/ui/views/tabs/common/tab_strip_collection_controller.h"
+@@ -78,6 +79,7 @@
+ #include "ui/base/dragdrop/os_exchange_data.h"
+ #include "ui/base/interaction/element_tracker.h"
+ #include "ui/base/l10n/l10n_util.h"
++#include "ui/base/metadata/metadata_header_macros.h"
+ #include "ui/base/metadata/metadata_impl_macros.h"
+ #include "ui/compositor/layer.h"
+ #include "ui/display/screen.h"
+@@ -101,6 +103,19 @@
+ #include "ui/views/view_utils.h"
+ 
+ namespace {
++
++// sidebar Y2: a row button whose label the view can reach, for the text
++// size (LabelButton keeps label() protected).
++class SidebarRowButton : public views::LabelButton {
++  METADATA_HEADER(SidebarRowButton, views::LabelButton)
++
++ public:
++  using views::LabelButton::label;
++  using views::LabelButton::LabelButton;
++};
++
++BEGIN_METADATA(SidebarRowButton)
++END_METADATA
+ // Stedding: 12, not 5 -- with the sidebar painting no edge of its own the
+ // handle has to be findable by feel along the last few rows' right end.
+ constexpr int kResizeAreaWidth = 12;
+@@ -208,7 +223,7 @@ VerticalTabStripRegionView::VerticalTabStripRegionView(
+     // layout keeps it at the bottom.
+     // The archive's door: one muted row above the switcher, in the New Tab
+     // row's dress (archive A7).
+-    auto archived_row = std::make_unique<views::LabelButton>(
++    auto archived_row = std::make_unique<SidebarRowButton>(
+         base::BindRepeating(
+             [](BrowserView* browser_view) {
+               ShowSingletonTab(browser_view->browser(),
+@@ -222,7 +237,7 @@ VerticalTabStripRegionView::VerticalTabStripRegionView(
+         views::Button::STATE_NORMAL,
+         ui::ImageModel::FromVectorIcon(vector_icons::kHistoryIcon,
+                                        kColorTabForegroundInactiveFrameActive,
+-                                       stedding::kTabFaviconSize.Get()));
++                                       stedding::SidebarFaviconSize()));
+     archived_row->SetImageLabelSpacing(10);
+     archived_row->SetBorder(views::CreateEmptyBorder(gfx::Insets::VH(0, 18)));
+     archived_row->SetPreferredSize(
+@@ -568,6 +583,19 @@ void VerticalTabStripRegionView::HideNumberBadges() {
+   }
+ }
+ 
++void VerticalTabStripRegionView::OnThemeChanged() {
++  views::View::OnThemeChanged();
++  // sidebar Y2, Y3: the Archived row at the preset's height and text size
++  // (a density change arrives as a theme change).
++  if (archived_row_) {
++    static_cast<SidebarRowButton*>(archived_row_.get())
++        ->label()
++        ->SetFontList(stedding::SidebarFont());
++    archived_row_->SetPreferredSize(
++        gfx::Size(0, GetLayoutConstant(LayoutConstant::kVerticalTabHeight)));
++  }
++}
++
+ void VerticalTabStripRegionView::AddedToWidget() {
+   BaseTabStripRegionView::AddedToWidget();
+   if (views::Widget* const widget = GetWidget();
+diff --git a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
+index 378a7c721a5eb..5b85ed47dce22 100644
+--- a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
++++ b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
+@@ -124,6 +124,7 @@ class VerticalTabStripRegionView final
+   // views::View:
+   void AddedToWidget() override;
+   void RemovedFromWidget() override;
++  void OnThemeChanged() override;
+   void Layout(PassKey) override;
+   views::View* GetDefaultFocusableChild() override;
+   gfx::Size GetMinimumSize() const override;
+diff --git a/chrome/browser/ui/views/tabs/common/clear_tabs_separator.cc b/chrome/browser/ui/views/tabs/common/clear_tabs_separator.cc
+index d5426f2817bb5..a105d11c8e58c 100644
+--- a/chrome/browser/ui/views/tabs/common/clear_tabs_separator.cc
++++ b/chrome/browser/ui/views/tabs/common/clear_tabs_separator.cc
+@@ -4,15 +4,14 @@
+ 
+ #include "chrome/browser/ui/views/tabs/common/clear_tabs_separator.h"
+ 
+-#include "ui/color/color_provider.h"
+-
+-#include "chrome/browser/ui/color/chrome_color_id.h"
+-
+ #include <utility>
+ 
+ #include "base/no_destructor.h"
+ #include "cc/paint/paint_flags.h"
++#include "chrome/browser/ui/color/chrome_color_id.h"
++#include "chrome/browser/ui/stedding_ui_metrics.h"
+ #include "ui/base/metadata/metadata_impl_macros.h"
++#include "ui/color/color_provider.h"
+ #include "ui/gfx/canvas.h"
+ #include "ui/gfx/font_list.h"
+ #include "ui/views/controls/separator.h"
+@@ -23,11 +22,11 @@ constexpr int kRowHeight = 22;
+ constexpr int kSideInset = 12;
+ constexpr int kLabelGap = 8;
+ 
+-const gfx::FontList& LabelFont() {
+-  static const base::NoDestructor<gfx::FontList> font(
+-      gfx::FontList({"system-ui"}, gfx::Font::NORMAL, 11,
+-                    gfx::Font::Weight::MEDIUM));
+-  return *font;
++gfx::FontList LabelFont() {
++  // sidebar Y2: one point under the title's size.
++  const int text = stedding::GetSidebarTextSize();
++  return gfx::FontList({"system-ui"}, gfx::Font::NORMAL,
++                       text > 0 ? text - 1 : 11, gfx::Font::Weight::MEDIUM);
+ }
+ 
+ }  // namespace
+@@ -62,30 +61,27 @@ void ClearTabsSeparator::OnPaint(gfx::Canvas* canvas) {
+   const int line_y = bounds.CenterPoint().y();
+ 
+   const ui::ColorProvider* const provider = GetColorProvider();
+-  const SkColor hairline =
+-      provider ? provider->GetColor(kColorTabDividerFrameActive)
+-               : SkColorSetA(SK_ColorWHITE, 0x2B);
++  const SkColor hairline = provider
++                               ? provider->GetColor(kColorTabDividerFrameActive)
++                               : SkColorSetA(SK_ColorWHITE, 0x2B);
+   const SkColor label_color =
+       provider ? provider->GetColor(kColorTabForegroundInactiveFrameActive)
+                : SkColorSetA(SK_ColorWHITE, 0x8C);
+   cc::PaintFlags flags;
+   flags.setColor(hairline);
+   flags.setStrokeWidth(1);
+-  canvas->DrawLine(gfx::PointF(bounds.x() + kSideInset, line_y),
+-                   gfx::PointF(bounds.right() - kSideInset - label_width,
+-                               line_y),
+-                   flags);
+-
+-  clear_rect_ =
+-      gfx::Rect(bounds.right() - kSideInset - label_width, bounds.y(),
+-                label_width, bounds.height());
++  canvas->DrawLine(
++      gfx::PointF(bounds.x() + kSideInset, line_y),
++      gfx::PointF(bounds.right() - kSideInset - label_width, line_y), flags);
++
++  clear_rect_ = gfx::Rect(bounds.right() - kSideInset - label_width, bounds.y(),
++                          label_width, bounds.height());
+   canvas->DrawStringRectWithFlags(label, LabelFont(), label_color, clear_rect_,
+                                   gfx::Canvas::TEXT_ALIGN_CENTER);
+ }
+ 
+ bool ClearTabsSeparator::OnMousePressed(const ui::MouseEvent& event) {
+-  pressed_in_clear_ =
+-      clear_callback_ && clear_rect_.Contains(event.location());
++  pressed_in_clear_ = clear_callback_ && clear_rect_.Contains(event.location());
+   return pressed_in_clear_;
+ }
+ 
+diff --git a/chrome/browser/ui/views/tabs/common/folder_view.cc b/chrome/browser/ui/views/tabs/common/folder_view.cc
+index ec87f9f1d54fe..a0c292f4de5d0 100644
+--- a/chrome/browser/ui/views/tabs/common/folder_view.cc
++++ b/chrome/browser/ui/views/tabs/common/folder_view.cc
+@@ -11,6 +11,7 @@
+ 
+ #include "base/strings/utf_string_conversions.h"
+ #include "chrome/browser/ui/layout_constants.h"
++#include "chrome/browser/ui/views/tabs/common/sidebar_font.h"
+ #include "chrome/browser/ui/views/tabs/common/stedding_tab_row_rules.h"
+ #include "chrome/browser/ui/views/tabs/common/tab_collection_node.h"
+ #include "chrome/browser/ui/views/tabs/common/tab_strip_collection_controller.h"
+@@ -126,6 +127,12 @@ void FolderView::SetDropHighlight(bool highlighted) {
+   header_->SchedulePaint();
+ }
+ 
++void FolderView::OnThemeChanged() {
++  views::View::OnThemeChanged();
++  // sidebar Y1, Y2: a density change reaches the window as a theme change.
++  UpdateHeader();
++}
++
+ void FolderView::ViewHierarchyChanged(
+     const views::ViewHierarchyChangedDetails& details) {
+   views::View::ViewHierarchyChanged(details);
+@@ -156,6 +163,10 @@ void FolderView::ApplyCollapsed() {
+ }
+ 
+ void FolderView::UpdateHeader() {
++  // sidebar Y2, Y3: the header's text and height follow the preset.
++  name_->SetFontList(stedding::SidebarFont());
++  header_->SetPreferredSize(
++      gfx::Size(0, GetLayoutConstant(LayoutConstant::kVerticalTabHeight)));
+   chevron_->SetText(folder()->collapsed() ? u"▸" : u"▾");
+   const std::string& title = folder()->title();
+   name_->SetText(title.empty() ? u"New Folder" : base::UTF8ToUTF16(title));
+diff --git a/chrome/browser/ui/views/tabs/common/folder_view.h b/chrome/browser/ui/views/tabs/common/folder_view.h
+index 455216384d9f4..1ce3f4369a558 100644
+--- a/chrome/browser/ui/views/tabs/common/folder_view.h
++++ b/chrome/browser/ui/views/tabs/common/folder_view.h
+@@ -60,6 +60,7 @@ class FolderView : public views::View,
+   // views::View:
+   void ViewHierarchyChanged(
+       const views::ViewHierarchyChangedDetails& details) override;
++  void OnThemeChanged() override;
+ 
+   // views::TextfieldController:
+   bool HandleKeyEvent(views::Textfield* sender,
+diff --git a/chrome/browser/ui/views/tabs/common/sidebar_font.h b/chrome/browser/ui/views/tabs/common/sidebar_font.h
+new file mode 100644
+index 0000000000000..810a190455bb9
+--- /dev/null
++++ b/chrome/browser/ui/views/tabs/common/sidebar_font.h
+@@ -0,0 +1,26 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_VIEWS_TABS_COMMON_SIDEBAR_FONT_H_
++#define CHROME_BROWSER_UI_VIEWS_TABS_COMMON_SIDEBAR_FONT_H_
++
++#include "chrome/browser/ui/stedding_ui_metrics.h"
++#include "ui/gfx/font_list.h"
++#include "ui/views/style/typography.h"
++#include "ui/views/style/typography_provider.h"
++
++namespace stedding {
++
++// docs/features/sidebar.md Y2: the label font at the sidebar's text size,
++// or the label font as it is when no size is set.
++inline gfx::FontList SidebarFont() {
++  const gfx::FontList base = views::TypographyProvider::Get().GetFont(
++      views::style::CONTEXT_LABEL, views::style::STYLE_PRIMARY);
++  const int size = GetSidebarTextSize();
++  return size > 0 ? base.DeriveWithSizeDelta(size - base.GetFontSize()) : base;
++}
++
++}  // namespace stedding
++
++#endif  // CHROME_BROWSER_UI_VIEWS_TABS_COMMON_SIDEBAR_FONT_H_
+diff --git a/chrome/browser/ui/views/tabs/common/tab_strip_view.cc b/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
+index 4e5e67c244735..0289421a6e07f 100644
+--- a/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
++++ b/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "chrome/browser/ui/views/tabs/common/tab_strip_view.h"
+ 
++#include <algorithm>
++
+ #include "base/callback_list.h"
+ #include "base/functional/bind.h"
+ #include "base/memory/raw_ptr.h"
+@@ -19,6 +21,7 @@
+ #include "chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h"
+ #include "chrome/browser/ui/views/tabs/common/clear_tabs_separator.h"
+ #include "chrome/browser/ui/views/tabs/common/pinned_tab_container_view.h"
++#include "chrome/browser/ui/views/tabs/common/sidebar_font.h"
+ #include "chrome/browser/ui/views/tabs/common/tab_collection_node.h"
+ #include "chrome/browser/ui/views/tabs/common/tab_group_view.h"
+ #include "chrome/browser/ui/views/tabs/common/tab_strip_collection_controller.h"
+@@ -31,6 +34,7 @@
+ #include "components/tabs/public/tab_collection_types.h"
+ #include "components/tabs/public/tab_group.h"
+ #include "components/vector_icons/vector_icons.h"
++#include "ui/base/metadata/metadata_header_macros.h"
+ #include "ui/base/metadata/metadata_impl_macros.h"
+ #include "ui/base/models/image_model.h"
+ #include "ui/compositor/layer.h"
+@@ -47,6 +51,19 @@
+ 
+ namespace {
+ 
++// sidebar Y2: a row button whose label the strip can reach, for the text
++// size (LabelButton keeps label() protected).
++class SidebarRowButton : public views::LabelButton {
++  METADATA_HEADER(SidebarRowButton, views::LabelButton)
++
++ public:
++  using views::LabelButton::label;
++  using views::LabelButton::LabelButton;
++};
++
++BEGIN_METADATA(SidebarRowButton)
++END_METADATA
++
+ // Stedding: the Space title row above the pinned tabs.
+ constexpr int kSpaceTitleRowHeight = 30;
+ 
+@@ -200,7 +217,7 @@ TabStripView::TabStripView(TabCollectionNode* collection_node)
+ 
+   // Stedding: the Space's title -- its icon and name -- above its pinned
+   // tabs, as the reference has it. Hidden until the region view names it.
+-  auto title_row = std::make_unique<views::LabelButton>(
++  auto title_row = std::make_unique<SidebarRowButton>(
+       views::Button::PressedCallback(), std::u16string());
+   title_row->SetHorizontalAlignment(gfx::ALIGN_LEFT);
+   title_row->SetEnabledTextColors(kColorTabForegroundInactiveFrameActive);
+@@ -257,7 +274,7 @@ void TabStripView::SetUpSpaceBoundary(
+   // "+ New Tab": muted, one tab-row tall, the plus a real icon in the
+   // favicon column so it reads as the first row of the list (a text "+"
+   // looked thin and small beside the favicons, 2026-09-05).
+-  auto new_tab_row = std::make_unique<views::LabelButton>(
++  auto new_tab_row = std::make_unique<SidebarRowButton>(
+       views::Button::PressedCallback(), u"New Tab");
+   new_tab_row->SetHorizontalAlignment(gfx::ALIGN_LEFT);
+   new_tab_row->SetEnabledTextColors(kColorTabForegroundInactiveFrameActive);
+@@ -265,7 +282,7 @@ void TabStripView::SetUpSpaceBoundary(
+       views::Button::STATE_NORMAL,
+       ui::ImageModel::FromVectorIcon(vector_icons::kAdd2Icon,
+                                      kColorTabForegroundInactiveFrameActive,
+-                                     stedding::kTabFaviconSize.Get()));
++                                     stedding::SidebarFaviconSize()));
+   new_tab_row->SetImageLabelSpacing(10);
+   new_tab_row->SetBorder(views::CreateEmptyBorder(gfx::Insets::VH(0, 18)));
+   new_tab_row->SetPreferredSize(
+@@ -822,6 +839,29 @@ gfx::Rect TabStripView::GetBoundsInScrollViewContents(
+   return bounds;
+ }
+ 
++void TabStripView::OnThemeChanged() {
++  views::View::OnThemeChanged();
++  // sidebar Y2, Y3: the Space title and the New Tab row follow the text
++  // size and the preset's row height (both rows are SidebarRowButtons, which
++  // let their label be reached). A density change arrives as a theme change.
++  if (space_title_row_) {
++    static_cast<SidebarRowButton*>(space_title_row_.get())
++        ->label()
++        ->SetFontList(stedding::SidebarFont());
++    space_title_row_->SetPreferredSize(gfx::Size(
++        0, std::min(kSpaceTitleRowHeight,
++                    GetLayoutConstant(LayoutConstant::kVerticalTabHeight))));
++  }
++  if (new_tab_row_) {
++    static_cast<SidebarRowButton*>(new_tab_row_.get())
++        ->label()
++        ->SetFontList(stedding::SidebarFont());
++    new_tab_row_->SetPreferredSize(
++        gfx::Size(0, GetLayoutConstant(LayoutConstant::kVerticalTabHeight)));
++  }
++  UpdateColors();
++}
++
+ void TabStripView::UpdateColors() {
+   if (tabs_separator_) {
+     tabs_separator_->SetColorId(IsFrameActive()
+diff --git a/chrome/browser/ui/views/tabs/common/tab_strip_view.h b/chrome/browser/ui/views/tabs/common/tab_strip_view.h
+index 0f494bf911ed9..27475b0fffe5c 100644
+--- a/chrome/browser/ui/views/tabs/common/tab_strip_view.h
++++ b/chrome/browser/ui/views/tabs/common/tab_strip_view.h
+@@ -7,10 +7,10 @@
+ 
+ #include "base/functional/callback.h"
+ #include "base/memory/raw_ptr.h"
+-#include "ui/views/controls/button/button.h"
+ #include "base/scoped_observation.h"
+ #include "components/tabs/public/tab_interface.h"
+ #include "ui/base/metadata/metadata_header_macros.h"
++#include "ui/views/controls/button/button.h"
+ #include "ui/views/view.h"
+ #include "ui/views/widget/widget_observer.h"
+ 
+@@ -29,8 +29,7 @@ class Separator;
+ // regions and associates them to their scroll views. It also is responsible for
+ // scrolling to the active tab view when the active tab changes.
+ // Layout is managed by `TabStripViewLayout`.
+-class TabStripView final : public views::View,
+-                           public views::WidgetObserver {
++class TabStripView final : public views::View, public views::WidgetObserver {
+   METADATA_HEADER(TabStripView, views::View)
+ 
+  public:
+@@ -80,6 +79,7 @@ class TabStripView final : public views::View,
+   // views::View:
+   void AddedToWidget() override;
+   void RemovedFromWidget() override;
++  void OnThemeChanged() override;
+   void OnMouseEntered(const ui::MouseEvent& event) override;
+   void OnMouseExited(const ui::MouseEvent& event) override;
+ 
+diff --git a/chrome/browser/ui/views/tabs/common/tab_view.cc b/chrome/browser/ui/views/tabs/common/tab_view.cc
+index 3727f5063baf5..ec169183b3623 100644
+--- a/chrome/browser/ui/views/tabs/common/tab_view.cc
++++ b/chrome/browser/ui/views/tabs/common/tab_view.cc
+@@ -42,6 +42,7 @@
+ #include "chrome/browser/ui/views/frame/themed_background.h"
+ #include "chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h"
+ #include "chrome/browser/ui/views/tabs/common/folder_view.h"
++#include "chrome/browser/ui/views/tabs/common/sidebar_font.h"
+ #include "chrome/browser/ui/views/tabs/common/split_tab_view.h"
+ #include "chrome/browser/ui/views/tabs/common/stedding_tab_row_rules.h"
+ #include "chrome/browser/ui/views/tabs/common/tab_collection_node.h"
+@@ -950,6 +951,9 @@ void TabView::UpdateLayerRoundedCorners() {
+ 
+ void TabView::OnThemeChanged() {
+   views::View::OnThemeChanged();
++  // sidebar Y2: the title at the chosen size. A density change is sent to
++  // every window as a theme change, which is how it reaches every row.
++  title_->SetFontList(stedding::SidebarFont());
+   UpdateColors();
+ }
+ 
+diff --git a/chrome/browser/ui/views/tabs/common/tab_view_vertical_layout.cc b/chrome/browser/ui/views/tabs/common/tab_view_vertical_layout.cc
+index b1fb0b1a36ae2..006289fcf0823 100644
+--- a/chrome/browser/ui/views/tabs/common/tab_view_vertical_layout.cc
++++ b/chrome/browser/ui/views/tabs/common/tab_view_vertical_layout.cc
+@@ -5,17 +5,16 @@
+ #include "chrome/browser/ui/views/tabs/common/tab_view_vertical_layout.h"
+ 
+ #include "base/feature_list.h"
+-
+ #include "chrome/browser/glic/browser_ui/tab_underline_view.h"
+ #include "chrome/browser/ui/layout_constants.h"
++#include "chrome/browser/ui/stedding_ui_metrics.h"
+ #include "chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h"
++#include "chrome/browser/ui/views/tabs/common/stedding_tab_row_rules.h"
+ #include "chrome/browser/ui/views/tabs/common/tab_view.h"
+ #include "chrome/browser/ui/views/tabs/shared/tab_strip_types.h"
+ #include "chrome/browser/ui/views/tabs/tab/alert_indicator_button.h"
+ #include "chrome/browser/ui/views/tabs/tab/tab_close_button.h"
+ #include "chrome/browser/ui/views/tabs/tab/tab_icon.h"
+-#include "chrome/browser/ui/stedding_ui_metrics.h"
+-#include "chrome/browser/ui/views/tabs/common/stedding_tab_row_rules.h"
+ #include "chrome/browser/ui/views/tabs/tab/tab_title.h"
+ #include "chrome/browser/ui/views/tabs/tab_style_views.h"
+ 
+@@ -23,7 +22,7 @@ namespace {
+ // Stedding: the favicon column is as wide as the favicon (18 DIP, a feature
+ // parameter), so the icon centres in it instead of hanging off the left.
+ int IconDesignWidth() {
+-  return stedding::kTabFaviconSize.Get();
++  return stedding::SidebarFaviconSize();
+ }
+ constexpr int kTitleMinWidth = 10;
+ constexpr int kHorizontalInset = 8;
+@@ -36,7 +35,8 @@ TabViewVerticalLayout::~TabViewVerticalLayout() = default;
+ void TabViewVerticalLayout::OnInstalled(views::View* host) {
+   TabView::LayoutManager::OnInstalled(host);
+   tab_children_configs_ = {
+-      TabChildConfig(TabView().close_button_, IconDesignWidth(), kDefaultPadding,
++      TabChildConfig(TabView().close_button_, IconDesignWidth(),
++                     kDefaultPadding,
+                      /*align_leading=*/false,
+                      /*expand=*/false),
+       TabChildConfig(TabView().alert_indicator_, IconDesignWidth(),
+diff --git a/chrome/browser/ui/webui/settings/settings_ui.cc b/chrome/browser/ui/webui/settings/settings_ui.cc
+index 8cc53e65d6265..4e2592fc556e7 100644
+--- a/chrome/browser/ui/webui/settings/settings_ui.cc
++++ b/chrome/browser/ui/webui/settings/settings_ui.cc
+@@ -692,6 +692,19 @@ SettingsUI::SettingsUI(content::WebUI* web_ui)
+   html_source->AddString("steddingSpaceNamePlaceholder", "Space name");
+   html_source->AddString("steddingDeleteSpace", "Delete Space");
+   html_source->AddString("steddingImportArcLabel", "Import from Arc");
++  // sidebar Y1, Y2.
++  html_source->AddString("steddingDensityLabel", "Sidebar density");
++  html_source->AddString(
++      "steddingDensitySubLabel",
++      "Comfortable is Arc\u2019s measure; Compact and Dense fit more rows.");
++  html_source->AddString("steddingDensityComfortable", "Comfortable");
++  html_source->AddString("steddingDensityCompact", "Compact");
++  html_source->AddString("steddingDensityDense", "Dense");
++  html_source->AddString("steddingTextSizeLabel", "Sidebar text size");
++  html_source->AddString(
++      "steddingTextSizeSubLabel",
++      "Tab titles, the Space title, folder names and the New Tab row.");
++  html_source->AddString("steddingTextSizeDefault", "Default");
+   // privacy Q8: one row per preference, the protective side on.
+   html_source->AddString("steddingPrivacyTitle", "Privacy");
+   html_source->AddString(
+diff --git a/chrome/test/BUILD.gn b/chrome/test/BUILD.gn
+index b3745b091f9b8..b42a4c3eec331 100644
+--- a/chrome/test/BUILD.gn
++++ b/chrome/test/BUILD.gn
+@@ -5427,6 +5427,7 @@ test("unit_tests") {
+     "//chrome/browser/ui/file_system_access:unit_tests",
+     "//chrome/browser/ui/spaces:unit_tests",
+     "//chrome/browser/ui/archive:unit_tests",
++    "//chrome/browser/ui:stedding_ui_metrics_unit_tests",
+     "//chrome/browser/ui/views/commandbar:unit_tests",
+     "//chrome/browser/ui/views/switcher:unit_tests",
+     "//chrome/browser/ui/stedding:unit_tests",

@@ -131,7 +131,7 @@ Built, with tests or measured captures:
   Google's rows, Import, Screenshot and Spaces in the app menu, a menu per
   row kind and for the folder header, Move to Space; a chip drag reorders
   the Spaces; a split's panes take a Space, a pin and a sleep together.
-- **Round 6, wave 3** (patches 0026–0030 so far): Import from Arc — Spaces,
+- **Round 6, wave 3** (patches 0026–0031 so far): Import from Arc — Spaces,
   essentials, pins and folders from Arc's sidebar file, every tab unloaded
   (`docs/features/import.md`); routing — a site opens in the Space it is
   routed to, with a toast that undoes it (`docs/features/routing.md`); the
@@ -139,7 +139,8 @@ Built, with tests or measured captures:
   and Space, restorable (`docs/features/archive.md` A7–A11); the address
   row hides with the sidebar, ⇧⌘D shows it on its own
   (`docs/features/toolbar.md` T8–T12); the tracker-free defaults and the
-  Privacy block (`docs/features/privacy.md`, ADR 0017).
+  Privacy block (`docs/features/privacy.md`, ADR 0017); sidebar density
+  presets and a text size (`docs/features/sidebar.md`).
 
 Read `docs/HANDOFF.md` before touching anything — it carries the working loop,
 every dev parameter, and the traps already paid for. `docs/ARC-ROUND2.md` is
@@ -202,6 +203,6 @@ bar's actions mode included), every row verified live or by unit test, notes
 in the plan, the ⌃⇥ switcher (R6-12) as 0023, the menus (R6-14) as 0024
 and the last rows (B27, J4, T14) as 0025: wave 2 is complete. Wave 3 opened
 with R6-22 (Import from Arc) as 0026, R6-23 (routing) as 0027 and R6-24 (the
-archived view) as 0028, R6-25 (the address row) as 0029 and R6-26 (the
-Privacy block) as 0030; the rest of waves 3–4 follow in order under the
-operator's overnight mandate.
+archived view) as 0028, R6-25 (the address row) as 0029, R6-26 (the
+Privacy block) as 0030 and R6-27 (sidebar density) as 0031; the rest of
+waves 3–4 follow in order under the operator's overnight mandate.

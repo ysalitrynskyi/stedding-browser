@@ -1,0 +1,2160 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Sat, 5 Sep 2026 13:07:31 -0400
+Subject: archive: an Archived view of what auto-archive, Clear and a close
+ left behind, restorable to its Space
+
+The sweep and Clear mark the tab they close (auto, clear) and the closed
+tab's extra data carries the mark and its Space's name beside the Space id
+and folder path it already had, so the recently-closed list is the archive
+and shift-cmd-T keeps working; Clear's tabs now join that list. A row above
+the switcher opens chrome://stedding-archive, a plain-DOM WebUI page that
+groups the closed tabs by day, filters by Space, searches, restores a tab
+to its Space (re-creating the Space by name when it is gone) and forgets or
+clears entries; the command bar lists matching archived tabs after the open
+ones and restores one when chosen; "Keep archived tabs for" (7, 30, 90
+days) bounds what the page and the bar show, and the list keeps 500
+entries instead of 25 (docs/features/archive.md A7-A11).
+
+Why: docs/ROUND6-PLAN.md wave 3, R6-24: Arc's archive, on Chromium's own
+list.
+Removable when: Chromium's recently-closed list has a page of its own with
+workspace membership.
+---
+ .../api/settings_private/prefs_util.cc        |   2 +
+ chrome/browser/resources/BUILD.gn             |   1 +
+ .../stedding_page/stedding_page.html.ts       |  15 ++
+ .../resources/stedding_archive/BUILD.gn       |  19 ++
+ .../resources/stedding_archive/app.css        | 144 +++++++++++++
+ .../browser/resources/stedding_archive/app.ts | 193 +++++++++++++++++
+ .../stedding_archive/stedding_archive.html    |  13 ++
+ chrome/browser/ui/BUILD.gn                    |   2 +
+ chrome/browser/ui/archive/BUILD.gn            |  32 ++-
+ chrome/browser/ui/archive/archive_mark.cc     |  85 ++++++++
+ chrome/browser/ui/archive/archive_mark.h      |  38 ++++
+ chrome/browser/ui/archive/archived_tabs.cc    | 196 ++++++++++++++++++
+ chrome/browser/ui/archive/archived_tabs.h     |  90 ++++++++
+ .../ui/archive/archived_tabs_unittest.cc      | 112 ++++++++++
+ chrome/browser/ui/archive/tab_archiver.cc     |  20 +-
+ .../ui/archive/tab_archiver_unittest.cc       |  22 +-
+ chrome/browser/ui/browser_live_tab_context.cc |   4 +
+ chrome/browser/ui/spaces/BUILD.gn             |   2 +
+ chrome/browser/ui/spaces/space_model.cc       |   8 +-
+ .../ui/spaces/space_model_window_unittest.cc  |  20 ++
+ chrome/browser/ui/stedding/stedding_prefs.cc  |   1 +
+ chrome/browser/ui/stedding/stedding_prefs.h   |   2 +
+ chrome/browser/ui/views/commandbar/BUILD.gn   |   3 +
+ .../ui/views/commandbar/command_bar_view.cc   |  74 +++++++
+ .../ui/views/commandbar/command_bar_view.h    |  22 ++
+ .../commandbar/command_bar_view_unittest.cc   |  32 +++
+ .../frame/vertical_tab_strip_region_view.cc   |  31 +++
+ .../frame/vertical_tab_strip_region_view.h    |   3 +
+ .../browser/ui/webui/chrome_web_ui_configs.cc |   4 +-
+ .../browser/ui/webui/settings/settings_ui.cc  |   8 +
+ .../ui/webui/stedding_archive/BUILD.gn        |  33 +++
+ .../stedding_archive_handler.cc               | 145 +++++++++++++
+ .../stedding_archive_handler.h                |  58 ++++++
+ .../stedding_archive/stedding_archive_ui.cc   |  34 +++
+ .../stedding_archive/stedding_archive_ui.h    |  33 +++
+ chrome/chrome_paks.gni                        |   1 +
+ .../core/tab_restore_service_helper.h         |   4 +-
+ tools/gritsettings/resource_ids.spec          |   5 +
+ 38 files changed, 1495 insertions(+), 16 deletions(-)
+ create mode 100644 chrome/browser/resources/stedding_archive/BUILD.gn
+ create mode 100644 chrome/browser/resources/stedding_archive/app.css
+ create mode 100644 chrome/browser/resources/stedding_archive/app.ts
+ create mode 100644 chrome/browser/resources/stedding_archive/stedding_archive.html
+ create mode 100644 chrome/browser/ui/archive/archive_mark.cc
+ create mode 100644 chrome/browser/ui/archive/archive_mark.h
+ create mode 100644 chrome/browser/ui/archive/archived_tabs.cc
+ create mode 100644 chrome/browser/ui/archive/archived_tabs.h
+ create mode 100644 chrome/browser/ui/archive/archived_tabs_unittest.cc
+ create mode 100644 chrome/browser/ui/webui/stedding_archive/BUILD.gn
+ create mode 100644 chrome/browser/ui/webui/stedding_archive/stedding_archive_handler.cc
+ create mode 100644 chrome/browser/ui/webui/stedding_archive/stedding_archive_handler.h
+ create mode 100644 chrome/browser/ui/webui/stedding_archive/stedding_archive_ui.cc
+ create mode 100644 chrome/browser/ui/webui/stedding_archive/stedding_archive_ui.h
+
+diff --git a/chrome/browser/extensions/api/settings_private/prefs_util.cc b/chrome/browser/extensions/api/settings_private/prefs_util.cc
+index ea600d9b43dfe..939c440cc0be2 100644
+--- a/chrome/browser/extensions/api/settings_private/prefs_util.cc
++++ b/chrome/browser/extensions/api/settings_private/prefs_util.cc
+@@ -309,6 +309,8 @@ const PrefsUtil::TypedPrefMap& PrefsUtil::GetAllowlistedKeys() {
+       settings_api::PrefType::kBoolean;
+   (*s_allowlist)[stedding::prefs::kArchiveIdleHours] =
+       settings_api::PrefType::kNumber;
++  (*s_allowlist)[stedding::prefs::kArchiveKeepDays] =
++      settings_api::PrefType::kNumber;
+   (*s_allowlist)[stedding::prefs::kPeekEnabled] =
+       settings_api::PrefType::kBoolean;
+   (*s_allowlist)[stedding::prefs::kExternalDefaultSpace] =
+diff --git a/chrome/browser/resources/BUILD.gn b/chrome/browser/resources/BUILD.gn
+index 1cfda9eb1a357..010ba95ed8709 100644
+--- a/chrome/browser/resources/BUILD.gn
++++ b/chrome/browser/resources/BUILD.gn
+@@ -80,6 +80,7 @@ group("resources") {
+       "password_manager:resources",
+       "profile_internals:resources",
+       "search_engine_choice:resources",
++      "stedding_archive:resources",
+       "stedding_welcome:resources",
+       "settings:resources",
+       "settings_shared:resources",
+diff --git a/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts b/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
+index c356d0d5ab7e6..61e6f19b4d432 100644
+--- a/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
++++ b/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
+@@ -100,6 +100,21 @@ export function getHtml(this: SettingsSteddingPageElement) {
+         ]}">
+     </settings-dropdown-menu>
+   </div>
++  <div class="settings-box continuation">
++    <div class="start" id="archiveKeepLabel">
++      <div class="label">$i18n{steddingArchiveKeepLabel}</div>
++      <div class="secondary">$i18n{steddingArchiveKeepSubLabel}</div>
++    </div>
++    <settings-dropdown-menu id="archiveKeepDays"
++        pref-key="stedding.archive.keep_days"
++        label="$i18n{steddingArchiveKeepLabel}"
++        .menuOptions="${[
++          {value: 7, name: '$i18n{steddingArchiveKeep7d}'},
++          {value: 30, name: '$i18n{steddingArchiveKeep30d}'},
++          {value: 90, name: '$i18n{steddingArchiveKeep90d}'},
++        ]}">
++    </settings-dropdown-menu>
++  </div>
+   <div class="hr settings-box">
+     <div class="start" id="spaceSleepLabel">
+       <div class="label">$i18n{steddingSpaceSleepLabel}</div>
+diff --git a/chrome/browser/resources/stedding_archive/BUILD.gn b/chrome/browser/resources/stedding_archive/BUILD.gn
+new file mode 100644
+index 0000000000000..309f2ab505a3b
+--- /dev/null
++++ b/chrome/browser/resources/stedding_archive/BUILD.gn
+@@ -0,0 +1,19 @@
++# Copyright 2026 The Stedding Authors
++# Use of this source code is governed by a BSD-style license that can be
++# found in the LICENSE file.
++
++import("//ui/webui/resources/tools/build_webui.gni")
++
++build_webui("build") {
++  grd_prefix = "stedding_archive"
++
++  static_files = [
++    "app.css",
++    "stedding_archive.html",
++  ]
++  ts_files = [ "app.ts" ]
++
++  ts_deps = [ "//ui/webui/resources/js:build_ts" ]
++  ts_definitions = [ "//tools/typescript/definitions/chrome_send.d.ts" ]
++  webui_context_type = "trusted"
++}
+diff --git a/chrome/browser/resources/stedding_archive/app.css b/chrome/browser/resources/stedding_archive/app.css
+new file mode 100644
+index 0000000000000..5e6be208d8390
+--- /dev/null
++++ b/chrome/browser/resources/stedding_archive/app.css
+@@ -0,0 +1,144 @@
++/* Copyright 2026 The Stedding Authors
++ * Use of this source code is governed by a BSD-style license that can be
++ * found in the LICENSE file. */
++
++/* The archived view (docs/features/archive.md A9): plain DOM, the page's
++ * colours from the system scheme, Stedding's sand and slate. */
++
++:root {
++  --bg: #f6f2ea;
++  --card: #fff;
++  --text: #1f2430;
++  --muted: #6b7280;
++  --line: rgba(31, 36, 48, 0.12);
++  --accent: #5b6b8c;
++  --hover: rgba(31, 36, 48, 0.05);
++}
++
++@media (prefers-color-scheme: dark) {
++  :root {
++    --bg: #23263a;
++    --card: #2c3048;
++    --text: #eceaf4;
++    --muted: #a3a6b8;
++    --line: rgba(236, 234, 244, 0.12);
++    --accent: #9aa8cc;
++    --hover: rgba(236, 234, 244, 0.06);
++  }
++}
++
++html,
++body {
++  background: var(--bg);
++  color: var(--text);
++  font: 14px/1.4 system-ui, -apple-system, sans-serif;
++  margin: 0;
++}
++
++#app {
++  margin: 0 auto;
++  max-width: 820px;
++  padding: 32px 24px 48px;
++}
++
++header {
++  align-items: center;
++  display: flex;
++  flex-wrap: wrap;
++  gap: 12px;
++  margin-bottom: 20px;
++}
++
++h1 {
++  flex: 1 1 auto;
++  font-size: 22px;
++  font-weight: 600;
++  margin: 0;
++}
++
++input[type='search'],
++select {
++  background: var(--card);
++  border: 1px solid var(--line);
++  border-radius: 8px;
++  color: var(--text);
++  font: inherit;
++  padding: 6px 10px;
++}
++
++input[type='search'] {
++  min-width: 220px;
++}
++
++button {
++  background: var(--card);
++  border: 1px solid var(--line);
++  border-radius: 8px;
++  color: var(--text);
++  cursor: pointer;
++  font: inherit;
++  padding: 6px 12px;
++}
++
++button:hover {
++  background: var(--hover);
++}
++
++.day {
++  color: var(--muted);
++  font-size: 12px;
++  font-weight: 600;
++  letter-spacing: 0.04em;
++  margin: 20px 0 6px;
++  text-transform: uppercase;
++}
++
++.row {
++  align-items: center;
++  background: var(--card);
++  border: 1px solid var(--line);
++  border-radius: 10px;
++  display: flex;
++  gap: 12px;
++  margin-bottom: 6px;
++  padding: 10px 14px;
++}
++
++.row:hover {
++  background: var(--hover);
++}
++
++.row .text {
++  flex: 1 1 auto;
++  min-width: 0;
++}
++
++.row .title {
++  font-weight: 500;
++  overflow: hidden;
++  text-overflow: ellipsis;
++  white-space: nowrap;
++}
++
++.row .meta {
++  color: var(--muted);
++  font-size: 12px;
++  overflow: hidden;
++  text-overflow: ellipsis;
++  white-space: nowrap;
++}
++
++.row .space {
++  border: 1px solid var(--line);
++  border-radius: 999px;
++  color: var(--accent);
++  font-size: 12px;
++  padding: 1px 8px;
++  white-space: nowrap;
++}
++
++.empty {
++  color: var(--muted);
++  margin-top: 40px;
++  text-align: center;
++}
+diff --git a/chrome/browser/resources/stedding_archive/app.ts b/chrome/browser/resources/stedding_archive/app.ts
+new file mode 100644
+index 0000000000000..8dd776bb9e33f
+--- /dev/null
++++ b/chrome/browser/resources/stedding_archive/app.ts
+@@ -0,0 +1,193 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++// The archived view (docs/features/archive.md A9): what auto-archive, Clear
++// and a plain close left in Chromium's recently-closed list, by day, filtered
++// by Space, searched, each row restorable to its Space. Plain DOM, as the
++// welcome flow is; buttons and inputs, so the keyboard and VoiceOver come
++// from the DOM.
++/* eslint-disable no-restricted-imports, no-restricted-properties */
++
++import {addWebUiListener, sendWithPromise} from 'chrome://resources/js/cr.js';
++
++interface ArchivedTab {
++  id: string;
++  title: string;
++  url: string;
++  time: number;
++  spaceId: string;
++  spaceName: string;
++  folderPath: string;
++  reason: string;
++}
++
++interface SpaceEntry {
++  id: string;
++  name: string;
++}
++
++interface Snapshot {
++  tabs: ArchivedTab[];
++  spaces: SpaceEntry[];
++}
++
++const state = {
++  tabs: [] as ArchivedTab[],
++  spaces: [] as SpaceEntry[],
++  query: '',
++  space: '',
++};
++
++function el<K extends keyof HTMLElementTagNameMap>(
++    tag: K, className?: string, text?: string): HTMLElementTagNameMap[K] {
++  const node = document.createElement(tag);
++  if (className) {
++    node.className = className;
++  }
++  if (text !== undefined) {
++    node.textContent = text;
++  }
++  return node;
++}
++
++function dayOf(ms: number): string {
++  const when = new Date(ms);
++  const today = new Date();
++  const yesterday = new Date(today.getTime() - 86400000);
++  if (when.toDateString() === today.toDateString()) {
++    return 'Today';
++  }
++  if (when.toDateString() === yesterday.toDateString()) {
++    return 'Yesterday';
++  }
++  return when.toLocaleDateString(undefined, {weekday: 'long', month: 'long', day: 'numeric'});
++}
++
++function reasonOf(tab: ArchivedTab): string {
++  switch (tab.reason) {
++    case 'auto':
++      return 'archived';
++    case 'clear':
++      return 'cleared';
++    default:
++      return 'closed';
++  }
++}
++
++function hostOf(url: string): string {
++  try {
++    return new URL(url).host || url;
++  } catch (e) {
++    return url;
++  }
++}
++
++function matches(tab: ArchivedTab): boolean {
++  if (state.space && tab.spaceName !== state.space) {
++    return false;
++  }
++  const q = state.query.trim().toLowerCase();
++  if (!q) {
++    return true;
++  }
++  return tab.title.toLowerCase().includes(q) || tab.url.toLowerCase().includes(q);
++}
++
++function render() {
++  const app = document.getElementById('app')!;
++  app.replaceChildren();
++
++  const header = el('header');
++  header.append(el('h1', undefined, 'Archived'));
++  const search = el('input');
++  search.type = 'search';
++  search.placeholder = 'Search title or address';
++  search.value = state.query;
++  search.setAttribute('aria-label', 'Search archived tabs');
++  search.addEventListener('input', () => {
++    state.query = search.value;
++    renderList(list);
++  });
++  header.append(search);
++  const names = new Set<string>();
++  for (const space of state.spaces) {
++    names.add(space.name);
++  }
++  for (const tab of state.tabs) {
++    if (tab.spaceName) {
++      names.add(tab.spaceName);
++    }
++  }
++  const select = el('select');
++  select.setAttribute('aria-label', 'Filter by Space');
++  const all = el('option', undefined, 'All Spaces');
++  all.value = '';
++  select.append(all);
++  for (const name of names) {
++    const option = el('option', undefined, name);
++    option.value = name;
++    option.selected = name === state.space;
++    select.append(option);
++  }
++  select.addEventListener('change', () => {
++    state.space = select.value;
++    renderList(list);
++  });
++  header.append(select);
++  const clear = el('button', undefined, 'Clear archive');
++  clear.addEventListener('click', () => chrome.send('clearArchive'));
++  header.append(clear);
++  app.append(header);
++
++  const list = el('div');
++  renderList(list);
++  app.append(list);
++  search.focus();
++}
++
++function renderList(list: HTMLElement) {
++  list.replaceChildren();
++  const shown = state.tabs.filter(matches);
++  if (shown.length === 0) {
++    list.append(el('p', 'empty',
++        state.tabs.length === 0 ? 'Nothing archived yet. Tabs that auto-archive, that Clear closes and that you close land here.' :
++                                  'Nothing matches.'));
++    return;
++  }
++  let day = '';
++  for (const tab of shown) {
++    const label = dayOf(tab.time);
++    if (label !== day) {
++      day = label;
++      list.append(el('div', 'day', day));
++    }
++    const row = el('div', 'row');
++    const text = el('div', 'text');
++    text.append(el('div', 'title', tab.title || tab.url));
++    const when = new Date(tab.time).toLocaleTimeString(undefined, {hour: 'numeric', minute: '2-digit'});
++    const path = tab.folderPath ? ` · ${tab.folderPath}` : '';
++    text.append(el('div', 'meta', `${hostOf(tab.url)} · ${reasonOf(tab)} ${when}${path}`));
++    row.append(text);
++    if (tab.spaceName) {
++      row.append(el('span', 'space', tab.spaceName));
++    }
++    const restore = el('button', undefined, tab.spaceName ? `Restore to ${tab.spaceName}` : 'Restore');
++    restore.addEventListener('click', () => chrome.send('restoreArchivedTab', [tab.id]));
++    row.append(restore);
++    const remove = el('button', undefined, 'Forget');
++    remove.setAttribute('aria-label', 'Forget this tab');
++    remove.addEventListener('click', () => chrome.send('removeArchivedTab', [tab.id]));
++    row.append(remove);
++    list.append(row);
++  }
++}
++
++function apply(snapshot: Snapshot) {
++  state.tabs = snapshot.tabs;
++  state.spaces = snapshot.spaces;
++  render();
++}
++
++addWebUiListener('archive-changed', (snapshot: unknown) => apply(snapshot as Snapshot));
++sendWithPromise('getArchivedTabs').then((snapshot: unknown) => apply(snapshot as Snapshot));
+diff --git a/chrome/browser/resources/stedding_archive/stedding_archive.html b/chrome/browser/resources/stedding_archive/stedding_archive.html
+new file mode 100644
+index 0000000000000..fdc9cb6084216
+--- /dev/null
++++ b/chrome/browser/resources/stedding_archive/stedding_archive.html
+@@ -0,0 +1,13 @@
++<!doctype html>
++<html dir="$i18n{textdirection}" lang="$i18n{language}">
++  <head>
++    <meta charset="utf-8">
++    <meta name="color-scheme" content="light dark">
++    <title>Archived</title>
++    <link rel="stylesheet" href="app.css">
++  </head>
++  <body>
++    <div id="app"></div>
++    <script type="module" src="app.js"></script>
++  </body>
++</html>
+diff --git a/chrome/browser/ui/BUILD.gn b/chrome/browser/ui/BUILD.gn
+index 4e32306ac46f2..591938a0576f8 100644
+--- a/chrome/browser/ui/BUILD.gn
++++ b/chrome/browser/ui/BUILD.gn
+@@ -1348,6 +1348,8 @@ static_library("ui") {
+       ":stedding_ui_metrics",
+       "//chrome/browser/ui/views/spaces",
+       "//chrome/browser/ui/stedding/theme",
++      "//chrome/browser/ui/archive",
++      "//chrome/browser/ui/webui/stedding_archive",
+       "//chrome/browser/ui/webui/stedding_welcome",
+       "//chrome/browser/ui/stedding/screenshot",
+       "//chrome/browser/ui/stedding:copy_link",
+diff --git a/chrome/browser/ui/archive/BUILD.gn b/chrome/browser/ui/archive/BUILD.gn
+index 38d8b0bf24193..3e22b628fcd81 100644
+--- a/chrome/browser/ui/archive/BUILD.gn
++++ b/chrome/browser/ui/archive/BUILD.gn
+@@ -4,13 +4,32 @@
+ 
+ # Auto-archive: unpinned tabs idle past a threshold leave the sidebar into the
+ # recently-closed list (docs/features/archive.md).
++
++# The mark a closing tab carries (A8): a leaf, so the Space model can set it.
++source_set("mark") {
++  public = [ "archive_mark.h" ]
++  sources = [ "archive_mark.cc" ]
++  deps = [
++    "//base",
++    "//content/public/browser",
++  ]
++}
++
+ source_set("archive") {
+-  public = [ "tab_archiver.h" ]
+-  sources = [ "tab_archiver.cc" ]
++  public = [
++    "archived_tabs.h",
++    "tab_archiver.h",
++  ]
++  sources = [
++    "archived_tabs.cc",
++    "tab_archiver.cc",
++  ]
+   public_deps = [
++    ":mark",
+     "//base",
+     "//chrome/browser/ui/tabs:tab_strip",
+     "//components/prefs",
++    "//components/sessions",
+     "//components/tabs:public",
+   ]
+   deps = [
+@@ -18,14 +37,19 @@ source_set("archive") {
+     "//chrome/browser/ui/spaces",
+     "//chrome/browser/ui/stedding:prefs",
+     "//content/public/browser",
++    "//url",
+   ]
+ }
+ 
+ source_set("unit_tests") {
+   testonly = true
+-  sources = [ "tab_archiver_unittest.cc" ]
++  sources = [
++    "archived_tabs_unittest.cc",
++    "tab_archiver_unittest.cc",
++  ]
+   deps = [
+     ":archive",
++    ":mark",
+     "//base",
+     "//base/test:test_support",
+     "//chrome/browser/ui/spaces",
+@@ -33,6 +57,8 @@ source_set("unit_tests") {
+     "//chrome/browser/ui/tabs:tab_strip",
+     "//chrome/test:test_support",
+     "//components/prefs",
++    "//components/sessions",
++    "//components/sessions:test_support",
+     "//components/tabs:public",
+     "//testing/gtest",
+   ]
+diff --git a/chrome/browser/ui/archive/archive_mark.cc b/chrome/browser/ui/archive/archive_mark.cc
+new file mode 100644
+index 0000000000000..9ad979b0691ca
+--- /dev/null
++++ b/chrome/browser/ui/archive/archive_mark.cc
+@@ -0,0 +1,85 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/archive/archive_mark.h"
++
++#include <string_view>
++
++#include "base/no_destructor.h"
++#include "content/public/browser/web_contents.h"
++#include "content/public/browser/web_contents_user_data.h"
++
++namespace stedding {
++
++namespace {
++
++class ArchiveMark : public content::WebContentsUserData<ArchiveMark> {
++ public:
++  ~ArchiveMark() override = default;
++  ArchiveReason reason() const { return reason_; }
++  void set_reason(ArchiveReason reason) { reason_ = reason; }
++
++ private:
++  friend class content::WebContentsUserData<ArchiveMark>;
++  ArchiveMark(content::WebContents* contents, ArchiveReason reason)
++      : content::WebContentsUserData<ArchiveMark>(*contents), reason_(reason) {}
++
++  ArchiveReason reason_;
++  WEB_CONTENTS_USER_DATA_KEY_DECL();
++};
++
++WEB_CONTENTS_USER_DATA_KEY_IMPL(ArchiveMark);
++
++ArchiveMarkObserver& ObserverForTesting() {
++  static base::NoDestructor<ArchiveMarkObserver> observer;
++  return *observer;
++}
++
++}  // namespace
++
++const char* ArchiveReasonName(ArchiveReason reason) {
++  switch (reason) {
++    case ArchiveReason::kAuto:
++      return "auto";
++    case ArchiveReason::kClear:
++      return "clear";
++  }
++  return "auto";
++}
++
++std::optional<ArchiveReason> ArchiveReasonFromName(std::string_view name) {
++  if (name == "auto") {
++    return ArchiveReason::kAuto;
++  }
++  if (name == "clear") {
++    return ArchiveReason::kClear;
++  }
++  return std::nullopt;
++}
++
++void MarkForArchive(content::WebContents* contents, ArchiveReason reason) {
++  if (!contents) {
++    return;
++  }
++  if (ArchiveMark* const mark = ArchiveMark::FromWebContents(contents)) {
++    mark->set_reason(reason);
++  } else {
++    ArchiveMark::CreateForWebContents(contents, reason);
++  }
++  if (ObserverForTesting()) {
++    ObserverForTesting().Run(contents, reason);
++  }
++}
++
++std::optional<ArchiveReason> ArchiveMarkOf(content::WebContents* contents) {
++  const ArchiveMark* const mark =
++      contents ? ArchiveMark::FromWebContents(contents) : nullptr;
++  return mark ? std::optional<ArchiveReason>(mark->reason()) : std::nullopt;
++}
++
++void SetArchiveMarkObserverForTesting(ArchiveMarkObserver observer) {
++  ObserverForTesting() = std::move(observer);
++}
++
++}  // namespace stedding
+diff --git a/chrome/browser/ui/archive/archive_mark.h b/chrome/browser/ui/archive/archive_mark.h
+new file mode 100644
+index 0000000000000..3bd2ed9252123
+--- /dev/null
++++ b/chrome/browser/ui/archive/archive_mark.h
+@@ -0,0 +1,38 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_ARCHIVE_ARCHIVE_MARK_H_
++#define CHROME_BROWSER_UI_ARCHIVE_ARCHIVE_MARK_H_
++
++#include <optional>
++
++#include "base/functional/callback.h"
++
++namespace content {
++class WebContents;
++}
++
++namespace stedding {
++
++// docs/features/archive.md A8: why a tab left the sidebar. Set on the
++// WebContents just before the close, read while Chromium records the closed
++// tab, so the archive knows a sweep from a Clear from a plain ⌘W.
++enum class ArchiveReason { kAuto, kClear };
++
++inline constexpr char kArchiveReasonKey[] = "stedding.archive.reason";
++
++const char* ArchiveReasonName(ArchiveReason reason);
++std::optional<ArchiveReason> ArchiveReasonFromName(std::string_view name);
++
++void MarkForArchive(content::WebContents* contents, ArchiveReason reason);
++std::optional<ArchiveReason> ArchiveMarkOf(content::WebContents* contents);
++
++// Tests watch the marks go on, since the tab is gone a moment later.
++using ArchiveMarkObserver =
++    base::RepeatingCallback<void(content::WebContents*, ArchiveReason)>;
++void SetArchiveMarkObserverForTesting(ArchiveMarkObserver observer);
++
++}  // namespace stedding
++
++#endif  // CHROME_BROWSER_UI_ARCHIVE_ARCHIVE_MARK_H_
+diff --git a/chrome/browser/ui/archive/archived_tabs.cc b/chrome/browser/ui/archive/archived_tabs.cc
+new file mode 100644
+index 0000000000000..ab21698e38fb1
+--- /dev/null
++++ b/chrome/browser/ui/archive/archived_tabs.cc
+@@ -0,0 +1,196 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/archive/archived_tabs.h"
++
++#include <memory>
++#include <utility>
++
++#include "base/strings/string_number_conversions.h"
++#include "base/strings/utf_string_conversions.h"
++#include "base/token.h"
++#include "chrome/browser/ui/archive/archive_mark.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/spaces/space.h"
++#include "chrome/browser/ui/spaces/space_colors.h"
++#include "chrome/browser/ui/spaces/space_model.h"
++#include "chrome/browser/ui/spaces/tab_space_restore_data.h"
++#include "chrome/browser/ui/stedding/stedding_prefs.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "components/prefs/pref_service.h"
++#include "components/sessions/content/session_tab_helper.h"
++#include "components/sessions/core/live_tab.h"
++#include "components/sessions/core/serialized_navigation_entry.h"
++#include "components/sessions/core/tab_restore_types.h"
++#include "components/tabs/public/tab_interface.h"
++#include "content/public/browser/web_contents.h"
++
++namespace stedding {
++
++namespace {
++
++std::string Lookup(const std::map<std::string, std::string>& extra_data,
++                   const char* key) {
++  const auto it = extra_data.find(key);
++  return it == extra_data.end() ? std::string() : it->second;
++}
++
++}  // namespace
++
++void PopulateArchiveExtraData(tabs::TabInterface* tab,
++                              std::map<std::string, std::string>* extra_data) {
++  if (!tab || !extra_data) {
++    return;
++  }
++  if (const std::optional<ArchiveReason> reason =
++          ArchiveMarkOf(tab->GetContents())) {
++    (*extra_data)[kArchiveReasonKey] = ArchiveReasonName(*reason);
++  }
++  spaces::SpaceModel* const model =
++      spaces::SpaceModel::From(tab->GetBrowserWindowInterface());
++  if (model && !tab->IsPinned()) {
++    (*extra_data)[kArchiveSpaceNameKey] =
++        base::UTF16ToUTF8(model->DisplayName(model->SpaceForTab(tab)));
++  }
++}
++
++ArchivedTab::ArchivedTab() = default;
++ArchivedTab::ArchivedTab(const ArchivedTab& other) = default;
++ArchivedTab& ArchivedTab::operator=(const ArchivedTab& other) = default;
++ArchivedTab::~ArchivedTab() = default;
++
++std::vector<ArchivedTab> ListArchivedTabs(
++    const sessions::TabRestoreService::Entries& entries,
++    base::Time now,
++    base::TimeDelta keep) {
++  std::vector<ArchivedTab> out;
++  for (const std::unique_ptr<sessions::tab_restore::Entry>& entry : entries) {
++    if (entry->type != sessions::tab_restore::TAB) {
++      continue;
++    }
++    const auto& tab = static_cast<const sessions::tab_restore::Tab&>(*entry);
++    if (tab.navigations.empty()) {
++      continue;
++    }
++    if (!tab.timestamp.is_null() && now - tab.timestamp > keep) {
++      continue;
++    }
++    const sessions::SerializedNavigationEntry& current =
++        tab.navigations[tab.normalized_navigation_index()];
++    ArchivedTab row;
++    row.id = tab.id;
++    row.title = current.title();
++    row.url = current.virtual_url();
++    if (row.title.empty()) {
++      row.title = base::UTF8ToUTF16(row.url.spec());
++    }
++    row.time = tab.timestamp;
++    row.space_id = Lookup(tab.extra_data, spaces::kSessionTabSpaceKey);
++    row.space_name = Lookup(tab.extra_data, kArchiveSpaceNameKey);
++    row.folder_path = Lookup(tab.extra_data, "stedding.folderpath");
++    row.reason = Lookup(tab.extra_data, kArchiveReasonKey);
++    out.push_back(std::move(row));
++  }
++  return out;
++}
++
++base::DictValue ArchivedTabToValue(const ArchivedTab& tab) {
++  base::DictValue value;
++  value.Set("id", base::NumberToString(tab.id.id()));
++  value.Set("title", tab.title);
++  value.Set("url", tab.url.spec());
++  value.Set("time", tab.time.InMillisecondsFSinceUnixEpoch());
++  value.Set("spaceId", tab.space_id);
++  value.Set("spaceName", tab.space_name);
++  value.Set("folderPath", tab.folder_path);
++  value.Set("reason", tab.reason);
++  return value;
++}
++
++base::TimeDelta ArchiveRetention(const PrefService* prefs) {
++  const int days = prefs ? prefs->GetInteger(prefs::kArchiveKeepDays) : 30;
++  return base::Days(days > 0 ? days : 30);
++}
++
++spaces::SpaceId SpaceForRestore(spaces::SpaceModel* model,
++                                const std::string& space_id,
++                                const std::string& space_name) {
++  CHECK(model);
++  if (const std::optional<spaces::SpaceId> id =
++          spaces::SpaceId::FromOptionalToken(base::Token::FromString(space_id));
++      id && model->GetSpace(*id)) {
++    return *id;
++  }
++  if (space_name.empty()) {
++    return model->active_id();
++  }
++  for (const std::unique_ptr<spaces::Space>& space : model->spaces()) {
++    if (base::UTF16ToUTF8(model->DisplayName(space->id())) == space_name) {
++      return space->id();
++    }
++  }
++  // Gone: it comes back with its name, in the next colour of the ring.
++  spaces::Space* const made = model->AddSpace(
++      space_name,
++      spaces::kSpaceColors.at(model->size() % spaces::kSpaceColors.size())
++          .color);
++  return made->id();
++}
++
++bool RestoreArchivedTab(BrowserWindowInterface* browser,
++                        sessions::LiveTabContext* context,
++                        sessions::TabRestoreService* service,
++                        SessionID id) {
++  if (!browser || !context || !service) {
++    return false;
++  }
++  std::string space_id;
++  std::string space_name;
++  bool found = false;
++  for (const std::unique_ptr<sessions::tab_restore::Entry>& entry :
++       service->entries()) {
++    if (entry->id == id && entry->type == sessions::tab_restore::TAB) {
++      space_id = Lookup(entry->extra_data, spaces::kSessionTabSpaceKey);
++      space_name = Lookup(entry->extra_data, kArchiveSpaceNameKey);
++      found = true;
++      break;
++    }
++  }
++  if (!found) {
++    return false;
++  }
++  spaces::SpaceModel* const model = spaces::SpaceModel::From(browser);
++  // The Space first, so the restored tab's own restore data names one that
++  // exists (spaces B2 would otherwise file it in the active Space).
++  std::optional<spaces::SpaceId> target;
++  if (model) {
++    target = SpaceForRestore(model, space_id, space_name);
++  }
++  const std::vector<sessions::LiveTab*> live = service->RestoreEntryById(
++      context, id, WindowOpenDisposition::NEW_BACKGROUND_TAB);
++  if (live.empty()) {
++    return false;
++  }
++  if (!model || !target) {
++    return true;
++  }
++  // A live tab names its WebContents only by session id; the strip has it.
++  TabStripModel* const tabs = browser->GetTabStripModel();
++  for (sessions::LiveTab* live_tab : live) {
++    const SessionID live_id = live_tab->GetSessionID();
++    for (int i = 0; i < tabs->count(); ++i) {
++      tabs::TabInterface* const tab = tabs->GetTabAtIndex(i);
++      if (sessions::SessionTabHelper::IdForTab(tab->GetContents()) != live_id) {
++        continue;
++      }
++      model->SetSpaceForTab(tab, *target);
++      model->SetActiveSpace(*target);
++      tabs->ActivateTabAt(i);
++      break;
++    }
++  }
++  return true;
++}
++
++}  // namespace stedding
+diff --git a/chrome/browser/ui/archive/archived_tabs.h b/chrome/browser/ui/archive/archived_tabs.h
+new file mode 100644
+index 0000000000000..5a08f7bdde7f5
+--- /dev/null
++++ b/chrome/browser/ui/archive/archived_tabs.h
+@@ -0,0 +1,90 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_ARCHIVE_ARCHIVED_TABS_H_
++#define CHROME_BROWSER_UI_ARCHIVE_ARCHIVED_TABS_H_
++
++#include <map>
++#include <string>
++#include <vector>
++
++#include "base/time/time.h"
++#include "base/values.h"
++#include "chrome/browser/ui/spaces/space_id.h"
++#include "components/sessions/core/session_id.h"
++#include "components/sessions/core/tab_restore_service.h"
++#include "url/gurl.h"
++
++class BrowserWindowInterface;
++class PrefService;
++
++namespace sessions {
++class LiveTabContext;
++}
++
++namespace spaces {
++class SpaceModel;
++}
++
++namespace tabs {
++class TabInterface;
++}
++
++namespace stedding {
++
++// docs/features/archive.md A8: the Space's name, written beside its id so
++// the archive can name it and bring it back when it is gone (A9).
++inline constexpr char kArchiveSpaceNameKey[] = "stedding.spacename";
++
++// What Chromium's recently-closed list carries for `tab`, in Stedding's
++// terms: the archive reason when the tab was marked, and its Space's name.
++void PopulateArchiveExtraData(tabs::TabInterface* tab,
++                              std::map<std::string, std::string>* extra_data);
++
++// One row of the archive (A9).
++struct ArchivedTab {
++  ArchivedTab();
++  ArchivedTab(const ArchivedTab& other);
++  ArchivedTab& operator=(const ArchivedTab& other);
++  ~ArchivedTab();
++
++  SessionID id = SessionID::InvalidValue();
++  std::u16string title;
++  GURL url;
++  base::Time time;
++  std::string space_id;
++  std::string space_name;
++  std::string folder_path;
++  // "auto", "clear", or empty for a plain close.
++  std::string reason;
++};
++
++// The closed tabs of `entries` no older than `keep`, newest first (A11).
++std::vector<ArchivedTab> ListArchivedTabs(
++    const sessions::TabRestoreService::Entries& entries,
++    base::Time now,
++    base::TimeDelta keep);
++
++base::DictValue ArchivedTabToValue(const ArchivedTab& tab);
++
++// stedding.archive.keep_days as a duration.
++base::TimeDelta ArchiveRetention(const PrefService* prefs);
++
++// A9: where a restored tab goes -- the Space it was in, else one with its
++// old name, else a new Space of that name; the active Space when nothing is
++// known.
++spaces::SpaceId SpaceForRestore(spaces::SpaceModel* model,
++                                const std::string& space_id,
++                                const std::string& space_name);
++
++// Restores entry `id` into `browser`'s window and its Space, then shows
++// that Space. False when the entry is gone.
++bool RestoreArchivedTab(BrowserWindowInterface* browser,
++                        sessions::LiveTabContext* context,
++                        sessions::TabRestoreService* service,
++                        SessionID id);
++
++}  // namespace stedding
++
++#endif  // CHROME_BROWSER_UI_ARCHIVE_ARCHIVED_TABS_H_
+diff --git a/chrome/browser/ui/archive/archived_tabs_unittest.cc b/chrome/browser/ui/archive/archived_tabs_unittest.cc
+new file mode 100644
+index 0000000000000..fba97d29929b2
+--- /dev/null
++++ b/chrome/browser/ui/archive/archived_tabs_unittest.cc
+@@ -0,0 +1,112 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/archive/archived_tabs.h"
++
++#include <memory>
++#include <string>
++
++#include "base/time/time.h"
++#include "chrome/browser/ui/archive/archive_mark.h"
++#include "chrome/browser/ui/browser.h"
++#include "chrome/browser/ui/spaces/space.h"
++#include "chrome/browser/ui/spaces/space_model.h"
++#include "chrome/browser/ui/spaces/tab_space_restore_data.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "chrome/test/base/browser_with_test_window_test.h"
++#include "components/sessions/core/serialized_navigation_entry_test_helper.h"
++#include "components/sessions/core/tab_restore_types.h"
++#include "components/tabs/public/tab_interface.h"
++#include "testing/gtest/include/gtest/gtest.h"
++
++namespace stedding {
++namespace {
++
++std::unique_ptr<sessions::tab_restore::Tab> ClosedTab(int id,
++                                                      const char* url,
++                                                      const char16_t* title,
++                                                      base::Time when,
++                                                      const char* reason) {
++  auto tab = std::make_unique<sessions::tab_restore::Tab>();
++  tab->id = SessionID::FromSerializedValue(id);
++  tab->timestamp = when;
++  sessions::SerializedNavigationEntry entry =
++      sessions::SerializedNavigationEntryTestHelper::CreateNavigationForTest();
++  entry.set_virtual_url(GURL(url));
++  entry.set_title(title);
++  tab->navigations.push_back(std::move(entry));
++  tab->current_navigation_index = 0;
++  tab->extra_data[kArchiveSpaceNameKey] = "Work";
++  tab->extra_data[spaces::kSessionTabSpaceKey] = "deadbeef";
++  if (reason) {
++    tab->extra_data[kArchiveReasonKey] = reason;
++  }
++  return tab;
++}
++
++// A11: what is older than the retention is not shown; the rest carries its
++// Space, reason and address.
++TEST(ArchivePageTest, RetentionFiltersOldEntries) {
++  const base::Time now = base::Time::Now();
++  sessions::TabRestoreService::Entries entries;
++  entries.push_back(
++      ClosedTab(1, "https://a.example/", u"A", now - base::Days(1), "auto"));
++  entries.push_back(
++      ClosedTab(2, "https://b.example/", u"B", now - base::Days(40), "clear"));
++  entries.push_back(
++      ClosedTab(3, "https://c.example/", u"C", now - base::Hours(2), nullptr));
++  const std::vector<ArchivedTab> shown =
++      ListArchivedTabs(entries, now, base::Days(30));
++  ASSERT_EQ(2u, shown.size());
++  EXPECT_EQ(u"A", shown[0].title);
++  EXPECT_EQ("auto", shown[0].reason);
++  EXPECT_EQ("Work", shown[0].space_name);
++  EXPECT_EQ(GURL("https://a.example/"), shown[0].url);
++  EXPECT_EQ(u"C", shown[1].title);
++  EXPECT_TRUE(shown[1].reason.empty()) << "a plain close has no reason";
++  EXPECT_EQ(3u, ListArchivedTabs(entries, now, base::Days(90)).size());
++  const base::DictValue value = ArchivedTabToValue(shown[0]);
++  EXPECT_EQ("1", *value.FindString("id"));
++  EXPECT_EQ("Work", *value.FindString("spaceName"));
++}
++
++class ArchivePageWindowTest : public BrowserWithTestWindowTest {
++ protected:
++  spaces::SpaceModel& model() { return *spaces::SpaceModel::From(browser()); }
++};
++
++// A9: a restore names a Space that is gone; it comes back by name, once.
++TEST_F(ArchivePageWindowTest, RestoreRecreatesAMissingSpace) {
++  const spaces::SpaceId home = model().active_id();
++  ASSERT_EQ(1u, model().size());
++  const spaces::SpaceId made = SpaceForRestore(&model(), "gone", "Work");
++  EXPECT_NE(home, made);
++  ASSERT_EQ(2u, model().size());
++  EXPECT_EQ("Work", model().GetSpace(made)->name());
++  EXPECT_EQ(made, SpaceForRestore(&model(), "gone", "Work"))
++      << "the second restore finds it by name";
++  EXPECT_EQ(made, SpaceForRestore(&model(), made.ToString(), "Renamed"))
++      << "an id that still exists wins over the name";
++  EXPECT_EQ(home, SpaceForRestore(&model(), "", ""))
++      << "nothing known: the active Space";
++  EXPECT_EQ(2u, model().size());
++}
++
++// A8: the mark and the Space name reach the closed tab's data.
++TEST_F(ArchivePageWindowTest, MarkThenPopulate) {
++  AddTab(browser(), GURL("https://a.example/"));
++  tabs::TabInterface* const tab = browser()->tab_strip_model()->GetActiveTab();
++  std::map<std::string, std::string> extra_data;
++  PopulateArchiveExtraData(tab, &extra_data);
++  EXPECT_FALSE(extra_data.contains(kArchiveReasonKey));
++  EXPECT_EQ("Space 1", extra_data[kArchiveSpaceNameKey]);
++  MarkForArchive(tab->GetContents(), ArchiveReason::kClear);
++  extra_data.clear();
++  PopulateArchiveExtraData(tab, &extra_data);
++  EXPECT_EQ("clear", extra_data[kArchiveReasonKey]);
++  EXPECT_EQ(ArchiveReason::kClear, *ArchiveMarkOf(tab->GetContents()));
++}
++
++}  // namespace
++}  // namespace stedding
+diff --git a/chrome/browser/ui/archive/tab_archiver.cc b/chrome/browser/ui/archive/tab_archiver.cc
+index f70263c5fe574..39b435e0642e2 100644
+--- a/chrome/browser/ui/archive/tab_archiver.cc
++++ b/chrome/browser/ui/archive/tab_archiver.cc
+@@ -7,6 +7,7 @@
+ #include <vector>
+ 
+ #include "base/functional/bind.h"
++#include "chrome/browser/ui/archive/archive_mark.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/spaces/space_model.h"
+ #include "chrome/browser/ui/stedding/stedding_prefs.h"
+@@ -25,9 +26,9 @@ TabArchiver::TabArchiver(BrowserWindowInterface& browser, PrefService& prefs)
+     Touch(model->GetTabAtIndex(i));
+   }
+   pref_registrar_.Init(&*prefs_);
+-  pref_registrar_.Add(prefs::kArchiveIdleHours,
+-                      base::BindRepeating(&TabArchiver::UpdateTimer,
+-                                          base::Unretained(this)));
++  pref_registrar_.Add(
++      prefs::kArchiveIdleHours,
++      base::BindRepeating(&TabArchiver::UpdateTimer, base::Unretained(this)));
+   UpdateTimer();
+ }
+ 
+@@ -68,8 +69,11 @@ void TabArchiver::Sweep() {
+     if (index == TabStripModel::kNoTab) {
+       continue;
+     }
+-    // Into the recently-closed list, so ⇧⌘T brings it back.
+-    model->CloseWebContentsAt(index, TabCloseTypes::CLOSE_CREATE_HISTORICAL_TAB);
++    // Into the recently-closed list, so ⇧⌘T brings it back; marked, so the
++    // archive knows why (A8).
++    MarkForArchive(tab->GetContents(), ArchiveReason::kAuto);
++    model->CloseWebContentsAt(index,
++                              TabCloseTypes::CLOSE_CREATE_HISTORICAL_TAB);
+   }
+ }
+ 
+@@ -137,9 +141,9 @@ void TabArchiver::UpdateTimer() {
+     return;
+   }
+   if (!timer_.IsRunning()) {
+-    timer_.Start(FROM_HERE, kSweepInterval,
+-                 base::BindRepeating(&TabArchiver::Sweep,
+-                                     base::Unretained(this)));
++    timer_.Start(
++        FROM_HERE, kSweepInterval,
++        base::BindRepeating(&TabArchiver::Sweep, base::Unretained(this)));
+   }
+ }
+ 
+diff --git a/chrome/browser/ui/archive/tab_archiver_unittest.cc b/chrome/browser/ui/archive/tab_archiver_unittest.cc
+index 02c3e2239a447..d292ea83793be 100644
+--- a/chrome/browser/ui/archive/tab_archiver_unittest.cc
++++ b/chrome/browser/ui/archive/tab_archiver_unittest.cc
+@@ -6,15 +6,18 @@
+ 
+ #include "chrome/browser/ui/archive/tab_archiver.h"
+ 
++#include "base/functional/bind.h"
+ #include "base/test/simple_test_tick_clock.h"
+ #include "base/test/task_environment.h"
+ #include "base/time/time.h"
++#include "chrome/browser/ui/archive/archive_mark.h"
+ #include "chrome/browser/ui/browser.h"
+ #include "chrome/browser/ui/spaces/space_model.h"
+ #include "chrome/browser/ui/stedding/stedding_prefs.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "chrome/test/base/browser_with_test_window_test.h"
+ #include "components/prefs/pref_service.h"
++#include "content/public/browser/web_contents.h"
+ #include "testing/gtest/include/gtest/gtest.h"
+ #include "url/gurl.h"
+ 
+@@ -97,12 +100,29 @@ TEST_F(TabArchiverTest, KeepsPinnedTabs) {
+   AddThreeTabs();
+   tabs().SetTabPinned(1, true);  // essentials
+   spaces::SpaceModel::From(browser())->SetSpacePinned(tabs().GetTabAtIndex(2),
+-                                                     true);
++                                                      true);
+   Idle(base::Hours(13));
+   archiver().Sweep();
+   EXPECT_EQ(3, tabs().count());
+ }
+ 
++// A8: a swept tab carries the reason, so the archive can say "auto".
++TEST_F(TabArchiverTest, SweepRecordsSpaceAndReason) {
++  std::vector<ArchiveReason> reasons;
++  SetArchiveMarkObserverForTesting(base::BindRepeating(
++      [](std::vector<ArchiveReason>* reasons, content::WebContents*,
++         ArchiveReason reason) { reasons->push_back(reason); },
++      &reasons));
++  AddThreeTabs();
++  Idle(base::Hours(13));
++  archiver().Sweep();
++  SetArchiveMarkObserverForTesting(ArchiveMarkObserver());
++  EXPECT_EQ(1, tabs().count());
++  ASSERT_EQ(2u, reasons.size());
++  EXPECT_EQ(ArchiveReason::kAuto, reasons[0]);
++  EXPECT_EQ(ArchiveReason::kAuto, reasons[1]);
++}
++
+ // A4: tabs in a folder survive.
+ TEST_F(TabArchiverTest, KeepsFolderTabs) {
+   AddThreeTabs();
+diff --git a/chrome/browser/ui/browser_live_tab_context.cc b/chrome/browser/ui/browser_live_tab_context.cc
+index d80d6550e73cc..e4ba16c28f45a 100644
+--- a/chrome/browser/ui/browser_live_tab_context.cc
++++ b/chrome/browser/ui/browser_live_tab_context.cc
+@@ -22,6 +22,7 @@
+ #include "chrome/browser/sessions/session_service_utils.h"
+ #include "chrome/browser/sessions/tab_restore_service_factory.h"
+ #include "chrome/browser/tab_group_sync/tab_group_sync_service_factory.h"
++#include "chrome/browser/ui/archive/archived_tabs.h"
+ #include "chrome/browser/ui/browser.h"
+ #include "chrome/browser/ui/browser_commands.h"
+ #include "chrome/browser/ui/browser_init_state.h"
+@@ -164,6 +165,9 @@ std::map<std::string, std::string> BrowserLiveTabContext::GetExtraDataForTab(
+ 
+   glic::PopulateGlicExtraData(tab_strip_model_->GetTabAtIndex(index),
+                               &extra_data);
++  // Stedding archive A8: why the tab left, and its Space's name.
++  stedding::PopulateArchiveExtraData(tab_strip_model_->GetTabAtIndex(index),
++                                     &extra_data);
+ 
+   return extra_data;
+ }
+diff --git a/chrome/browser/ui/spaces/BUILD.gn b/chrome/browser/ui/spaces/BUILD.gn
+index ab66e57ae0210..c3a00633a135e 100644
+--- a/chrome/browser/ui/spaces/BUILD.gn
++++ b/chrome/browser/ui/spaces/BUILD.gn
+@@ -45,6 +45,7 @@ source_set("spaces") {
+   deps = [
+     ":router",
+     "//chrome/app:command_ids",
++    "//chrome/browser/ui/archive:mark",
+     "//chrome/browser/profiles:profile",
+     "//chrome/browser/ui:stedding_ui_metrics",
+     "//chrome/browser/ui/stedding/theme",
+@@ -74,6 +75,7 @@ source_set("unit_tests") {
+   deps = [
+     ":router",
+     ":spaces",
++    "//chrome/browser/ui/archive:mark",
+     "//base",
+     "//chrome/app:command_ids",
+     "//chrome/browser/profiles:profile",
+diff --git a/chrome/browser/ui/spaces/space_model.cc b/chrome/browser/ui/spaces/space_model.cc
+index 87a87d5117cdc..cef2ea217b266 100644
+--- a/chrome/browser/ui/spaces/space_model.cc
++++ b/chrome/browser/ui/spaces/space_model.cc
+@@ -21,6 +21,7 @@
+ #include "base/values.h"
+ #include "chrome/browser/sessions/session_service.h"
+ #include "chrome/browser/sessions/session_service_factory.h"
++#include "chrome/browser/ui/archive/archive_mark.h"
+ #include "chrome/browser/ui/browser.h"
+ #include "chrome/browser/ui/browser_init_state.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+@@ -710,8 +711,11 @@ void SpaceModel::ClearUnpinnedTabs() {
+   for (content::WebContents* contents : doomed) {
+     const int index = tab_strip_model_->GetIndexOfWebContents(contents);
+     if (index != TabStripModel::kNoTab) {
+-      tab_strip_model_->CloseWebContentsAt(index,
+-                                           TabCloseTypes::CLOSE_USER_GESTURE);
++      // Into the recently-closed list, marked "clear" (archive A8).
++      stedding::MarkForArchive(contents, stedding::ArchiveReason::kClear);
++      tab_strip_model_->CloseWebContentsAt(
++          index, TabCloseTypes::CLOSE_USER_GESTURE |
++                     TabCloseTypes::CLOSE_CREATE_HISTORICAL_TAB);
+     }
+   }
+ }
+diff --git a/chrome/browser/ui/spaces/space_model_window_unittest.cc b/chrome/browser/ui/spaces/space_model_window_unittest.cc
+index 7e1fa44927194..e4562fb3d9d87 100644
+--- a/chrome/browser/ui/spaces/space_model_window_unittest.cc
++++ b/chrome/browser/ui/spaces/space_model_window_unittest.cc
+@@ -15,6 +15,7 @@
+ #include <vector>
+ 
+ #include "chrome/app/chrome_command_ids.h"
++#include "chrome/browser/ui/archive/archive_mark.h"
+ #include "chrome/browser/ui/browser.h"
+ #include "chrome/browser/ui/browser_commands.h"
+ #include "chrome/browser/ui/spaces/space.h"
+@@ -747,6 +748,25 @@ TEST_F(PopupSpaceTest, PopupWindowsHaveNoSpaces) {
+   EXPECT_EQ(nullptr, SpaceModel::From(browser()));
+ }
+ 
++// archive A8: Clear marks what it closes, so the archive can say "clear".
++TEST_F(SpaceWindowTest, ClearRecordsReason) {
++  std::vector<stedding::ArchiveReason> reasons;
++  stedding::SetArchiveMarkObserverForTesting(base::BindRepeating(
++      [](std::vector<stedding::ArchiveReason>* reasons, content::WebContents*,
++         stedding::ArchiveReason reason) { reasons->push_back(reason); },
++      &reasons));
++  OpenTab();
++  OpenTab();
++  tabs::TabInterface* const kept = OpenTab();
++  model().SetSpacePinned(kept, true);
++  model().ClearUnpinnedTabs();
++  stedding::SetArchiveMarkObserverForTesting(stedding::ArchiveMarkObserver());
++  EXPECT_EQ(1, tabs().count());
++  ASSERT_EQ(2u, reasons.size());
++  EXPECT_EQ(stedding::ArchiveReason::kClear, reasons[0]);
++  EXPECT_EQ(stedding::ArchiveReason::kClear, reasons[1]);
++}
++
+ // routing D2: a tab that opens with a routed address moves to its Space,
+ // and the window follows a foreground open a turn later.
+ TEST_F(SpaceWindowTest, InsertedTabFollowsRoute) {
+diff --git a/chrome/browser/ui/stedding/stedding_prefs.cc b/chrome/browser/ui/stedding/stedding_prefs.cc
+index 6955e7d34ecad..8b0b0063d0ece 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs.cc
++++ b/chrome/browser/ui/stedding/stedding_prefs.cc
+@@ -13,6 +13,7 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
+   registry->RegisterBooleanPref(kNewTabShowShortcuts, true);
+   registry->RegisterBooleanPref(kPeekEnabled, true);
+   registry->RegisterIntegerPref(kArchiveIdleHours, 12);
++  registry->RegisterIntegerPref(kArchiveKeepDays, 30);
+   registry->RegisterBooleanPref(kWelcomeShown, false);
+   registry->RegisterBooleanPref(kCopyStripTracking, true);
+   registry->RegisterBooleanPref(kUiAnimate, true);
+diff --git a/chrome/browser/ui/stedding/stedding_prefs.h b/chrome/browser/ui/stedding/stedding_prefs.h
+index 2aff78dc4b564..089cd94f554fd 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs.h
++++ b/chrome/browser/ui/stedding/stedding_prefs.h
+@@ -26,6 +26,8 @@ inline constexpr char kPeekEnabled[] = "stedding.peek.enabled";
+ // Hours an unpinned tab may sit unlooked-at before auto-archive closes it
+ // into the recently-closed list (docs/features/archive.md). 0 turns it off.
+ inline constexpr char kArchiveIdleHours[] = "stedding.archive.idle_hours";
++// archive A11: how many days the Archived page and the bar look back.
++inline constexpr char kArchiveKeepDays[] = "stedding.archive.keep_days";
+ 
+ // True once the first-run welcome flow was finished or skipped
+ // (docs/features/welcome.md).
+diff --git a/chrome/browser/ui/views/commandbar/BUILD.gn b/chrome/browser/ui/views/commandbar/BUILD.gn
+index f63dd352aa429..a768fdc0f8ff9 100644
+--- a/chrome/browser/ui/views/commandbar/BUILD.gn
++++ b/chrome/browser/ui/views/commandbar/BUILD.gn
+@@ -12,6 +12,9 @@ source_set("commandbar") {
+   ]
+ 
+   deps = [
++    "//components/sessions",
++    "//chrome/browser/sessions",
++    "//chrome/browser/ui/archive",
+     "//chrome/browser/profiles:profile",
+     "//chrome/browser/search_engines",
+     "//chrome/browser/ui/navigator",
+diff --git a/chrome/browser/ui/views/commandbar/command_bar_view.cc b/chrome/browser/ui/views/commandbar/command_bar_view.cc
+index f2f307d732635..9b2097a7f524b 100644
+--- a/chrome/browser/ui/views/commandbar/command_bar_view.cc
++++ b/chrome/browser/ui/views/commandbar/command_bar_view.cc
+@@ -22,12 +22,16 @@
+ #include "chrome/browser/autocomplete/chrome_autocomplete_scheme_classifier.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/search_engines/template_url_service_factory.h"
++#include "chrome/browser/sessions/tab_restore_service_factory.h"
++#include "chrome/browser/ui/archive/archived_tabs.h"
+ #include "chrome/browser/ui/browser.h"
+ #include "chrome/browser/ui/browser_actions.h"
+ #include "chrome/browser/ui/browser_command_controller.h"
++#include "chrome/browser/ui/browser_live_tab_context.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/navigator/browser_navigator.h"
+ #include "chrome/browser/ui/navigator/browser_navigator_params.h"
++#include "chrome/browser/ui/singleton_tabs.h"
+ #include "chrome/browser/ui/spaces/arc_sidebar_importer.h"
+ #include "chrome/browser/ui/spaces/space.h"
+ #include "chrome/browser/ui/spaces/space_colors.h"
+@@ -39,6 +43,7 @@
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "chrome/browser/ui/views/frame/browser_view.h"
+ #include "chrome/browser/ui/views/peek/peek_view.h"
++#include "chrome/browser/ui/webui/stedding_archive/stedding_archive_ui.h"
+ #include "components/omnibox/browser/autocomplete_classifier.h"
+ #include "components/omnibox/browser/autocomplete_controller.h"
+ #include "components/omnibox/browser/autocomplete_controller_config.h"
+@@ -49,6 +54,7 @@
+ #include "components/prefs/pref_service.h"
+ #include "components/search_engines/template_url.h"
+ #include "components/search_engines/template_url_service.h"
++#include "components/sessions/core/tab_restore_service.h"
+ #include "third_party/metrics_proto/omnibox_event.pb.h"
+ #include "ui/actions/actions.h"
+ #include "ui/base/accelerators/accelerator.h"
+@@ -98,6 +104,8 @@ constexpr int kPanelInset = 12;
+ constexpr int kFontSizeDelta = 3;
+ constexpr size_t kMaxTabResults = 4;
+ constexpr size_t kMaxSuggestions = 6;
++// archive A10: archived rows after the open tabs and the suggestions.
++constexpr size_t kMaxArchivedResults = 3;
+ 
+ // The overlay is its own surface floating over the page, so it takes the
+ // dialog colours of the current theme (light panel in light mode, dark in
+@@ -321,6 +329,14 @@ void CommandBarView::BuildActions() {
+                               },
+                               base::Unretained(browser_))});
+     }
++    // archive A7: the archived view.
++    actions_.push_back({u"Show Archived Tabs", std::u16string(),
++                        base::BindRepeating(
++                            [](Browser* browser) {
++                              ShowSingletonTab(browser,
++                                               GURL(stedding::kArchiveURL));
++                            },
++                            base::Unretained(browser_))});
+     // switcher X2 from the bar: a tap, since no Ctrl is held.
+     actions_.push_back({u"Go to the Most Recent Tab",
+                         ChordFor(IDC_CYCLE_TO_NEXT_TAB),
+@@ -652,6 +668,26 @@ void CommandBarView::UpdateResults(const std::u16string& query) {
+     results_.push_back({i, title, space_name, GURL()});
+   }
+ 
++  // The archive (A10): closed tabs whose title matches, after the open ones.
++  archived_.clear();
++  if (!query.empty()) {
++    for (const stedding::ArchivedTab& tab : ArchivedTabs()) {
++      if (archived_.size() >= kMaxArchivedResults) {
++        break;
++      }
++      if (!Matches(tab.title, query)) {
++        continue;
++      }
++      Result result{-1, tab.title,
++                    tab.space_name.empty()
++                        ? u"Archived"
++                        : u"Archived · " + base::UTF8ToUTF16(tab.space_name),
++                    tab.url};
++      result.archived_id = tab.id;
++      archived_.push_back(std::move(result));
++    }
++  }
++
+   // The omnibox's own providers -- history, bookmarks, search suggestions --
+   // answer asynchronously through OnResultChanged.
+   if (autocomplete_) {
+@@ -760,6 +796,16 @@ void CommandBarView::RebuildRows() {
+     StyleRow(row.get(), chosen());
+     contents->AddChildView(std::move(row));
+   }
++  // The archive (A10): after the open tabs, before the suggestions, so a
++  // closed tab is never below the clip.
++  for (const Result& result : archived_) {
++    auto row = std::make_unique<ResultRow>(
++        base::BindRepeating(&CommandBarView::GoTo, base::Unretained(this),
++                            result),
++        result.title + u"   —   " + result.space);
++    StyleRow(row.get(), chosen());
++    contents->AddChildView(std::move(row));
++  }
+   for (const Result& result : suggestions_) {
+     // The search-suggest match for the typed text itself repeats the first
+     // row; skip it.
+@@ -820,7 +866,35 @@ void CommandBarView::OnThemeChanged() {
+   }
+ }
+ 
++std::vector<stedding::ArchivedTab> CommandBarView::ArchivedTabs() const {
++  if (archived_source_for_testing_) {
++    return archived_source_for_testing_.Run();
++  }
++  sessions::TabRestoreService* const service =
++      TabRestoreServiceFactory::GetForProfile(browser_->GetProfile());
++  if (!service) {
++    return {};
++  }
++  return stedding::ListArchivedTabs(
++      service->entries(), base::Time::Now(),
++      stedding::ArchiveRetention(browser_->GetProfile()->GetPrefs()));
++}
++
+ void CommandBarView::GoTo(const Result& result) {
++  // archive A10: an archived row comes back to its Space.
++  if (result.archived_id.is_valid()) {
++    if (restore_archived_for_testing_) {
++      restore_archived_for_testing_.Run(result.archived_id);
++    } else {
++      stedding::RestoreArchivedTab(
++          browser_,
++          BrowserLiveTabContext::FindContextWithID(browser_->GetSessionID()),
++          TabRestoreServiceFactory::GetForProfile(browser_->GetProfile()),
++          result.archived_id);
++    }
++    Close();
++    return;
++  }
+   if (result.tab_index < 0 && result.url.is_valid()) {
+     NavigateParams params(browser_, result.url, ui::PAGE_TRANSITION_TYPED);
+     params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
+diff --git a/chrome/browser/ui/views/commandbar/command_bar_view.h b/chrome/browser/ui/views/commandbar/command_bar_view.h
+index b538bc85e5673..62498ef98ffd4 100644
+--- a/chrome/browser/ui/views/commandbar/command_bar_view.h
++++ b/chrome/browser/ui/views/commandbar/command_bar_view.h
+@@ -13,7 +13,9 @@
+ #include "base/memory/raw_ptr.h"
+ #include "base/memory/weak_ptr.h"
+ #include "base/scoped_observation.h"
++#include "chrome/browser/ui/archive/archived_tabs.h"
+ #include "components/omnibox/browser/autocomplete_controller.h"
++#include "components/sessions/core/session_id.h"
+ #include "ui/base/accelerators/accelerator.h"
+ #include "ui/base/metadata/metadata_header_macros.h"
+ #include "ui/views/controls/textfield/textfield_controller.h"
+@@ -105,6 +107,18 @@ class CommandBarView : public views::View,
+   size_t result_count_for_testing() const { return results_.size(); }
+   // Goes to the i-th result, as clicking its row would.
+   void GoToResultForTesting(size_t index) { GoTo(results_.at(index)); }
++  // archive A10.
++  size_t archived_count_for_testing() const { return archived_.size(); }
++  std::u16string archived_kind_for_testing(size_t index) const {
++    return archived_.at(index).space;
++  }
++  void GoToArchivedForTesting(size_t index) { GoTo(archived_.at(index)); }
++  void SetArchivedSourceForTesting(
++      base::RepeatingCallback<std::vector<stedding::ArchivedTab>()> source,
++      base::RepeatingCallback<void(SessionID)> restore) {
++    archived_source_for_testing_ = std::move(source);
++    restore_archived_for_testing_ = std::move(restore);
++  }
+   // Where typed text goes and whether that is a search (see Classify()).
+   struct Classification {
+     GURL destination;
+@@ -145,6 +159,8 @@ class CommandBarView : public views::View,
+     // for a suggestion, what it is ("Search", "History", "Bookmark").
+     std::u16string space;
+     GURL url;
++    // archive A10: set for a closed tab from the archive; GoTo restores it.
++    SessionID archived_id = SessionID::InvalidValue();
+   };
+ 
+   // One thing the user can do (actions mode, commandbar K9).
+@@ -204,6 +220,12 @@ class CommandBarView : public views::View,
+   std::vector<Result> results_;
+   // Suggestions from the omnibox providers for the current query.
+   std::vector<Result> suggestions_;
++  // archive A10.
++  std::vector<Result> archived_;
++  std::vector<stedding::ArchivedTab> ArchivedTabs() const;
++  base::RepeatingCallback<std::vector<stedding::ArchivedTab>()>
++      archived_source_for_testing_;
++  base::RepeatingCallback<void(SessionID)> restore_archived_for_testing_;
+   // Which row Enter takes: an index into the rows in order (open row, tabs,
+   // suggestions).
+   size_t selected_ = 0;
+diff --git a/chrome/browser/ui/views/commandbar/command_bar_view_unittest.cc b/chrome/browser/ui/views/commandbar/command_bar_view_unittest.cc
+index 83d9ad1ef5648..ae7e981a31af3 100644
+--- a/chrome/browser/ui/views/commandbar/command_bar_view_unittest.cc
++++ b/chrome/browser/ui/views/commandbar/command_bar_view_unittest.cc
+@@ -8,8 +8,10 @@
+ #include <tuple>
+ #include <vector>
+ 
++#include "base/functional/bind.h"
+ #include "chrome/app/chrome_command_ids.h"
+ #include "chrome/browser/search_engines/template_url_service_factory.h"
++#include "chrome/browser/ui/archive/archived_tabs.h"
+ #include "chrome/browser/ui/browser.h"
+ #include "chrome/browser/ui/spaces/space.h"
+ #include "chrome/browser/ui/spaces/space_model.h"
+@@ -19,6 +21,7 @@
+ #include "chrome/browser/ui/views/frame/browser_view.h"
+ #include "chrome/test/base/browser_with_test_window_test.h"
+ #include "components/prefs/pref_service.h"
++#include "components/sessions/core/session_id.h"
+ #include "testing/gtest/include/gtest/gtest.h"
+ #include "ui/base/accelerators/accelerator.h"
+ #include "ui/events/event.h"
+@@ -309,6 +312,35 @@ TEST_F(CommandBarViewTest, TypingFiltersByTitle) {
+   EXPECT_EQ(0u, bar->result_count_for_testing());
+ }
+ 
++// archive A10: an archived tab that matches is listed after the open ones,
++// labelled with its Space, and choosing it restores it.
++TEST_F(CommandBarViewTest, ArchivedRowRestoresToItsSpace) {
++  auto bar = std::make_unique<CommandBarView>(browser());
++  std::vector<SessionID> restored;
++  bar->SetArchivedSourceForTesting(
++      base::BindRepeating([] {
++        stedding::ArchivedTab old_docs;
++        old_docs.id = SessionID::FromSerializedValue(41);
++        old_docs.title = u"Old Docs";
++        old_docs.url = GURL("https://docs.example/old");
++        old_docs.space_name = "Work";
++        stedding::ArchivedTab other;
++        other.id = SessionID::FromSerializedValue(42);
++        other.title = u"Something else";
++        other.url = GURL("https://else.example/");
++        return std::vector<stedding::ArchivedTab>{old_docs, other};
++      }),
++      base::BindRepeating([](std::vector<SessionID>* restored,
++                             SessionID id) { restored->push_back(id); },
++                          &restored));
++  bar->PrefillForTesting(u"old");
++  ASSERT_EQ(1u, bar->archived_count_for_testing());
++  EXPECT_EQ(u"Archived · Work", bar->archived_kind_for_testing(0));
++  bar->GoToArchivedForTesting(0);
++  ASSERT_EQ(1u, restored.size());
++  EXPECT_EQ(41, restored[0].id());
++  EXPECT_TRUE(bar->closing_for_testing());
++}
+ }  // namespace
+ 
+ // With no omnibox classifier in the fixture, typed text falls back to a
+diff --git a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+index c1e23788e959b..ae5bc05d7aa9f 100644
+--- a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
++++ b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+@@ -29,6 +29,7 @@
+ #include "chrome/browser/ui/color/chrome_color_id.h"
+ #include "chrome/browser/ui/layout_constants.h"
+ #include "chrome/browser/ui/omnibox/omnibox_tab_helper.h"
++#include "chrome/browser/ui/singleton_tabs.h"
+ #include "chrome/browser/ui/spaces/space.h"
+ #include "chrome/browser/ui/spaces/space_commands.h"
+ #include "chrome/browser/ui/spaces/space_model.h"
+@@ -67,11 +68,13 @@
+ #include "chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_focus_swipe_controller.h"
+ #include "chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_top_container.h"
+ #include "chrome/browser/ui/web_applications/app_browser_controller.h"
++#include "chrome/browser/ui/webui/stedding_archive/stedding_archive_ui.h"
+ #include "chrome/grit/generated_resources.h"
+ #include "components/prefs/pref_service.h"
+ #include "components/tabs/public/folder_tab_collection.h"
+ #include "components/tabs/public/tab_group.h"
+ #include "components/tabs/public/tab_interface.h"
++#include "components/vector_icons/vector_icons.h"
+ #include "ui/base/dragdrop/os_exchange_data.h"
+ #include "ui/base/interaction/element_tracker.h"
+ #include "ui/base/l10n/l10n_util.h"
+@@ -203,6 +206,34 @@ VerticalTabStripRegionView::VerticalTabStripRegionView(
+     // The row declares the switcher's height and a fixed flex, exactly as the
+     // switcher did when it was a direct child, so the sidebar's vertical
+     // layout keeps it at the bottom.
++    // The archive's door: one muted row above the switcher, in the New Tab
++    // row's dress (archive A7).
++    auto archived_row = std::make_unique<views::LabelButton>(
++        base::BindRepeating(
++            [](BrowserView* browser_view) {
++              ShowSingletonTab(browser_view->browser(),
++                               GURL(stedding::kArchiveURL));
++            },
++            browser_view),
++        u"Archived");
++    archived_row->SetHorizontalAlignment(gfx::ALIGN_LEFT);
++    archived_row->SetEnabledTextColors(kColorTabForegroundInactiveFrameActive);
++    archived_row->SetImageModel(
++        views::Button::STATE_NORMAL,
++        ui::ImageModel::FromVectorIcon(vector_icons::kHistoryIcon,
++                                       kColorTabForegroundInactiveFrameActive,
++                                       stedding::kTabFaviconSize.Get()));
++    archived_row->SetImageLabelSpacing(10);
++    archived_row->SetBorder(views::CreateEmptyBorder(gfx::Insets::VH(0, 18)));
++    archived_row->SetPreferredSize(
++        gfx::Size(0, GetLayoutConstant(LayoutConstant::kVerticalTabHeight)));
++    archived_row->SetTooltipText(u"Archived tabs");
++    archived_row->SetProperty(
++        views::kFlexBehaviorKey,
++        views::FlexSpecification(views::MinimumFlexSizeRule::kPreferred,
++                                 views::MaximumFlexSizeRule::kPreferred));
++    archived_row_ = AddChildView(std::move(archived_row));
++
+     auto* const bottom_row = AddChildView(std::make_unique<views::View>());
+     auto* const row_layout =
+         bottom_row->SetLayoutManager(std::make_unique<views::BoxLayout>(
+diff --git a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
+index 5b0650f0a2e5e..378a7c721a5eb 100644
+--- a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
++++ b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
+@@ -51,6 +51,7 @@ class VerticalTabStripStateController;
+ }  // namespace tabs
+ 
+ namespace views {
++class LabelButton;
+ class Label;
+ class ResizeArea;
+ class Separator;
+@@ -261,6 +262,8 @@ class VerticalTabStripRegionView final
+   void OnActiveTabChanged(const tabs::TabInterface* active_tab) override;
+ 
+   raw_ptr<spaces::SpaceSwitcherView> space_switcher_ = nullptr;
++  // archive A7: the row above the switcher that opens the archived view.
++  raw_ptr<views::LabelButton> archived_row_ = nullptr;
+   // Stedding (tabs R11-R13): row numbers while Cmd is held. Modifier-only
+   // presses never reach a view, so a monitor on the window watches them; a
+   // chord (Cmd plus a key) hides the numbers again.
+diff --git a/chrome/browser/ui/webui/chrome_web_ui_configs.cc b/chrome/browser/ui/webui/chrome_web_ui_configs.cc
+index 62fbab3d40f46..8e405ed9ecdff 100644
+--- a/chrome/browser/ui/webui/chrome_web_ui_configs.cc
++++ b/chrome/browser/ui/webui/chrome_web_ui_configs.cc
+@@ -116,8 +116,9 @@
+ #if BUILDFLAG(ENABLE_WEBUI_NTP)
+ #include "chrome/browser/ui/webui/new_tab_footer/new_tab_footer_ui.h"
+ #include "chrome/browser/ui/webui/new_tab_page_third_party/new_tab_page_third_party_ui.h"
+-#include "chrome/browser/ui/webui/stedding_welcome/stedding_welcome_ui.h"
+ #include "chrome/browser/ui/webui/ntp/new_tab_ui.h"
++#include "chrome/browser/ui/webui/stedding_archive/stedding_archive_ui.h"
++#include "chrome/browser/ui/webui/stedding_welcome/stedding_welcome_ui.h"
+ #endif  // BUILDFLAG(ENABLE_WEBUI_NTP)
+ #include "chrome/browser/ui/webui/omnibox_everywhere/omnibox_everywhere_ui.h"
+ #include "chrome/browser/ui/webui/omnibox_popup/omnibox_popup_ui.h"
+@@ -375,6 +376,7 @@ void RegisterChromeWebUIConfigs() {
+   map.AddWebUIConfig(std::make_unique<NewTabFooterUIConfig>());
+   map.AddWebUIConfig(std::make_unique<NewTabPageThirdPartyUIConfig>());
+   map.AddWebUIConfig(std::make_unique<stedding::WelcomeUIConfig>());
++  map.AddWebUIConfig(std::make_unique<stedding::ArchiveUIConfig>());
+ #endif  // BUILDFLAG(ENABLE_WEBUI_NTP)
+   map.AddWebUIConfig(std::make_unique<NewTabUIConfig>());
+   map.AddWebUIConfig(std::make_unique<OmniboxEverywhereUIConfig>());
+diff --git a/chrome/browser/ui/webui/settings/settings_ui.cc b/chrome/browser/ui/webui/settings/settings_ui.cc
+index ba4754407004b..5f52416259c48 100644
+--- a/chrome/browser/ui/webui/settings/settings_ui.cc
++++ b/chrome/browser/ui/webui/settings/settings_ui.cc
+@@ -692,6 +692,14 @@ SettingsUI::SettingsUI(content::WebUI* web_ui)
+   html_source->AddString("steddingSpaceNamePlaceholder", "Space name");
+   html_source->AddString("steddingDeleteSpace", "Delete Space");
+   html_source->AddString("steddingImportArcLabel", "Import from Arc");
++  html_source->AddString("steddingArchiveKeepLabel", "Keep archived tabs for");
++  html_source->AddString(
++      "steddingArchiveKeepSubLabel",
++      "The Archived page and the command bar show tabs closed within this "
++      "time; the sidebar's Archived row opens the page.");
++  html_source->AddString("steddingArchiveKeep7d", "7 days");
++  html_source->AddString("steddingArchiveKeep30d", "30 days");
++  html_source->AddString("steddingArchiveKeep90d", "90 days");
+   html_source->AddString("steddingExternalDefaultLabel",
+                          "Open links from other apps in");
+   html_source->AddString("steddingExternalDefaultSubLabel",
+diff --git a/chrome/browser/ui/webui/stedding_archive/BUILD.gn b/chrome/browser/ui/webui/stedding_archive/BUILD.gn
+new file mode 100644
+index 0000000000000..472005f8e490c
+--- /dev/null
++++ b/chrome/browser/ui/webui/stedding_archive/BUILD.gn
+@@ -0,0 +1,33 @@
++# Copyright 2026 The Stedding Authors
++# Use of this source code is governed by a BSD-style license that can be
++# found in the LICENSE file.
++
++# chrome://stedding-archive: the archived view (docs/features/archive.md A7,
++# A9).
++source_set("stedding_archive") {
++  public = [
++    "stedding_archive_handler.h",
++    "stedding_archive_ui.h",
++  ]
++  sources = [
++    "stedding_archive_handler.cc",
++    "stedding_archive_ui.cc",
++  ]
++  public_deps = [
++    "//base",
++    "//components/sessions",
++    "//content/public/browser",
++  ]
++  deps = [
++    "//chrome/browser/profiles:profile",
++    "//chrome/browser/resources/stedding_archive:resources",
++    "//chrome/browser/sessions",
++    "//chrome/browser/ui/archive",
++    "//chrome/browser/ui/browser_window",
++    "//chrome/browser/ui/spaces",
++    "//chrome/browser/ui/stedding:prefs",
++    "//chrome/common",
++    "//components/prefs",
++    "//ui/webui",
++  ]
++}
+diff --git a/chrome/browser/ui/webui/stedding_archive/stedding_archive_handler.cc b/chrome/browser/ui/webui/stedding_archive/stedding_archive_handler.cc
+new file mode 100644
+index 0000000000000..1d2ce6e359545
+--- /dev/null
++++ b/chrome/browser/ui/webui/stedding_archive/stedding_archive_handler.cc
+@@ -0,0 +1,145 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/webui/stedding_archive/stedding_archive_handler.h"
++
++#include <string>
++#include <utility>
++
++#include "base/functional/bind.h"
++#include "base/strings/string_number_conversions.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/sessions/tab_restore_service_factory.h"
++#include "chrome/browser/ui/archive/archived_tabs.h"
++#include "chrome/browser/ui/browser_live_tab_context.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
++#include "chrome/browser/ui/spaces/space.h"
++#include "chrome/browser/ui/spaces/space_model.h"
++#include "components/prefs/pref_service.h"
++#include "content/public/browser/web_contents.h"
++#include "content/public/browser/web_ui.h"
++
++namespace stedding {
++
++ArchiveHandler::ArchiveHandler() = default;
++ArchiveHandler::~ArchiveHandler() = default;
++
++void ArchiveHandler::RegisterMessages() {
++  web_ui()->RegisterMessageCallback(
++      "getArchivedTabs",
++      base::BindRepeating(&ArchiveHandler::HandleGetArchivedTabs,
++                          base::Unretained(this)));
++  web_ui()->RegisterMessageCallback(
++      "restoreArchivedTab",
++      base::BindRepeating(&ArchiveHandler::HandleRestoreArchivedTab,
++                          base::Unretained(this)));
++  web_ui()->RegisterMessageCallback(
++      "removeArchivedTab",
++      base::BindRepeating(&ArchiveHandler::HandleRemoveArchivedTab,
++                          base::Unretained(this)));
++  web_ui()->RegisterMessageCallback(
++      "clearArchive", base::BindRepeating(&ArchiveHandler::HandleClearArchive,
++                                          base::Unretained(this)));
++}
++
++void ArchiveHandler::OnJavascriptAllowed() {
++  if (sessions::TabRestoreService* const service = GetService()) {
++    observation_.Observe(service);
++  }
++}
++
++void ArchiveHandler::OnJavascriptDisallowed() {
++  observation_.Reset();
++}
++
++void ArchiveHandler::TabRestoreServiceChanged(
++    sessions::TabRestoreService* service) {
++  if (IsJavascriptAllowed()) {
++    FireWebUIListener("archive-changed", Snapshot());
++  }
++}
++
++void ArchiveHandler::TabRestoreServiceDestroyed(
++    sessions::TabRestoreService* service) {
++  observation_.Reset();
++}
++
++BrowserWindowInterface* ArchiveHandler::GetBrowser() {
++  return GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
++      web_ui()->GetWebContents());
++}
++
++sessions::TabRestoreService* ArchiveHandler::GetService() {
++  return TabRestoreServiceFactory::GetForProfile(Profile::FromWebUI(web_ui()));
++}
++
++base::DictValue ArchiveHandler::Snapshot() {
++  base::DictValue snapshot;
++  base::ListValue tabs;
++  if (sessions::TabRestoreService* const service = GetService()) {
++    for (const ArchivedTab& tab : ListArchivedTabs(
++             service->entries(), base::Time::Now(),
++             ArchiveRetention(Profile::FromWebUI(web_ui())->GetPrefs()))) {
++      tabs.Append(ArchivedTabToValue(tab));
++    }
++  }
++  snapshot.Set("tabs", std::move(tabs));
++  base::ListValue spaces;
++  BrowserWindowInterface* const browser = GetBrowser();
++  if (spaces::SpaceModel* const model =
++          browser ? spaces::SpaceModel::From(browser) : nullptr) {
++    for (const std::unique_ptr<spaces::Space>& space : model->spaces()) {
++      base::DictValue entry;
++      entry.Set("id", space->id().ToString());
++      entry.Set("name", model->DisplayName(space->id()));
++      spaces.Append(std::move(entry));
++    }
++  }
++  snapshot.Set("spaces", std::move(spaces));
++  return snapshot;
++}
++
++void ArchiveHandler::HandleGetArchivedTabs(const base::ListValue& args) {
++  CHECK_EQ(1U, args.size());
++  AllowJavascript();
++  ResolveJavascriptCallback(base::Value(args[0].GetString()), Snapshot());
++}
++
++void ArchiveHandler::HandleRestoreArchivedTab(const base::ListValue& args) {
++  CHECK_EQ(1U, args.size());
++  AllowJavascript();
++  int32_t raw = 0;
++  if (!base::StringToInt(args[0].GetString(), &raw)) {
++    return;
++  }
++  BrowserWindowInterface* const browser = GetBrowser();
++  if (!browser) {
++    return;
++  }
++  RestoreArchivedTab(
++      browser, BrowserLiveTabContext::FindContextWithID(browser->GetSessionID()),
++      GetService(), SessionID::FromSerializedValue(raw));
++}
++
++void ArchiveHandler::HandleRemoveArchivedTab(const base::ListValue& args) {
++  CHECK_EQ(1U, args.size());
++  AllowJavascript();
++  int32_t raw = 0;
++  if (!base::StringToInt(args[0].GetString(), &raw)) {
++    return;
++  }
++  if (sessions::TabRestoreService* const service = GetService()) {
++    service->RemoveEntryById(SessionID::FromSerializedValue(raw));
++  }
++}
++
++void ArchiveHandler::HandleClearArchive(const base::ListValue& args) {
++  AllowJavascript();
++  if (sessions::TabRestoreService* const service = GetService()) {
++    service->ClearEntries();
++  }
++}
++
++}  // namespace stedding
+diff --git a/chrome/browser/ui/webui/stedding_archive/stedding_archive_handler.h b/chrome/browser/ui/webui/stedding_archive/stedding_archive_handler.h
+new file mode 100644
+index 0000000000000..f3af462f636b3
+--- /dev/null
++++ b/chrome/browser/ui/webui/stedding_archive/stedding_archive_handler.h
+@@ -0,0 +1,58 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_WEBUI_STEDDING_ARCHIVE_STEDDING_ARCHIVE_HANDLER_H_
++#define CHROME_BROWSER_UI_WEBUI_STEDDING_ARCHIVE_STEDDING_ARCHIVE_HANDLER_H_
++
++#include "base/memory/raw_ptr.h"
++#include "base/scoped_observation.h"
++#include "base/values.h"
++#include "components/sessions/core/tab_restore_service.h"
++#include "components/sessions/core/tab_restore_service_observer.h"
++#include "content/public/browser/web_ui_message_handler.h"
++
++class BrowserWindowInterface;
++
++namespace stedding {
++
++// The page's messages (docs/features/archive.md A9):
++//   getArchivedTabs(callback) -> {tabs: [...], spaces: [{id, name}]}
++//   restoreArchivedTab(id), removeArchivedTab(id), clearArchive()
++// and the listener "archive-changed" when Chromium's list changes.
++class ArchiveHandler : public content::WebUIMessageHandler,
++                       public sessions::TabRestoreServiceObserver {
++ public:
++  ArchiveHandler();
++  ArchiveHandler(const ArchiveHandler&) = delete;
++  ArchiveHandler& operator=(const ArchiveHandler&) = delete;
++  ~ArchiveHandler() override;
++
++  // content::WebUIMessageHandler:
++  void RegisterMessages() override;
++  void OnJavascriptAllowed() override;
++  void OnJavascriptDisallowed() override;
++
++  // sessions::TabRestoreServiceObserver:
++  void TabRestoreServiceChanged(sessions::TabRestoreService* service) override;
++  void TabRestoreServiceDestroyed(
++      sessions::TabRestoreService* service) override;
++
++ private:
++  BrowserWindowInterface* GetBrowser();
++  sessions::TabRestoreService* GetService();
++  base::DictValue Snapshot();
++
++  void HandleGetArchivedTabs(const base::ListValue& args);
++  void HandleRestoreArchivedTab(const base::ListValue& args);
++  void HandleRemoveArchivedTab(const base::ListValue& args);
++  void HandleClearArchive(const base::ListValue& args);
++
++  base::ScopedObservation<sessions::TabRestoreService,
++                          sessions::TabRestoreServiceObserver>
++      observation_{this};
++};
++
++}  // namespace stedding
++
++#endif  // CHROME_BROWSER_UI_WEBUI_STEDDING_ARCHIVE_STEDDING_ARCHIVE_HANDLER_H_
+diff --git a/chrome/browser/ui/webui/stedding_archive/stedding_archive_ui.cc b/chrome/browser/ui/webui/stedding_archive/stedding_archive_ui.cc
+new file mode 100644
+index 0000000000000..6ee4b206a4ecb
+--- /dev/null
++++ b/chrome/browser/ui/webui/stedding_archive/stedding_archive_ui.cc
+@@ -0,0 +1,34 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/webui/stedding_archive/stedding_archive_ui.h"
++
++#include <memory>
++
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/ui/webui/stedding_archive/stedding_archive_handler.h"
++#include "chrome/grit/stedding_archive_resources.h"
++#include "chrome/grit/stedding_archive_resources_map.h"
++#include "content/public/browser/web_ui.h"
++#include "content/public/browser/web_ui_data_source.h"
++#include "content/public/common/url_constants.h"
++#include "ui/webui/webui_util.h"
++
++namespace stedding {
++
++ArchiveUI::ArchiveUI(content::WebUI* web_ui) : content::WebUIController(web_ui) {
++  Profile* const profile = Profile::FromWebUI(web_ui);
++  content::WebUIDataSource* const source = content::WebUIDataSource::CreateAndAdd(
++      profile, kArchiveHost);
++  webui::SetupWebUIDataSource(source, kSteddingArchiveResources,
++                              IDR_STEDDING_ARCHIVE_STEDDING_ARCHIVE_HTML);
++  web_ui->AddMessageHandler(std::make_unique<ArchiveHandler>());
++}
++
++ArchiveUI::~ArchiveUI() = default;
++
++ArchiveUIConfig::ArchiveUIConfig()
++    : DefaultWebUIConfig(content::kChromeUIScheme, kArchiveHost) {}
++
++}  // namespace stedding
+diff --git a/chrome/browser/ui/webui/stedding_archive/stedding_archive_ui.h b/chrome/browser/ui/webui/stedding_archive/stedding_archive_ui.h
+new file mode 100644
+index 0000000000000..4fa770392fe91
+--- /dev/null
++++ b/chrome/browser/ui/webui/stedding_archive/stedding_archive_ui.h
+@@ -0,0 +1,33 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_WEBUI_STEDDING_ARCHIVE_STEDDING_ARCHIVE_UI_H_
++#define CHROME_BROWSER_UI_WEBUI_STEDDING_ARCHIVE_STEDDING_ARCHIVE_UI_H_
++
++#include "content/public/browser/web_ui_controller.h"
++#include "content/public/browser/webui_config.h"
++
++namespace stedding {
++
++inline constexpr char kArchiveHost[] = "stedding-archive";
++inline constexpr char kArchiveURL[] = "chrome://stedding-archive/";
++
++// docs/features/archive.md A7: the archived view, what auto-archive, Clear
++// and ⌘W closed, restorable to its Space.
++class ArchiveUI : public content::WebUIController {
++ public:
++  explicit ArchiveUI(content::WebUI* web_ui);
++  ArchiveUI(const ArchiveUI&) = delete;
++  ArchiveUI& operator=(const ArchiveUI&) = delete;
++  ~ArchiveUI() override;
++};
++
++class ArchiveUIConfig : public content::DefaultWebUIConfig<ArchiveUI> {
++ public:
++  ArchiveUIConfig();
++};
++
++}  // namespace stedding
++
++#endif  // CHROME_BROWSER_UI_WEBUI_STEDDING_ARCHIVE_STEDDING_ARCHIVE_UI_H_
+diff --git a/chrome/chrome_paks.gni b/chrome/chrome_paks.gni
+index ce57ba614ee2b..9a6aff100108a 100644
+--- a/chrome/chrome_paks.gni
++++ b/chrome/chrome_paks.gni
+@@ -235,6 +235,7 @@ template("chrome_extra_paks") {
+         "$root_gen_dir/chrome/password_manager_resources.pak",
+         "$root_gen_dir/chrome/profile_internals_resources.pak",
+         "$root_gen_dir/chrome/search_engine_choice_resources.pak",
++        "$root_gen_dir/chrome/stedding_archive_resources.pak",
+         "$root_gen_dir/chrome/stedding_welcome_resources.pak",
+         "$root_gen_dir/chrome/settings_resources.pak",
+         "$root_gen_dir/chrome/side_panel_bookmarks_resources.pak",
+diff --git a/components/sessions/core/tab_restore_service_helper.h b/components/sessions/core/tab_restore_service_helper.h
+index 41fe1e40c9167..6e101d8dec619 100644
+--- a/components/sessions/core/tab_restore_service_helper.h
++++ b/components/sessions/core/tab_restore_service_helper.h
+@@ -66,7 +66,9 @@ class SESSIONS_EXPORT TabRestoreServiceHelper
+   };
+ 
+   // Max number of entries we'll keep around.
+-  static const int kMaxEntries = 25;
++  // Stedding (docs/features/archive.md A11): the recently-closed list is
++  // the archive, so it keeps what a month of closing produces.
++  static const int kMaxEntries = 500;
+ 
+   // Creates a new TabRestoreServiceHelper and provides an object that provides
+   // the current time. The TabRestoreServiceHelper does not take ownership of
+diff --git a/tools/gritsettings/resource_ids.spec b/tools/gritsettings/resource_ids.spec
+index 10d0ade5aecde..17ea411f19763 100644
+--- a/tools/gritsettings/resource_ids.spec
++++ b/tools/gritsettings/resource_ids.spec
+@@ -1794,6 +1794,11 @@
+     "META": {"sizes": {"includes": [10]}},
+     "includes": [10240],
+   },
++  # Stedding: the archived view (chrome://stedding-archive).
++  "<(SHARED_INTERMEDIATE_DIR)/chrome/browser/resources/stedding_archive/resources.grd": {
++    "META": {"sizes": {"includes": [10]}},
++    "includes": [10260],
++  },
+ 
+   "<(SHARED_INTERMEDIATE_DIR)/THIS_IS_A_PLACEHOLDER.grd": {
+     "META": {"sizes": {"includes": [800]}},

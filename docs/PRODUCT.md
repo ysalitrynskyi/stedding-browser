@@ -210,7 +210,7 @@ Two are separable and are **[1.0]** because they need no model: *tidy downloads*
 ## 10. Profiles, windows, sync
 
 - **Profiles** **[1.0]** — Chromium profiles, surfaced Arc's way and bound to Spaces.
-- **Multi-window and multi-display** **[1.0]** — tabs in a Space appear in every window
+- **Multi-window and multi-display** **[1.0]** — tabs in a Space appear in every window Built: `docs/features/windows.md` (round 6).
   showing that Space; Blank Windows are independent.
 - **Arc Sync** **[needs decision]** — cross-device sync of spaces, pinned tabs and
   order. `ROADMAP.md` puts sync services out of scope and `PRIVACY.md` is emphatic that

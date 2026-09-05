@@ -24,3 +24,6 @@ divergence row here, in their own patch; nothing is hand-typed. Remapping by the
 ```bash
 tooling/dev test shortcuts
 ```
+
+- ⇧⌘D shows or hides the address row on its own (toolbar T10); Chromium had no
+  chord on it in Stedding's tables, and Bookmark All Tabs keeps its menu item.

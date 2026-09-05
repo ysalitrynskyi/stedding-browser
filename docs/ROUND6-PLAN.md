@@ -339,6 +339,13 @@ said otherwise. Each is also in the item's spec.
   rows in the bar (A10), the retention dropdown and the list's cap at 500 (A11).
   Patch 0028. Not taken: restore acting on the page's own selection (TBD in the
   plan), and Floating History's Library panel.
+- **Part P, the address row (R6-25).** `stedding::AddressRow`, owned by the
+  window's Space model, answers `BrowserView::IsToolbarVisible`: the row hides
+  with the sidebar (T8), a localhost page keeps it (T11), ⇧⌘D overrides until the
+  sidebar changes (T10), the setting off keeps today's behaviour (T12); the
+  command id lives in `stedding_command_ids.h` to spare the rebuild. Patch 0029.
+  Not taken: T13 (extension actions, the media button and page info in the
+  bar's actions mode, D10) and the permission-chip question; T9 stays dropped.
 - **Not in this pass.** R6-19's other J rows (J1, J3, J5, J6 keep their rows for
   the splits pass), and the menus' Move to Folder ▸ with existing folders.
 
@@ -903,7 +910,7 @@ From the critic: #11 (owner).
 | R6-22 | Import from Arc (StorableSidebar.json): Spaces, pins, folders, favorites | idea "Import from Arc" (judges 8.33, build×3) | M | button "Import from Arc…"; welcome row | none; ⌘T "Import from Arc" | built (0026) |
 | R6-23 | Air Traffic Control: route sites to Spaces | idea "Air Traffic Control" (judges 7.33, build×3) | M | per-Space Routes list; stedding.spaces.external_default | none | built (0027) |
 | R6-24 | Archived view: what auto-archive and Clear closed, restorable to its Space | idea "Archived view" (judges 7.33, build×3); Floating History's Library panel deferred to grow around this data layer | M | stedding.archive.keep_days | none; ⌘T "Show archived tabs" | built (0028) |
-| R6-25 | The address row hides with the sidebar; ⇧⌘D shows it on its own | idea "The bar goes with the sidebar" (judges 7, build×2, maybe×1); mod "Hide Toolbar" (judges 6, maybe×2, build×1), merged: ⇧⌘D, the localhost exception | M (T8 first; T10 and T13 are the second half) | stedding.toolbar.hide_with_sidebar | ⌘S; ⇧⌘D | planned |
+| R6-25 | The address row hides with the sidebar; ⇧⌘D shows it on its own | idea "The bar goes with the sidebar" (judges 7, build×2, maybe×1); mod "Hide Toolbar" (judges 6, maybe×2, build×1), merged: ⇧⌘D, the localhost exception | M (T8 first; T10 and T13 are the second half) | stedding.toolbar.hide_with_sidebar | ⌘S; ⇧⌘D | built (0029), T13 open |
 | R6-26 | Tracker-free defaults as one Privacy block | idea "Tracker-free defaults as one settings block" (judges 7.67, build×3); mod "No Top Sites" (judges 5.67, build×1, maybe×2): the kSearchSuggestEnabled default flip merged as Q7 | M (Q4 is the M-sized piece; the rest is default flips) | Privacy block (Chromium prefs + stedding.privacy.gpc) | none | planned |
 | R6-27 | Sidebar density presets with one text-size step | idea "Sidebar density presets with one text-size step" (judges 6, maybe×3); mods Customize Font Size, Tab Text Size, Lean's compact rows, merged | M | stedding.sidebar.density; stedding.sidebar.text_size | none | planned |
 | R6-28 | Imported bookmarks become pinned tabs and folders | critic #3 (PRODUCT §1 "No bookmarks" [1.0]); the Bookmark Toolbar Tweaks, Lean and Cleaner Bookmark Menu leftovers | M | import step wording (TBD) | none | planned |

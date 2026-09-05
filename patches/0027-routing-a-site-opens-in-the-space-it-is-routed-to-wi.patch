@@ -1,0 +1,2155 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Sat, 5 Sep 2026 11:51:14 -0400
+Subject: routing: a site opens in the Space it is routed to, with a toast that
+ undoes it
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+spaces::SpaceRouter is a pure function over the profile pref
+stedding.spaces.routes (site, contains or equals rules, first match wins)
+plus stedding.spaces.external_default, the Space for links from other
+apps. A tab inserted with a routed address, or a fresh tab given a typed
+address, moves to its Space at once and the window follows a foreground
+open a turn later; a tab rebuilt from a session is never routed. Links
+handed over by another app are marked for a moment so they can land in
+the default Space. A toast "Opened in <Space> · Undo" puts the tab back.
+Rules are made in place: the tab menu's "Always Open <site> in" lists the
+Spaces and writes a site rule, and chrome://settings/stedding shows each
+Space's rules under its row with a remove control and an add field, plus
+the dropdown for links from other apps. Peek runs first, so a link that
+peeks is never routed (docs/features/routing.md D1-D6).
+
+Why: docs/ROUND6-PLAN.md wave 3, R6-23: Arc's Air Traffic Control.
+Removable when: Chromium routes new tabs to workspaces by site.
+---
+ chrome/app/stedding_strings.grdp              |   6 +
+ chrome/browser/app_controller_mac.mm          | 140 +++++++-----
+ .../api/settings_private/prefs_util.cc        |   2 +
+ .../settings/stedding_page/stedding_page.css  |  35 +++
+ .../stedding_page/stedding_page.html.ts       |  28 +++
+ .../settings/stedding_page/stedding_page.ts   |  36 ++++
+ .../ui/browser_tab_menu_model_delegate.cc     |  22 ++
+ .../ui/browser_tab_menu_model_delegate.h      |   1 +
+ .../browser/ui/navigator/browser_navigator.cc |  43 +++-
+ chrome/browser/ui/spaces/BUILD.gn             |  17 ++
+ chrome/browser/ui/spaces/space_model.cc       | 128 +++++++++++
+ chrome/browser/ui/spaces/space_model.h        |  52 +++++
+ .../ui/spaces/space_model_window_unittest.cc  |  90 ++++++++
+ chrome/browser/ui/spaces/space_router.cc      | 201 ++++++++++++++++++
+ chrome/browser/ui/spaces/space_router.h       |  65 ++++++
+ .../ui/spaces/space_router_unittest.cc        | 107 ++++++++++
+ chrome/browser/ui/stedding/menu_rules.cc      |   7 +-
+ chrome/browser/ui/stedding/stedding_prefs.cc  |   2 +
+ chrome/browser/ui/stedding/stedding_prefs.h   |   5 +
+ chrome/browser/ui/tabs/BUILD.gn               |   1 +
+ chrome/browser/ui/tabs/tab_menu_model.cc      |  30 +++
+ chrome/browser/ui/tabs/tab_menu_model.h       |   1 +
+ .../browser/ui/tabs/tab_menu_model_delegate.h |   3 +
+ chrome/browser/ui/tabs/tab_strip_model.cc     |   6 +
+ chrome/browser/ui/tabs/tab_strip_model.h      |   6 +
+ chrome/browser/ui/toasts/BUILD.gn             |   1 +
+ chrome/browser/ui/toasts/api/toast_id.cc      |   2 +
+ chrome/browser/ui/toasts/api/toast_id.h       |   5 +-
+ chrome/browser/ui/toasts/toast_service.cc     |  21 +-
+ chrome/browser/ui/views/spaces/BUILD.gn       |   4 +
+ .../ui/views/spaces/space_switcher_view.cc    |  15 ++
+ .../ui/views/spaces/space_switcher_view.h     |   3 +
+ .../common/tab_strip_collection_controller.cc |  40 +++-
+ .../browser/ui/webui/settings/settings_ui.cc  |   9 +
+ .../webui/settings/stedding_spaces_handler.cc |  58 +++++
+ .../webui/settings/stedding_spaces_handler.h  |   3 +
+ 36 files changed, 1128 insertions(+), 67 deletions(-)
+ create mode 100644 chrome/browser/ui/spaces/space_router.cc
+ create mode 100644 chrome/browser/ui/spaces/space_router.h
+ create mode 100644 chrome/browser/ui/spaces/space_router_unittest.cc
+
+diff --git a/chrome/app/stedding_strings.grdp b/chrome/app/stedding_strings.grdp
+index eb12f5e1b4c09..b196f8e2275a8 100644
+--- a/chrome/app/stedding_strings.grdp
++++ b/chrome/app/stedding_strings.grdp
+@@ -93,4 +93,10 @@
+   <message name="IDS_STEDDING_CAPTURE_TOAST_BUTTON" desc="The toast button that reveals the saved screenshot in the Finder.">
+     Show in Finder
+   </message>
++  <message name="IDS_STEDDING_ROUTED_TOAST_BODY" desc="Toast text after a new tab was moved to the Space its site is routed to. SPACE is that Space's name.">
++    Opened in <ph name="SPACE">$1<ex>Work</ex></ph>
++  </message>
++  <message name="IDS_STEDDING_ROUTED_TOAST_BUTTON" desc="The toast button that moves the routed tab back to the Space it opened in.">
++    Undo
++  </message>
+ </grit-part>
+diff --git a/chrome/browser/app_controller_mac.mm b/chrome/browser/app_controller_mac.mm
+index 51af775d30ce3..e80416fcbf4c3 100644
+--- a/chrome/browser/app_controller_mac.mm
++++ b/chrome/browser/app_controller_mac.mm
+@@ -98,6 +98,7 @@
+ #include "chrome/browser/ui/dialogs/browser_dialogs.h"
+ #include "chrome/browser/ui/extensions/application_launch.h"
+ #include "chrome/browser/ui/profiles/profile_picker.h"
++#include "chrome/browser/ui/spaces/space_router.h"
+ #include "chrome/browser/ui/startup/first_run_service.h"
+ #include "chrome/browser/ui/startup/google_chrome_scheme_util.h"
+ #include "chrome/browser/ui/startup/startup_browser_creator.h"
+@@ -525,8 +526,9 @@ void OpenStartupTabsInBrowser(StartupTabs tabs) {
+ // to be friend with base::ScopedAllowBlocking.
+ Profile* GetLastProfileMac() {
+   ProfileManager* profile_manager = g_browser_process->profile_manager();
+-  if (!profile_manager)
++  if (!profile_manager) {
+     return nullptr;
++  }
+ 
+   base::FilePath profile_path = GetStartupProfilePathMac();
+   // ProfileManager::GetProfile() is blocking if the profile was not loaded yet.
+@@ -595,10 +597,9 @@ class AppControllerProfileObserver : public ProfileAttributesStorage::Observer,
+                                      public ProfileManagerObserver,
+                                      public ProfileObserver {
+  public:
+-  AppControllerProfileObserver(
+-      ProfileManager* profile_manager, AppController* app_controller)
+-      : profile_manager_(profile_manager),
+-        app_controller_(app_controller) {
++  AppControllerProfileObserver(ProfileManager* profile_manager,
++                               AppController* app_controller)
++      : profile_manager_(profile_manager), app_controller_(app_controller) {
+     DCHECK(profile_manager_);
+     DCHECK(app_controller_);
+     // Listen to ProfileObserver and ProfileManagerObserver.
+@@ -648,8 +649,9 @@ class AppControllerProfileObserver : public ProfileAttributesStorage::Observer,
+         profile->IsOffTheRecord() || ObserveRegularProfiles();
+ 
+     // If the profile is not observed, then no need to call rest.
+-    if (!is_profile_observed)
++    if (!is_profile_observed) {
+       return;
++    }
+ 
+     [app_controller_ profileWasRemoved:profile->GetPath()
+                           forIncognito:profile->IsOffTheRecord()];
+@@ -700,7 +702,6 @@ class AppControllerProfileObserver : public ProfileAttributesStorage::Observer,
+ 
+   std::unique_ptr<HistoryMenuBridge> _historyMenuBridge;
+ 
+-
+   // The profile menu, which appears right before the Help menu. It is only
+   // available when multiple profiles is enabled.
+   ProfileMenuController* __strong _profileMenuController;
+@@ -896,16 +897,14 @@ class AppControllerProfileObserver : public ProfileAttributesStorage::Observer,
+ // user-data initialization until -applicationDidFinishLaunching:.
+ - (void)mainMenuCreated {
+   NSNotificationCenter* notificationCenter = NSNotificationCenter.defaultCenter;
+-  [notificationCenter
+-      addObserver:self
+-         selector:@selector(windowDidResignKey:)
+-             name:NSWindowDidResignKeyNotification
+-           object:nil];
+-  [notificationCenter
+-      addObserver:self
+-         selector:@selector(windowDidBecomeMain:)
+-             name:NSWindowDidBecomeMainNotification
+-           object:nil];
++  [notificationCenter addObserver:self
++                         selector:@selector(windowDidResignKey:)
++                             name:NSWindowDidResignKeyNotification
++                           object:nil];
++  [notificationCenter addObserver:self
++                         selector:@selector(windowDidBecomeMain:)
++                             name:NSWindowDidBecomeMainNotification
++                           object:nil];
+ 
+   [NSWorkspace.sharedWorkspace.notificationCenter
+       addObserver:self
+@@ -1075,7 +1074,6 @@ class AppControllerProfileObserver : public ProfileAttributesStorage::Observer,
+   // deleted first.
+   _historyMenuBridge.reset();
+ 
+-
+   // It's safe to delete |_lastProfile| now.
+   [self setLastProfile:nullptr];
+ 
+@@ -1125,8 +1123,9 @@ class AppControllerProfileObserver : public ProfileAttributesStorage::Observer,
+   BrowserWindowInterface* browser =
+       GlobalBrowserCollection::GetInstance()->FindBrowserWithWindow(
+           gfx::NativeWindow([notify object]));
+-  if (!browser)
++  if (!browser) {
+     return;
++  }
+ 
+   // Since we may have different windows with different profiles, we clear the
+   // subscription each time a window becomes the main.
+@@ -1226,8 +1225,9 @@ class AppControllerProfileObserver : public ProfileAttributesStorage::Observer,
+ }
+ 
+ - (void)checkForAnyKeyWindows {
+-  if ([NSApp keyWindow])
++  if ([NSApp keyWindow]) {
+     return;
++  }
+ 
+   g_browser_process->platform_part()->key_window_notifier().NotifyNoKeyWindow();
+ }
+@@ -1244,8 +1244,8 @@ class AppControllerProfileObserver : public ProfileAttributesStorage::Observer,
+       CFPreferencesCopyAppValue(checkInterval, app));
+   if (!plist.get()) {
+     const float interval = base::Hours(5).InSecondsF();
+-    CFPreferencesSetAppValue(
+-        checkInterval, base::apple::NSToCFPtrCast(@(interval)), app);
++    CFPreferencesSetAppValue(checkInterval,
++                             base::apple::NSToCFPtrCast(@(interval)), app);
+     CFPreferencesAppSynchronize(app);
+   }
+ #endif
+@@ -1269,6 +1269,11 @@ class AppControllerProfileObserver : public ProfileAttributesStorage::Observer,
+     return;
+   }
+ 
++  // Stedding routing D3: these addresses come from another app, so the tabs
++  // they open may land in the Space chosen for that.
++  for (const StartupTab& tab : tabs) {
++    spaces::MarkExternalOpen(tab.url);
++  }
+   OpenStartupTabsInBrowser(std::move(tabs));
+ }
+ 
+@@ -1333,8 +1338,9 @@ class AppControllerProfileObserver : public ProfileAttributesStorage::Observer,
+ 
+   _startupComplete = YES;
+ 
+-  if (base::CommandLine::ForCurrentProcess()->HasSwitch(switches::kKioskMode))
++  if (base::CommandLine::ForCurrentProcess()->HasSwitch(switches::kKioskMode)) {
+     ConfigureNSAppForKioskMode();
++  }
+ 
+   BrowserWindowInterface* browser =
+       GlobalBrowserCollection::GetInstance()->GetLastActiveBrowser();
+@@ -1519,8 +1525,9 @@ class AppControllerProfileObserver : public ProfileAttributesStorage::Observer,
+ // still loaded (if ever).
+ - (BOOL)canRestoreTab {
+   Profile* lastProfile = [self lastProfileIfLoaded];
+-  if (!lastProfile)
++  if (!lastProfile) {
+     return _tabRestoreWasEnabled;
++  }
+   sessions::TabRestoreService* service =
+       TabRestoreServiceFactory::GetForProfile(lastProfile);
+   return service && !service->entries().empty();
+@@ -1564,8 +1571,9 @@ class AppControllerProfileObserver : public ProfileAttributesStorage::Observer,
+ // sheets) will not count as blocking the browser. But things like open/save
+ // dialogs that are window modal will block the browser.
+ - (BOOL)keyWindowIsModal {
+-  if ([NSApp modalWindow])
++  if ([NSApp modalWindow]) {
+     return YES;
++  }
+ 
+   BrowserWindowInterface* browser =
+       GlobalBrowserCollection::GetInstance()->GetLastActiveBrowser();
+@@ -1578,8 +1586,9 @@ class AppControllerProfileObserver : public ProfileAttributesStorage::Observer,
+   Profile* unsafeLastProfile = [self lastProfileIfLoaded];
+   // If the profile is not loaded, try to load it. If it's not usable, the
+   // profile picker will be open instead.
+-  if (!unsafeLastProfile)
++  if (!unsafeLastProfile) {
+     return YES;
++  }
+   return [self safeProfileForNewWindows:unsafeLastProfile] ? YES : NO;
+ }
+ 
+@@ -1646,8 +1655,8 @@ class AppControllerProfileObserver : public ProfileAttributesStorage::Observer,
+           enable = _menuState->IsCommandEnabled(tag) ? canOpenNewBrowser : NO;
+           break;
+         default:
+-          enable = _menuState->IsCommandEnabled(tag) ?
+-                   ![self keyWindowIsModal] : NO;
++          enable =
++              _menuState->IsCommandEnabled(tag) ? ![self keyWindowIsModal] : NO;
+           break;
+       }
+     }
+@@ -1844,8 +1853,8 @@ class AppControllerProfileObserver : public ProfileAttributesStorage::Observer,
+   DCHECK(sender);
+   if ([sender respondsToSelector:@selector(window)]) {
+     id delegate = [[sender window] windowController];
+-    if ([delegate respondsToSelector:
+-            @selector(commandDispatchUsingKeyModifiers:)]) {
++    if ([delegate
++            respondsToSelector:@selector(commandDispatchUsingKeyModifiers:)]) {
+       [delegate commandDispatchUsingKeyModifiers:sender];
+     }
+   }
+@@ -1858,8 +1867,9 @@ class AppControllerProfileObserver : public ProfileAttributesStorage::Observer,
+                     hasVisibleWindows:(BOOL)hasVisibleWindows {
+   // If the browser is currently trying to quit, don't do anything and return NO
+   // to prevent AppKit from doing anything.
+-  if (browser_shutdown::IsTryingToQuit())
++  if (browser_shutdown::IsTryingToQuit()) {
+     return NO;
++  }
+ 
+   // Bring all browser windows to the front. Specifically, this brings them in
+   // front of any app windows. FocusWindowSet will also unminimize the most
+@@ -1991,8 +2001,8 @@ class AppControllerProfileObserver : public ProfileAttributesStorage::Observer,
+ - (void)updateConfirmToQuitPrefMenuItem:(NSMenuItem*)item {
+   // Format the string so that the correct key equivalent is displayed.
+   NSString* acceleratorString = [ConfirmQuitPanelController keyCommandString];
+-  NSString* title = l10n_util::GetNSStringF(IDS_CONFIRM_TO_QUIT_OPTION,
+-      base::SysNSStringToUTF16(acceleratorString));
++  NSString* title = l10n_util::GetNSStringF(
++      IDS_CONFIRM_TO_QUIT_OPTION, base::SysNSStringToUTF16(acceleratorString));
+   [item setTitle:title];
+ 
+   const PrefService* prefService = g_browser_process->local_state();
+@@ -2016,15 +2026,18 @@ class AppControllerProfileObserver : public ProfileAttributesStorage::Observer,
+ // Returns null if the profile is not loaded in memory.
+ - (Profile*)lastProfileIfLoaded {
+   // Return the profile of the last-used Browser, if available.
+-  if (_lastProfile)
++  if (_lastProfile) {
+     return _lastProfile;
++  }
+ 
+-  if (![self isProfileReady])
++  if (![self isProfileReady]) {
+     return nullptr;
++  }
+ 
+   ProfileManager* profile_manager = g_browser_process->profile_manager();
+-  if (!profile_manager)
++  if (!profile_manager) {
+     return nullptr;
++  }
+ 
+   // GetProfileByPath() returns nullptr if the profile is not loaded.
+   return profile_manager->GetProfileByPath(GetStartupProfilePathMac());
+@@ -2036,25 +2049,30 @@ class AppControllerProfileObserver : public ProfileAttributesStorage::Observer,
+ // |-lastProfileIfLoaded|.
+ - (Profile*)lastProfile {
+   Profile* lastLoadedProfile = [self lastProfileIfLoaded];
+-  if (lastLoadedProfile)
++  if (lastLoadedProfile) {
+     return lastLoadedProfile;
++  }
+ 
+-  if (![self isProfileReady])
++  if (![self isProfileReady]) {
+     return nullptr;
++  }
+ 
+   return GetLastProfileMac();
+ }
+ 
+ - (Profile*)safeProfileForNewWindows:(Profile*)profile {
+-  if (!profile)
++  if (!profile) {
+     return nullptr;
++  }
+ 
+   DCHECK(!profile->IsSystemProfile());
+-  if (profile->IsGuestSession() && !profiles::IsGuestModeEnabled())
++  if (profile->IsGuestSession() && !profiles::IsGuestModeEnabled()) {
+     return nullptr;
++  }
+ 
+-  if (IsProfileSignedOut(profile->GetPath()))
++  if (IsProfileSignedOut(profile->GetPath())) {
+     return nullptr;  // Profile is locked.
++  }
+ 
+   return ProfileManager::MaybeForceOffTheRecordMode(profile);
+ }
+@@ -2202,7 +2220,6 @@ class AppControllerProfileObserver : public ProfileAttributesStorage::Observer,
+   return dockMenu;
+ }
+ 
+-
+ - (BookmarkMenuBridge*)bookmarkMenuBridge {
+   return _bookmarkMenuBridge;
+ }
+@@ -2216,8 +2233,9 @@ class AppControllerProfileObserver : public ProfileAttributesStorage::Observer,
+ }
+ 
+ - (void)setLastProfile:(Profile*)profile {
+-  if (profile == _lastProfile)
++  if (profile == _lastProfile) {
+     return;
++  }
+ 
+   // If _lastProfile becomes null, remember the last state of Cmd+Shift+T so the
+   // command can continue working (or stay disabled). This is primarily meant
+@@ -2227,14 +2245,14 @@ class AppControllerProfileObserver : public ProfileAttributesStorage::Observer,
+   // Before tearing down the menu controller bridges, return the history menu to
+   // its initial state.
+   if (profile != nullptr) {
+-    if (_historyMenuBridge)
++    if (_historyMenuBridge) {
+       _historyMenuBridge->ResetMenu();
++    }
+     _historyMenuBridge.reset();
+   } else if (_historyMenuBridge && !_isShuttingDown) {
+     _historyMenuBridge->OnProfileWillBeDestroyed();
+   }
+ 
+-
+   _profilePrefRegistrar.reset();
+ 
+   // Update Incognito and Isolated Mode menu items based on enterprise policy.
+@@ -2301,8 +2319,9 @@ class AppControllerProfileObserver : public ProfileAttributesStorage::Observer,
+ 
+   _lastProfile = profile;
+ 
+-  if (_lastProfile == nullptr)
++  if (_lastProfile == nullptr) {
+     return;
++  }
+ 
+   auto& entry = _profileBookmarkMenuBridgeMap[profile->GetPath()];
+   if (!entry || !entry->GetProfile()) {
+@@ -2329,10 +2348,9 @@ class AppControllerProfileObserver : public ProfileAttributesStorage::Observer,
+   _historyMenuBridge = std::make_unique<HistoryMenuBridge>(_lastProfile);
+   _historyMenuBridge->BuildMenu();
+ 
+-
+   chrome::BrowserCommandController::
+-      UpdateSharedCommandsForIncognitoAvailability(
+-          _menuState.get(), _lastProfile);
++      UpdateSharedCommandsForIncognitoAvailability(_menuState.get(),
++                                                   _lastProfile);
+   _profilePrefRegistrar = std::make_unique<PrefChangeRegistrar>();
+   _profilePrefRegistrar->Init(_lastProfile->GetPrefs());
+   _profilePrefRegistrar->Add(
+@@ -2486,16 +2504,16 @@ class AppControllerProfileObserver : public ProfileAttributesStorage::Observer,
+ - (BOOL)application:(NSApplication*)application
+     continueUserActivity:(NSUserActivity*)userActivity
+       restorationHandler:
+-          (void (^)(NSArray<id<NSUserActivityRestoring>>*))restorationHandler
+-{
++          (void (^)(NSArray<id<NSUserActivityRestoring>>*))restorationHandler {
+   if (![userActivity.activityType
+           isEqualToString:NSUserActivityTypeBrowsingWeb]) {
+     return NO;
+   }
+ 
+   NSURL* url = userActivity.webpageURL;
+-  if (!url)
++  if (!url) {
+     return NO;
++  }
+ 
+   GURL gurl(base::SysNSStringToUTF8([url absoluteString]));
+   StartupTabs tabs;
+@@ -2519,8 +2537,9 @@ class AppControllerProfileObserver : public ProfileAttributesStorage::Observer,
+ }
+ 
+ - (void)updateHandoffManager:(content::WebContents*)webContents {
+-  if (!_handoffManager)
++  if (!_handoffManager) {
+     _handoffManager = [[HandoffManager alloc] init];
++  }
+ 
+   if ([self isHandoffEligible:webContents]) {
+     [self updateHandoffManagerWithURL:webContents->GetVisibleURL()
+@@ -2531,13 +2550,15 @@ class AppControllerProfileObserver : public ProfileAttributesStorage::Observer,
+ }
+ 
+ - (BOOL)isHandoffEligible:(content::WebContents*)webContents {
+-  if (!webContents)
++  if (!webContents) {
+     return NO;
++  }
+ 
+   Profile* profile =
+       Profile::FromBrowserContext(webContents->GetBrowserContext());
+-  if (!profile)
++  if (!profile) {
+     return NO;
++  }
+ 
+   // Handoff is not allowed from an incognito profile. To err on the safe side,
+   // also disallow Handoff from a guest profile.
+@@ -2643,8 +2664,9 @@ void UpdateProfileInUse(Profile* profile) {
+ 
+ void OpenStartupTabsInBrowserWithProfile(const StartupTabs& tabs,
+                                          Profile* profile) {
+-  if (!profile)
++  if (!profile) {
+     return;  // No suitable profile to open the URLs, do nothing.
++  }
+   // Prefer a regular (non-incognito) profile
+   if (profile->IsIncognitoProfile()) {
+     profile = ProfileManager::MaybeForceOffTheRecordMode(
+@@ -2804,8 +2826,9 @@ void TabRestorer::RestoreMostRecent(Profile* profile) {
+ void TabRestorer::RestoreByID(Profile* profile, SessionID session_id) {
+   DCHECK(profile);
+   auto* service = TabRestoreServiceFactory::GetForProfile(profile);
+-  if (!service)
++  if (!service) {
+     return;
++  }
+   if (service->IsLoaded()) {
+     DoRestoreTab(profile, session_id);
+   } else {
+@@ -2820,8 +2843,9 @@ void TabRestorer::RestoreByID(Profile* profile, SessionID session_id) {
+ void TabRestorer::DoRestoreTab(Profile* profile, SessionID session_id) {
+   DCHECK(profile);
+   auto* service = TabRestoreServiceFactory::GetForProfile(profile);
+-  if (!service)
++  if (!service) {
+     return;
++  }
+   BrowserWindowInterface* browser =
+       ProfileBrowserCollection::GetForProfile(profile)->FindTabbedBrowser();
+   BrowserLiveTabContext* context =
+diff --git a/chrome/browser/extensions/api/settings_private/prefs_util.cc b/chrome/browser/extensions/api/settings_private/prefs_util.cc
+index 184b0582b76e8..ea600d9b43dfe 100644
+--- a/chrome/browser/extensions/api/settings_private/prefs_util.cc
++++ b/chrome/browser/extensions/api/settings_private/prefs_util.cc
+@@ -311,6 +311,8 @@ const PrefsUtil::TypedPrefMap& PrefsUtil::GetAllowlistedKeys() {
+       settings_api::PrefType::kNumber;
+   (*s_allowlist)[stedding::prefs::kPeekEnabled] =
+       settings_api::PrefType::kBoolean;
++  (*s_allowlist)[stedding::prefs::kExternalDefaultSpace] =
++      settings_api::PrefType::kString;
+   (*s_allowlist)[stedding::prefs::kCopyStripTracking] =
+       settings_api::PrefType::kBoolean;
+   (*s_allowlist)[stedding::prefs::kUiAnimate] =
+diff --git a/chrome/browser/resources/settings/stedding_page/stedding_page.css b/chrome/browser/resources/settings/stedding_page/stedding_page.css
+index a848d91004ff6..f023e99375e87 100644
+--- a/chrome/browser/resources/settings/stedding_page/stedding_page.css
++++ b/chrome/browser/resources/settings/stedding_page/stedding_page.css
+@@ -33,6 +33,41 @@
+   flex: 1;
+ }
+ 
++/* routing D5: a Space's rules under its row. */
++.route-row {
++  align-items: center;
++  gap: 12px;
++  padding-top: 0;
++}
++
++.route-list {
++  align-items: center;
++  display: flex;
++  flex-wrap: wrap;
++  gap: 6px;
++}
++
++.route-chip {
++  align-items: center;
++  border: 1px solid var(--cr-separator-color);
++  border-radius: 12px;
++  display: inline-flex;
++  font-size: 12px;
++  gap: 2px;
++  padding: 0 2px 0 10px;
++}
++
++.route-chip cr-icon-button {
++  --cr-icon-button-size: 20px;
++  --cr-icon-button-icon-size: 14px;
++  margin: 0;
++}
++
++.route-add {
++  flex: none;
++  width: 240px;
++}
++
+ .shortcut-group {
+   display: block;
+   padding-bottom: 8px;
+diff --git a/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts b/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
+index b33ae0670008d..c356d0d5ab7e6 100644
+--- a/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
++++ b/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
+@@ -122,6 +122,17 @@ export function getHtml(this: SettingsSteddingPageElement) {
+       <div class="secondary">$i18n{steddingSpacesIntro}</div>
+     </div>
+   </div>
++  <div class="settings-box continuation" id="externalDefault">
++    <div class="flex">
++      <div class="label">$i18n{steddingExternalDefaultLabel}</div>
++      <div class="secondary">$i18n{steddingExternalDefaultSubLabel}</div>
++    </div>
++    <settings-dropdown-menu id="externalDefaultSpace"
++        pref-key="stedding.spaces.external_default"
++        label="$i18n{steddingExternalDefaultLabel}"
++        .menuOptions="${this.externalOptions_()}">
++    </settings-dropdown-menu>
++  </div>
+   ${this.spaces_.map(space => html`
+     <div class="settings-box continuation space-row">
+       <span class="space-swatch" style="background: ${space.color}"
+@@ -136,6 +147,23 @@ export function getHtml(this: SettingsSteddingPageElement) {
+           ?disabled="${this.spaces_.length <= 1}"
+           @click="${this.onDeleteSpaceClick_}">
+       </cr-icon-button>
++    </div>
++    <div class="settings-box continuation route-row">
++      <div class="flex route-list">
++        <span class="secondary">$i18n{steddingRoutesLabel}</span>
++        ${space.routes.map(route => html`
++          <span class="route-chip">${route.pattern}
++            <cr-icon-button class="icon-clear" data-index="${route.index}"
++                title="$i18n{steddingRemoveRoute}"
++                @click="${this.onRemoveRouteClick_}">
++            </cr-icon-button>
++          </span>`)}
++      </div>
++      <cr-input class="route-add" data-id="${space.id}"
++          placeholder="$i18n{steddingRouteAddPlaceholder}"
++          aria-label="$i18n{steddingRouteAddPlaceholder}"
++          @change="${this.onRouteAddChange_}">
++      </cr-input>
+     </div>`)}
+   ${this.arcSummary_ ? html`
+     <div class="settings-box continuation" id="arcImport">
+diff --git a/chrome/browser/resources/settings/stedding_page/stedding_page.ts b/chrome/browser/resources/settings/stedding_page/stedding_page.ts
+index a1258f6d64ae8..e26dddcb8b95c 100644
+--- a/chrome/browser/resources/settings/stedding_page/stedding_page.ts
++++ b/chrome/browser/resources/settings/stedding_page/stedding_page.ts
+@@ -19,6 +19,7 @@ import '../settings_page/settings_section.js';
+ import type {CrInputElement} from 'chrome://resources/cr_elements/cr_input/cr_input.js';
+ import {WebUiListenerMixinLit} from 'chrome://resources/cr_elements/web_ui_listener_mixin_lit.js';
+ import {sendWithPromise} from 'chrome://resources/js/cr.js';
++import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
+ import {CrLitElement} from 'chrome://resources/lit/v3_0/lit.rollup.js';
+ 
+ import {getSearchManager} from '../search_settings.js';
+@@ -28,6 +29,13 @@ import {getCss} from './stedding_page.css.js';
+ import {getHtml} from './stedding_page.html.js';
+ 
+ /** One Space of the window this page is in, as the browser reports it. */
++// routing D5: one rule of a Space, with its index in the pref.
++export interface SteddingRoute {
++  index: number;
++  pattern: string;
++  match: string;
++}
++
+ export interface SteddingSpace {
+   id: string;
+   name: string;
+@@ -35,6 +43,7 @@ export interface SteddingSpace {
+   icon: string;
+   color: string;
+   active: boolean;
++  routes: SteddingRoute[];
+ }
+ 
+ /** One line of the shortcut reference (docs/features/shortcuts.md). */
+@@ -101,6 +110,33 @@ export class SettingsSteddingPageElement extends
+     chrome.send('steddingRenameSpace', [input.dataset['id'], input.value]);
+   }
+ 
++  // routing D5: the dropdown's choices, the active Space first.
++  protected externalOptions_(): Array<{value: string, name: string}> {
++    const options = [{value: '', name: loadTimeData.getString('steddingExternalActiveSpace')}];
++    for (const space of this.spaces_) {
++      options.push({value: space.id, name: space.displayName});
++    }
++    return options;
++  }
++
++  protected onRouteAddChange_(e: Event) {
++    const input = e.target as CrInputElement;
++    const site = input.value.trim();
++    const id = input.dataset['id'];
++    if (!site || !id) {
++      return;
++    }
++    chrome.send('steddingAddRoute', [id, site]);
++    input.value = '';
++  }
++
++  protected onRemoveRouteClick_(e: Event) {
++    const index = Number((e.currentTarget as HTMLElement).dataset['index']);
++    if (Number.isInteger(index)) {
++      chrome.send('steddingRemoveRoute', [index]);
++    }
++  }
++
+   protected onImportArcClick_() {
+     this.arcImporting_ = true;
+     sendWithPromise('steddingImportFromArc').then((line: unknown) => {
+diff --git a/chrome/browser/ui/browser_tab_menu_model_delegate.cc b/chrome/browser/ui/browser_tab_menu_model_delegate.cc
+index ad5513b2926b2..f05f9e42707de 100644
+--- a/chrome/browser/ui/browser_tab_menu_model_delegate.cc
++++ b/chrome/browser/ui/browser_tab_menu_model_delegate.cc
+@@ -57,6 +57,28 @@ BrowserTabMenuModelDelegate::GetTabGroupSyncService() {
+   return tab_group_sync_service_;
+ }
+ 
++std::vector<std::u16string> BrowserTabMenuModelDelegate::GetAllSpaceNames() {
++  std::vector<std::u16string> names;
++  BrowserWindowInterface* self = nullptr;
++  ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
++      [&](BrowserWindowInterface* browser) {
++        if (browser->GetSessionID() == session_id_) {
++          self = browser;
++          return false;
++        }
++        return true;
++      });
++  spaces::SpaceModel* const model =
++      self ? spaces::SpaceModel::From(self) : nullptr;
++  if (!model) {
++    return names;
++  }
++  for (const std::unique_ptr<spaces::Space>& space : model->spaces()) {
++    names.push_back(model->DisplayName(space->id()));
++  }
++  return names;
++}
++
+ std::vector<std::u16string> BrowserTabMenuModelDelegate::GetOtherSpaceNames() {
+   std::vector<std::u16string> names;
+   BrowserWindowInterface* self = nullptr;
+diff --git a/chrome/browser/ui/browser_tab_menu_model_delegate.h b/chrome/browser/ui/browser_tab_menu_model_delegate.h
+index ccbd0b68ba263..9c25c4aeb3b73 100644
+--- a/chrome/browser/ui/browser_tab_menu_model_delegate.h
++++ b/chrome/browser/ui/browser_tab_menu_model_delegate.h
+@@ -41,6 +41,7 @@ class BrowserTabMenuModelDelegate : public TabMenuModelDelegate {
+       bool is_app) override;
+   tab_groups::TabGroupSyncService* GetTabGroupSyncService() override;
+   std::vector<std::u16string> GetOtherSpaceNames() override;
++  std::vector<std::u16string> GetAllSpaceNames() override;
+ 
+   const SessionID session_id_;
+   const raw_ptr<const Profile> profile_;
+diff --git a/chrome/browser/ui/navigator/browser_navigator.cc b/chrome/browser/ui/navigator/browser_navigator.cc
+index 5887e43908094..3bba22660031d 100644
+--- a/chrome/browser/ui/navigator/browser_navigator.cc
++++ b/chrome/browser/ui/navigator/browser_navigator.cc
+@@ -4,8 +4,6 @@
+ 
+ #include "chrome/browser/ui/navigator/browser_navigator.h"
+ 
+-#include "chrome/browser/ui/views/peek/peek_navigation_throttle.h"
+-
+ #include <algorithm>
+ #include <memory>
+ #include <optional>
+@@ -42,11 +40,13 @@
+ #include "chrome/browser/ui/navigator/browser_navigator_params.h"
+ #include "chrome/browser/ui/navigator/browser_navigator_params_utils.h"
+ #include "chrome/browser/ui/singleton_tabs.h"
++#include "chrome/browser/ui/spaces/space_model.h"
+ #include "chrome/browser/ui/status_bubble.h"
+ #include "chrome/browser/ui/tab_helpers.h"
+ #include "chrome/browser/ui/tabs/split_tab_metrics.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "chrome/browser/ui/tabs/tab_strip_user_gesture_details.h"
++#include "chrome/browser/ui/views/peek/peek_navigation_throttle.h"
+ #include "chrome/browser/ui/web_applications/app_browser_controller.h"
+ #include "chrome/browser/ui/web_applications/navigation_capturing_process.h"
+ #include "chrome/browser/ui/web_applications/web_app_launch_navigation_handle_user_data.h"
+@@ -1106,12 +1106,51 @@ base::WeakPtr<content::NavigationHandle> ShowTabModalPopup(
+ 
+ }  // namespace internal
+ 
++namespace {
++
++// Stedding routing D2: a typed address in a fresh tab -- one that has shown
++// nothing but a new-tab page -- follows the routes, the way a new tab does.
++// The peek check runs first (D6); a peek never reaches here.
++void MaybeRouteFreshTab(NavigateParams* params) {
++  if (params->disposition != WindowOpenDisposition::CURRENT_TAB ||
++      !params->url.is_valid() ||
++      !(ui::PageTransitionCoreTypeIs(params->transition,
++                                     ui::PAGE_TRANSITION_TYPED) ||
++        ui::PageTransitionCoreTypeIs(params->transition,
++                                     ui::PAGE_TRANSITION_GENERATED))) {
++    return;
++  }
++  content::WebContents* contents = params->source_contents;
++  if (!contents && params->browser) {
++    contents = params->browser->tab_strip_model()->GetActiveWebContents();
++  }
++  if (!contents) {
++    return;
++  }
++  const GURL& shown = contents->GetLastCommittedURL();
++  if (!shown.is_empty() && !shown.SchemeIs("chrome") &&
++      !shown.SchemeIs("about")) {
++    return;
++  }
++  tabs::TabInterface* const tab =
++      tabs::TabInterface::MaybeGetFromContents(contents);
++  BrowserWindowInterface* const window =
++      tab ? tab->GetBrowserWindowInterface() : nullptr;
++  if (spaces::SpaceModel* const model =
++          window ? spaces::SpaceModel::From(window) : nullptr) {
++    model->RouteFreshTab(tab, params->url);
++  }
++}
++
++}  // namespace
++
+ base::WeakPtr<content::NavigationHandle> Navigate(NavigateParams* params) {
+   // Stedding: a link from a pinned tab that wants a new tab peeks instead
+   // (docs/features/peek.md, P8).
+   if (stedding::MaybePeekInsteadOfNewTab(params)) {
+     return nullptr;
+   }
++  MaybeRouteFreshTab(params);
+   AdditionalParams additional_params;
+   return internal::NavigateImpl(params, additional_params);
+ }
+diff --git a/chrome/browser/ui/spaces/BUILD.gn b/chrome/browser/ui/spaces/BUILD.gn
+index 8625123d73b6b..ab66e57ae0210 100644
+--- a/chrome/browser/ui/spaces/BUILD.gn
++++ b/chrome/browser/ui/spaces/BUILD.gn
+@@ -2,6 +2,20 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
++# docs/features/routing.md D1: pure rules over a pref, with no view or model
++# behind them, so the tab strip's menu can name a site without a cycle.
++source_set("router") {
++  public = [ "space_router.h" ]
++  sources = [ "space_router.cc" ]
++  deps = [
++    "//base",
++    "//chrome/browser/ui/stedding:prefs",
++    "//components/prefs",
++    "//net",
++    "//url",
++  ]
++}
++
+ source_set("spaces") {
+   public = [
+     "arc_sidebar_importer.h",
+@@ -29,6 +43,7 @@ source_set("spaces") {
+   ]
+ 
+   deps = [
++    ":router",
+     "//chrome/app:command_ids",
+     "//chrome/browser/profiles:profile",
+     "//chrome/browser/ui:stedding_ui_metrics",
+@@ -54,8 +69,10 @@ source_set("unit_tests") {
+     "space_commands_unittest.cc",
+     "space_model_unittest.cc",
+     "space_model_window_unittest.cc",
++    "space_router_unittest.cc",
+   ]
+   deps = [
++    ":router",
+     ":spaces",
+     "//base",
+     "//chrome/app:command_ids",
+diff --git a/chrome/browser/ui/spaces/space_model.cc b/chrome/browser/ui/spaces/space_model.cc
+index 8f2873e21b6b5..c05cc6a2c7bff 100644
+--- a/chrome/browser/ui/spaces/space_model.cc
++++ b/chrome/browser/ui/spaces/space_model.cc
+@@ -24,6 +24,7 @@
+ #include "chrome/browser/ui/browser.h"
+ #include "chrome/browser/ui/browser_init_state.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/spaces/space_router.h"
+ #include "chrome/browser/ui/spaces/tab_space_restore_data.h"
+ #include "chrome/browser/ui/stedding/sleep_tabs.h"
+ #include "chrome/browser/ui/stedding/stedding_prefs.h"
+@@ -465,6 +466,8 @@ void SpaceModel::OnTabStripModelChanged(
+          change.GetInsert()->contents) {
+       // First ask decides membership: restored Space if any, else active.
+       SpaceForTab(inserted.tab);
++      // Then the routes may move it (routing D2).
++      MaybeRouteInsertedTab(inserted.tab, selection);
+     }
+     return;
+   }
+@@ -844,6 +847,131 @@ void SpaceModel::SetSpaceForOneTab(tabs::TabInterface* tab, const SpaceId& id) {
+   observers_.Notify(&Observer::OnTabSpaceChanged, tab);
+ }
+ 
++SpaceModel::LastRoute::LastRoute(tabs::TabHandle tab, SpaceId from, SpaceId to)
++    : tab(tab), from(from), to(to) {}
++
++SpaceModel::ScopedRoutingPause::ScopedRoutingPause(SpaceModel* model)
++    : model_(model) {
++  if (model_) {
++    ++model_->routing_paused_;
++  }
++}
++
++SpaceModel::ScopedRoutingPause::~ScopedRoutingPause() {
++  if (model_) {
++    --model_->routing_paused_;
++  }
++}
++
++std::optional<SpaceId> SpaceModel::RouteTargetFor(const GURL& url,
++                                                  bool external) {
++  if (!tab_strip_model_ || !url.is_valid()) {
++    return std::nullopt;
++  }
++  const PrefService* const prefs = pref_registrar_.prefs();
++  if (!prefs) {
++    return std::nullopt;
++  }
++  const auto known = [&](const std::string& token) -> std::optional<SpaceId> {
++    const std::optional<SpaceId> id =
++        SpaceId::FromOptionalToken(base::Token::FromString(token));
++    return id && GetSpace(*id) ? id : std::nullopt;
++  };
++  if (const std::optional<std::string> routed =
++          RouteFor(ReadRoutes(prefs), url)) {
++    if (const std::optional<SpaceId> id = known(*routed)) {
++      return id;
++    }
++  }
++  if (external) {
++    return known(prefs->GetString(stedding::prefs::kExternalDefaultSpace));
++  }
++  return std::nullopt;
++}
++
++std::optional<SpaceId> SpaceModel::RouteTab(tabs::TabInterface* tab,
++                                            const GURL& url,
++                                            bool foreground,
++                                            bool external) {
++  if (!tab || routing_paused_ || tab->IsPinned()) {
++    return std::nullopt;
++  }
++  const std::optional<SpaceId> target = RouteTargetFor(url, external);
++  if (!target) {
++    return std::nullopt;
++  }
++  const SpaceId from = SpaceForTab(tab);
++  if (from == *target) {
++    return std::nullopt;
++  }
++  SetSpaceForTab(tab, *target);
++  last_route_.emplace(tab->GetHandle(), from, *target);
++  // The switch and the toast wait a turn: this may run inside a strip
++  // notification, which must not re-enter the strip (B4).
++  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
++      FROM_HERE,
++      base::BindOnce(&SpaceModel::FinishRoute, weak_factory_.GetWeakPtr(),
++                     tab->GetHandle(), from, *target, foreground));
++  return target;
++}
++
++void SpaceModel::FinishRoute(tabs::TabHandle handle,
++                             SpaceId from,
++                             SpaceId to,
++                             bool foreground) {
++  tabs::TabInterface* const tab = handle.Get();
++  if (!tab || !GetSpace(to)) {
++    return;
++  }
++  if (foreground) {
++    SetActiveSpace(to);
++  }
++  observers_.Notify(&Observer::OnTabRouted, tab, from, to);
++}
++
++void SpaceModel::MaybeRouteInsertedTab(
++    tabs::TabInterface* tab,
++    const TabStripSelectionChange& selection) {
++  content::WebContents* const contents = tab->GetContents();
++  // A tab rebuilt from a session keeps the Space it was in (B2).
++  if (!contents || TabSpaceRestoreData::FromWebContents(contents)) {
++    return;
++  }
++  const GURL url = contents->GetVisibleURL();
++  if (!url.is_valid() || url.is_empty()) {
++    return;
++  }
++  const bool external = TakeExternalOpen(url);
++  const bool foreground =
++      selection.active_tab_changed() && selection.new_contents == contents;
++  RouteTab(tab, url, foreground, external);
++}
++
++void SpaceModel::RouteFreshTab(tabs::TabInterface* tab, const GURL& url) {
++  RouteTab(tab, url, /*foreground=*/true, TakeExternalOpen(url));
++}
++
++bool SpaceModel::UndoLastRoute() {
++  if (!last_route_) {
++    return false;
++  }
++  const LastRoute route = *last_route_;
++  last_route_.reset();
++  tabs::TabInterface* const tab = route.tab.Get();
++  if (!tab || !GetSpace(route.from) || SpaceForTab(tab) != route.to) {
++    return false;
++  }
++  SetSpaceForTab(tab, route.from);
++  SetActiveSpace(route.from);
++  if (tab_strip_model_) {
++    const int index = tab_strip_model_->GetIndexOfTab(tab);
++    if (index != TabStripModel::kNoTab) {
++      tab_strip_model_->ActivateTabAt(index);
++    }
++  }
++  return true;
++}
++
+ bool SpaceModel::IsTabInActiveSpace(const tabs::TabInterface* tab) const {
+   if (!tab) {
+     return true;
+diff --git a/chrome/browser/ui/spaces/space_model.h b/chrome/browser/ui/spaces/space_model.h
+index 9a0c9a7cf76b4..e875df65a2962 100644
+--- a/chrome/browser/ui/spaces/space_model.h
++++ b/chrome/browser/ui/spaces/space_model.h
+@@ -28,6 +28,7 @@
+ #include "components/sessions/core/session_id.h"
+ #include "components/tabs/public/tab_interface.h"
+ #include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
++#include "url/gurl.h"
+ 
+ class Browser;
+ class BrowserWindowInterface;
+@@ -81,6 +82,25 @@ class SpaceModel : public TabStripModelObserver {
+     // `tab` now belongs to a different Space than it did. Views that filter by
+     // Space refresh on this so a move shows without a switch (B8).
+     virtual void OnTabSpaceChanged(tabs::TabInterface* tab) {}
++    // routing D4: `tab` opened in `from` and a route (or the default Space
++    // for links from other apps) moved it to `to`; the window shows a toast
++    // with Undo.
++    virtual void OnTabRouted(tabs::TabInterface* tab,
++                             const SpaceId& from,
++                             const SpaceId& to) {}
++  };
++
++  // Routing is off while one of these lives (the importer inserts hundreds
++  // of tabs that already know their Space).
++  class ScopedRoutingPause {
++   public:
++    explicit ScopedRoutingPause(SpaceModel* model);
++    ~ScopedRoutingPause();
++    ScopedRoutingPause(const ScopedRoutingPause&) = delete;
++    ScopedRoutingPause& operator=(const ScopedRoutingPause&) = delete;
++
++   private:
++    const raw_ptr<SpaceModel> model_;
+   };
+ 
+   // A model with no window: nothing is observed and no tab is ever activated.
+@@ -216,6 +236,21 @@ class SpaceModel : public TabStripModelObserver {
+   // A split's panes move together (splits J4).
+   void SetSpaceForTab(tabs::TabInterface* tab, const SpaceId& id);
+ 
++  // routing D2: moves `tab` to the Space its address is routed to, if any;
++  // an `external` open with no route lands in the default Space for links
++  // from other apps. `foreground` switches to that Space. Returns where the
++  // tab went, or nothing when it stayed.
++  std::optional<SpaceId> RouteTab(tabs::TabInterface* tab,
++                                  const GURL& url,
++                                  bool foreground,
++                                  bool external);
++  // D2: the first navigation of a fresh tab, a typed address in a new-tab
++  // page; the tab is in front, so the window follows it.
++  void RouteFreshTab(tabs::TabInterface* tab, const GURL& url);
++  // D4: puts the last routed tab back in the Space it opened in and shows
++  // that Space. False when there is nothing to undo.
++  bool UndoLastRoute();
++
+   // splits J4: the tabs a verb on `tab` takes -- its split's panes, or
+   // itself alone.
+   std::vector<tabs::TabInterface*> SplitPeers(tabs::TabInterface* tab) const;
+@@ -325,6 +360,23 @@ class SpaceModel : public TabStripModelObserver {
+   // BrowserWindowFeatures creates; adding a member to that header rebuilds
+   // most of the browser.
+   std::unique_ptr<stedding::PageThemeColorController> page_theme_color_;
++  // routing D2/D4.
++  struct LastRoute {
++    LastRoute(tabs::TabHandle tab, SpaceId from, SpaceId to);
++    tabs::TabHandle tab;
++    SpaceId from;
++    SpaceId to;
++  };
++  std::optional<SpaceId> RouteTargetFor(const GURL& url, bool external);
++  void MaybeRouteInsertedTab(tabs::TabInterface* tab,
++                             const TabStripSelectionChange& selection);
++  void FinishRoute(tabs::TabHandle handle,
++                   SpaceId from,
++                   SpaceId to,
++                   bool foreground);
++  std::optional<LastRoute> last_route_;
++  int routing_paused_ = 0;
++
+   base::WeakPtrFactory<SpaceModel> weak_factory_{this};
+ };
+ 
+diff --git a/chrome/browser/ui/spaces/space_model_window_unittest.cc b/chrome/browser/ui/spaces/space_model_window_unittest.cc
+index 63aec5376d794..7e1fa44927194 100644
+--- a/chrome/browser/ui/spaces/space_model_window_unittest.cc
++++ b/chrome/browser/ui/spaces/space_model_window_unittest.cc
+@@ -20,6 +20,7 @@
+ #include "chrome/browser/ui/spaces/space.h"
+ #include "chrome/browser/ui/spaces/space_commands.h"
+ #include "chrome/browser/ui/spaces/space_model.h"
++#include "chrome/browser/ui/spaces/space_router.h"
+ #include "chrome/browser/ui/spaces/tab_space_restore_data.h"
+ #include "chrome/browser/ui/stedding/pin_lifecycle.h"
+ #include "chrome/browser/ui/stedding/sleep_tabs.h"
+@@ -35,6 +36,7 @@
+ #include "components/split_tabs/split_tab_visual_data.h"
+ #include "components/tabs/public/tab_interface.h"
+ #include "content/public/browser/web_contents.h"
++#include "content/public/test/web_contents_tester.h"
+ #include "testing/gtest/include/gtest/gtest.h"
+ #include "url/gurl.h"
+ 
+@@ -744,5 +746,93 @@ TEST_F(PopupSpaceTest, PopupWindowsHaveNoSpaces) {
+   EXPECT_EQ(1, browser()->tab_strip_model()->count());
+   EXPECT_EQ(nullptr, SpaceModel::From(browser()));
+ }
++
++// routing D2: a tab that opens with a routed address moves to its Space,
++// and the window follows a foreground open a turn later.
++TEST_F(SpaceWindowTest, InsertedTabFollowsRoute) {
++  const SpaceId home = model().active_id();
++  Space* const work = model().AddSpace("Work", SK_ColorBLUE);
++  AddRoute(profile()->GetPrefs(),
++           SiteRouteFor(GURL("https://github.com/"), work->id().ToString()));
++  AddTab(browser(), GURL("https://gist.github.com/a/b"));
++  tabs::TabInterface* const routed = tabs().GetActiveTab();
++  EXPECT_EQ(work->id(), model().SpaceForTab(routed));
++  EXPECT_EQ(home, model().active_id()) << "the switch waits a turn";
++  task_environment()->RunUntilIdle();
++  EXPECT_EQ(work->id(), model().active_id());
++  // An address with no rule stays where it opened.
++  model().SetActiveSpace(home);
++  AddTab(browser(), GURL("https://example.org/"));
++  EXPECT_EQ(home, model().SpaceForTab(tabs().GetActiveTab()));
++}
++
++// routing D2 / spaces B2: a tab rebuilt from a session keeps its Space.
++TEST_F(SpaceWindowTest, RestoredTabIsNotRouted) {
++  const SpaceId home = model().active_id();
++  Space* const work = model().AddSpace("Work", SK_ColorBLUE);
++  AddRoute(profile()->GetPrefs(),
++           SiteRouteFor(GURL("https://github.com/"), work->id().ToString()));
++  std::unique_ptr<content::WebContents> contents = content::WebContents::Create(
++      content::WebContents::CreateParams(profile()));
++  content::WebContentsTester::For(contents.get())
++      ->NavigateAndCommit(GURL("https://github.com/restored"));
++  TabSpaceRestoreData::CreateForWebContents(contents.get(), home.ToString(),
++                                            /*space_pinned=*/false);
++  tabs().AppendTab(
++      std::make_unique<tabs::TabModel>(std::move(contents), &tabs()),
++      /*foreground=*/true);
++  task_environment()->RunUntilIdle();
++  EXPECT_EQ(home, model().SpaceForTab(tabs().GetActiveTab()));
++  EXPECT_EQ(home, model().active_id());
++}
++
++// routing D2: a typed address in a fresh tab follows the routes too.
++TEST_F(SpaceWindowTest, TypedAddressInAFreshTabFollowsRoute) {
++  const SpaceId home = model().active_id();
++  Space* const work = model().AddSpace("Work", SK_ColorBLUE);
++  AddRoute(profile()->GetPrefs(),
++           SiteRouteFor(GURL("https://github.com/"), work->id().ToString()));
++  tabs::TabInterface* const fresh = OpenTab();
++  EXPECT_EQ(home, model().SpaceForTab(fresh));
++  model().RouteFreshTab(fresh, GURL("https://github.com/typed"));
++  EXPECT_EQ(work->id(), model().SpaceForTab(fresh));
++  task_environment()->RunUntilIdle();
++  EXPECT_EQ(work->id(), model().active_id());
++}
++
++// routing D4: Undo puts the tab back and shows its Space again.
++TEST_F(SpaceWindowTest, UndoMovesTheTabBack) {
++  const SpaceId home = model().active_id();
++  Space* const work = model().AddSpace("Work", SK_ColorBLUE);
++  AddRoute(profile()->GetPrefs(),
++           SiteRouteFor(GURL("https://github.com/"), work->id().ToString()));
++  EXPECT_FALSE(model().UndoLastRoute()) << "nothing routed yet";
++  AddTab(browser(), GURL("https://github.com/x"));
++  tabs::TabInterface* const routed = tabs().GetActiveTab();
++  task_environment()->RunUntilIdle();
++  ASSERT_EQ(work->id(), model().active_id());
++  EXPECT_TRUE(model().UndoLastRoute());
++  EXPECT_EQ(home, model().SpaceForTab(routed));
++  EXPECT_EQ(home, model().active_id());
++  EXPECT_EQ(routed, tabs().GetActiveTab());
++  EXPECT_FALSE(model().UndoLastRoute()) << "an undo is once";
++}
++
++// routing D3: a link from another app lands in the chosen Space when no rule
++// names it.
++TEST_F(SpaceWindowTest, ExternalOpenLandsInTheDefaultSpace) {
++  const SpaceId home = model().active_id();
++  Space* const mail = model().AddSpace("Mail", SK_ColorGREEN);
++  profile()->GetPrefs()->SetString(stedding::prefs::kExternalDefaultSpace,
++                                   mail->id().ToString());
++  const GURL url("https://example.com/from-another-app");
++  MarkExternalOpen(url);
++  AddTab(browser(), url);
++  EXPECT_EQ(mail->id(), model().SpaceForTab(tabs().GetActiveTab()));
++  // The mark is spent: the same address opened again stays home.
++  model().SetActiveSpace(home);
++  AddTab(browser(), url);
++  EXPECT_EQ(home, model().SpaceForTab(tabs().GetActiveTab()));
++}
+ }  // namespace
+ }  // namespace spaces
+diff --git a/chrome/browser/ui/spaces/space_router.cc b/chrome/browser/ui/spaces/space_router.cc
+new file mode 100644
+index 0000000000000..5b4dacb4bab9a
+--- /dev/null
++++ b/chrome/browser/ui/spaces/space_router.cc
+@@ -0,0 +1,201 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/spaces/space_router.h"
++
++#include <algorithm>
++#include <utility>
++
++#include "base/no_destructor.h"
++#include "base/strings/string_util.h"
++#include "base/time/time.h"
++#include "chrome/browser/ui/stedding/stedding_prefs.h"
++#include "components/prefs/pref_service.h"
++#include "net/base/registry_controlled_domains/registry_controlled_domain.h"
++
++namespace spaces {
++
++namespace {
++
++constexpr base::TimeDelta kExternalOpenWindow = base::Seconds(10);
++
++std::vector<std::pair<GURL, base::TimeTicks>>& ExternalOpens() {
++  static base::NoDestructor<std::vector<std::pair<GURL, base::TimeTicks>>>
++      opens;
++  return *opens;
++}
++
++}  // namespace
++
++std::string SiteOf(const GURL& url) {
++  if (!url.is_valid() || !url.has_host()) {
++    return std::string();
++  }
++  const std::string domain =
++      net::registry_controlled_domains::GetDomainAndRegistry(
++          url, net::registry_controlled_domains::INCLUDE_PRIVATE_REGISTRIES);
++  return base::ToLowerASCII(domain.empty() ? url.host() : domain);
++}
++
++bool RouteMatches(const Route& route, const GURL& url) {
++  if (route.pattern.empty() || !url.is_valid()) {
++    return false;
++  }
++  switch (route.match) {
++    case Route::Match::kSite:
++      return SiteOf(url) == base::ToLowerASCII(route.pattern);
++    case Route::Match::kContains:
++      return base::ToLowerASCII(url.spec())
++                 .find(base::ToLowerASCII(route.pattern)) != std::string::npos;
++    case Route::Match::kEquals: {
++      const GURL wanted(route.pattern);
++      return wanted.is_valid() ? wanted == url : url.spec() == route.pattern;
++    }
++  }
++  return false;
++}
++
++std::optional<std::string> RouteFor(const std::vector<Route>& routes,
++                                    const GURL& url,
++                                    bool peeking) {
++  if (peeking) {
++    return std::nullopt;
++  }
++  for (const Route& route : routes) {
++    if (RouteMatches(route, url)) {
++      return route.space;
++    }
++  }
++  return std::nullopt;
++}
++
++Route SiteRouteFor(const GURL& url, const std::string& space) {
++  Route route;
++  route.match = Route::Match::kSite;
++  route.pattern = SiteOf(url);
++  route.space = space;
++  return route;
++}
++
++const char* MatchName(Route::Match match) {
++  switch (match) {
++    case Route::Match::kSite:
++      return "site";
++    case Route::Match::kContains:
++      return "contains";
++    case Route::Match::kEquals:
++      return "equals";
++  }
++  return "site";
++}
++
++std::optional<Route::Match> MatchFromName(std::string_view name) {
++  if (name == "site") {
++    return Route::Match::kSite;
++  }
++  if (name == "contains") {
++    return Route::Match::kContains;
++  }
++  if (name == "equals") {
++    return Route::Match::kEquals;
++  }
++  return std::nullopt;
++}
++
++std::vector<Route> RoutesFromValue(const base::ListValue& value) {
++  std::vector<Route> routes;
++  for (const base::Value& entry : value) {
++    const base::DictValue* const dict = entry.GetIfDict();
++    if (!dict) {
++      continue;
++    }
++    const std::string* const match = dict->FindString("match");
++    const std::string* const pattern = dict->FindString("pattern");
++    const std::string* const space = dict->FindString("space");
++    if (!match || !pattern || !space || pattern->empty() || space->empty()) {
++      continue;
++    }
++    const std::optional<Route::Match> kind = MatchFromName(*match);
++    if (!kind) {
++      continue;
++    }
++    Route route;
++    route.match = *kind;
++    route.pattern = *pattern;
++    route.space = *space;
++    routes.push_back(std::move(route));
++  }
++  return routes;
++}
++
++base::ListValue RoutesToValue(const std::vector<Route>& routes) {
++  base::ListValue list;
++  for (const Route& route : routes) {
++    base::DictValue dict;
++    dict.Set("match", MatchName(route.match));
++    dict.Set("pattern", route.pattern);
++    dict.Set("space", route.space);
++    list.Append(std::move(dict));
++  }
++  return list;
++}
++
++std::vector<Route> ReadRoutes(const PrefService* prefs) {
++  if (!prefs) {
++    return {};
++  }
++  return RoutesFromValue(prefs->GetList(stedding::prefs::kSpaceRoutes));
++}
++
++void WriteRoutes(PrefService* prefs, const std::vector<Route>& routes) {
++  if (prefs) {
++    prefs->SetList(stedding::prefs::kSpaceRoutes, RoutesToValue(routes));
++  }
++}
++
++void AddRoute(PrefService* prefs, Route route) {
++  if (!prefs || route.pattern.empty() || route.space.empty()) {
++    return;
++  }
++  std::vector<Route> routes = ReadRoutes(prefs);
++  std::erase_if(routes, [&](const Route& existing) {
++    return existing.match == route.match &&
++           base::ToLowerASCII(existing.pattern) ==
++               base::ToLowerASCII(route.pattern);
++  });
++  routes.push_back(std::move(route));
++  WriteRoutes(prefs, routes);
++}
++
++void RemoveRoute(PrefService* prefs, size_t index) {
++  std::vector<Route> routes = ReadRoutes(prefs);
++  if (index >= routes.size()) {
++    return;
++  }
++  routes.erase(routes.begin() + static_cast<std::ptrdiff_t>(index));
++  WriteRoutes(prefs, routes);
++}
++
++void MarkExternalOpen(const GURL& url) {
++  if (url.is_valid()) {
++    ExternalOpens().emplace_back(url, base::TimeTicks::Now());
++  }
++}
++
++bool TakeExternalOpen(const GURL& url) {
++  auto& opens = ExternalOpens();
++  const base::TimeTicks now = base::TimeTicks::Now();
++  std::erase_if(opens, [&](const auto& entry) {
++    return now - entry.second > kExternalOpenWindow;
++  });
++  const auto it = std::ranges::find_if(
++      opens, [&](const auto& entry) { return entry.first == url; });
++  if (it == opens.end()) {
++    return false;
++  }
++  opens.erase(it);
++  return true;
++}
++
++}  // namespace spaces
+diff --git a/chrome/browser/ui/spaces/space_router.h b/chrome/browser/ui/spaces/space_router.h
+new file mode 100644
+index 0000000000000..2e6ebdb87f891
+--- /dev/null
++++ b/chrome/browser/ui/spaces/space_router.h
+@@ -0,0 +1,65 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_SPACES_SPACE_ROUTER_H_
++#define CHROME_BROWSER_UI_SPACES_SPACE_ROUTER_H_
++
++#include <optional>
++#include <string>
++#include <string_view>
++#include <vector>
++
++#include "base/values.h"
++#include "url/gurl.h"
++
++class PrefService;
++
++namespace spaces {
++
++// docs/features/routing.md D1: a rule that sends an address to a Space.
++struct Route {
++  enum class Match { kSite, kContains, kEquals };
++  Match match = Match::kSite;
++  std::string pattern;
++  // The Space's id, as SpaceId::ToString() writes it.
++  std::string space;
++  friend bool operator==(const Route&, const Route&) = default;
++};
++
++// The registrable domain of an address (github.com for gist.github.com), or
++// its host when it has no registry (localhost, an IP).
++std::string SiteOf(const GURL& url);
++
++bool RouteMatches(const Route& route, const GURL& url);
++
++// The Space of the first matching route. A link that peeks is never routed
++// (D6), so `peeking` short-circuits to nothing.
++std::optional<std::string> RouteFor(const std::vector<Route>& routes,
++                                    const GURL& url,
++                                    bool peeking = false);
++
++// D5: the rule the tab menu writes -- the address's site, no regex.
++Route SiteRouteFor(const GURL& url, const std::string& space);
++
++const char* MatchName(Route::Match match);
++std::optional<Route::Match> MatchFromName(std::string_view name);
++
++std::vector<Route> RoutesFromValue(const base::ListValue& value);
++base::ListValue RoutesToValue(const std::vector<Route>& routes);
++
++// The profile pref stedding.spaces.routes.
++std::vector<Route> ReadRoutes(const PrefService* prefs);
++void WriteRoutes(PrefService* prefs, const std::vector<Route>& routes);
++// Adds `route`, replacing a rule with the same match and pattern.
++void AddRoute(PrefService* prefs, Route route);
++void RemoveRoute(PrefService* prefs, size_t index);
++
++// D3: an address handed over by another app is remembered for a moment, so
++// the tab it opens can land in the default Space. Take returns true once.
++void MarkExternalOpen(const GURL& url);
++bool TakeExternalOpen(const GURL& url);
++
++}  // namespace spaces
++
++#endif  // CHROME_BROWSER_UI_SPACES_SPACE_ROUTER_H_
+diff --git a/chrome/browser/ui/spaces/space_router_unittest.cc b/chrome/browser/ui/spaces/space_router_unittest.cc
+new file mode 100644
+index 0000000000000..91505fc8aa99f
+--- /dev/null
++++ b/chrome/browser/ui/spaces/space_router_unittest.cc
+@@ -0,0 +1,107 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/spaces/space_router.h"
++
++#include <string>
++#include <vector>
++
++#include "chrome/browser/ui/stedding/stedding_prefs.h"
++#include "components/prefs/pref_registry_simple.h"
++#include "components/prefs/testing_pref_service.h"
++#include "testing/gtest/include/gtest/gtest.h"
++#include "url/gurl.h"
++
++namespace spaces {
++namespace {
++
++Route Make(Route::Match match, const char* pattern, const char* space) {
++  Route route;
++  route.match = match;
++  route.pattern = pattern;
++  route.space = space;
++  return route;
++}
++
++// D1: the three kinds, first match wins, no match is nothing.
++TEST(SpaceRouterTest, MatchTable) {
++  const std::vector<Route> routes = {
++      Make(Route::Match::kSite, "github.com", "work"),
++      Make(Route::Match::kContains, "/docs/", "study"),
++      Make(Route::Match::kEquals, "https://example.com/exact", "home"),
++      Make(Route::Match::kSite, "github.com", "later"),
++  };
++  EXPECT_EQ("work", RouteFor(routes, GURL("https://gist.github.com/a/b")));
++  EXPECT_EQ("work", RouteFor(routes, GURL("https://GitHub.com/")));
++  EXPECT_EQ("study", RouteFor(routes, GURL("https://site.test/docs/x")));
++  EXPECT_EQ("home", RouteFor(routes, GURL("https://example.com/exact")));
++  EXPECT_FALSE(RouteFor(routes, GURL("https://example.com/other")).has_value());
++  EXPECT_FALSE(RouteFor(routes, GURL("https://github.com/"), /*peeking=*/true)
++                   .has_value())
++      << "D6";
++  EXPECT_EQ("localhost", SiteOf(GURL("http://localhost:8080/x")));
++  EXPECT_EQ("example.co.uk", SiteOf(GURL("https://www.example.co.uk/")));
++  EXPECT_EQ("", SiteOf(GURL("about:blank")));
++}
++
++// D5: the rule the tab menu writes is the address's site, nothing more.
++TEST(SpaceRouterTest, RuleFromTabIsSiteScoped) {
++  const Route route =
++      SiteRouteFor(GURL("https://gist.github.com/x/y?z=1#f"), "work");
++  EXPECT_EQ(Route::Match::kSite, route.match);
++  EXPECT_EQ("github.com", route.pattern);
++  EXPECT_EQ("work", route.space);
++  EXPECT_TRUE(RouteMatches(route, GURL("https://github.com/other")));
++  EXPECT_FALSE(RouteMatches(route, GURL("https://github.io/")));
++}
++
++// D1: the pref holds what was written; a rule is replaced, not doubled.
++TEST(SpaceRouterTest, PrefsRoundTrip) {
++  TestingPrefServiceSimple prefs;
++  prefs.registry()->RegisterListPref(stedding::prefs::kSpaceRoutes);
++  EXPECT_TRUE(ReadRoutes(&prefs).empty());
++  AddRoute(&prefs, Make(Route::Match::kSite, "github.com", "work"));
++  AddRoute(&prefs, Make(Route::Match::kContains, "/docs/", "study"));
++  AddRoute(&prefs, Make(Route::Match::kSite, "GitHub.com", "play"));
++  std::vector<Route> routes = ReadRoutes(&prefs);
++  ASSERT_EQ(2u, routes.size());
++  EXPECT_EQ("/docs/", routes[0].pattern);
++  EXPECT_EQ("play", routes[1].space) << "the later rule replaced the first";
++  RemoveRoute(&prefs, 0);
++  routes = ReadRoutes(&prefs);
++  ASSERT_EQ(1u, routes.size());
++  EXPECT_EQ("GitHub.com", routes[0].pattern);
++  RemoveRoute(&prefs, 5);
++  EXPECT_EQ(1u, ReadRoutes(&prefs).size());
++  // A malformed entry is skipped.
++  base::ListValue raw = RoutesToValue(routes);
++  base::DictValue bad;
++  bad.Set("match", "regex");
++  bad.Set("pattern", "x");
++  bad.Set("space", "y");
++  raw.Append(std::move(bad));
++  EXPECT_EQ(1u, RoutesFromValue(raw).size());
++}
++
++// D3: an external open is taken once.
++TEST(SpaceRouterTest, ExternalOpenIsTakenOnce) {
++  const GURL url("https://example.com/from-mail");
++  EXPECT_FALSE(TakeExternalOpen(url));
++  MarkExternalOpen(url);
++  EXPECT_FALSE(TakeExternalOpen(GURL("https://example.com/other")));
++  EXPECT_TRUE(TakeExternalOpen(url));
++  EXPECT_FALSE(TakeExternalOpen(url));
++}
++
++// D6: a link that peeks is not routed, whatever the rules say.
++TEST(SpaceRouterTest, PeekPrecedesRoutes) {
++  const std::vector<Route> routes = {
++      Make(Route::Match::kSite, "example.com", "work")};
++  EXPECT_TRUE(RouteFor(routes, GURL("https://example.com/")).has_value());
++  EXPECT_FALSE(RouteFor(routes, GURL("https://example.com/"), /*peeking=*/true)
++                   .has_value());
++}
++
++}  // namespace
++}  // namespace spaces
+diff --git a/chrome/browser/ui/stedding/menu_rules.cc b/chrome/browser/ui/stedding/menu_rules.cc
+index 70b264110d991..d8ffb286a1b61 100644
+--- a/chrome/browser/ui/stedding/menu_rules.cc
++++ b/chrome/browser/ui/stedding/menu_rules.cc
+@@ -48,8 +48,10 @@ bool IsGoogleAppMenuCommand(int command_id) {
+ }
+ 
+ bool IsTabMenuCommandVisible(TabRowKind kind, int command_id) {
+-  if (command_id >= TabStripModel::CommandSteddingMoveToSpaceFirst &&
+-      command_id <= TabStripModel::CommandSteddingMoveToSpaceLast) {
++  if ((command_id >= TabStripModel::CommandSteddingMoveToSpaceFirst &&
++       command_id <= TabStripModel::CommandSteddingMoveToSpaceLast) ||
++      (command_id >= TabStripModel::CommandSteddingRouteToSpaceFirst &&
++       command_id <= TabStripModel::CommandSteddingRouteToSpaceLast)) {
+     // An essentials tab is in every Space.
+     return kind != TabRowKind::kEssential;
+   }
+@@ -64,6 +66,7 @@ bool IsTabMenuCommandVisible(TabRowKind kind, int command_id) {
+       return kind != TabRowKind::kPlain;
+     case TabStripModel::CommandMoveTabToNewFolder:
+     case TabStripModel::CommandSteddingMoveToSpaceMenu:
++    case TabStripModel::CommandSteddingRouteToSpaceMenu:
+       // The essentials row is above every Space and never in a folder.
+       return kind != TabRowKind::kEssential;
+     default:
+diff --git a/chrome/browser/ui/stedding/stedding_prefs.cc b/chrome/browser/ui/stedding/stedding_prefs.cc
+index 49db88131d0df..6955e7d34ecad 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs.cc
++++ b/chrome/browser/ui/stedding/stedding_prefs.cc
+@@ -23,6 +23,8 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
+   registry->RegisterBooleanPref(kCtrlTabMru, true);
+   registry->RegisterListPref(kArcImportedIds);
+   registry->RegisterDictionaryPref(kArcImportedSpaces);
++  registry->RegisterListPref(kSpaceRoutes);
++  registry->RegisterStringPref(kExternalDefaultSpace, std::string());
+ }
+ 
+ }  // namespace stedding::prefs
+diff --git a/chrome/browser/ui/stedding/stedding_prefs.h b/chrome/browser/ui/stedding/stedding_prefs.h
+index f97cfb8f0b96d..2aff78dc4b564 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs.h
++++ b/chrome/browser/ui/stedding/stedding_prefs.h
+@@ -60,6 +60,11 @@ inline constexpr char kCtrlTabMru[] = "stedding.tabs.ctrl_tab_mru";
+ // the Spaces they became, so a second import adds nothing twice.
+ inline constexpr char kArcImportedIds[] = "stedding.import.arc_ids";
+ inline constexpr char kArcImportedSpaces[] = "stedding.import.arc_spaces";
++// routing D1: the rules ({match, pattern, space}) and the Space for links
++// from other apps (a Space id; empty means the active Space).
++inline constexpr char kSpaceRoutes[] = "stedding.spaces.routes";
++inline constexpr char kExternalDefaultSpace[] =
++    "stedding.spaces.external_default";
+ 
+ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
+ 
+diff --git a/chrome/browser/ui/tabs/BUILD.gn b/chrome/browser/ui/tabs/BUILD.gn
+index db1a4f0190ff8..9ec4ad7490f0a 100644
+--- a/chrome/browser/ui/tabs/BUILD.gn
++++ b/chrome/browser/ui/tabs/BUILD.gn
+@@ -116,6 +116,7 @@ if (!is_android) {
+     ]
+ 
+     deps = [
++      "//chrome/browser/ui/spaces:router",
+       ":tab_menu",
+       ":tab_model",
+       ":tab_strip",
+diff --git a/chrome/browser/ui/tabs/tab_menu_model.cc b/chrome/browser/ui/tabs/tab_menu_model.cc
+index 0731814383483..218eb3f6c20f0 100644
+--- a/chrome/browser/ui/tabs/tab_menu_model.cc
++++ b/chrome/browser/ui/tabs/tab_menu_model.cc
+@@ -14,6 +14,7 @@
+ #include "base/metrics/user_metrics.h"
+ #include "base/strings/strcat.h"
+ #include "base/strings/string_number_conversions.h"
++#include "base/strings/utf_string_conversions.h"
+ #include "build/build_config.h"
+ #include "chrome/app/chrome_command_ids.h"
+ #include "chrome/app/vector_icons/vector_icons.h"
+@@ -30,6 +31,7 @@
+ #include "chrome/browser/ui/color/chrome_color_id.h"
+ #include "chrome/browser/ui/immersive/immersive_mode_controller.h"
+ #include "chrome/browser/ui/send_tab_to_self/send_tab_to_self_context_menu_delegate.h"
++#include "chrome/browser/ui/spaces/space_router.h"
+ #include "chrome/browser/ui/stedding/stedding_prefs.h"
+ #include "chrome/browser/ui/stedding_ui_metrics.h"
+ #include "chrome/browser/ui/tabs/existing_tab_group_sub_menu_model.h"
+@@ -104,6 +106,10 @@ TabMenuModel::TabMenuModel(ui::SimpleMenuModel::Delegate* delegate,
+ 
+ TabMenuModel::~TabMenuModel() = default;
+ 
++std::vector<std::u16string> TabMenuModelDelegate::GetAllSpaceNames() {
++  return {};
++}
++
+ std::vector<std::u16string> TabMenuModelDelegate::GetOtherSpaceNames() {
+   return {};
+ }
+@@ -184,6 +190,30 @@ void TabMenuModel::BuildStedding(int index) {
+                                    u" Tabs to Space"}),
+                move_to_space_submenu_.get());
+   }
++  // Always Open <site> in: every Space, in switcher order; the rule is the
++  // site of the row the menu is on (routing D5).
++  content::WebContents* const menu_contents =
++      tab_strip_->GetWebContentsAt(index);
++  const GURL menu_url =
++      menu_contents ? menu_contents->GetLastCommittedURL() : GURL();
++  const std::vector<std::u16string> all_spaces =
++      tab_menu_model_delegate_ && menu_url.SchemeIsHTTPOrHTTPS()
++          ? tab_menu_model_delegate_->GetAllSpaceNames()
++          : std::vector<std::u16string>();
++  const std::string site = spaces::SiteOf(menu_url);
++  if (!all_spaces.empty() && !site.empty()) {
++    route_to_space_submenu_ = std::make_unique<ui::SimpleMenuModel>(delegate());
++    const size_t slots = TabStripModel::CommandSteddingRouteToSpaceLast -
++                         TabStripModel::CommandSteddingRouteToSpaceFirst + 1;
++    for (size_t i = 0; i < all_spaces.size() && i < slots; ++i) {
++      route_to_space_submenu_->AddItem(
++          TabStripModel::CommandSteddingRouteToSpaceFirst + static_cast<int>(i),
++          all_spaces[i]);
++    }
++    AddSubMenu(TabStripModel::CommandSteddingRouteToSpaceMenu,
++               base::StrCat({u"Always Open ", base::UTF8ToUTF16(site), u" in"}),
++               route_to_space_submenu_.get());
++  }
+   AddItem(TabStripModel::CommandMoveTabToNewFolder,
+           l10n_util::GetPluralStringFUTF16(
+               IDS_STEDDING_TAB_CXMENU_MOVE_TO_NEW_FOLDER, num_tabs));
+diff --git a/chrome/browser/ui/tabs/tab_menu_model.h b/chrome/browser/ui/tabs/tab_menu_model.h
+index c82a4df6fa369..61ce52a2ba316 100644
+--- a/chrome/browser/ui/tabs/tab_menu_model.h
++++ b/chrome/browser/ui/tabs/tab_menu_model.h
+@@ -109,6 +109,7 @@ class TabMenuModel : public ui::SimpleMenuModel {
+   std::unique_ptr<ui::SimpleMenuModel> arrange_split_view_submenu_;
+   // Stedding menus M1: "Move to Space".
+   std::unique_ptr<ui::SimpleMenuModel> move_to_space_submenu_;
++  std::unique_ptr<ui::SimpleMenuModel> route_to_space_submenu_;
+   std::unique_ptr<ui::SimpleMenuModel> glic_tab_sub_menu_model_;
+   std::unique_ptr<ui::SimpleMenuModel> send_tab_to_self_submenu_;
+   std::unique_ptr<send_tab_to_self::SendTabToSelfContextMenuDelegate>
+diff --git a/chrome/browser/ui/tabs/tab_menu_model_delegate.h b/chrome/browser/ui/tabs/tab_menu_model_delegate.h
+index 84ad897770dc4..386093f5eb2ab 100644
+--- a/chrome/browser/ui/tabs/tab_menu_model_delegate.h
++++ b/chrome/browser/ui/tabs/tab_menu_model_delegate.h
+@@ -42,6 +42,9 @@ class TabMenuModelDelegate {
+   // switcher order, for the tab menu's "Move to Space" rows. Empty where the
+   // window has no Spaces.
+   virtual std::vector<std::u16string> GetOtherSpaceNames();
++  // Stedding (routing D5): every Space of the tab's window, in switcher
++  // order, for "Always Open <site> in".
++  virtual std::vector<std::u16string> GetAllSpaceNames();
+ };
+ 
+ #endif  // CHROME_BROWSER_UI_TABS_TAB_MENU_MODEL_DELEGATE_H_
+diff --git a/chrome/browser/ui/tabs/tab_strip_model.cc b/chrome/browser/ui/tabs/tab_strip_model.cc
+index 1e37badb830bf..c86bb3055037b 100644
+--- a/chrome/browser/ui/tabs/tab_strip_model.cc
++++ b/chrome/browser/ui/tabs/tab_strip_model.cc
+@@ -2693,6 +2693,9 @@ bool TabStripModel::IsContextMenuCommandEnabled(
+     case CommandSteddingMoveToSpaceMenu:
+     case CommandSteddingMoveToSpaceFirst:
+     case CommandSteddingMoveToSpaceLast:
++    case CommandSteddingRouteToSpaceMenu:
++    case CommandSteddingRouteToSpaceFirst:
++    case CommandSteddingRouteToSpaceLast:
+       return false;
+ 
+     case CommandGoBack:
+@@ -3086,6 +3089,9 @@ void TabStripModel::ExecuteContextMenuCommand(int context_index,
+     case CommandSteddingMoveToSpaceMenu:
+     case CommandSteddingMoveToSpaceFirst:
+     case CommandSteddingMoveToSpaceLast:
++    case CommandSteddingRouteToSpaceMenu:
++    case CommandSteddingRouteToSpaceFirst:
++    case CommandSteddingRouteToSpaceLast:
+       break;
+ 
+     case CommandGoBack: {
+diff --git a/chrome/browser/ui/tabs/tab_strip_model.h b/chrome/browser/ui/tabs/tab_strip_model.h
+index 1556fc90bd91e..55fe48a9b6d16 100644
+--- a/chrome/browser/ui/tabs/tab_strip_model.h
++++ b/chrome/browser/ui/tabs/tab_strip_model.h
+@@ -858,6 +858,12 @@ class TabStripModel {
+     CommandSteddingMoveToSpaceMenu,
+     CommandSteddingMoveToSpaceFirst,
+     CommandSteddingMoveToSpaceLast = CommandSteddingMoveToSpaceFirst + 8,
++    // Stedding (docs/features/routing.md D5): "Always Open <site> in" lists
++    // every Space in switcher order; the i-th writes a site rule and routes
++    // the selection now.
++    CommandSteddingRouteToSpaceMenu,
++    CommandSteddingRouteToSpaceFirst,
++    CommandSteddingRouteToSpaceLast = CommandSteddingRouteToSpaceFirst + 8,
+     CommandGoBack,
+     CommandCloseAllTabs,
+     CommandToggleVertical,
+diff --git a/chrome/browser/ui/toasts/BUILD.gn b/chrome/browser/ui/toasts/BUILD.gn
+index e4e7328944ab6..acc259f0be1f4 100644
+--- a/chrome/browser/ui/toasts/BUILD.gn
++++ b/chrome/browser/ui/toasts/BUILD.gn
+@@ -58,6 +58,7 @@ source_set("impl") {
+     "//chrome/browser/profiles:profile",
+     "//chrome/browser/send_tab_to_self",
+     "//chrome/browser/skills:public",
++    "//chrome/browser/ui/spaces",
+     "//chrome/browser/ui/stedding:motion",
+     "//chrome/browser/ui/stedding/screenshot",
+     "//chrome/browser/translate",
+diff --git a/chrome/browser/ui/toasts/api/toast_id.cc b/chrome/browser/ui/toasts/api/toast_id.cc
+index 925465ec2a13f..935b598fc2c40 100644
+--- a/chrome/browser/ui/toasts/api/toast_id.cc
++++ b/chrome/browser/ui/toasts/api/toast_id.cc
+@@ -121,6 +121,8 @@ std::string_view GetToastName(ToastId toast_id) {
+       return "SteddingLinkCopiedClean";
+     case ToastId::kSteddingCaptureSaved:
+       return "SteddingCaptureSaved";
++    case ToastId::kSteddingRouted:
++      return "SteddingRouted";
+   }
+ 
+   NOTREACHED();
+diff --git a/chrome/browser/ui/toasts/api/toast_id.h b/chrome/browser/ui/toasts/api/toast_id.h
+index edffe4b1136f1..538f40f46529e 100644
+--- a/chrome/browser/ui/toasts/api/toast_id.h
++++ b/chrome/browser/ui/toasts/api/toast_id.h
+@@ -81,7 +81,10 @@ enum class ToastId {
+   // (docs/features/screenshot.md C5).
+   kSteddingLinkCopiedClean = 56,
+   kSteddingCaptureSaved = 57,
+-  kMaxValue = kSteddingCaptureSaved,
++  // A tab moved to the Space its site is routed to (docs/features/routing.md
++  // D4); the button undoes it.
++  kSteddingRouted = 58,
++  kMaxValue = kSteddingRouted,
+ };
+ // LINT.ThenChange(/tools/metrics/histograms/metadata/toasts/enums.xml:ToastId)
+ 
+diff --git a/chrome/browser/ui/toasts/toast_service.cc b/chrome/browser/ui/toasts/toast_service.cc
+index 254f7cfa89ee1..beb9e0eec1395 100644
+--- a/chrome/browser/ui/toasts/toast_service.cc
++++ b/chrome/browser/ui/toasts/toast_service.cc
+@@ -4,9 +4,6 @@
+ 
+ #include "chrome/browser/ui/toasts/toast_service.h"
+ 
+-#include "chrome/browser/platform_util.h"
+-#include "chrome/browser/ui/stedding/screenshot/screenshot_capture.h"
+-
+ #include <memory>
+ 
+ #include "base/feature_list.h"
+@@ -18,6 +15,7 @@
+ #include "chrome/browser/glic/browser_ui/glic_vector_icon_manager.h"
+ #include "chrome/browser/indigo/indigo_page_action_controller.h"
+ #include "chrome/browser/indigo/resources/grit/indigo_strings.h"
++#include "chrome/browser/platform_util.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/send_tab_to_self/send_tab_to_self_client_service.h"
+ #include "chrome/browser/send_tab_to_self/send_tab_to_self_client_service_factory.h"
+@@ -32,6 +30,8 @@
+ #include "chrome/browser/ui/side_panel/side_panel_entry_id.h"
+ #include "chrome/browser/ui/side_panel/side_panel_enums.h"
+ #include "chrome/browser/ui/side_panel/side_panel_ui.h"
++#include "chrome/browser/ui/spaces/space_model.h"
++#include "chrome/browser/ui/stedding/screenshot/screenshot_capture.h"
+ #include "chrome/browser/ui/tabs/public/tab_features.h"
+ #include "chrome/browser/ui/tabs/saved_tab_groups/collaboration_messaging_observer.h"
+ #include "chrome/browser/ui/tabs/saved_tab_groups/collaboration_messaging_observer_factory.h"
+@@ -392,6 +392,21 @@ void ToastService::RegisterToasts(
+                                base::Unretained(browser_window_interface)))
+           .Build());
+ 
++  toast_registry_->RegisterToast(
++      ToastId::kSteddingRouted,
++      ToastSpecification::Builder(kGridViewIcon, IDS_STEDDING_ROUTED_TOAST_BODY)
++          .AddCloseButton()
++          .AddActionButton(IDS_STEDDING_ROUTED_TOAST_BUTTON,
++                           base::BindRepeating(
++                               [](BrowserWindowInterface* window) {
++                                 if (spaces::SpaceModel* const model =
++                                         spaces::SpaceModel::From(window)) {
++                                   model->UndoLastRoute();
++                                 }
++                               },
++                               base::Unretained(browser_window_interface)))
++          .Build());
++
+   toast_registry_->RegisterToast(
+       ToastId::kSkillSaved,
+       ToastSpecification::Builder(
+diff --git a/chrome/browser/ui/views/spaces/BUILD.gn b/chrome/browser/ui/views/spaces/BUILD.gn
+index 6a105da40d554..5b25adada55dc 100644
+--- a/chrome/browser/ui/views/spaces/BUILD.gn
++++ b/chrome/browser/ui/views/spaces/BUILD.gn
+@@ -23,6 +23,8 @@ source_set("spaces") {
+   ]
+ 
+   deps = [
++    "//chrome/browser/ui/toasts",
++    "//chrome/browser/ui/toasts/api:toasts",
+     "//components/vector_icons",
+     "//chrome/browser/ui/browser_window",
+     "//chrome/browser/ui/tabs:tab_strip",
+@@ -38,6 +40,8 @@ source_set("unit_tests") {
+     "space_switcher_rules_unittest.cc",
+   ]
+   deps = [
++    "//chrome/browser/ui/toasts",
++    "//chrome/browser/ui/toasts/api:toasts",
+     ":spaces",
+     "//base",
+     "//chrome/browser/ui/spaces",
+diff --git a/chrome/browser/ui/views/spaces/space_switcher_view.cc b/chrome/browser/ui/views/spaces/space_switcher_view.cc
+index 3e1ae3ba31ed0..541a2d3db7575 100644
+--- a/chrome/browser/ui/views/spaces/space_switcher_view.cc
++++ b/chrome/browser/ui/views/spaces/space_switcher_view.cc
+@@ -19,6 +19,8 @@
+ #include "chrome/browser/ui/spaces/space.h"
+ #include "chrome/browser/ui/spaces/space_colors.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "chrome/browser/ui/toasts/api/toast_id.h"
++#include "chrome/browser/ui/toasts/toast_controller.h"
+ #include "chrome/browser/ui/views/spaces/space_switcher_rules.h"
+ #include "components/tabs/public/tab_interface.h"
+ #include "components/vector_icons/vector_icons.h"
+@@ -620,6 +622,19 @@ void SpaceSwitcherView::OnSpaceMetadataChanged(const SpaceId& id) {
+   Rebuild();
+ }
+ 
++void SpaceSwitcherView::OnTabRouted(tabs::TabInterface* tab,
++                                    const SpaceId& from,
++                                    const SpaceId& to) {
++  // routing D4: "Opened in <Space> · Undo".
++  ToastController* const toasts = ToastController::From(&*browser_);
++  if (!toasts) {
++    return;
++  }
++  ToastParams params(ToastId::kSteddingRouted);
++  params.body_string_replacement_params = {model_->DisplayName(to)};
++  toasts->MaybeShowToast(std::move(params));
++}
++
+ void SpaceSwitcherView::OnThemeChanged() {
+   views::View::OnThemeChanged();
+   Rebuild();
+diff --git a/chrome/browser/ui/views/spaces/space_switcher_view.h b/chrome/browser/ui/views/spaces/space_switcher_view.h
+index ee63cbd5ff6e7..af8be0589e4c8 100644
+--- a/chrome/browser/ui/views/spaces/space_switcher_view.h
++++ b/chrome/browser/ui/views/spaces/space_switcher_view.h
+@@ -71,6 +71,9 @@ class SpaceSwitcherView : public views::View,
+   void OnSpaceRemoved(const SpaceId& id) override;
+   void OnActiveSpaceChanged(const SpaceId& from, const SpaceId& to) override;
+   void OnSpaceMetadataChanged(const SpaceId& id) override;
++  void OnTabRouted(tabs::TabInterface* tab,
++                   const SpaceId& from,
++                   const SpaceId& to) override;
+ 
+   // The Space whose icon is at `point_in_screen`, if any. Used by the drag
+   // target to say which Space a tab was dropped on.
+diff --git a/chrome/browser/ui/views/tabs/common/tab_strip_collection_controller.cc b/chrome/browser/ui/views/tabs/common/tab_strip_collection_controller.cc
+index be1cc4aa73d58..fdf6cda434fdb 100644
+--- a/chrome/browser/ui/views/tabs/common/tab_strip_collection_controller.cc
++++ b/chrome/browser/ui/views/tabs/common/tab_strip_collection_controller.cc
+@@ -10,6 +10,7 @@
+ #include "base/metrics/histogram_functions.h"
+ #include "base/metrics/user_metrics.h"
+ #include "base/metrics/user_metrics_action.h"
++#include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/tab_group_sync/tab_group_sync_service_factory.h"
+ #include "chrome/browser/ui/browser_command_controller.h"
+ #include "chrome/browser/ui/browser_commands.h"
+@@ -18,6 +19,7 @@
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/spaces/space.h"
+ #include "chrome/browser/ui/spaces/space_model.h"
++#include "chrome/browser/ui/spaces/space_router.h"
+ #include "chrome/browser/ui/stedding/copy_link.h"
+ #include "chrome/browser/ui/stedding/menu_rules.h"
+ #include "chrome/browser/ui/stedding/pin_lifecycle.h"
+@@ -46,6 +48,7 @@
+ #include "chrome/browser/ui/views/tabs/groups/tab_group_editor_bubble_view.h"
+ #include "chrome/browser/ui/views/tabs/tab/tab_context_menu_controller.h"
+ #include "chrome/grit/generated_resources.h"
++#include "components/prefs/pref_service.h"
+ #include "components/tabs/public/folder_tab_collection.h"
+ #include "components/tabs/public/tab_collection_types.h"
+ #include "components/tabs/public/tab_group.h"
+@@ -558,7 +561,10 @@ bool TabStripCollectionController::IsContextMenuCommandEnabled(
+   }
+   if (command_id == TabStripModel::CommandSteddingMoveToSpaceMenu ||
+       (command_id >= TabStripModel::CommandSteddingMoveToSpaceFirst &&
+-       command_id <= TabStripModel::CommandSteddingMoveToSpaceLast)) {
++       command_id <= TabStripModel::CommandSteddingMoveToSpaceLast) ||
++      command_id == TabStripModel::CommandSteddingRouteToSpaceMenu ||
++      (command_id >= TabStripModel::CommandSteddingRouteToSpaceFirst &&
++       command_id <= TabStripModel::CommandSteddingRouteToSpaceLast)) {
+     return tab && !tab->IsPinned();
+   }
+   if (command_id == TabStripModel::CommandSteddingSleepTab) {
+@@ -640,6 +646,38 @@ void TabStripCollectionController::ExecuteContextMenuCommand(
+     }
+     return;
+   }
++  if (command_id >= TabStripModel::CommandSteddingRouteToSpaceFirst &&
++      command_id <= TabStripModel::CommandSteddingRouteToSpaceLast) {
++    // routing D5: the i-th Space in switcher order gets a site rule for each
++    // selected tab, and the tabs go there now.
++    spaces::SpaceModel* const space_model =
++        spaces::SpaceModel::From(browser_view_->browser());
++    if (!space_model || !tab) {
++      return;
++    }
++    const size_t which =
++        command_id - TabStripModel::CommandSteddingRouteToSpaceFirst;
++    if (which >= space_model->size()) {
++      return;
++    }
++    const spaces::SpaceId target = space_model->spaces()[which]->id();
++    PrefService* const prefs = browser_view_->browser()->GetProfile()->GetPrefs();
++    for (tabs::TabInterface* each :
++         model_->GetTabsForContextMenuCommand(model_->GetIndexOfTab(tab))) {
++      content::WebContents* const contents = each->GetContents();
++      if (each->IsPinned() || !contents) {
++        continue;
++      }
++      const GURL url = contents->GetLastCommittedURL();
++      if (!url.SchemeIsHTTPOrHTTPS()) {
++        continue;
++      }
++      spaces::AddRoute(prefs, spaces::SiteRouteFor(url, target.ToString()));
++      space_model->RouteTab(each, url, /*foreground=*/true,
++                            /*external=*/false);
++    }
++    return;
++  }
+   if (command_id >= TabStripModel::CommandSteddingMoveToSpaceFirst &&
+       command_id <= TabStripModel::CommandSteddingMoveToSpaceLast) {
+     // menus M1: the i-th Space other than the active one, in switcher order
+diff --git a/chrome/browser/ui/webui/settings/settings_ui.cc b/chrome/browser/ui/webui/settings/settings_ui.cc
+index 5ab68194fa9f3..ba4754407004b 100644
+--- a/chrome/browser/ui/webui/settings/settings_ui.cc
++++ b/chrome/browser/ui/webui/settings/settings_ui.cc
+@@ -692,6 +692,15 @@ SettingsUI::SettingsUI(content::WebUI* web_ui)
+   html_source->AddString("steddingSpaceNamePlaceholder", "Space name");
+   html_source->AddString("steddingDeleteSpace", "Delete Space");
+   html_source->AddString("steddingImportArcLabel", "Import from Arc");
++  html_source->AddString("steddingExternalDefaultLabel",
++                         "Open links from other apps in");
++  html_source->AddString("steddingExternalDefaultSubLabel",
++                         "A site with a rule below goes to its Space instead.");
++  html_source->AddString("steddingExternalActiveSpace", "The active Space");
++  html_source->AddString("steddingRoutesLabel", "Always open here:");
++  html_source->AddString("steddingRouteAddPlaceholder",
++                         "Add a site, e.g. github.com");
++  html_source->AddString("steddingRemoveRoute", "Remove");
+   html_source->AddString("steddingImportArcButton", "Import\u2026");
+   html_source->AddString("steddingArchiveLabel",
+                          "Archive tabs nobody has looked at for");
+diff --git a/chrome/browser/ui/webui/settings/stedding_spaces_handler.cc b/chrome/browser/ui/webui/settings/stedding_spaces_handler.cc
+index 7bced90c4445c..955baf1f10eef 100644
+--- a/chrome/browser/ui/webui/settings/stedding_spaces_handler.cc
++++ b/chrome/browser/ui/webui/settings/stedding_spaces_handler.cc
+@@ -9,13 +9,17 @@
+ #include <utility>
+ 
+ #include "base/functional/bind.h"
++#include "base/strings/string_util.h"
+ #include "base/strings/stringprintf.h"
+ #include "base/strings/utf_string_conversions.h"
+ #include "base/token.h"
++#include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+ #include "chrome/browser/ui/spaces/space.h"
+ #include "chrome/browser/ui/spaces/space_id.h"
++#include "chrome/browser/ui/spaces/space_router.h"
++#include "components/prefs/pref_service.h"
+ #include "content/public/browser/web_ui.h"
+ #include "third_party/skia/include/core/SkColor.h"
+ 
+@@ -47,6 +51,14 @@ void SteddingSpacesHandler::RegisterMessages() {
+       "steddingRenameSpace",
+       base::BindRepeating(&SteddingSpacesHandler::HandleRenameSpace,
+                           base::Unretained(this)));
++  web_ui()->RegisterMessageCallback(
++      "steddingAddRoute",
++      base::BindRepeating(&SteddingSpacesHandler::HandleAddRoute,
++                          base::Unretained(this)));
++  web_ui()->RegisterMessageCallback(
++      "steddingRemoveRoute",
++      base::BindRepeating(&SteddingSpacesHandler::HandleRemoveRoute,
++                          base::Unretained(this)));
+   web_ui()->RegisterMessageCallback(
+       "steddingGetArcImport",
+       base::BindRepeating(&SteddingSpacesHandler::HandleGetArcImport,
+@@ -109,6 +121,21 @@ base::ListValue SteddingSpacesHandler::ListSpaces() {
+                                  SkColorGetG(space->color()),
+                                  SkColorGetB(space->color())));
+     entry.Set("active", space->id() == model->active_id());
++    // routing D5: this Space's rules, with their index in the pref.
++    base::ListValue routes;
++    const std::vector<spaces::Route> all =
++        spaces::ReadRoutes(Profile::FromWebUI(web_ui())->GetPrefs());
++    for (size_t i = 0; i < all.size(); ++i) {
++      if (all[i].space != space->id().ToString()) {
++        continue;
++      }
++      base::DictValue route;
++      route.Set("index", static_cast<int>(i));
++      route.Set("pattern", all[i].pattern);
++      route.Set("match", spaces::MatchName(all[i].match));
++      routes.Append(std::move(route));
++    }
++    entry.Set("routes", std::move(routes));
+     list.Append(std::move(entry));
+   }
+   return list;
+@@ -137,6 +164,37 @@ void SteddingSpacesHandler::HandleRenameSpace(const base::ListValue& args) {
+   model->SetSpaceName(*id, args[1].GetString());
+ }
+ 
++void SteddingSpacesHandler::HandleAddRoute(const base::ListValue& args) {
++  CHECK_EQ(2U, args.size());
++  AllowJavascript();
++  const std::string& space = args[0].GetString();
++  std::string site = base::ToLowerASCII(args[1].GetString());
++  base::TrimWhitespaceASCII(site, base::TRIM_ALL, &site);
++  // Whatever was typed, the rule is a site: "https://gist.github.com/x"
++  // and "github.com" both become github.com.
++  const GURL as_url(site.find("://") == std::string::npos ? "https://" + site
++                                                          : site);
++  const std::string pattern = spaces::SiteOf(as_url);
++  if (pattern.empty() || space.empty()) {
++    return;
++  }
++  spaces::AddRoute(Profile::FromWebUI(web_ui())->GetPrefs(),
++                   spaces::SiteRouteFor(as_url, space));
++  PushSpaces();
++}
++
++void SteddingSpacesHandler::HandleRemoveRoute(const base::ListValue& args) {
++  CHECK_EQ(1U, args.size());
++  AllowJavascript();
++  const std::optional<int> index = args[0].GetIfInt();
++  if (!index || *index < 0) {
++    return;
++  }
++  spaces::RemoveRoute(Profile::FromWebUI(web_ui())->GetPrefs(),
++                      static_cast<size_t>(*index));
++  PushSpaces();
++}
++
+ void SteddingSpacesHandler::HandleGetArcImport(const base::ListValue& args) {
+   CHECK_EQ(1U, args.size());
+   AllowJavascript();
+diff --git a/chrome/browser/ui/webui/settings/stedding_spaces_handler.h b/chrome/browser/ui/webui/settings/stedding_spaces_handler.h
+index 2e8436de88dcf..4ec3bb74e3ac6 100644
+--- a/chrome/browser/ui/webui/settings/stedding_spaces_handler.h
++++ b/chrome/browser/ui/webui/settings/stedding_spaces_handler.h
+@@ -46,6 +46,9 @@ class SteddingSpacesHandler : public settings::SettingsPageUIHandler,
+   void HandleGetSpaces(const base::ListValue& args);
+   void HandleRenameSpace(const base::ListValue& args);
+   void HandleDeleteSpace(const base::ListValue& args);
++  // routing D5: steddingAddRoute(spaceId, site) and steddingRemoveRoute(index).
++  void HandleAddRoute(const base::ListValue& args);
++  void HandleRemoveRoute(const base::ListValue& args);
+   // import I4: steddingGetArcImport(callback) -> the summary line, or "" when
+   // this Mac has no Arc sidebar; steddingImportFromArc(callback) -> what was
+   // imported.

@@ -1,0 +1,1919 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Sat, 5 Sep 2026 10:55:58 -0400
+Subject: import: an Arc user's sidebar comes across, Spaces, essentials, pins
+ and folders, every tab unloaded
+
+spaces::ParseArcSidebar reads Arc's StorableSidebar.json into a plan
+(Spaces with their icon and the nearest Stedding swatch, the essentials,
+per Space the pinned and unpinned items with lists as folders) and
+ApplyArcImport applies it to a window: a lone unnamed default Space is
+taken over by the first Arc Space, the essentials are capped at twelve,
+loose pinned items become Space-pinned tabs with their home, lists become
+folders, and every tab is a restored navigation entry marked discarded so
+a large sidebar costs nothing until a tab is opened. The file is read
+through a copy since Arc rewrites it while running; the flow says when Arc
+is running; Arc's per-Space profile binding is dropped and named in the
+summary; a second import adds nothing (Arc's ids are kept in the profile).
+Entry points: the welcome flow's import step, chrome://settings/stedding
+under the Spaces list, and a bar action (docs/features/import.md I1-I4,
+I8-I12).
+
+Why: docs/ROUND6-PLAN.md wave 3, R6-22: the first thing an Arc user does.
+Removable when: Chromium's importer knows Arc's sidebar, or Arc ships an
+export.
+---
+ .../stedding_page/stedding_page.html.ts       |  11 +
+ .../settings/stedding_page/stedding_page.ts   |  17 +
+ .../resources/stedding_welcome/app.css        |  21 +
+ .../browser/resources/stedding_welcome/app.ts |  46 +
+ chrome/browser/ui/spaces/BUILD.gn             |   4 +
+ .../browser/ui/spaces/arc_sidebar_importer.cc | 813 ++++++++++++++++++
+ .../browser/ui/spaces/arc_sidebar_importer.h  | 158 ++++
+ .../spaces/arc_sidebar_importer_unittest.cc   | 275 ++++++
+ chrome/browser/ui/stedding/stedding_prefs.cc  |   2 +
+ chrome/browser/ui/stedding/stedding_prefs.h   |   4 +
+ .../ui/views/commandbar/command_bar_view.cc   |  36 +
+ .../browser/ui/webui/settings/settings_ui.cc  |   2 +
+ .../webui/settings/stedding_spaces_handler.cc |  59 +-
+ .../webui/settings/stedding_spaces_handler.h  |  12 +
+ .../stedding_welcome_handler.cc               |  78 +-
+ .../stedding_welcome_handler.h                |  12 +-
+ 16 files changed, 1533 insertions(+), 17 deletions(-)
+ create mode 100644 chrome/browser/ui/spaces/arc_sidebar_importer.cc
+ create mode 100644 chrome/browser/ui/spaces/arc_sidebar_importer.h
+ create mode 100644 chrome/browser/ui/spaces/arc_sidebar_importer_unittest.cc
+
+diff --git a/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts b/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
+index 31c1b75aa8ece..b33ae0670008d 100644
+--- a/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
++++ b/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
+@@ -137,6 +137,17 @@ export function getHtml(this: SettingsSteddingPageElement) {
+           @click="${this.onDeleteSpaceClick_}">
+       </cr-icon-button>
+     </div>`)}
++  ${this.arcSummary_ ? html`
++    <div class="settings-box continuation" id="arcImport">
++      <div class="flex">
++        <div class="label">$i18n{steddingImportArcLabel}</div>
++        <div class="secondary">${this.arcSummary_}</div>
++      </div>
++      <cr-button ?disabled="${this.arcImporting_}"
++          @click="${this.onImportArcClick_}">
++        $i18n{steddingImportArcButton}
++      </cr-button>
++    </div>` : ''}
+   <settings-toggle-button
+       id="newTabHint"
+       class="hr"
+diff --git a/chrome/browser/resources/settings/stedding_page/stedding_page.ts b/chrome/browser/resources/settings/stedding_page/stedding_page.ts
+index 20dcceaf3c167..a1258f6d64ae8 100644
+--- a/chrome/browser/resources/settings/stedding_page/stedding_page.ts
++++ b/chrome/browser/resources/settings/stedding_page/stedding_page.ts
+@@ -8,6 +8,7 @@
+  * behaviours this browser adds on top of Chromium, each backed by one
+  * profile preference (chrome/browser/ui/stedding/stedding_prefs.h).
+  */
++import 'chrome://resources/cr_elements/cr_button/cr_button.js';
+ import 'chrome://resources/cr_elements/cr_icon_button/cr_icon_button.js';
+ import 'chrome://resources/cr_elements/cr_input/cr_input.js';
+ import '../controls/settings_dropdown_menu.js';
+@@ -68,11 +69,16 @@ export class SettingsSteddingPageElement extends
+     return {
+       spaces_: {type: Array},
+       shortcuts_: {type: Array},
++      arcSummary_: {type: String},
++      arcImporting_: {type: Boolean},
+     };
+   }
+ 
+   protected accessor spaces_: SteddingSpace[] = [];
+   protected accessor shortcuts_: SteddingShortcutGroup[] = [];
++  // import I4: Arc's sidebar summary, or '' when this Mac has none.
++  protected accessor arcSummary_: string = '';
++  protected accessor arcImporting_: boolean = false;
+ 
+   override connectedCallback() {
+     super.connectedCallback();
+@@ -85,6 +91,9 @@ export class SettingsSteddingPageElement extends
+     sendWithPromise('steddingGetShortcuts').then((groups: unknown) => {
+       this.shortcuts_ = groups as SteddingShortcutGroup[];
+     });
++    sendWithPromise('steddingGetArcImport').then((summary: unknown) => {
++      this.arcSummary_ = String(summary || '');
++    });
+   }
+ 
+   protected onSpaceNameChange_(e: Event) {
+@@ -92,6 +101,14 @@ export class SettingsSteddingPageElement extends
+     chrome.send('steddingRenameSpace', [input.dataset['id'], input.value]);
+   }
+ 
++  protected onImportArcClick_() {
++    this.arcImporting_ = true;
++    sendWithPromise('steddingImportFromArc').then((line: unknown) => {
++      this.arcSummary_ = String(line);
++      this.arcImporting_ = false;
++    });
++  }
++
+   protected onDeleteSpaceClick_(e: Event) {
+     const id = (e.currentTarget as HTMLElement).dataset['id'];
+     chrome.send('steddingDeleteSpace', [id]);
+diff --git a/chrome/browser/resources/stedding_welcome/app.css b/chrome/browser/resources/stedding_welcome/app.css
+index fedb18c1f562a..69e37a09ff318 100644
+--- a/chrome/browser/resources/stedding_welcome/app.css
++++ b/chrome/browser/resources/stedding_welcome/app.css
+@@ -294,3 +294,24 @@ button:disabled {
+     transition: none;
+   }
+ }
++
++/* import I4: the Arc row on the import step. */
++.arc-import {
++  border: 1px solid var(--stedding-hairline, rgba(128, 128, 128, 0.3));
++  border-radius: 12px;
++  margin-bottom: 16px;
++  padding: 12px 16px;
++}
++
++.arc-import .name {
++  font-weight: 600;
++}
++
++.arc-import .hint {
++  margin-top: 2px;
++  opacity: 0.75;
++}
++
++.arc-import .import-row {
++  margin-top: 10px;
++}
+diff --git a/chrome/browser/resources/stedding_welcome/app.ts b/chrome/browser/resources/stedding_welcome/app.ts
+index 6b4fdfb109407..76e3ebd6081e6 100644
+--- a/chrome/browser/resources/stedding_welcome/app.ts
++++ b/chrome/browser/resources/stedding_welcome/app.ts
+@@ -38,6 +38,11 @@ const state = {
+   importHistory: true,
+   importPasswords: true,
+   scheme: 'system',
++  arc: null as ArcImport|null,
++  arcSpaces: true,
++  arcPinned: true,
++  arcUnpinned: true,
++  arcStatus: '',
+   spaceColors: [] as SpaceColor[],
+   spaceColor: 0,
+   defaultState: 'unknown',
+@@ -48,6 +53,13 @@ interface SpaceColor {
+   color: string;
+ }
+ 
++// import I2, I4: what Arc's sidebar holds, before anything is applied.
++interface ArcImport {
++  found: boolean;
++  arcRunning: boolean;
++  summary: string;
++}
++
+ function el<K extends keyof HTMLElementTagNameMap>(
+     tag: K, className?: string, text?: string): HTMLElementTagNameMap[K] {
+   const node = document.createElement(tag);
+@@ -145,6 +157,36 @@ function renderStep(main: HTMLElement) {
+     case 'import': {
+       heading('Bring your bookmarks and history',
+               'From another browser on this Mac. Nothing leaves the machine; it is copied into your profile.');
++      // import I4: Arc's sidebar, when this Mac has one.
++      if (state.arc && state.arc.found) {
++        const arc = el('div', 'arc-import');
++        arc.append(el('div', 'name', 'Your Arc sidebar'),
++                   el('div', 'hint', state.arc.summary));
++        if (state.arc.arcRunning) {
++          arc.append(el('div', 'hint', 'Arc is running: quit it first for a complete copy.'));
++        }
++        const choices = el('div', 'import-row');
++        choices.append(
++            checkbox('Spaces', state.arcSpaces, v => state.arcSpaces = v),
++            checkbox('Pinned tabs and essentials', state.arcPinned, v => state.arcPinned = v),
++            checkbox('Other tabs', state.arcUnpinned, v => state.arcUnpinned = v));
++        const button = el('button', 'secondary',
++            state.arcStatus === 'inProgress' ? 'Importing…' :
++            state.arcStatus ? state.arcStatus : 'Import from Arc');
++        button.disabled = state.arcStatus !== '';
++        button.addEventListener('click', () => {
++          state.arcStatus = 'inProgress';
++          render();
++          sendWithPromise('importFromArc', state.arcSpaces, state.arcPinned, state.arcUnpinned)
++              .then((line: unknown) => {
++                state.arcStatus = String(line);
++                render();
++              });
++        });
++        choices.append(button);
++        arc.append(choices);
++        main.append(arc);
++      }
+       if (state.sources.length === 0) {
+         main.append(el('p', 'lead', 'No other browser profiles were found.'));
+         break;
+@@ -326,6 +368,10 @@ sendWithPromise('getSearchEngines').then((engines: unknown) => {
+   state.engines = engines as SearchEngine[];
+   render();
+ });
++sendWithPromise('getArcImport').then((arc: unknown) => {
++  state.arc = arc as ArcImport;
++  render();
++});
+ sendWithPromise('initializeImportDialog').then((sources: unknown) => {
+   state.sources = sources as ImportSource[];
+   if (state.sources.length > 0) {
+diff --git a/chrome/browser/ui/spaces/BUILD.gn b/chrome/browser/ui/spaces/BUILD.gn
+index c8cffabe64462..8625123d73b6b 100644
+--- a/chrome/browser/ui/spaces/BUILD.gn
++++ b/chrome/browser/ui/spaces/BUILD.gn
+@@ -4,6 +4,7 @@
+ 
+ source_set("spaces") {
+   public = [
++    "arc_sidebar_importer.h",
+     "space.h",
+     "space_colors.h",
+     "space_commands.h",
+@@ -12,6 +13,7 @@ source_set("spaces") {
+     "tab_space_restore_data.h",
+   ]
+   sources = [
++    "arc_sidebar_importer.cc",
+     "space.cc",
+     "space_commands.cc",
+     "space_model.cc",
+@@ -40,12 +42,14 @@ source_set("spaces") {
+     "//components/sessions",
+     "//content/public/browser",
+     "//chrome/browser/ui/browser_window",
++    "//url",
+   ]
+ }
+ 
+ source_set("unit_tests") {
+   testonly = true
+   sources = [
++    "arc_sidebar_importer_unittest.cc",
+     "session_rebuild_unittest.cc",
+     "space_commands_unittest.cc",
+     "space_model_unittest.cc",
+diff --git a/chrome/browser/ui/spaces/arc_sidebar_importer.cc b/chrome/browser/ui/spaces/arc_sidebar_importer.cc
+new file mode 100644
+index 0000000000000..48ae161ef502a
+--- /dev/null
++++ b/chrome/browser/ui/spaces/arc_sidebar_importer.cc
+@@ -0,0 +1,813 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/spaces/arc_sidebar_importer.h"
++
++#include <algorithm>
++#include <map>
++#include <memory>
++#include <set>
++#include <utility>
++
++#include "base/files/file_util.h"
++#include "base/files/scoped_temp_dir.h"
++#include "base/functional/bind.h"
++#include "base/json/json_reader.h"
++#include "base/memory/weak_ptr.h"
++#include "base/path_service.h"
++#include "base/process/process_iterator.h"
++#include "base/strings/strcat.h"
++#include "base/strings/string_number_conversions.h"
++#include "base/strings/utf_string_conversions.h"
++#include "base/task/thread_pool.h"
++#include "base/token.h"
++#include "base/values.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/spaces/space.h"
++#include "chrome/browser/ui/spaces/space_colors.h"
++#include "chrome/browser/ui/spaces/space_model.h"
++#include "chrome/browser/ui/stedding/stedding_prefs.h"
++#include "chrome/browser/ui/tabs/tab_model.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "components/prefs/pref_service.h"
++#include "components/prefs/scoped_user_pref_update.h"
++#include "components/tabs/public/folder_tab_collection.h"
++#include "components/tabs/public/tab_interface.h"
++#include "content/public/browser/navigation_controller.h"
++#include "content/public/browser/navigation_entry.h"
++#include "content/public/browser/restore_type.h"
++#include "content/public/browser/web_contents.h"
++#include "content/public/common/referrer.h"
++#include "services/network/public/cpp/shared_url_loader_factory.h"
++#include "ui/base/page_transition_types.h"
++
++namespace spaces {
++
++ArcImportPlan::Node::Node() = default;
++ArcImportPlan::Node::Node(const Node& other) = default;
++ArcImportPlan::Node::Node(Node&& other) = default;
++ArcImportPlan::Node& ArcImportPlan::Node::operator=(const Node& other) =
++    default;
++ArcImportPlan::Node& ArcImportPlan::Node::operator=(Node&& other) = default;
++ArcImportPlan::Node::~Node() = default;
++
++ArcImportPlan::Space::Space() = default;
++ArcImportPlan::Space::Space(const Space& other) = default;
++ArcImportPlan::Space::Space(Space&& other) = default;
++ArcImportPlan::Space& ArcImportPlan::Space::operator=(const Space& other) =
++    default;
++ArcImportPlan::Space& ArcImportPlan::Space::operator=(Space&& other) = default;
++ArcImportPlan::Space::~Space() = default;
++
++ArcImportPlan::ArcImportPlan() = default;
++ArcImportPlan::ArcImportPlan(const ArcImportPlan& other) = default;
++ArcImportPlan::ArcImportPlan(ArcImportPlan&& other) = default;
++ArcImportPlan& ArcImportPlan::operator=(const ArcImportPlan& other) = default;
++ArcImportPlan& ArcImportPlan::operator=(ArcImportPlan&& other) = default;
++ArcImportPlan::~ArcImportPlan() = default;
++
++ArcSidebarInfo::ArcSidebarInfo() = default;
++ArcSidebarInfo::ArcSidebarInfo(const ArcSidebarInfo& other) = default;
++ArcSidebarInfo::~ArcSidebarInfo() = default;
++
++namespace {
++
++using Node = ArcImportPlan::Node;
++
++void CountNodes(const std::vector<Node>& nodes, size_t* tabs, size_t* folders) {
++  for (const Node& node : nodes) {
++    if (node.kind == Node::Kind::kTab) {
++      ++*tabs;
++    } else {
++      ++*folders;
++      CountNodes(node.children, tabs, folders);
++    }
++  }
++}
++
++// Arc's item, before the tree is built.
++struct ArcItem {
++  enum class Kind { kTab, kList, kContainer };
++  Kind kind = Kind::kTab;
++  std::string id;
++  std::string parent;
++  std::vector<std::string> children;
++  std::u16string title;
++  GURL url;
++  std::string container_type;
++};
++
++// Arc's lists alternate an id string with its dict.
++std::vector<const base::DictValue*> DictsOf(const base::ListValue* list) {
++  std::vector<const base::DictValue*> out;
++  if (!list) {
++    return out;
++  }
++  for (const base::Value& value : *list) {
++    if (const base::DictValue* dict = value.GetIfDict()) {
++      out.push_back(dict);
++    }
++  }
++  return out;
++}
++
++std::string StringAt(const base::DictValue& dict, std::string_view key) {
++  const std::string* value = dict.FindString(key);
++  return value ? *value : std::string();
++}
++
++// The first string inside a value, depth first: Arc's profile binding is a
++// small nest whose leaf is the name.
++std::string FirstString(const base::Value& value);
++
++std::string FirstString(const base::DictValue& dict) {
++  for (const auto [key, child] : dict) {
++    const std::string found = FirstString(child);
++    if (!found.empty()) {
++      return found;
++    }
++  }
++  return std::string();
++}
++
++std::string FirstString(const base::ListValue& list) {
++  for (const base::Value& child : list) {
++    const std::string found = FirstString(child);
++    if (!found.empty()) {
++      return found;
++    }
++  }
++  return std::string();
++}
++
++std::string FirstString(const base::Value& value) {
++  if (value.is_string()) {
++    return value.GetString();
++  }
++  if (const base::DictValue* dict = value.GetIfDict()) {
++    return FirstString(*dict);
++  }
++  if (const base::ListValue* list = value.GetIfList()) {
++    return FirstString(*list);
++  }
++  return std::string();
++}
++
++std::optional<ArcItem> ParseItem(const base::DictValue& dict) {
++  ArcItem item;
++  item.id = StringAt(dict, "id");
++  if (item.id.empty()) {
++    return std::nullopt;
++  }
++  item.parent = StringAt(dict, "parentID");
++  if (const base::ListValue* children = dict.FindList("childrenIds")) {
++    for (const base::Value& child : *children) {
++      if (child.is_string()) {
++        item.children.push_back(child.GetString());
++      }
++    }
++  }
++  item.title = base::UTF8ToUTF16(StringAt(dict, "title"));
++  const base::DictValue* data = dict.FindDict("data");
++  if (!data) {
++    return std::nullopt;
++  }
++  if (const base::DictValue* tab = data->FindDict("tab")) {
++    item.kind = ArcItem::Kind::kTab;
++    item.url = GURL(StringAt(*tab, "savedURL"));
++    const std::string saved_title = StringAt(*tab, "savedTitle");
++    if (!saved_title.empty()) {
++      item.title = base::UTF8ToUTF16(saved_title);
++    }
++    return item;
++  }
++  if (data->contains("list")) {
++    item.kind = ArcItem::Kind::kList;
++    return item;
++  }
++  if (const base::DictValue* container = data->FindDict("itemContainer")) {
++    item.kind = ArcItem::Kind::kContainer;
++    if (const base::DictValue* type = container->FindDict("containerType")) {
++      if (!type->empty()) {
++        item.container_type = type->begin()->first;
++      }
++    } else {
++      item.container_type = StringAt(*container, "containerType");
++    }
++    return item;
++  }
++  return std::nullopt;
++}
++
++// The nodes under `parent`, in Arc's order; lists nest.
++std::vector<Node> BuildChildren(const ArcItem& parent,
++                                const std::map<std::string, ArcItem>& items,
++                                int depth) {
++  std::vector<Node> out;
++  if (depth > 16) {
++    return out;
++  }
++  for (const std::string& child_id : parent.children) {
++    const auto it = items.find(child_id);
++    if (it == items.end()) {
++      continue;
++    }
++    const ArcItem& child = it->second;
++    Node node;
++    node.arc_id = child.id;
++    node.title = child.title;
++    if (child.kind == ArcItem::Kind::kTab) {
++      if (!child.url.is_valid()) {
++        continue;
++      }
++      node.kind = Node::Kind::kTab;
++      node.url = child.url;
++      out.push_back(std::move(node));
++    } else if (child.kind == ArcItem::Kind::kList) {
++      node.kind = Node::Kind::kFolder;
++      node.children = BuildChildren(child, items, depth + 1);
++      out.push_back(std::move(node));
++    }
++  }
++  return out;
++}
++
++std::optional<SkColor> ThemeColor(const base::DictValue& space) {
++  const base::DictValue* tone = space.FindDictByDottedPath(
++      "customInfo.windowTheme.primaryColorPalette.midTone");
++  if (!tone) {
++    return std::nullopt;
++  }
++  const auto channel = [tone](std::string_view key) {
++    const std::optional<double> value = tone->FindDouble(key);
++    return static_cast<int>(std::clamp(value.value_or(0.0), 0.0, 1.0) * 255.0 +
++                            0.5);
++  };
++  return NearestSpaceColor(
++      SkColorSetRGB(channel("red"), channel("green"), channel("blue")));
++}
++
++// Arc's item ids already brought over (I12).
++class ImportedIds {
++ public:
++  explicit ImportedIds(PrefService* prefs) : prefs_(prefs) {
++    if (!prefs_) {
++      return;
++    }
++    for (const base::Value& id :
++         prefs_->GetList(stedding::prefs::kArcImportedIds)) {
++      if (id.is_string()) {
++        ids_.insert(id.GetString());
++      }
++    }
++  }
++  bool Contains(const std::string& id) const { return ids_.contains(id); }
++  void Add(const std::string& id) {
++    if (!id.empty() && ids_.insert(id).second) {
++      added_.push_back(id);
++    }
++  }
++  std::optional<SpaceId> SpaceFor(const std::string& arc_id) const {
++    if (!prefs_) {
++      return std::nullopt;
++    }
++    const std::string* stored =
++        prefs_->GetDict(stedding::prefs::kArcImportedSpaces).FindString(arc_id);
++    if (!stored) {
++      return std::nullopt;
++    }
++    return SpaceId::FromOptionalToken(base::Token::FromString(*stored));
++  }
++  void RememberSpace(const std::string& arc_id, const SpaceId& id) {
++    spaces_[arc_id] = id.ToString();
++  }
++  void Save() {
++    if (!prefs_) {
++      return;
++    }
++    {
++      ScopedListPrefUpdate update(prefs_, stedding::prefs::kArcImportedIds);
++      for (const std::string& id : added_) {
++        update->Append(id);
++      }
++    }
++    ScopedDictPrefUpdate update(prefs_, stedding::prefs::kArcImportedSpaces);
++    for (const auto& [arc_id, id] : spaces_) {
++      update->Set(arc_id, id);
++    }
++  }
++
++ private:
++  const raw_ptr<PrefService> prefs_;
++  std::set<std::string> ids_;
++  std::vector<std::string> added_;
++  std::map<std::string, std::string> spaces_;
++};
++
++// I3: a tab that shows its title and loads on its first activation, the way
++// session restore creates the tabs it does not load.
++tabs::TabInterface* InsertUnloaded(TabStripModel* tabs,
++                                   Profile* profile,
++                                   const Node& node) {
++  content::WebContents::CreateParams params(profile);
++  params.initially_hidden = true;
++  std::unique_ptr<content::WebContents> contents =
++      content::WebContents::Create(params);
++  std::vector<std::unique_ptr<content::NavigationEntry>> entries;
++  std::unique_ptr<content::NavigationEntry> entry =
++      content::NavigationController::CreateNavigationEntry(
++          node.url, content::Referrer(), std::nullopt, std::nullopt,
++          ui::PAGE_TRANSITION_TYPED, false, std::string(), profile, nullptr);
++  entry->SetTitle(node.title);
++  entries.push_back(std::move(entry));
++  contents->GetController().Restore(0, content::RestoreType::kRestored,
++                                    &entries);
++  contents->SetWasDiscarded(true);
++  content::WebContents* const raw = contents.get();
++  tabs->AppendTab(std::make_unique<tabs::TabModel>(std::move(contents), tabs),
++                  /*foreground=*/false);
++  return tabs->GetTabForWebContents(raw);
++}
++
++struct ApplyContext {
++  raw_ptr<BrowserWindowInterface> browser;
++  raw_ptr<SpaceModel> model;
++  raw_ptr<TabStripModel> tabs;
++  raw_ptr<Profile> profile;
++  raw_ptr<ImportedIds> ids;
++  raw_ptr<ArcImportResult> result;
++};
++
++// Inserts `nodes` into `space`: loose tabs, and folders with their tabs, in
++// order. Returns the loose tabs, for the pinned run.
++std::vector<tabs::TabInterface*> InsertNodes(
++    ApplyContext& ctx,
++    const std::vector<Node>& nodes,
++    const SpaceId& space,
++    tabs::FolderTabCollection* parent_folder) {
++  std::vector<tabs::TabInterface*> loose;
++  for (const Node& node : nodes) {
++    if (ctx.ids->Contains(node.arc_id)) {
++      ++ctx.result->skipped;
++      continue;
++    }
++    if (node.kind == Node::Kind::kTab) {
++      tabs::TabInterface* const tab =
++          InsertUnloaded(ctx.tabs, ctx.profile, node);
++      if (!tab) {
++        continue;
++      }
++      ctx.model->SetSpaceForTab(tab, space);
++      ctx.ids->Add(node.arc_id);
++      ++ctx.result->tabs;
++      if (parent_folder) {
++        const int index = ctx.tabs->GetIndexOfTab(tab);
++        if (index != TabStripModel::kNoTab) {
++          ctx.tabs->MoveTabsToFolder({index}, parent_folder);
++        }
++      } else {
++        loose.push_back(tab);
++      }
++      continue;
++    }
++    // A folder: its direct tabs first, then the folder around them, then the
++    // folders inside it.
++    std::vector<int> indices;
++    std::vector<const Node*> subfolders;
++    for (const Node& child : node.children) {
++      if (child.kind == Node::Kind::kFolder) {
++        subfolders.push_back(&child);
++        continue;
++      }
++      if (ctx.ids->Contains(child.arc_id)) {
++        ++ctx.result->skipped;
++        continue;
++      }
++      tabs::TabInterface* const tab =
++          InsertUnloaded(ctx.tabs, ctx.profile, child);
++      if (!tab) {
++        continue;
++      }
++      ctx.model->SetSpaceForTab(tab, space);
++      ctx.ids->Add(child.arc_id);
++      ++ctx.result->tabs;
++      indices.push_back(ctx.tabs->GetIndexOfTab(tab));
++    }
++    tabs::FolderTabCollection* folder = nullptr;
++    if (!indices.empty()) {
++      std::ranges::sort(indices);
++      folder = ctx.tabs->AddToNewFolder(indices, parent_folder);
++      if (folder) {
++        folder->SetTitle(base::UTF16ToUTF8(node.title));
++        ctx.ids->Add(node.arc_id);
++        ++ctx.result->folders;
++      }
++    }
++    // A folder with no tab of its own cannot be made; its folders come out
++    // beside it.
++    for (const Node* sub : subfolders) {
++      InsertNodes(ctx, {*sub}, space, folder ? folder : parent_folder);
++    }
++  }
++  return loose;
++}
++
++}  // namespace
++
++size_t ArcImportPlan::pinned_tab_count() const {
++  size_t tabs = 0;
++  size_t folders = 0;
++  for (const Space& space : spaces) {
++    CountNodes(space.pinned, &tabs, &folders);
++  }
++  return tabs;
++}
++
++size_t ArcImportPlan::unpinned_tab_count() const {
++  size_t tabs = 0;
++  size_t folders = 0;
++  for (const Space& space : spaces) {
++    CountNodes(space.unpinned, &tabs, &folders);
++  }
++  return tabs;
++}
++
++size_t ArcImportPlan::folder_count() const {
++  size_t tabs = 0;
++  size_t folders = 0;
++  for (const Space& space : spaces) {
++    CountNodes(space.pinned, &tabs, &folders);
++    CountNodes(space.unpinned, &tabs, &folders);
++  }
++  return folders;
++}
++
++std::vector<std::string> ArcImportPlan::dropped_profiles() const {
++  std::vector<std::string> out;
++  for (const Space& space : spaces) {
++    if (!space.profile.empty() &&
++        std::ranges::find(out, space.profile) == out.end()) {
++      out.push_back(space.profile);
++    }
++  }
++  return out;
++}
++
++std::optional<ArcImportPlan> ParseArcSidebar(std::string_view json) {
++  const std::optional<base::Value> root =
++      base::JSONReader::Read(json, base::JSON_PARSE_RFC);
++  if (!root || !root->is_dict()) {
++    return std::nullopt;
++  }
++  const base::ListValue* containers =
++      root->GetDict().FindListByDottedPath("sidebar.containers");
++  if (!containers) {
++    return std::nullopt;
++  }
++  const base::DictValue* sidebar = nullptr;
++  for (const base::Value& container : *containers) {
++    const base::DictValue* dict = container.GetIfDict();
++    if (dict && dict->FindList("spaces") && dict->FindList("items")) {
++      sidebar = dict;
++      break;
++    }
++  }
++  if (!sidebar) {
++    return std::nullopt;
++  }
++
++  std::map<std::string, ArcItem> items;
++  for (const base::DictValue* dict : DictsOf(sidebar->FindList("items"))) {
++    if (std::optional<ArcItem> item = ParseItem(*dict)) {
++      items.emplace(item->id, std::move(*item));
++    }
++  }
++
++  ArcImportPlan plan;
++  for (const base::DictValue* dict : DictsOf(sidebar->FindList("spaces"))) {
++    ArcImportPlan::Space space;
++    space.arc_id = StringAt(*dict, "id");
++    space.title = StringAt(*dict, "title");
++    if (space.arc_id.empty()) {
++      continue;
++    }
++    if (const base::DictValue* icon =
++            dict->FindDictByDottedPath("customInfo.iconType")) {
++      space.emoji = StringAt(*icon, "emoji_v2");
++      if (space.emoji.empty()) {
++        space.emoji = StringAt(*icon, "emoji");
++      }
++    }
++    space.color = ThemeColor(*dict);
++    if (const base::Value* profile = dict->Find("profile")) {
++      const base::DictValue* bound = profile->GetIfDict();
++      if (bound && !bound->contains("default")) {
++        const std::string name = FirstString(*profile);
++        space.profile = name.empty() ? std::string("custom") : name;
++      }
++    }
++    // The pinned and unpinned containers: a word, then the id it names.
++    if (const base::ListValue* container_ids = dict->FindList("containerIDs")) {
++      std::string which;
++      for (const base::Value& entry : *container_ids) {
++        if (!entry.is_string()) {
++          continue;
++        }
++        const std::string& text = entry.GetString();
++        if (text == "pinned" || text == "unpinned") {
++          which = text;
++          continue;
++        }
++        const auto it = items.find(text);
++        if (it == items.end() || which.empty()) {
++          continue;
++        }
++        std::vector<Node> nodes = BuildChildren(it->second, items, 0);
++        if (which == "pinned") {
++          space.pinned = std::move(nodes);
++        } else {
++          space.unpinned = std::move(nodes);
++        }
++        which.clear();
++      }
++    }
++    plan.spaces.push_back(std::move(space));
++  }
++
++  // The essentials: the top-apps containers, tabs only. Arc names the same
++  // container twice ({default: id} and id): once is enough.
++  std::set<std::string> top_seen;
++  if (const base::ListValue* top = sidebar->FindList("topAppsContainerIDs")) {
++    for (const base::Value& entry : *top) {
++      std::string id;
++      if (entry.is_string()) {
++        id = entry.GetString();
++      } else if (const base::DictValue* dict = entry.GetIfDict()) {
++        id = FirstString(*dict);
++      }
++      const auto it = items.find(id);
++      if (it == items.end() || !top_seen.insert(id).second) {
++        continue;
++      }
++      for (Node& node : BuildChildren(it->second, items, 0)) {
++        if (node.kind == Node::Kind::kTab) {
++          plan.essentials.push_back(std::move(node));
++        }
++      }
++    }
++  }
++  return plan;
++}
++
++std::u16string SummariseArcImport(const ArcImportPlan& plan) {
++  const auto count = [](size_t n, std::u16string_view one,
++                        std::u16string_view many) {
++    return base::StrCat({base::NumberToString16(n), u" ", n == 1 ? one : many});
++  };
++  std::u16string text = base::StrCat(
++      {count(plan.spaces.size(), u"Space", u"Spaces"), u", ",
++       count(plan.pinned_tab_count(), u"pinned tab", u"pinned tabs"), u", ",
++       count(plan.folder_count(), u"folder", u"folders"), u", ",
++       count(plan.unpinned_tab_count(), u"tab", u"tabs")});
++  if (!plan.essentials.empty()) {
++    text += base::StrCat({u" \u00B7 ", count(plan.essentials.size(),
++                                             u"essential", u"essentials")});
++    if (plan.essentials.size() > kMaxEssentials) {
++      text +=
++          base::StrCat({u" (the first ", base::NumberToString16(kMaxEssentials),
++                        u" become essentials)"});
++    }
++  }
++  const std::vector<std::string> profiles = plan.dropped_profiles();
++  if (!profiles.empty()) {
++    text += u" \u00B7 Arc's per-Space profiles are not carried over: ";
++    for (size_t i = 0; i < profiles.size(); ++i) {
++      text += base::StrCat({i ? u", " : u"", base::UTF8ToUTF16(profiles[i])});
++    }
++  }
++  return text;
++}
++
++base::FilePath ArcSidebarPath() {
++  base::FilePath home;
++  if (!base::PathService::Get(base::DIR_HOME, &home)) {
++    return base::FilePath();
++  }
++  return home.Append("Library")
++      .Append("Application Support")
++      .Append("Arc")
++      .Append("StorableSidebar.json");
++}
++
++std::optional<std::string> ReadArcSidebar(const base::FilePath& path) {
++  if (path.empty() || !base::PathExists(path)) {
++    return std::nullopt;
++  }
++  // A copy first: Arc rewrites the file while it runs (I9), and a read of
++  // the copy sees one version.
++  base::ScopedTempDir temp;
++  base::FilePath copy;
++  if (temp.CreateUniqueTempDir()) {
++    copy = temp.GetPath().Append("StorableSidebar.json");
++    if (!base::CopyFile(path, copy)) {
++      copy.clear();
++    }
++  }
++  std::string json;
++  if (!base::ReadFileToString(copy.empty() ? path : copy, &json)) {
++    return std::nullopt;
++  }
++  return json;
++}
++
++bool IsArcRunning() {
++  return base::GetProcessCount(FILE_PATH_LITERAL("Arc"), nullptr) > 0;
++}
++
++SkColor NearestSpaceColor(SkColor arc_color) {
++  SkColor nearest = kSpaceColors.front().color;
++  int best = -1;
++  for (const SpaceColorChoice& choice : kSpaceColors) {
++    const int dr = static_cast<int>(SkColorGetR(choice.color)) -
++                   static_cast<int>(SkColorGetR(arc_color));
++    const int dg = static_cast<int>(SkColorGetG(choice.color)) -
++                   static_cast<int>(SkColorGetG(arc_color));
++    const int db = static_cast<int>(SkColorGetB(choice.color)) -
++                   static_cast<int>(SkColorGetB(arc_color));
++    const int distance = dr * dr + dg * dg + db * db;
++    if (best < 0 || distance < best) {
++      best = distance;
++      nearest = choice.color;
++    }
++  }
++  return nearest;
++}
++
++ArcImportResult ApplyArcImport(BrowserWindowInterface* browser,
++                               const ArcImportPlan& plan,
++                               const ArcImportOptions& options) {
++  ArcImportResult result;
++  SpaceModel* const model = browser ? SpaceModel::From(browser) : nullptr;
++  TabStripModel* const tabs = browser ? browser->GetTabStripModel() : nullptr;
++  Profile* const profile = browser ? browser->GetProfile() : nullptr;
++  if (!model || !tabs || !profile) {
++    return result;
++  }
++  ImportedIds ids(profile->GetPrefs());
++  ApplyContext ctx{browser, model, tabs, profile, &ids, &result};
++  // Every tab here knows its Space; no route moves it (routing D2).
++  SpaceModel::ScopedRoutingPause no_routing(model);
++
++  // The essentials row first; it is in every Space (I11 caps it).
++  if (options.pinned) {
++    size_t pinned_now = static_cast<size_t>(tabs->IndexOfFirstNonPinnedTab());
++    for (const Node& node : plan.essentials) {
++      if (ids.Contains(node.arc_id)) {
++        ++result.skipped;
++        continue;
++      }
++      if (pinned_now >= kMaxEssentials) {
++        break;
++      }
++      tabs::TabInterface* const tab = InsertUnloaded(tabs, profile, node);
++      if (!tab) {
++        continue;
++      }
++      tabs->SetTabPinned(tabs->GetIndexOfTab(tab), true);
++      ids.Add(node.arc_id);
++      ++result.essentials;
++      ++pinned_now;
++    }
++  }
++
++  if (options.spaces) {
++    bool default_taken = false;
++    for (size_t i = 0; i < plan.spaces.size(); ++i) {
++      const ArcImportPlan::Space& arc_space = plan.spaces[i];
++      Space* space = nullptr;
++      if (const std::optional<SpaceId> known = ids.SpaceFor(arc_space.arc_id)) {
++        space = model->GetSpace(*known);
++      }
++      if (!space) {
++        // A lone unnamed default Space is the first Space's to take.
++        if (!default_taken && model->size() == 1 &&
++            model->spaces().front()->name().empty()) {
++          space = model->spaces().front().get();
++          model->SetSpaceName(space->id(), arc_space.title);
++          default_taken = true;
++        } else {
++          space = model->AddSpace(
++              arc_space.title,
++              arc_space.color.value_or(
++                  kSpaceColors.at(model->size() % kSpaceColors.size()).color));
++        }
++        if (!arc_space.emoji.empty()) {
++          model->SetSpaceIcon(space->id(), arc_space.emoji);
++        }
++        if (arc_space.color) {
++          model->SetSpaceColor(space->id(), *arc_space.color);
++        }
++        ids.Add(arc_space.arc_id);
++        ids.RememberSpace(arc_space.arc_id, space->id());
++        ++result.spaces;
++      } else {
++        ++result.skipped;
++      }
++      const SpaceId id = space->id();
++      if (options.pinned) {
++        // The loose tabs of the pinned run are Space-pinned last to first,
++        // since a pin moves its tab to the top of the run.
++        std::vector<tabs::TabInterface*> loose =
++            InsertNodes(ctx, arc_space.pinned, id, nullptr);
++        for (auto it = loose.rbegin(); it != loose.rend(); ++it) {
++          model->SetSpacePinned(*it, true);
++        }
++      }
++      if (options.unpinned) {
++        InsertNodes(ctx, arc_space.unpinned, id, nullptr);
++      }
++    }
++  }
++  ids.Save();
++  return result;
++}
++
++namespace {
++
++ArcSidebarInfo LoadInfoOnPool() {
++  ArcSidebarInfo info;
++  const std::optional<std::string> json = ReadArcSidebar(ArcSidebarPath());
++  if (!json) {
++    return info;
++  }
++  info.plan = ParseArcSidebar(*json);
++  if (!info.plan) {
++    return info;
++  }
++  info.found = true;
++  info.arc_running = IsArcRunning();
++  info.summary = SummariseArcImport(*info.plan);
++  return info;
++}
++
++void ApplyRead(base::WeakPtr<BrowserWindowInterface> browser,
++               ArcImportOptions options,
++               ArcImportDoneCallback done,
++               std::optional<std::string> json) {
++  if (!browser || !json) {
++    std::move(done).Run(std::nullopt);
++    return;
++  }
++  const std::optional<ArcImportPlan> plan = ParseArcSidebar(*json);
++  if (!plan) {
++    std::move(done).Run(std::nullopt);
++    return;
++  }
++  std::move(done).Run(ApplyArcImport(browser.get(), *plan, options));
++}
++
++}  // namespace
++
++void LoadArcSidebarInfo(ArcSidebarInfoCallback callback) {
++  base::ThreadPool::PostTaskAndReplyWithResult(
++      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
++      base::BindOnce(&LoadInfoOnPool), std::move(callback));
++}
++
++void ImportFromArcAsync(BrowserWindowInterface* browser,
++                        const ArcImportOptions& options,
++                        ArcImportDoneCallback done) {
++  if (!browser) {
++    std::move(done).Run(std::nullopt);
++    return;
++  }
++  base::ThreadPool::PostTaskAndReplyWithResult(
++      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
++      base::BindOnce(&ReadArcSidebar, ArcSidebarPath()),
++      base::BindOnce(&ApplyRead, browser->GetWeakPtr(), options,
++                     std::move(done)));
++}
++
++std::u16string DescribeArcImportResult(const ArcImportResult& result) {
++  const auto count = [](size_t n, std::u16string_view one,
++                        std::u16string_view many) {
++    return base::StrCat({base::NumberToString16(n), u" ", n == 1 ? one : many});
++  };
++  std::u16string text =
++      base::StrCat({u"Imported ", count(result.spaces, u"Space", u"Spaces"),
++                    u", ", count(result.tabs, u"tab", u"tabs"), u", ",
++                    count(result.folders, u"folder", u"folders")});
++  if (result.essentials) {
++    text += base::StrCat(
++        {u", ", count(result.essentials, u"essential", u"essentials")});
++  }
++  if (result.skipped) {
++    text += base::StrCat({u" \u00B7 ", base::NumberToString16(result.skipped),
++                          u" already here"});
++  }
++  return text;
++}
++
++}  // namespace spaces
+diff --git a/chrome/browser/ui/spaces/arc_sidebar_importer.h b/chrome/browser/ui/spaces/arc_sidebar_importer.h
+new file mode 100644
+index 0000000000000..bfd5d57c8ddfe
+--- /dev/null
++++ b/chrome/browser/ui/spaces/arc_sidebar_importer.h
+@@ -0,0 +1,158 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_SPACES_ARC_SIDEBAR_IMPORTER_H_
++#define CHROME_BROWSER_UI_SPACES_ARC_SIDEBAR_IMPORTER_H_
++
++#include <optional>
++#include <string>
++#include <string_view>
++#include <vector>
++
++#include "base/files/file_path.h"
++#include "base/functional/callback.h"
++#include "third_party/skia/include/core/SkColor.h"
++#include "url/gurl.h"
++
++class BrowserWindowInterface;
++
++namespace spaces {
++
++// docs/features/import.md I1: Arc's sidebar, StorableSidebar.json, as a plan
++// Stedding can apply -- Spaces with their icon and nearest colour, the
++// essentials row, and per Space the pinned and unpinned items, folders
++// nesting as Arc's lists do.
++struct ArcImportPlan {
++  struct Node {
++    enum class Kind { kTab, kFolder };
++    Node();
++    Node(const Node& other);
++    Node(Node&& other);
++    Node& operator=(const Node& other);
++    Node& operator=(Node&& other);
++    ~Node();
++
++    Kind kind = Kind::kTab;
++    std::string arc_id;
++    std::u16string title;
++    GURL url;
++    std::vector<Node> children;
++  };
++
++  struct Space {
++    Space();
++    Space(const Space& other);
++    Space(Space&& other);
++    Space& operator=(const Space& other);
++    Space& operator=(Space&& other);
++    ~Space();
++
++    std::string arc_id;
++    std::string title;
++    std::string emoji;
++    // I10: the nearest Stedding swatch, when Arc had a theme.
++    std::optional<SkColor> color;
++    // I8: Arc's per-Space profile, which Stedding does not carry over.
++    std::string profile;
++    std::vector<Node> pinned;
++    std::vector<Node> unpinned;
++  };
++
++  ArcImportPlan();
++  ArcImportPlan(const ArcImportPlan& other);
++  ArcImportPlan(ArcImportPlan&& other);
++  ArcImportPlan& operator=(const ArcImportPlan& other);
++  ArcImportPlan& operator=(ArcImportPlan&& other);
++  ~ArcImportPlan();
++
++  std::vector<Space> spaces;
++  std::vector<Node> essentials;
++
++  // The counts the summary shows (I2).
++  size_t pinned_tab_count() const;
++  size_t unpinned_tab_count() const;
++  size_t folder_count() const;
++  std::vector<std::string> dropped_profiles() const;
++};
++
++// The essentials row holds this many at most (I11).
++inline constexpr size_t kMaxEssentials = 12;
++
++// Parses the file's JSON. Nullopt when it is not Arc's sidebar.
++std::optional<ArcImportPlan> ParseArcSidebar(std::string_view json);
++
++// The one line the welcome flow and the settings row show before anything
++// is applied (I2), with the dropped profiles (I8) and the essentials beyond
++// twelve (I11) named.
++std::u16string SummariseArcImport(const ArcImportPlan& plan);
++
++// ~/Library/Application Support/Arc/StorableSidebar.json.
++base::FilePath ArcSidebarPath();
++
++// I9: reads a copy of the file, because Arc rewrites it while it runs.
++// Blocking: call from the thread pool. Nullopt when there is no file.
++std::optional<std::string> ReadArcSidebar(const base::FilePath& path);
++
++// I9: whether Arc is running now, so the flow can say the file may be
++// mid-write. Blocking: call from the thread pool.
++bool IsArcRunning();
++
++// The nearest Stedding swatch to an Arc theme colour (I10).
++SkColor NearestSpaceColor(SkColor arc_color);
++
++struct ArcImportOptions {
++  bool spaces = true;
++  bool pinned = true;
++  bool unpinned = true;
++};
++
++struct ArcImportResult {
++  size_t spaces = 0;
++  size_t tabs = 0;
++  size_t folders = 0;
++  size_t essentials = 0;
++  // I12: already present from an earlier import.
++  size_t skipped = 0;
++};
++
++// Applies `plan` to `browser`'s window (I3): Spaces, essentials (capped at
++// twelve, I11), the pinned runs, folders, every tab inserted unloaded. A
++// second run adds nothing already present: Arc's ids are remembered in the
++// profile (I12).
++ArcImportResult ApplyArcImport(BrowserWindowInterface* browser,
++                               const ArcImportPlan& plan,
++                               const ArcImportOptions& options);
++
++// What the entry points ask before offering an import (I2, I9).
++struct ArcSidebarInfo {
++  ArcSidebarInfo();
++  ArcSidebarInfo(const ArcSidebarInfo& other);
++  ~ArcSidebarInfo();
++  bool found = false;
++  bool arc_running = false;
++  std::u16string summary;
++  std::optional<ArcImportPlan> plan;
++};
++using ArcSidebarInfoCallback = base::OnceCallback<void(ArcSidebarInfo)>;
++
++// Reads and parses the file on the thread pool and answers on the caller's
++// sequence.
++void LoadArcSidebarInfo(ArcSidebarInfoCallback callback);
++
++using ArcImportDoneCallback =
++    base::OnceCallback<void(std::optional<ArcImportResult>)>;
++
++// The whole thing for the settings row and the bar: read on the thread pool,
++// then apply to `browser` with `options`. Nullopt when there is no file, it
++// does not parse, or the window went away.
++void ImportFromArcAsync(BrowserWindowInterface* browser,
++                        const ArcImportOptions& options,
++                        ArcImportDoneCallback done);
++
++// A one-line account of what an import did, for the flow and the toast.
++std::u16string DescribeArcImportResult(const ArcImportResult& result);
++
++}  // namespace spaces
++
++#endif  // CHROME_BROWSER_UI_SPACES_ARC_SIDEBAR_IMPORTER_H_
+diff --git a/chrome/browser/ui/spaces/arc_sidebar_importer_unittest.cc b/chrome/browser/ui/spaces/arc_sidebar_importer_unittest.cc
+new file mode 100644
+index 0000000000000..4faa22de4d297
+--- /dev/null
++++ b/chrome/browser/ui/spaces/arc_sidebar_importer_unittest.cc
+@@ -0,0 +1,275 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/spaces/arc_sidebar_importer.h"
++
++#include <string>
++#include <vector>
++
++#include "base/files/file_util.h"
++#include "base/files/scoped_temp_dir.h"
++#include "base/strings/string_number_conversions.h"
++#include "base/strings/utf_string_conversions.h"
++#include "chrome/browser/ui/browser.h"
++#include "chrome/browser/ui/spaces/space.h"
++#include "chrome/browser/ui/spaces/space_colors.h"
++#include "chrome/browser/ui/spaces/space_model.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "chrome/test/base/browser_with_test_window_test.h"
++#include "components/tabs/public/folder_tab_collection.h"
++#include "components/tabs/public/tab_collection.h"
++#include "components/tabs/public/tab_interface.h"
++#include "content/public/browser/web_contents.h"
++#include "testing/gtest/include/gtest/gtest.h"
++
++namespace spaces {
++namespace {
++
++// A synthetic sidebar in Arc's shape (docs/features/import.md, Notes): two
++// Spaces, a pinned run with a folder, an unpinned tab, one essential, and a
++// per-Space profile binding on the second Space.
++constexpr char kSidebar[] = R"json({
++  "version": 1,
++  "sidebar": {"containers": [
++    {"global": {}},
++    {
++      "spaces": [
++        "space-work", {
++          "id": "space-work", "title": "Work",
++          "profile": {"default": {}},
++          "containerIDs": ["unpinned", "cont-work-unpinned", "pinned", "cont-work-pinned"],
++          "customInfo": {
++            "iconType": {"emoji_v2": "💼"},
++            "windowTheme": {"primaryColorPalette": {"midTone": {
++              "red": 0.47, "green": 0.36, "blue": 0.55, "alpha": 1}}}
++          }
++        },
++        "space-play", {
++          "id": "space-play", "title": "Play",
++          "profile": {"custom": {"_0": {"name": "Personal"}}},
++          "containerIDs": ["pinned", "cont-play-pinned", "unpinned", "cont-play-unpinned"],
++          "customInfo": {"iconType": {"emoji_v2": "🎮"}}
++        }
++      ],
++      "items": [
++        "cont-work-pinned", {"id": "cont-work-pinned", "parentID": null,
++          "childrenIds": ["tab-a", "list-docs"], "title": "",
++          "data": {"itemContainer": {"containerType": {"spaceItems": {}}}}},
++        "cont-work-unpinned", {"id": "cont-work-unpinned", "parentID": null,
++          "childrenIds": ["tab-d"], "title": "",
++          "data": {"itemContainer": {"containerType": {"spaceItems": {}}}}},
++        "cont-play-pinned", {"id": "cont-play-pinned", "parentID": null,
++          "childrenIds": [], "title": "",
++          "data": {"itemContainer": {"containerType": {"spaceItems": {}}}}},
++        "cont-play-unpinned", {"id": "cont-play-unpinned", "parentID": null,
++          "childrenIds": ["tab-f"], "title": "",
++          "data": {"itemContainer": {"containerType": {"spaceItems": {}}}}},
++        "cont-top", {"id": "cont-top", "parentID": null,
++          "childrenIds": ["tab-e"], "title": "",
++          "data": {"itemContainer": {"containerType": {"topApps": {}}}}},
++        "tab-a", {"id": "tab-a", "parentID": "cont-work-pinned", "childrenIds": [],
++          "title": "", "data": {"tab": {"savedURL": "https://a.example/", "savedTitle": "A"}}},
++        "list-docs", {"id": "list-docs", "parentID": "cont-work-pinned",
++          "childrenIds": ["tab-b", "tab-c"], "title": "Docs", "data": {"list": {}}},
++        "tab-b", {"id": "tab-b", "parentID": "list-docs", "childrenIds": [],
++          "title": "", "data": {"tab": {"savedURL": "https://b.example/", "savedTitle": "B"}}},
++        "tab-c", {"id": "tab-c", "parentID": "list-docs", "childrenIds": [],
++          "title": "", "data": {"tab": {"savedURL": "https://c.example/", "savedTitle": "C"}}},
++        "tab-d", {"id": "tab-d", "parentID": "cont-work-unpinned", "childrenIds": [],
++          "title": "", "data": {"tab": {"savedURL": "https://d.example/", "savedTitle": "D"}}},
++        "tab-e", {"id": "tab-e", "parentID": "cont-top", "childrenIds": [],
++          "title": "", "data": {"tab": {"savedURL": "https://e.example/", "savedTitle": "E"}}},
++        "tab-f", {"id": "tab-f", "parentID": "cont-play-unpinned", "childrenIds": [],
++          "title": "", "data": {"tab": {"savedURL": "https://f.example/", "savedTitle": "F"}}}
++      ],
++      "topAppsContainerIDs": [{"default": "cont-top"}, "cont-top"]
++    }
++  ]}
++})json";
++
++// I1, I8, I10: the shape comes across, the profile is named, the theme maps.
++TEST(ArcSidebarImporterTest, ParsesSpacesFoldersAndEssentials) {
++  const std::optional<ArcImportPlan> plan = ParseArcSidebar(kSidebar);
++  ASSERT_TRUE(plan.has_value());
++  ASSERT_EQ(2u, plan->spaces.size());
++  const ArcImportPlan::Space& work = plan->spaces[0];
++  EXPECT_EQ("Work", work.title);
++  EXPECT_EQ("💼", work.emoji);
++  ASSERT_TRUE(work.color.has_value());
++  EXPECT_EQ(kSpaceColors[1].color, *work.color) << "Plum is nearest";
++  EXPECT_TRUE(work.profile.empty());
++  ASSERT_EQ(2u, work.pinned.size());
++  EXPECT_EQ(ArcImportPlan::Node::Kind::kTab, work.pinned[0].kind);
++  EXPECT_EQ(GURL("https://a.example/"), work.pinned[0].url);
++  EXPECT_EQ(u"A", work.pinned[0].title);
++  EXPECT_EQ(ArcImportPlan::Node::Kind::kFolder, work.pinned[1].kind);
++  EXPECT_EQ(u"Docs", work.pinned[1].title);
++  ASSERT_EQ(2u, work.pinned[1].children.size());
++  EXPECT_EQ(u"C", work.pinned[1].children[1].title);
++  ASSERT_EQ(1u, work.unpinned.size());
++  EXPECT_EQ(u"D", work.unpinned[0].title);
++
++  const ArcImportPlan::Space& play = plan->spaces[1];
++  EXPECT_EQ("Personal", play.profile);
++  EXPECT_FALSE(play.color.has_value());
++  EXPECT_TRUE(play.pinned.empty());
++  ASSERT_EQ(1u, play.unpinned.size());
++
++  ASSERT_EQ(1u, plan->essentials.size());
++  EXPECT_EQ(u"E", plan->essentials[0].title);
++  EXPECT_EQ(3u, plan->pinned_tab_count());
++  EXPECT_EQ(2u, plan->unpinned_tab_count());
++  EXPECT_EQ(1u, plan->folder_count());
++  EXPECT_EQ(std::vector<std::string>{"Personal"}, plan->dropped_profiles());
++  EXPECT_FALSE(ParseArcSidebar("{\"nope\": 1}").has_value());
++}
++
++// I2, I8: the summary before anything is applied.
++TEST(ArcSidebarImporterTest, SummaryCountsThePlan) {
++  const std::optional<ArcImportPlan> plan = ParseArcSidebar(kSidebar);
++  ASSERT_TRUE(plan.has_value());
++  const std::u16string summary = SummariseArcImport(*plan);
++  EXPECT_NE(std::u16string::npos,
++            summary.find(u"2 Spaces, 3 pinned tabs, 1 folder, 2 tabs"))
++      << summary;
++  EXPECT_NE(std::u16string::npos, summary.find(u"1 essential")) << summary;
++  EXPECT_NE(std::u16string::npos, summary.find(u"not carried over: Personal"))
++      << summary;
++}
++
++// I10: every theme lands on one of the five swatches, the nearest.
++TEST(ArcSidebarImporterTest, ThemeMapsToTheNearestSwatch) {
++  EXPECT_EQ(kSpaceColors[1].color, NearestSpaceColor(kSpaceColors[1].color));
++  EXPECT_EQ(kSpaceColors[2].color,
++            NearestSpaceColor(SkColorSetRGB(0x50, 0x90, 0x70)));
++  EXPECT_EQ(kSpaceColors[4].color,
++            NearestSpaceColor(SkColorSetRGB(0x90, 0x50, 0x60)));
++}
++
++// I9: the file is read through a copy.
++TEST(ArcSidebarImporterTest, ReadsACopy) {
++  base::ScopedTempDir dir;
++  ASSERT_TRUE(dir.CreateUniqueTempDir());
++  const base::FilePath path = dir.GetPath().Append("StorableSidebar.json");
++  ASSERT_TRUE(base::WriteFile(path, kSidebar));
++  const std::optional<std::string> json = ReadArcSidebar(path);
++  ASSERT_TRUE(json.has_value());
++  EXPECT_EQ(std::string(kSidebar), *json);
++  EXPECT_FALSE(
++      ReadArcSidebar(dir.GetPath().Append("missing.json")).has_value());
++}
++
++class ArcSidebarImportWindowTest : public BrowserWithTestWindowTest {
++ protected:
++  SpaceModel& model() {
++    SpaceModel* const model = SpaceModel::From(browser());
++    CHECK(model);
++    return *model;
++  }
++  TabStripModel& tabs() { return *browser()->tab_strip_model(); }
++  const Space* SpaceNamed(const std::string& name) {
++    for (const auto& space : model().spaces()) {
++      if (space->name() == name) {
++        return space.get();
++      }
++    }
++    return nullptr;
++  }
++  std::vector<tabs::TabInterface*> TabsIn(const SpaceId& id) {
++    std::vector<tabs::TabInterface*> out;
++    for (int i = 0; i < tabs().count(); ++i) {
++      tabs::TabInterface* const tab = tabs().GetTabAtIndex(i);
++      if (!tab->IsPinned() && model().SpaceForTab(tab) == id) {
++        out.push_back(tab);
++      }
++    }
++    return out;
++  }
++};
++
++// I3: Spaces, essentials, the pinned run, a folder, unloaded tabs.
++TEST_F(ArcSidebarImportWindowTest, AppliesSpacesPinsAndFolders) {
++  const std::optional<ArcImportPlan> plan = ParseArcSidebar(kSidebar);
++  ASSERT_TRUE(plan.has_value());
++  ASSERT_EQ(1u, model().size());
++  const ArcImportResult result =
++      ApplyArcImport(browser(), *plan, ArcImportOptions());
++  EXPECT_EQ(2u, result.spaces);
++  EXPECT_EQ(5u, result.tabs);
++  EXPECT_EQ(1u, result.folders);
++  EXPECT_EQ(1u, result.essentials);
++  EXPECT_EQ(0u, result.skipped);
++
++  // The lone unnamed default Space became Work; Play was added.
++  ASSERT_EQ(2u, model().size());
++  const Space* const work = SpaceNamed("Work");
++  const Space* const play = SpaceNamed("Play");
++  ASSERT_TRUE(work);
++  ASSERT_TRUE(play);
++  EXPECT_EQ("💼", work->icon());
++  EXPECT_EQ(kSpaceColors[1].color, work->color());
++  EXPECT_EQ("🎮", play->icon());
++
++  // The essential is a Chromium-pinned tab; A is Space-pinned in Work; the
++  // folder holds B and C; D and F are plain, each in its Space.
++  EXPECT_EQ(1, tabs().IndexOfFirstNonPinnedTab());
++  EXPECT_EQ(u"E", tabs().GetTabAtIndex(0)->GetContents()->GetTitle());
++  const std::vector<tabs::TabInterface*> in_work = TabsIn(work->id());
++  ASSERT_EQ(4u, in_work.size());
++  EXPECT_EQ(u"A", in_work[0]->GetContents()->GetTitle());
++  EXPECT_TRUE(model().IsSpacePinned(in_work[0]));
++  EXPECT_TRUE(model().HomeUrl(in_work[0]).has_value());
++  EXPECT_FALSE(model().IsSpacePinned(in_work[1]));
++  const tabs::TabCollection* const folder = in_work[1]->GetParentCollection();
++  ASSERT_TRUE(folder);
++  EXPECT_EQ(tabs::TabCollection::Type::FOLDER, folder->type());
++  EXPECT_EQ("Docs",
++            static_cast<const tabs::FolderTabCollection*>(folder)->title());
++  EXPECT_EQ(folder, in_work[2]->GetParentCollection());
++  EXPECT_NE(folder, in_work[3]->GetParentCollection());
++  EXPECT_EQ(u"D", in_work[3]->GetContents()->GetTitle());
++  EXPECT_TRUE(in_work[3]->GetContents()->WasDiscarded()) << "inserted unloaded";
++  const std::vector<tabs::TabInterface*> in_play = TabsIn(play->id());
++  ASSERT_EQ(1u, in_play.size());
++  EXPECT_EQ(u"F", in_play[0]->GetContents()->GetTitle());
++}
++
++// I12: a second import adds nothing.
++TEST_F(ArcSidebarImportWindowTest, SecondImportAddsNothing) {
++  const std::optional<ArcImportPlan> plan = ParseArcSidebar(kSidebar);
++  ASSERT_TRUE(plan.has_value());
++  ApplyArcImport(browser(), *plan, ArcImportOptions());
++  const int tabs_after_first = tabs().count();
++  const size_t spaces_after_first = model().size();
++  const ArcImportResult again =
++      ApplyArcImport(browser(), *plan, ArcImportOptions());
++  EXPECT_EQ(0u, again.spaces);
++  EXPECT_EQ(0u, again.tabs);
++  EXPECT_EQ(0u, again.folders);
++  EXPECT_EQ(0u, again.essentials);
++  EXPECT_GT(again.skipped, 0u);
++  EXPECT_EQ(tabs_after_first, tabs().count());
++  EXPECT_EQ(spaces_after_first, model().size());
++}
++
++// I11: the essentials row takes twelve at most.
++TEST_F(ArcSidebarImportWindowTest, FavoritesCapAtTwelve) {
++  ArcImportPlan plan;
++  for (int i = 0; i < 14; ++i) {
++    ArcImportPlan::Node node;
++    node.arc_id = "top-" + base::NumberToString(i);
++    node.title = u"Top";
++    node.url = GURL("https://top.example/" + base::NumberToString(i));
++    plan.essentials.push_back(node);
++  }
++  EXPECT_NE(std::u16string::npos,
++            SummariseArcImport(plan).find(u"the first 12 become essentials"));
++  const ArcImportResult result =
++      ApplyArcImport(browser(), plan, ArcImportOptions());
++  EXPECT_EQ(12u, result.essentials);
++  EXPECT_EQ(12, tabs().IndexOfFirstNonPinnedTab());
++}
++
++}  // namespace
++}  // namespace spaces
+diff --git a/chrome/browser/ui/stedding/stedding_prefs.cc b/chrome/browser/ui/stedding/stedding_prefs.cc
+index f6ebd39a8727e..49db88131d0df 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs.cc
++++ b/chrome/browser/ui/stedding/stedding_prefs.cc
+@@ -21,6 +21,8 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
+   registry->RegisterBooleanPref(kMenusShort, true);
+   registry->RegisterBooleanPref(kHoldCmdNumbers, true);
+   registry->RegisterBooleanPref(kCtrlTabMru, true);
++  registry->RegisterListPref(kArcImportedIds);
++  registry->RegisterDictionaryPref(kArcImportedSpaces);
+ }
+ 
+ }  // namespace stedding::prefs
+diff --git a/chrome/browser/ui/stedding/stedding_prefs.h b/chrome/browser/ui/stedding/stedding_prefs.h
+index 6619d4286e6d4..f97cfb8f0b96d 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs.h
++++ b/chrome/browser/ui/stedding/stedding_prefs.h
+@@ -56,6 +56,10 @@ inline constexpr char kHoldCmdNumbers[] = "stedding.sidebar.hold_cmd_numbers";
+ // switcher X1, X5: Ctrl-Tab walks the active Space's most recent tabs; off,
+ // it walks the sidebar in order.
+ inline constexpr char kCtrlTabMru[] = "stedding.tabs.ctrl_tab_mru";
++// import I12: Arc's item ids already brought over, and Arc's Space ids to
++// the Spaces they became, so a second import adds nothing twice.
++inline constexpr char kArcImportedIds[] = "stedding.import.arc_ids";
++inline constexpr char kArcImportedSpaces[] = "stedding.import.arc_spaces";
+ 
+ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
+ 
+diff --git a/chrome/browser/ui/views/commandbar/command_bar_view.cc b/chrome/browser/ui/views/commandbar/command_bar_view.cc
+index 0e7189469f84b..11ca1160cc6d1 100644
+--- a/chrome/browser/ui/views/commandbar/command_bar_view.cc
++++ b/chrome/browser/ui/views/commandbar/command_bar_view.cc
+@@ -9,10 +9,13 @@
+ #include <string>
+ #include <utility>
+ 
++#include "base/files/file_util.h"
+ #include "base/functional/bind.h"
++#include "base/functional/callback_helpers.h"
+ #include "base/memory/ptr_util.h"
+ #include "base/strings/utf_string_conversions.h"
+ #include "base/task/single_thread_task_runner.h"
++#include "base/task/thread_pool.h"
+ #include "chrome/app/chrome_command_ids.h"
+ #include "chrome/browser/autocomplete/autocomplete_classifier_factory.h"
+ #include "chrome/browser/autocomplete/chrome_autocomplete_provider_client.h"
+@@ -25,6 +28,7 @@
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/navigator/browser_navigator.h"
+ #include "chrome/browser/ui/navigator/browser_navigator_params.h"
++#include "chrome/browser/ui/spaces/arc_sidebar_importer.h"
+ #include "chrome/browser/ui/spaces/space.h"
+ #include "chrome/browser/ui/spaces/space_colors.h"
+ #include "chrome/browser/ui/spaces/space_commands.h"
+@@ -221,6 +225,26 @@ struct PrefChoice {
+   const char16_t* name;
+ };
+ 
++// import I4: whether this Mac has an Arc sidebar, learned once on the
++// thread pool; false until known.
++bool& ArcSidebarKnownFlag() {
++  static bool known = false;
++  return known;
++}
++
++bool ArcSidebarKnown() {
++  static bool asked = false;
++  if (!asked) {
++    asked = true;
++    base::ThreadPool::PostTaskAndReplyWithResult(
++        FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
++        base::BindOnce(
++            [] { return base::PathExists(spaces::ArcSidebarPath()); }),
++        base::BindOnce([](bool exists) { ArcSidebarKnownFlag() = exists; }));
++  }
++  return ArcSidebarKnownFlag();
++}
++
+ }  // namespace
+ 
+ void CommandBarView::BuildActions() {
+@@ -305,6 +329,18 @@ void CommandBarView::BuildActions() {
+                  base::Unretained(browser_))});
+       }
+     }
++    // import I4: the Arc sidebar, when this Mac has one (the check runs
++    // once, off the UI thread; the row appears from the next bar on).
++    if (ArcSidebarKnown()) {
++      actions_.push_back({u"Import from Arc", std::u16string(),
++                          base::BindRepeating(
++                              [](Browser* browser) {
++                                spaces::ImportFromArcAsync(
++                                    browser, spaces::ArcImportOptions(),
++                                    base::DoNothing());
++                              },
++                              base::Unretained(browser_))});
++    }
+     // switcher X2 from the bar: a tap, since no Ctrl is held.
+     actions_.push_back({u"Go to the Most Recent Tab",
+                         ChordFor(IDC_CYCLE_TO_NEXT_TAB),
+diff --git a/chrome/browser/ui/webui/settings/settings_ui.cc b/chrome/browser/ui/webui/settings/settings_ui.cc
+index 474c64da9c64b..5ab68194fa9f3 100644
+--- a/chrome/browser/ui/webui/settings/settings_ui.cc
++++ b/chrome/browser/ui/webui/settings/settings_ui.cc
+@@ -691,6 +691,8 @@ SettingsUI::SettingsUI(content::WebUI* web_ui)
+       "context menu sets icon and colour.");
+   html_source->AddString("steddingSpaceNamePlaceholder", "Space name");
+   html_source->AddString("steddingDeleteSpace", "Delete Space");
++  html_source->AddString("steddingImportArcLabel", "Import from Arc");
++  html_source->AddString("steddingImportArcButton", "Import\u2026");
+   html_source->AddString("steddingArchiveLabel",
+                          "Archive tabs nobody has looked at for");
+   html_source->AddString(
+diff --git a/chrome/browser/ui/webui/settings/stedding_spaces_handler.cc b/chrome/browser/ui/webui/settings/stedding_spaces_handler.cc
+index dc599a3e52f0f..7bced90c4445c 100644
+--- a/chrome/browser/ui/webui/settings/stedding_spaces_handler.cc
++++ b/chrome/browser/ui/webui/settings/stedding_spaces_handler.cc
+@@ -47,6 +47,14 @@ void SteddingSpacesHandler::RegisterMessages() {
+       "steddingRenameSpace",
+       base::BindRepeating(&SteddingSpacesHandler::HandleRenameSpace,
+                           base::Unretained(this)));
++  web_ui()->RegisterMessageCallback(
++      "steddingGetArcImport",
++      base::BindRepeating(&SteddingSpacesHandler::HandleGetArcImport,
++                          base::Unretained(this)));
++  web_ui()->RegisterMessageCallback(
++      "steddingImportFromArc",
++      base::BindRepeating(&SteddingSpacesHandler::HandleImportFromArc,
++                          base::Unretained(this)));
+   web_ui()->RegisterMessageCallback(
+       "steddingDeleteSpace",
+       base::BindRepeating(&SteddingSpacesHandler::HandleDeleteSpace,
+@@ -96,10 +104,10 @@ base::ListValue SteddingSpacesHandler::ListSpaces() {
+     entry.Set("name", space->name());
+     entry.Set("displayName", model->DisplayName(space->id()));
+     entry.Set("icon", space->icon());
+-    entry.Set("color", base::StringPrintf("#%02X%02X%02X",
+-                                          SkColorGetR(space->color()),
+-                                          SkColorGetG(space->color()),
+-                                          SkColorGetB(space->color())));
++    entry.Set("color",
++              base::StringPrintf("#%02X%02X%02X", SkColorGetR(space->color()),
++                                 SkColorGetG(space->color()),
++                                 SkColorGetB(space->color())));
+     entry.Set("active", space->id() == model->active_id());
+     list.Append(std::move(entry));
+   }
+@@ -129,6 +137,49 @@ void SteddingSpacesHandler::HandleRenameSpace(const base::ListValue& args) {
+   model->SetSpaceName(*id, args[1].GetString());
+ }
+ 
++void SteddingSpacesHandler::HandleGetArcImport(const base::ListValue& args) {
++  CHECK_EQ(1U, args.size());
++  AllowJavascript();
++  spaces::LoadArcSidebarInfo(
++      base::BindOnce(&SteddingSpacesHandler::OnArcSidebarInfo,
++                     weak_factory_.GetWeakPtr(), args[0].GetString()));
++}
++
++void SteddingSpacesHandler::OnArcSidebarInfo(const std::string& callback_id,
++                                             spaces::ArcSidebarInfo info) {
++  if (!IsJavascriptAllowed()) {
++    return;
++  }
++  ResolveJavascriptCallback(
++      base::Value(callback_id),
++      base::Value(info.found ? info.summary : std::u16string()));
++}
++
++void SteddingSpacesHandler::HandleImportFromArc(const base::ListValue& args) {
++  CHECK_EQ(1U, args.size());
++  AllowJavascript();
++  BrowserWindowInterface* const browser =
++      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
++          web_ui()->GetWebContents());
++  spaces::ImportFromArcAsync(
++      browser, spaces::ArcImportOptions(),
++      base::BindOnce(&SteddingSpacesHandler::OnArcImportDone,
++                     weak_factory_.GetWeakPtr(), args[0].GetString()));
++}
++
++void SteddingSpacesHandler::OnArcImportDone(
++    const std::string& callback_id,
++    std::optional<spaces::ArcImportResult> result) {
++  if (!IsJavascriptAllowed()) {
++    return;
++  }
++  PushSpaces();
++  ResolveJavascriptCallback(
++      base::Value(callback_id),
++      base::Value(result ? spaces::DescribeArcImportResult(*result)
++                         : u"Nothing was imported."));
++}
++
+ void SteddingSpacesHandler::HandleDeleteSpace(const base::ListValue& args) {
+   CHECK_EQ(1U, args.size());
+   AllowJavascript();
+diff --git a/chrome/browser/ui/webui/settings/stedding_spaces_handler.h b/chrome/browser/ui/webui/settings/stedding_spaces_handler.h
+index 72a648ec02195..2e8436de88dcf 100644
+--- a/chrome/browser/ui/webui/settings/stedding_spaces_handler.h
++++ b/chrome/browser/ui/webui/settings/stedding_spaces_handler.h
+@@ -5,8 +5,10 @@
+ #ifndef CHROME_BROWSER_UI_WEBUI_SETTINGS_STEDDING_SPACES_HANDLER_H_
+ #define CHROME_BROWSER_UI_WEBUI_SETTINGS_STEDDING_SPACES_HANDLER_H_
+ 
++#include "base/memory/weak_ptr.h"
+ #include "base/scoped_observation.h"
+ #include "base/values.h"
++#include "chrome/browser/ui/spaces/arc_sidebar_importer.h"
+ #include "chrome/browser/ui/spaces/space_model.h"
+ #include "chrome/browser/ui/webui/settings/settings_page_ui_handler.h"
+ 
+@@ -44,9 +46,19 @@ class SteddingSpacesHandler : public settings::SettingsPageUIHandler,
+   void HandleGetSpaces(const base::ListValue& args);
+   void HandleRenameSpace(const base::ListValue& args);
+   void HandleDeleteSpace(const base::ListValue& args);
++  // import I4: steddingGetArcImport(callback) -> the summary line, or "" when
++  // this Mac has no Arc sidebar; steddingImportFromArc(callback) -> what was
++  // imported.
++  void HandleGetArcImport(const base::ListValue& args);
++  void OnArcSidebarInfo(const std::string& callback_id,
++                        spaces::ArcSidebarInfo info);
++  void HandleImportFromArc(const base::ListValue& args);
++  void OnArcImportDone(const std::string& callback_id,
++                       std::optional<spaces::ArcImportResult> result);
+ 
+   base::ScopedObservation<spaces::SpaceModel, spaces::SpaceModel::Observer>
+       observation_{this};
++  base::WeakPtrFactory<SteddingSpacesHandler> weak_factory_{this};
+ };
+ 
+ #endif  // CHROME_BROWSER_UI_WEBUI_SETTINGS_STEDDING_SPACES_HANDLER_H_
+diff --git a/chrome/browser/ui/webui/stedding_welcome/stedding_welcome_handler.cc b/chrome/browser/ui/webui/stedding_welcome/stedding_welcome_handler.cc
+index 1ee3e1ee02b3e..f4f04fd2c427b 100644
+--- a/chrome/browser/ui/webui/stedding_welcome/stedding_welcome_handler.cc
++++ b/chrome/browser/ui/webui/stedding_welcome/stedding_welcome_handler.cc
+@@ -9,29 +9,29 @@
+ 
+ #include "base/functional/bind.h"
+ #include "base/strings/strcat.h"
++#include "base/strings/stringprintf.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/search_engine_choice/search_engine_choice_dialog_service.h"
+ #include "chrome/browser/search_engine_choice/search_engine_choice_dialog_service_factory.h"
++#include "chrome/browser/search_engines/template_url_service_factory.h"
+ #include "chrome/browser/themes/theme_service.h"
+ #include "chrome/browser/themes/theme_service_factory.h"
+-#include "base/strings/stringprintf.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/spaces/space_colors.h"
+ #include "chrome/browser/ui/spaces/space_model.h"
+ #include "chrome/browser/ui/stedding/stedding_prefs.h"
+ #include "chrome/browser/ui/webui/stedding_welcome/welcome_host.h"
+-#include "third_party/skia/include/core/SkColor.h"
+-#include "ui/base/window_open_disposition.h"
+-#include "url/gurl.h"
+ #include "components/prefs/pref_service.h"
++#include "components/search_engines/choice_made_location.h"
++#include "components/search_engines/search_engine_choice/search_engine_choice_service.h"
++#include "components/search_engines/search_engine_choice/search_engine_choice_utils.h"
+ #include "components/search_engines/template_url.h"
+ #include "components/search_engines/template_url_service.h"
+-#include "components/search_engines/search_engine_choice/search_engine_choice_utils.h"
+-#include "components/search_engines/search_engine_choice/search_engine_choice_service.h"
+-#include "components/search_engines/choice_made_location.h"
+-#include "chrome/browser/search_engines/template_url_service_factory.h"
+ #include "content/public/browser/web_contents.h"
+ #include "content/public/browser/web_ui.h"
++#include "third_party/skia/include/core/SkColor.h"
++#include "ui/base/window_open_disposition.h"
++#include "url/gurl.h"
+ 
+ namespace stedding {
+ 
+@@ -68,6 +68,12 @@ void WelcomeHandler::RegisterMessages() {
+   web_ui()->RegisterMessageCallback(
+       "setSpaceColor", base::BindRepeating(&WelcomeHandler::HandleSetSpaceColor,
+                                            base::Unretained(this)));
++  web_ui()->RegisterMessageCallback(
++      "getArcImport", base::BindRepeating(&WelcomeHandler::HandleGetArcImport,
++                                          base::Unretained(this)));
++  web_ui()->RegisterMessageCallback(
++      "importFromArc", base::BindRepeating(&WelcomeHandler::HandleImportFromArc,
++                                           base::Unretained(this)));
+   web_ui()->RegisterMessageCallback(
+       "openShortcuts", base::BindRepeating(&WelcomeHandler::HandleOpenShortcuts,
+                                            base::Unretained(this)));
+@@ -80,10 +86,10 @@ void WelcomeHandler::HandleGetSpaceColors(const base::ListValue& args) {
+   for (const spaces::SpaceColorChoice& choice : spaces::kSpaceColors) {
+     base::DictValue entry;
+     entry.Set("name", std::u16string(choice.name));
+-    entry.Set("color", base::StringPrintf("#%02X%02X%02X",
+-                                          SkColorGetR(choice.color),
+-                                          SkColorGetG(choice.color),
+-                                          SkColorGetB(choice.color)));
++    entry.Set("color",
++              base::StringPrintf("#%02X%02X%02X", SkColorGetR(choice.color),
++                                 SkColorGetG(choice.color),
++                                 SkColorGetB(choice.color)));
+     list.Append(std::move(entry));
+   }
+   ResolveJavascriptCallback(args[0], list);
+@@ -108,6 +114,54 @@ void WelcomeHandler::HandleSetSpaceColor(const base::ListValue& args) {
+                        spaces::kSpaceColors.at(*index).color);
+ }
+ 
++void WelcomeHandler::HandleGetArcImport(const base::ListValue& args) {
++  CHECK_EQ(1U, args.size());
++  AllowJavascript();
++  spaces::LoadArcSidebarInfo(base::BindOnce(&WelcomeHandler::OnArcSidebarInfo,
++                                            weak_factory_.GetWeakPtr(),
++                                            args[0].GetString()));
++}
++
++void WelcomeHandler::OnArcSidebarInfo(const std::string& callback_id,
++                                      spaces::ArcSidebarInfo info) {
++  if (!IsJavascriptAllowed()) {
++    return;
++  }
++  base::DictValue reply;
++  reply.Set("found", info.found);
++  reply.Set("arcRunning", info.arc_running);
++  reply.Set("summary", info.summary);
++  ResolveJavascriptCallback(base::Value(callback_id), reply);
++}
++
++void WelcomeHandler::HandleImportFromArc(const base::ListValue& args) {
++  CHECK_EQ(4U, args.size());
++  AllowJavascript();
++  const WelcomeHost* const host =
++      WelcomeHost::FromWebContents(web_ui()->GetWebContents());
++  BrowserWindowInterface* const browser = host ? host->browser() : nullptr;
++  spaces::ArcImportOptions options;
++  options.spaces = args[1].GetIfBool().value_or(true);
++  options.pinned = args[2].GetIfBool().value_or(true);
++  options.unpinned = args[3].GetIfBool().value_or(true);
++  spaces::ImportFromArcAsync(
++      browser, options,
++      base::BindOnce(&WelcomeHandler::OnArcImportDone,
++                     weak_factory_.GetWeakPtr(), args[0].GetString()));
++}
++
++void WelcomeHandler::OnArcImportDone(
++    const std::string& callback_id,
++    std::optional<spaces::ArcImportResult> result) {
++  if (!IsJavascriptAllowed()) {
++    return;
++  }
++  ResolveJavascriptCallback(
++      base::Value(callback_id),
++      base::Value(result ? spaces::DescribeArcImportResult(*result)
++                         : u"Nothing was imported."));
++}
++
+ void WelcomeHandler::HandleOpenShortcuts(const base::ListValue& args) {
+   AllowJavascript();
+   const WelcomeHost* const host =
+diff --git a/chrome/browser/ui/webui/stedding_welcome/stedding_welcome_handler.h b/chrome/browser/ui/webui/stedding_welcome/stedding_welcome_handler.h
+index 51b232de6b975..dac09754d5b3a 100644
+--- a/chrome/browser/ui/webui/stedding_welcome/stedding_welcome_handler.h
++++ b/chrome/browser/ui/webui/stedding_welcome/stedding_welcome_handler.h
+@@ -9,6 +9,7 @@
+ #include "base/memory/weak_ptr.h"
+ #include "base/values.h"
+ #include "chrome/browser/shell_integration.h"
++#include "chrome/browser/ui/spaces/arc_sidebar_importer.h"
+ #include "content/public/browser/web_ui_message_handler.h"
+ 
+ namespace stedding {
+@@ -46,11 +47,20 @@ class WelcomeHandler : public content::WebUIMessageHandler {
+   // openShortcuts(): the shortcut reference in chrome://settings/stedding
+   // opens in a tab of the window behind the flow (shortcuts Z4).
+   void HandleOpenShortcuts(const base::ListValue& args);
++  // getArcImport(callback) -> {found, arcRunning, summary} (import I2, I4).
++  void HandleGetArcImport(const base::ListValue& args);
++  void OnArcSidebarInfo(const std::string& callback_id,
++                        spaces::ArcSidebarInfo info);
++  // importFromArc(callback, spaces, pinned, unpinned) -> the result line.
++  void HandleImportFromArc(const base::ListValue& args);
++  void OnArcImportDone(const std::string& callback_id,
++                       std::optional<spaces::ArcImportResult> result);
+ 
+   void OnDefaultBrowserState(const std::string& callback_id,
+                              shell_integration::DefaultWebClientState state);
+ 
+-  scoped_refptr<shell_integration::DefaultBrowserWorker> default_browser_worker_;
++  scoped_refptr<shell_integration::DefaultBrowserWorker>
++      default_browser_worker_;
+   base::WeakPtrFactory<WelcomeHandler> weak_factory_{this};
+ };
+ 

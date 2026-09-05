@@ -1,6 +1,6 @@
 # Feature: Toolbar and page bar
 
-Status: **T1–T3, T5, T6 built**; **T4, T7 planned** (round 6, the page-colour row, 2026-09-04).
+Status: **T1–T3, T5, T6 built**; **T4, T7 planned** (round 6, the page-colour row, 2026-09-04); **T8, T10–T12 planned, T13 planned (D10), T9 dropped** (round 6, `docs/ROUND6-PLAN.md` R6-25).
 Owner docs: `docs/UI-SPEC.md`. Patches: `0002` (layout), `0007` (colours).
 
 The address row is the top of the page card, not a strip above it: no gap, no hairline,
@@ -18,4 +18,10 @@ one. Arc's window reads the same way.
 | T5 | The omnibox has no pill of its own: text on the bar, a quiet tint on hover. The page-info chip ("Stedding" on chrome:// pages) keeps 21 DIP for its 16 DIP icon inside the 25 DIP location bar (found clipped 2026-09-04). | capture | built |
 | T6 | In macOS immersive fullscreen the row moves into the overlay; the sidebar's top row stays as compact as outside fullscreen. The sidebar cannot reach the overlay's 33 DIP (platform: the window's content view starts below it). | live capture (⌃⌘F) | built |
 | T7 | The row's icon and text colours follow the page colour through the ColorProvider: `PageBarColorSupplier` rides on the window's `ColorProviderKey` as its app controller (the slot web apps use for their theme colour) and remaps the toolbar's icon, text and omnibox ids to the colour with most contrast against the painted bar; the sidebar's buttons use the tab-strip control ids and keep theirs. A page-colour change re-themes the window the way a web app's theme-colour change does. | live: github.com (dark) in light mode and example.com; probe on the back arrow's pixel, dark and light | built |
+| T8 | With the sidebar collapsed (⌘S) and the setting on, the address row hides: `BrowserView::IsToolbarVisible` answers no, the top container keeps only the card gutter, the content card takes the full height with its radius and gutters, and `PaintPageBar` paints nothing. Immersive fullscreen is unchanged (T6). | `AddressRowRulesTest.HiddenWithTheSidebarUnlessLocalhostOrOverridden`; live: `w3_row_collapsed` (dark), `w3_row_collapsed_light` | planned |
+| T9 | Resting the pointer at the top floats the row as a pill; ⌘L summons it. | none yet | gap · dropped: ⌘L opens the command bar (commandbar K12); no floating pill (`docs/ROUND6-PLAN.md` D2) |
+| T10 | ⇧⌘D toggles the row for the window on its own: shown while the sidebar is collapsed, or hidden while it is expanded. The override clears when the sidebar's state changes, so ⌘S behaves as the setting says again. Bookmark All Tabs loses the chord (its menu item stays). | `AddressRowTest.ToggleOverridesUntilTheSidebarChanges`; live: `w3_row_toggled` | planned |
+| T11 | A localhost page always shows the row (Arc's Developer Mode). | `AddressRowRulesTest.HiddenWithTheSidebarUnlessLocalhostOrOverridden`; live: `w3_row_localhost` | planned |
+| T12 | Setting off keeps the row whatever the sidebar does (today's behaviour); ⇧⌘D still works. | `SteddingPrefsTest.EveryPreferenceRegistersAndDefaultsToOn` (the default); `AddressRowRulesTest.HiddenWithTheSidebarUnlessLocalhostOrOverridden` | planned |
+| T13 | With the row hidden, extension actions, the media button and page info live in the command bar's actions mode; ⌘E cycles extension actions; page info opens from the address text in the bar. | TBD | planned · D10, the second half |
 | T14 | The bottom-left downloads button shows Chromium's progress ring and the download-started animation; the toolbar's own button never appears at the top right during a download (backlog S-41). | live: `w2_download_ring` (a 24 MB download from a local server at about 1 MB/s; the sidebar's button shows the ring, the toolbar shows no button). | built |

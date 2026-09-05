@@ -1,0 +1,647 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Sat, 5 Sep 2026 06:16:27 -0400
+Subject: spaces: switcher overflow and reorder, the Space sleep timer's tests,
+ downloads on the sidebar button
+
+At overflow the inactive chips shrink to dots in their Space colour and grow
+back while the pointer rests on the row (docs/features/spaces.md B24-B26);
+Move Left / Move Right on the Space menu reorder the switcher through
+SpaceModel::MoveSpace, persisted with the Spaces, and Ctrl-N follows (B27,
+the keyboard path; the chip drag is a later pass). The download progress ring
+and the started animation target the sidebar's bottom-left button, not the
+toolbar's (docs/features/toolbar.md T14, backlog S-41).
+
+Why: docs/ROUND6-PLAN.md wave 2 (R6-18, R6-21) and the model tests for R6-15.
+Removable when: Chromium's tab strip hosts a Space switcher and a downloads
+button of its own.
+---
+ .../browser/ui/spaces/space_model_unittest.cc | 79 ++++++++++++++++
+ .../bubble/download_toolbar_ui_controller.cc  | 65 ++++++++-----
+ chrome/browser/ui/views/spaces/BUILD.gn       |  7 +-
+ .../ui/views/spaces/space_switcher_rules.cc   | 21 +++++
+ .../ui/views/spaces/space_switcher_rules.h    | 31 ++++++
+ .../spaces/space_switcher_rules_unittest.cc   | 28 ++++++
+ .../ui/views/spaces/space_switcher_view.cc    | 94 +++++++++++++++++++
+ .../ui/views/spaces/space_switcher_view.h     | 22 ++++-
+ 8 files changed, 318 insertions(+), 29 deletions(-)
+ create mode 100644 chrome/browser/ui/views/spaces/space_switcher_rules.cc
+ create mode 100644 chrome/browser/ui/views/spaces/space_switcher_rules.h
+ create mode 100644 chrome/browser/ui/views/spaces/space_switcher_rules_unittest.cc
+
+diff --git a/chrome/browser/ui/spaces/space_model_unittest.cc b/chrome/browser/ui/spaces/space_model_unittest.cc
+index 0969184453000..c74016b163fa6 100644
+--- a/chrome/browser/ui/spaces/space_model_unittest.cc
++++ b/chrome/browser/ui/spaces/space_model_unittest.cc
+@@ -6,6 +6,9 @@
+ 
+ #include <string>
+ 
++#include "base/functional/bind.h"
++#include "base/test/task_environment.h"
++#include "base/time/time.h"
+ #include "components/tabs/public/mock_tab_interface.h"
+ #include "testing/gtest/include/gtest/gtest.h"
+ 
+@@ -101,6 +104,82 @@ TEST(SpaceModelTest, AChosenColourOnALoneSpaceIsRemembered) {
+   EXPECT_FALSE(plain_read.active_space()->color_chosen());
+ }
+ 
++// tabs R6: leaving a Space arms its sleep; coming back cancels it; a
++// removed Space never fires; zero disables.
++TEST(SpaceModelTest, SleepTimerFiresForTheSpaceTheUserLeft) {
++  base::test::TaskEnvironment env(
++      base::test::TaskEnvironment::TimeSource::MOCK_TIME);
++  SpaceModel model;
++  std::vector<SpaceId> slept;
++  model.SetSleepPolicy(
++      base::Minutes(15),
++      base::BindRepeating(
++          [](std::vector<SpaceId>* slept, const SpaceId& id,
++             const std::vector<tabs::TabInterface*>&) { slept->push_back(id); },
++          &slept));
++  const SpaceId home = model.active_id();
++  const SpaceId work = model.AddSpace("Work", kBlue)->id();
++
++  model.SetActiveSpace(work);
++  EXPECT_TRUE(model.HasPendingSleepForTesting(home));
++  env.FastForwardBy(base::Minutes(14));
++  EXPECT_TRUE(slept.empty());
++  env.FastForwardBy(base::Minutes(2));
++  ASSERT_EQ(1u, slept.size());
++  EXPECT_EQ(home, slept[0]);
++  EXPECT_FALSE(model.HasPendingSleepForTesting(home));
++
++  // Coming back in time cancels the Space's own timer; leaving the other
++  // one arms that one instead.
++  model.SetActiveSpace(home);
++  EXPECT_TRUE(model.HasPendingSleepForTesting(work));
++  model.SetActiveSpace(work);
++  EXPECT_FALSE(model.HasPendingSleepForTesting(work));
++  EXPECT_TRUE(model.HasPendingSleepForTesting(home));
++  env.FastForwardBy(base::Minutes(30));
++  ASSERT_EQ(2u, slept.size());
++  EXPECT_EQ(home, slept[1]);
++
++  // Zero disables and drops what was pending.
++  model.SetActiveSpace(home);
++  EXPECT_TRUE(model.HasPendingSleepForTesting(work));
++  model.SetSleepPolicy(base::TimeDelta(), base::DoNothing());
++  EXPECT_FALSE(model.HasPendingSleepForTesting(work));
++  env.FastForwardBy(base::Minutes(30));
++  EXPECT_EQ(2u, slept.size());
++}
++
++// spaces B27: Move Left / Move Right reorder the switcher, the ends clamp,
++// the order survives a session round trip, and Ctrl-N follows it.
++TEST(SpaceModelTest, MoveSpaceReordersAndPersists) {
++  SpaceModel written;
++  const SpaceId first = written.active_id();
++  const SpaceId second = written.AddSpace("Second", kBlue)->id();
++  const SpaceId third = written.AddSpace("Third", kRed)->id();
++
++  EXPECT_TRUE(written.MoveSpace(third, -2));
++  EXPECT_EQ(third, written.spaces()[0]->id());
++  EXPECT_EQ(first, written.spaces()[1]->id());
++  EXPECT_EQ(second, written.spaces()[2]->id());
++  // The ends clamp: already first, already last, no step.
++  EXPECT_FALSE(written.MoveSpace(third, -1));
++  EXPECT_FALSE(written.MoveSpace(second, 5));
++  EXPECT_FALSE(written.MoveSpace(first, 0));
++  // A long step lands on the end.
++  EXPECT_TRUE(written.MoveSpace(first, 5));
++  EXPECT_EQ(first, written.spaces()[2]->id());
++  EXPECT_EQ(second, written.spaces()[1]->id());
++
++  SpaceModel read;
++  read.RestoreFrom(written.Serialize());
++  ASSERT_EQ(3u, read.size());
++  EXPECT_EQ(third, read.spaces()[0]->id());
++  EXPECT_EQ(second, read.spaces()[1]->id());
++  EXPECT_EQ(first, read.spaces()[2]->id());
++  read.SetActiveSpaceByIndex(0);
++  EXPECT_EQ(third, read.active_id());
++}
++
+ class CountingObserver : public SpaceModel::Observer {
+  public:
+   void OnSpaceAdded(const SpaceId& id) override { ++added; }
+diff --git a/chrome/browser/ui/views/download/bubble/download_toolbar_ui_controller.cc b/chrome/browser/ui/views/download/bubble/download_toolbar_ui_controller.cc
+index 2205591c9c3ae..212fb657140ec 100644
+--- a/chrome/browser/ui/views/download/bubble/download_toolbar_ui_controller.cc
++++ b/chrome/browser/ui/views/download/bubble/download_toolbar_ui_controller.cc
+@@ -114,7 +114,7 @@ class DownloadProgressRing : public views::View, gfx::AnimationDelegate {
+ 
+   // Create a DownloadProgressRing and adds it to |parent|. The
+   // returned progress ring is owned by the |parent|.
+-  static DownloadProgressRing* Install(ToolbarButton* parent) {
++  static DownloadProgressRing* Install(views::View* parent) {
+     auto progress_ring =
+         base::WrapUnique<DownloadProgressRing>(new DownloadProgressRing());
+     auto* ring = parent->AddChildView(std::move(progress_ring));
+@@ -122,7 +122,7 @@ class DownloadProgressRing : public views::View, gfx::AnimationDelegate {
+   }
+ 
+   // Returns the progress ring if it is a direct child of the `parent`.
+-  static DownloadProgressRing* GetProgressRing(ToolbarButton* parent) {
++  static DownloadProgressRing* GetProgressRing(views::View* parent) {
+     for (auto& child : parent->children()) {
+       if (views::IsViewClass<DownloadProgressRing>(child)) {
+         return views::AsViewClass<DownloadProgressRing>(child);
+@@ -240,14 +240,16 @@ class DownloadProgressRing : public views::View, gfx::AnimationDelegate {
+ BEGIN_METADATA(DownloadProgressRing)
+ END_METADATA
+ 
+-DownloadProgressRing* GetProgressRing(BrowserView* browser_view) {
+-  auto* button = GetDownloadsButton(browser_view);
+-  if (!button) {
++// Stedding (toolbar, S-41): the ring and the badge live on whichever view
++// hosts the downloads icon -- the sidebar's button when the window has one,
++// else the toolbar's.
++DownloadProgressRing* GetProgressRing(views::View* host) {
++  if (!host) {
+     return nullptr;
+   }
+-  auto* progress_ring = DownloadProgressRing::GetProgressRing(button);
++  auto* progress_ring = DownloadProgressRing::GetProgressRing(host);
+   if (!progress_ring) {
+-    progress_ring = DownloadProgressRing::Install(button);
++    progress_ring = DownloadProgressRing::Install(host);
+   }
+   return progress_ring;
+ }
+@@ -308,14 +310,14 @@ class DownloadsImageBadge : public views::ImageView {
+ 
+   // Create a DownloadsImageBadge and adds it to |parent|. The
+   // returned badge is owned by the |parent|.
+-  static DownloadsImageBadge* Install(ToolbarButton* parent) {
++  static DownloadsImageBadge* Install(views::View* parent) {
+     auto badge =
+         base::WrapUnique<DownloadsImageBadge>(new DownloadsImageBadge());
+     return parent->AddChildView(std::move(badge));
+   }
+ 
+   // Returns the image badge if it is a direct child of the `parent`.
+-  static DownloadsImageBadge* GetImageBadge(ToolbarButton* parent) {
++  static DownloadsImageBadge* GetImageBadge(views::View* parent) {
+     for (auto& child : parent->children()) {
+       if (views::IsViewClass<DownloadsImageBadge>(child)) {
+         return views::AsViewClass<DownloadsImageBadge>(child);
+@@ -417,14 +419,13 @@ class DownloadsImageBadge : public views::ImageView {
+ BEGIN_METADATA(DownloadsImageBadge)
+ END_METADATA
+ 
+-DownloadsImageBadge* GetImageBadge(BrowserView* browser_view) {
+-  auto* button = GetDownloadsButton(browser_view);
+-  if (!button) {
++DownloadsImageBadge* GetImageBadge(views::View* host) {
++  if (!host) {
+     return nullptr;
+   }
+-  auto* badge = DownloadsImageBadge::GetImageBadge(button);
++  auto* badge = DownloadsImageBadge::GetImageBadge(host);
+   if (!badge) {
+-    badge = DownloadsImageBadge::Install(button);
++    badge = DownloadsImageBadge::Install(host);
+   }
+   return badge;
+ }
+@@ -475,6 +476,11 @@ void DownloadToolbarUIController::TearDownPreBrowserWindowDestruction() {
+ }
+ 
+ void DownloadToolbarUIController::Show() {
++  // Stedding (S-41): the sidebar's button is always there, so the toolbar's
++  // never appears at the top right during a download.
++  if (SteddingAnchorView()) {
++    return;
++  }
+   auto* container = GetPinnedToolbarActions(browser_view_);
+   if (!container) {
+     return;
+@@ -644,8 +650,13 @@ void DownloadToolbarUIController::OnOfflineItemsInitialized() {
+ }
+ 
+ void DownloadToolbarUIController::UpdateIcon() {
+-  auto* button = GetDownloadsButton(browser_view_);
+-  if (!button) {
++  // Stedding (S-41): the sidebar's downloads button carries the ring and the
++  // badge when the window has one; the toolbar's button otherwise.
++  views::View* button = SteddingAnchorView();
++  if (!button || !button->GetWidget()) {
++    button = GetDownloadsButton(browser_view_);
++  }
++  if (!button || !button->GetColorProvider()) {
+     return;
+   }
+ 
+@@ -718,11 +729,10 @@ void DownloadToolbarUIController::UpdateIcon() {
+ 
+   redraw_progress_soon_ = false;
+ 
+-  DownloadProgressRing* progress_ring = GetProgressRing(browser_view_);
++  DownloadProgressRing* progress_ring = GetProgressRing(button);
+ 
+-  GetImageBadge(browser_view_)
+-      ->UpdateImage(is_active, progress_download_count, progress_color,
+-                    badge_background_color);
++  GetImageBadge(button)->UpdateImage(is_active, progress_download_count,
++                                     progress_color, badge_background_color);
+ 
+   // Do not show the progress ring when there is no in progress download.
+   if (state_ == IconState::kComplete || progress_info_.download_count == 0) {
+@@ -859,7 +869,10 @@ void DownloadToolbarUIController::ShowPendingDownloadStartedAnimation() {
+ }
+ 
+ bool DownloadToolbarUIController::IsProgressRingInDownloadingStateForTesting() {
+-  if (auto* progress_ring = GetProgressRing(browser_view_)) {
++  if (auto* progress_ring = GetProgressRing(
++          SteddingAnchorView() && SteddingAnchorView()->GetWidget()
++              ? SteddingAnchorView()
++              : static_cast<views::View*>(GetDownloadsButton(browser_view_)))) {
+     return progress_ring->GetStatus() ==
+            DownloadProgressRing::DownloadStatus::kDownloading;
+   }
+@@ -867,7 +880,10 @@ bool DownloadToolbarUIController::IsProgressRingInDownloadingStateForTesting() {
+ }
+ 
+ bool DownloadToolbarUIController::IsProgressRingInDormantStateForTesting() {
+-  if (auto* progress_ring = GetProgressRing(browser_view_)) {
++  if (auto* progress_ring = GetProgressRing(
++          SteddingAnchorView() && SteddingAnchorView()->GetWidget()
++              ? SteddingAnchorView()
++              : static_cast<views::View*>(GetDownloadsButton(browser_view_)))) {
+     return progress_ring->GetStatus() ==
+            DownloadProgressRing::DownloadStatus::kDormant;
+   }
+@@ -875,7 +891,10 @@ bool DownloadToolbarUIController::IsProgressRingInDormantStateForTesting() {
+ }
+ 
+ views::ImageView* DownloadToolbarUIController::GetImageBadgeForTesting() {
+-  return GetImageBadge(browser_view_);
++  return GetImageBadge(
++      SteddingAnchorView() && SteddingAnchorView()->GetWidget()
++          ? SteddingAnchorView()
++          : static_cast<views::View*>(GetDownloadsButton(browser_view_)));
+ }
+ 
+ DownloadToolbarUIController::BubbleCloser::BubbleCloser(
+diff --git a/chrome/browser/ui/views/spaces/BUILD.gn b/chrome/browser/ui/views/spaces/BUILD.gn
+index 3db16302be365..6a105da40d554 100644
+--- a/chrome/browser/ui/views/spaces/BUILD.gn
++++ b/chrome/browser/ui/views/spaces/BUILD.gn
+@@ -10,6 +10,8 @@ source_set("spaces") {
+   ]
+   sources = [
+     "space_drag_target.cc",
++    "space_switcher_rules.cc",
++    "space_switcher_rules.h",
+     "space_switcher_view.cc",
+     "space_tab_visibility_controller.cc",
+   ]
+@@ -31,7 +33,10 @@ source_set("spaces") {
+ 
+ source_set("unit_tests") {
+   testonly = true
+-  sources = [ "space_drag_target_unittest.cc" ]
++  sources = [
++    "space_drag_target_unittest.cc",
++    "space_switcher_rules_unittest.cc",
++  ]
+   deps = [
+     ":spaces",
+     "//base",
+diff --git a/chrome/browser/ui/views/spaces/space_switcher_rules.cc b/chrome/browser/ui/views/spaces/space_switcher_rules.cc
+new file mode 100644
+index 0000000000000..79a0c615d6450
+--- /dev/null
++++ b/chrome/browser/ui/views/spaces/space_switcher_rules.cc
+@@ -0,0 +1,21 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/views/spaces/space_switcher_rules.h"
++
++namespace spaces {
++
++bool SwitcherOverflows(int row_width, size_t chip_count) {
++  // Every chip carries half the gap on each side; the "+" is one more chip.
++  const int need =
++      static_cast<int>(chip_count) * (kSwitcherChip + kSwitcherChipGap) +
++      kSwitcherChip;
++  return need > row_width - 2 * kSwitcherRowInset;
++}
++
++int SwitcherChipWidth(bool overflow, bool active, bool row_hovered) {
++  return overflow && !active && !row_hovered ? kSwitcherDot : kSwitcherChip;
++}
++
++}  // namespace spaces
+diff --git a/chrome/browser/ui/views/spaces/space_switcher_rules.h b/chrome/browser/ui/views/spaces/space_switcher_rules.h
+new file mode 100644
+index 0000000000000..5bb037a2d589a
+--- /dev/null
++++ b/chrome/browser/ui/views/spaces/space_switcher_rules.h
+@@ -0,0 +1,31 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_VIEWS_SPACES_SPACE_SWITCHER_RULES_H_
++#define CHROME_BROWSER_UI_VIEWS_SPACES_SPACE_SWITCHER_RULES_H_
++
++#include <cstddef>
++
++namespace spaces {
++
++// The switcher row's metrics (space_switcher_view.cc): a chip, the gap
++// between chips, the row's side inset, and the dot an inactive chip shrinks
++// to at overflow (docs/features/spaces.md B24).
++inline constexpr int kSwitcherChip = 24;
++inline constexpr int kSwitcherChipGap = 12;
++inline constexpr int kSwitcherRowInset = 12;
++inline constexpr int kSwitcherDot = 6;
++
++// True when `chip_count` chips plus the "+" would not fit a row `row_width`
++// wide at full size.
++bool SwitcherOverflows(int row_width, size_t chip_count);
++
++// The width a chip takes: full while the row has room, while it is the
++// active Space, or while the pointer rests on the row (B25); a dot
++// otherwise.
++int SwitcherChipWidth(bool overflow, bool active, bool row_hovered);
++
++}  // namespace spaces
++
++#endif  // CHROME_BROWSER_UI_VIEWS_SPACES_SPACE_SWITCHER_RULES_H_
+diff --git a/chrome/browser/ui/views/spaces/space_switcher_rules_unittest.cc b/chrome/browser/ui/views/spaces/space_switcher_rules_unittest.cc
+new file mode 100644
+index 0000000000000..82971d99daf06
+--- /dev/null
++++ b/chrome/browser/ui/views/spaces/space_switcher_rules_unittest.cc
+@@ -0,0 +1,28 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/views/spaces/space_switcher_rules.h"
++
++#include "testing/gtest/include/gtest/gtest.h"
++
++namespace spaces {
++namespace {
++
++// spaces B24-B26: a full sidebar (352) holds eight chips and the plus; twelve
++// overflow; below the threshold nothing changes.
++TEST(SwitcherRulesTest, OverflowShrinksInactiveChips) {
++  EXPECT_FALSE(SwitcherOverflows(352, 5));
++  EXPECT_FALSE(SwitcherOverflows(352, 8));
++  EXPECT_TRUE(SwitcherOverflows(352, 12));
++  EXPECT_TRUE(SwitcherOverflows(126, 3));
++
++  EXPECT_EQ(kSwitcherChip, SwitcherChipWidth(false, false, false));
++  EXPECT_EQ(kSwitcherDot, SwitcherChipWidth(true, false, false));
++  EXPECT_EQ(kSwitcherChip, SwitcherChipWidth(true, true, false));
++  // Hovering the row grows them back (B25).
++  EXPECT_EQ(kSwitcherChip, SwitcherChipWidth(true, false, true));
++}
++
++}  // namespace
++}  // namespace spaces
+diff --git a/chrome/browser/ui/views/spaces/space_switcher_view.cc b/chrome/browser/ui/views/spaces/space_switcher_view.cc
+index dbd3063a1bd06..7ae2d66b03e68 100644
+--- a/chrome/browser/ui/views/spaces/space_switcher_view.cc
++++ b/chrome/browser/ui/views/spaces/space_switcher_view.cc
+@@ -10,6 +10,7 @@
+ #include <utility>
+ 
+ #include "base/functional/bind.h"
++#include "base/strings/strcat.h"
+ #include "base/strings/string_number_conversions.h"
+ #include "base/strings/utf_string_conversions.h"
+ #include "cc/paint/paint_flags.h"
+@@ -17,6 +18,7 @@
+ #include "chrome/browser/ui/spaces/space.h"
+ #include "chrome/browser/ui/spaces/space_colors.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "chrome/browser/ui/views/spaces/space_switcher_rules.h"
+ #include "components/tabs/public/tab_interface.h"
+ #include "components/vector_icons/vector_icons.h"
+ #include "third_party/skia/include/core/SkColor.h"
+@@ -35,6 +37,7 @@
+ #include "ui/views/layout/fill_layout.h"
+ #include "ui/views/layout/flex_layout.h"
+ #include "ui/views/layout/layout_types.h"
++#include "ui/views/view_utils.h"
+ 
+ namespace spaces {
+ namespace {
+@@ -93,6 +96,9 @@ constexpr int kMoveTabHereCommand = 149;
+ constexpr int kFirstColorCommand = 150;
+ constexpr int kRenameSpaceCommand = 199;
+ constexpr int kRemoveSpaceCommand = 200;
++// spaces B27: the keyboard path to reordering.
++constexpr int kMoveSpaceLeftCommand = 201;
++constexpr int kMoveSpaceRightCommand = 202;
+ 
+ // The colour choices live in space_colors.h: the welcome flow shows the same
+ // five (welcome W7).
+@@ -158,6 +164,9 @@ SpaceSwitcherView::SpaceSwitcherView(SpaceModel& model, Browser& browser)
+               views::FlexSpecification(views::MinimumFlexSizeRule::kPreferred,
+                                        views::MaximumFlexSizeRule::kPreferred));
+ 
++  // The pointer is usually over a chip or a spacer, not the row itself;
++  // enter/exit still has to reach the row for the overflow rule (B25).
++  SetNotifyEnterExitOnChild(true);
+   observation_.Observe(&model);
+   Rebuild();
+ }
+@@ -199,6 +208,11 @@ void SpaceSwitcherView::Rebuild() {
+         base::BindRepeating(
+             [](SpaceSwitcherView* self, size_t chip_index, std::u16string name,
+                bool entered) {
++              // A chip under the pointer means the row is hovered (B25).
++              if (self->row_hovered_ != entered) {
++                self->row_hovered_ = entered;
++                self->ApplyOverflow();
++              }
+               if (!self->hover_callback_) {
+                 return;
+               }
+@@ -246,6 +260,51 @@ void SpaceSwitcherView::Rebuild() {
+   add->SetTooltipText(u"New Space");
+   add->SetBorder(views::CreateEmptyBorder(gfx::Insets()));
+   icon_row_->AddChildView(std::move(add));
++  ApplyOverflow();
++}
++
++void SpaceSwitcherView::ApplyOverflow() {
++  if (!icon_row_) {
++    return;
++  }
++  const bool overflow = SwitcherOverflows(width(), chips_.size());
++  const auto& spaces = model_->spaces();
++  for (size_t i = 0; i < chips_.size() && i < spaces.size(); ++i) {
++    auto* const chip = views::AsViewClass<views::LabelButton>(chips_[i].first);
++    if (!chip) {
++      continue;
++    }
++    const bool active = chips_[i].second == model_->active_id();
++    const bool dot =
++        SwitcherChipWidth(overflow, active, row_hovered_) == kSwitcherDot;
++    chip->SetPreferredSize(dot ? gfx::Size(kSwitcherDot, kSwitcherDot)
++                               : gfx::Size(kIconSize, kIconSize));
++    chip->SetText(dot ? std::u16string() : GlyphFor(*spaces[i], i));
++    chip->SetBackground(dot ? views::CreateRoundedRectBackground(
++                                  spaces[i]->color(), kSwitcherDot / 2)
++                            : nullptr);
++  }
++  icon_row_->InvalidateLayout();
++}
++
++void SpaceSwitcherView::OnBoundsChanged(const gfx::Rect& previous_bounds) {
++  if (previous_bounds.width() != width()) {
++    ApplyOverflow();
++  }
++}
++
++void SpaceSwitcherView::OnMouseEntered(const ui::MouseEvent& event) {
++  if (!row_hovered_) {
++    row_hovered_ = true;
++    ApplyOverflow();
++  }
++}
++
++void SpaceSwitcherView::OnMouseExited(const ui::MouseEvent& event) {
++  if (row_hovered_ && !IsMouseHovered()) {
++    row_hovered_ = false;
++    ApplyOverflow();
++  }
+ }
+ 
+ void SpaceSwitcherView::ShowContextMenuForViewImpl(
+@@ -301,6 +360,8 @@ void SpaceSwitcherView::ShowMenuForSpace(
+   }
+   menu_model_->AddSeparator(ui::NORMAL_SEPARATOR);
+   menu_model_->AddItem(kRenameSpaceCommand, u"Rename Space");
++  menu_model_->AddItem(kMoveSpaceLeftCommand, u"Move Left");
++  menu_model_->AddItem(kMoveSpaceRightCommand, u"Move Right");
+   menu_model_->AddItem(kRemoveSpaceCommand, u"Delete Space");
+ 
+   menu_runner_ = std::make_unique<views::MenuRunner>(
+@@ -329,6 +390,12 @@ void SpaceSwitcherView::ExecuteCommand(int command_id, int event_flags) {
+     model_->RemoveSpace(*menu_space_);
+     return;
+   }
++  if (command_id == kMoveSpaceLeftCommand ||
++      command_id == kMoveSpaceRightCommand) {
++    model_->MoveSpace(*menu_space_,
++                      command_id == kMoveSpaceLeftCommand ? -1 : 1);
++    return;
++  }
+   if (command_id >= kFirstColorCommand && command_id < kRenameSpaceCommand) {
+     const size_t choice = static_cast<size_t>(command_id - kFirstColorCommand);
+     if (choice < kSpaceColors.size()) {
+@@ -347,6 +414,20 @@ bool SpaceSwitcherView::IsCommandIdEnabled(int command_id) const {
+   if (command_id == kRemoveSpaceCommand) {
+     return model_->size() > 1;
+   }
++  if (command_id == kMoveSpaceLeftCommand ||
++      command_id == kMoveSpaceRightCommand) {
++    if (!menu_space_) {
++      return false;
++    }
++    const auto& spaces = model_->spaces();
++    for (size_t i = 0; i < spaces.size(); ++i) {
++      if (spaces[i]->id() == *menu_space_) {
++        return command_id == kMoveSpaceLeftCommand ? i > 0
++                                                   : i + 1 < spaces.size();
++      }
++    }
++    return false;
++  }
+   if (command_id == kMoveTabHereCommand) {
+     // Pinned tabs are the essentials row and are in every Space already, so
+     // there is nowhere to move one to.
+@@ -444,6 +525,19 @@ void SpaceSwitcherView::OnThemeChanged() {
+   Rebuild();
+ }
+ 
++void SpaceSwitcherView::SetNumberBadges(bool showing) {
++  const auto& spaces = model_->spaces();
++  for (size_t i = 0; i < chips_.size() && i < spaces.size(); ++i) {
++    auto* const chip = views::AsViewClass<views::LabelButton>(chips_[i].first);
++    if (!chip) {
++      continue;
++    }
++    chip->SetText(showing && i < 9
++                      ? base::StrCat({u"\u2303", base::NumberToString16(i + 1)})
++                      : GlyphFor(*spaces[i], i));
++  }
++}
++
+ BEGIN_METADATA(SpaceSwitcherView)
+ END_METADATA
+ 
+diff --git a/chrome/browser/ui/views/spaces/space_switcher_view.h b/chrome/browser/ui/views/spaces/space_switcher_view.h
+index 311ec03d97f99..6474e87aef9d6 100644
+--- a/chrome/browser/ui/views/spaces/space_switcher_view.h
++++ b/chrome/browser/ui/views/spaces/space_switcher_view.h
+@@ -6,10 +6,10 @@
+ #define CHROME_BROWSER_UI_VIEWS_SPACES_SPACE_SWITCHER_VIEW_H_
+ 
+ #include <memory>
+-#include <utility>
+-#include <vector>
+ #include <optional>
+ #include <string>
++#include <utility>
++#include <vector>
+ 
+ #include "base/memory/raw_ptr.h"
+ #include "base/memory/raw_ref.h"
+@@ -83,15 +83,20 @@ class SpaceSwitcherView : public views::View,
+   // list the context menu offers, so nothing is ever a blank spot.
+   static std::u16string GlyphFor(const Space& space, size_t index);
+ 
++  // tabs R11: the chips show their Ctrl-N chord in place of the glyph while
++  // Cmd is held.
++  void SetNumberBadges(bool showing);
++
+   // Opens the Space menu (icon, colour, rename, delete) for `id` at `point`
+   // in screen coordinates; the sidebar's title row uses it.
+   void ShowMenuForSpace(const SpaceId& id,
+                         const gfx::Point& point,
+                         ui::mojom::MenuSourceType source_type);
+ 
+-  void ShowContextMenuForViewImpl(views::View* source,
+-                                  const gfx::Point& point,
+-                                  ui::mojom::MenuSourceType source_type) override;
++  void ShowContextMenuForViewImpl(
++      views::View* source,
++      const gfx::Point& point,
++      ui::mojom::MenuSourceType source_type) override;
+ 
+   // ui::SimpleMenuModel::Delegate:
+   void ExecuteCommand(int command_id, int event_flags) override;
+@@ -106,6 +111,12 @@ class SpaceSwitcherView : public views::View,
+   // a handful of buttons, so rebuilding is simpler and less error-prone than
+   // reconciling, and it happens only when Spaces change.
+   void Rebuild();
++  // spaces B24-B26: at overflow the inactive chips are dots in their Space
++  // colour until the pointer rests on the row.
++  void ApplyOverflow();
++  void OnBoundsChanged(const gfx::Rect& previous_bounds) override;
++  void OnMouseEntered(const ui::MouseEvent& event) override;
++  void OnMouseExited(const ui::MouseEvent& event) override;
+ 
+   void OnSpacePressed(const SpaceId& id);
+   void OnNewSpacePressed();
+@@ -130,6 +141,7 @@ class SpaceSwitcherView : public views::View,
+   // wrong, so hit tests and the context menu go through this instead.
+   std::vector<std::pair<views::View*, SpaceId>> chips_;
+   HoverCallback hover_callback_;
++  bool row_hovered_ = false;
+   base::ScopedObservation<SpaceModel, SpaceModel::Observer> observation_{this};
+ };
+ 

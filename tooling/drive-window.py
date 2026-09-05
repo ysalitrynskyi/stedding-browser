@@ -18,18 +18,33 @@ def origin():
         b=w.get("kCGWindowBounds",{}); a=b.get("Width",0)*b.get("Height",0)
         if a>area and a>100000: best=b; area=a
     return best["X"], best["Y"]
-def mouse(kind, x, y, button=Quartz.kCGMouseButtonLeft, clicks=1):
+MOUSE_MODS={'cmd':Quartz.kCGEventFlagMaskCommand,'shift':Quartz.kCGEventFlagMaskShift,
+            'alt':Quartz.kCGEventFlagMaskAlternate}
+def mouse(kind, x, y, button=Quartz.kCGMouseButtonLeft, clicks=1, flags=0):
     e=Quartz.CGEventCreateMouseEvent(None, kind, (x,y), button)
     # A created mouse event inherits the last chord's modifiers too (trap 3
     # in docs/HANDOFF.md): after Ctrl-Cmd-F a plain click became Ctrl-click,
-    # which macOS treats as a right-click.
-    Quartz.CGEventSetFlags(e, 0)  # mouse
+    # which macOS treats as a right-click. Explicit flags every time; a
+    # modifier click ("click X Y cmd") asks for its own.
+    Quartz.CGEventSetFlags(e, flags)  # mouse
     Quartz.CGEventSetIntegerValueField(e, Quartz.kCGMouseEventClickState, clicks)
     Quartz.CGEventPost(Quartz.kCGHIDEventTap, e)
 KEYS={'a':0,'s':1,'d':2,'f':3,'h':4,'g':5,'z':6,'x':7,'c':8,'v':9,'b':11,'q':12,'w':13,'e':14,'r':15,'y':16,'t':17,
  '1':18,'2':19,'3':20,'4':21,'6':22,'5':23,'9':25,'7':26,'8':28,'0':29,'o':31,'u':32,'i':34,'p':35,'l':37,'j':38,'k':40,
  'n':45,'m':46,'enter':36,'tab':48,'space':49,'esc':53,'left':123,'right':124,'down':125,'up':126,'backspace':51,
  'delete':117,'home':115,'end':119,'pageup':116,'pagedown':121}
+MOD_KEYS={'cmd':55,'shift':56,'alt':58,'ctrl':59}
+def key_hold(name, down):
+    # A modifier held on its own (Cmd for the row numbers, tabs R11): one
+    # flagsChanged-style event, the flag set while it is down.
+    code=MOD_KEYS.get(name, KEYS.get(name))
+    e=Quartz.CGEventCreateKeyboardEvent(None, code, down)
+    flags=0
+    if down and name in MOD_KEYS:
+        flags={'cmd':Quartz.kCGEventFlagMaskCommand,'shift':Quartz.kCGEventFlagMaskShift,
+               'alt':Quartz.kCGEventFlagMaskAlternate,'ctrl':Quartz.kCGEventFlagMaskControl}[name]
+    Quartz.CGEventSetFlags(e, flags)
+    Quartz.CGEventPost(Quartz.kCGHIDEventTap, e); time.sleep(0.05)
 def key(spec):
     parts=spec.split('+'); name=parts[0]; mods=parts[1:]
     flags=0
@@ -54,6 +69,11 @@ def type_text(text):
                 # Explicit flags every time: a created event otherwise inherits the
                 # modifier state left behind by the last chord (Cmd stuck after Cmd+T).
                 Quartz.CGEventSetFlags(e, Quartz.kCGEventFlagMaskShift if ch.isupper() else 0)
+                # The character rides along too: with a non-Latin input source
+                # active on the machine, the virtual code alone typed Cyrillic
+                # into the address bar (docs/HANDOFF.md trap 13). Chromium keys
+                # accelerators off the code and text off the characters.
+                Quartz.CGEventKeyboardSetUnicodeString(e, len(ch), ch)
             else:
                 e=Quartz.CGEventCreateKeyboardEvent(None, 0, down)
                 Quartz.CGEventSetFlags(e, 0)
@@ -62,13 +82,16 @@ def type_text(text):
 
 def to_screen(x,y):
     ox,oy=origin(); return float(x)+ox, float(y)+oy
-def click(x,y,button=Quartz.kCGMouseButtonLeft,clicks=1):
+def click(x,y,button=Quartz.kCGMouseButtonLeft,clicks=1,mods=''):
     sx,sy=to_screen(x,y)
+    flags=0
+    for m in mods.split('+'):
+        flags|=MOUSE_MODS.get(m,0)
     down=Quartz.kCGEventLeftMouseDown if button==Quartz.kCGMouseButtonLeft else Quartz.kCGEventRightMouseDown
     up=Quartz.kCGEventLeftMouseUp if button==Quartz.kCGMouseButtonLeft else Quartz.kCGEventRightMouseUp
     mouse(Quartz.kCGEventMouseMoved,sx,sy); time.sleep(0.2)
     for i in range(clicks):
-        mouse(down,sx,sy,button,i+1); time.sleep(0.08); mouse(up,sx,sy,button,i+1); time.sleep(0.12)
+        mouse(down,sx,sy,button,i+1,flags); time.sleep(0.08); mouse(up,sx,sy,button,i+1,flags); time.sleep(0.12)
 def drag_start(x,y):
     sx,sy=to_screen(x,y)
     mouse(Quartz.kCGEventMouseMoved,sx,sy); time.sleep(0.3)
@@ -97,15 +120,17 @@ for raw in open(sys.argv[1]):
     if not line or line.startswith('#'): continue
     op,*args=line.split(' ',1); arg=args[0] if args else ''
     a=arg.split()
-    if op=='click': click(a[0],a[1])
-    elif op=='rclick': click(a[0],a[1],Quartz.kCGMouseButtonRight)
-    elif op=='dblclick': click(a[0],a[1],clicks=2)
+    if op=='click': click(a[0],a[1],mods=a[2] if len(a)>2 else '')
+    elif op=='rclick': click(a[0],a[1],Quartz.kCGMouseButtonRight,mods=a[2] if len(a)>2 else '')
+    elif op=='dblclick': click(a[0],a[1],clicks=2,mods=a[2] if len(a)>2 else '')
     elif op=='hover': sx,sy=to_screen(a[0],a[1]); mouse(Quartz.kCGEventMouseMoved,sx,sy)
     elif op=='drag': drag(*a[:4])
     elif op=='dragstart': drag_start(a[0],a[1])
     elif op=='dragmove': drag_move(a[0],a[1])
     elif op=='dragend': drag_end()
     elif op=='key': key(arg)
+    elif op=='keydown': key_hold(arg, True)
+    elif op=='keyup': key_hold(arg, False)
     elif op=='type': type_text(arg)
     elif op=='wait': time.sleep(float(arg))
     elif op=='shot': time.sleep(0.6); subprocess.run(['python3',CAP,OWNER,arg],check=False)

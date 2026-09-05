@@ -117,6 +117,14 @@ Built, with tests or measured captures:
   the welcome flow; the address row takes the page colour on either side of
   the contrast line (toolbar T7) and sits in a 6 DIP gutter like the card's
   other three sides.
+- **Round 6, wave 2** (patches 0019–0021): sleeping tabs with one dimmed look,
+  Sleep Tab / Sleep Others and a Space that sleeps after the user leaves it;
+  rename in place that survives restore; row numbers while ⌘ is held; verbs
+  that act on the selection with plural labels; Stedding's short tab menu
+  with Chromium's behind a setting; Arc's pinned-tab lifecycle (a home URL,
+  ⌘W sleeps, the drifted dot, the favicon reset, the menu rows, peek reads
+  the stored site); the switcher's overflow dots and Move Left / Move Right;
+  download progress on the sidebar button.
 
 Read `docs/HANDOFF.md` before touching anything — it carries the working loop,
 every dev parameter, and the traps already paid for. `docs/ARC-ROUND2.md` is
@@ -174,5 +182,7 @@ and `S-43` (capture toast, welcome swatches, About version) closed with wave
 1; `S-41` (download progress on the sidebar button) is wave 2's. `S-44` is
 the body of work under way: `docs/ROUND6-PLAN.md`, the reviewed plan from the Zen mods and
 beyond (four waves, decisions recorded): wave 1 landed 2026-09-05 (patches
-0016–0018, every row verified live or by unit test, notes in the plan), waves
-2–4 follow in order under the operator's overnight mandate.
+0016–0018) and most of wave 2 the same night (patches 0019–0021), every row
+verified live or by unit test, notes in the plan; the command bar's actions
+mode (R6-11), the ⌃⇥ strip (R6-12), the remaining menu and pin rows, and
+waves 3–4 follow in order under the operator's overnight mandate.

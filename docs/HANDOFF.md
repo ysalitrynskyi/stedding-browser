@@ -154,6 +154,19 @@ perform; a param that recreates the state IS the test surface.
     For an incremental chunk `STEDDING_MIN_FREE_GB=40 tooling/dev build …` lowers the
     floor (20 is the least it accepts); the 60 stays the default for full builds.
 
+12. **Patch files are tracked, so ADR 0007's version scan reads them.** A unit test
+    that spelled the pinned Chromium version (`stedding_version_unittest.cc`) passed
+    `tooling/check-repo` while its patch was still untracked and failed the moment
+    the patch was committed. Tests of version formatting use a made-up version
+    (`150.0.1234.5`); only `tooling/chromium-version` carries the pin (2026-09-05).
+
+13. **The machine's input source leaks into the harness.** A `type` step that used
+    virtual key codes alone typed Cyrillic into the address bar once a non-Latin
+    input source was active (2026-09-05, 05:21: `chrome://settings/stedding` became a
+    DuckDuckGo search). `tooling/drive-window.py` now puts the character on every
+    typed event as well as the code; if a capture shows the wrong script, that is
+    the first thing to check.
+
 ## Open items
 
 `BACKLOG.md` is the list; do not keep one here. First up: the operator

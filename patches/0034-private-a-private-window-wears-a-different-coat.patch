@@ -1,0 +1,605 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Sat, 5 Sep 2026 14:56:41 -0400
+Subject: private: a private window wears a different coat
+
+Chromium keys an incognito window dark and grayscale; Stedding's colour
+mixer reads that key and paints the chrome flat graphite with no Space
+tint, and the window background skips its gradient. A private window has
+no Space model and no archiver, so its title row reads "Private" with the
+incognito glyph, it has no switcher, the Space chords do nothing, the
+archiver never closes a private tab and nothing private reaches the
+sidebar model or the session's data; its window title ends in "Private"
+and Chromium's avatar badge shows for it alone (docs/features/private.md
+V1-V4, V6).
+
+Why: docs/ROUND6-PLAN.md wave 4, R6-32: a private window must be told
+apart at a glance and leave nothing behind.
+Removable when: Chromium's own incognito theming reaches the vertical
+tab strip.
+---
+ chrome/browser/ui/archive/BUILD.gn            |  1 +
+ chrome/browser/ui/archive/tab_archiver.cc     |  4 +-
+ .../ui/archive/tab_archiver_unittest.cc       | 19 +++++++
+ .../internal/browser_window_features.cc       | 11 ++--
+ chrome/browser/ui/color/BUILD.gn              | 12 +++++
+ .../browser/ui/color/stedding_color_mixer.cc  | 17 ++++--
+ .../browser/ui/color/stedding_color_mixer.h   |  9 ++++
+ .../ui/color/stedding_color_mixer_unittest.cc | 38 +++++++++++++
+ chrome/browser/ui/spaces/space_commands.cc    | 28 ++++++++++
+ .../ui/spaces/space_model_window_unittest.cc  | 11 ++++
+ chrome/browser/ui/views/frame/browser_view.cc |  4 ++
+ .../views/frame/stedding_window_background.cc | 53 ++++++++++++-------
+ .../frame/vertical_tab_strip_region_view.cc   | 37 +++++++++++++
+ .../ui/views/tabs/common/tab_strip_view.cc    |  7 +++
+ .../ui/views/tabs/common/tab_strip_view.h     |  2 +
+ chrome/test/BUILD.gn                          |  1 +
+ 16 files changed, 225 insertions(+), 29 deletions(-)
+ create mode 100644 chrome/browser/ui/color/stedding_color_mixer_unittest.cc
+
+diff --git a/chrome/browser/ui/archive/BUILD.gn b/chrome/browser/ui/archive/BUILD.gn
+index 3e22b628fcd81..38e28b183cf02 100644
+--- a/chrome/browser/ui/archive/BUILD.gn
++++ b/chrome/browser/ui/archive/BUILD.gn
+@@ -33,6 +33,7 @@ source_set("archive") {
+     "//components/tabs:public",
+   ]
+   deps = [
++    "//chrome/browser/profiles:profile",
+     "//chrome/browser/ui/browser_window",
+     "//chrome/browser/ui/spaces",
+     "//chrome/browser/ui/stedding:prefs",
+diff --git a/chrome/browser/ui/archive/tab_archiver.cc b/chrome/browser/ui/archive/tab_archiver.cc
+index 39b435e0642e2..ffe2657ac5552 100644
+--- a/chrome/browser/ui/archive/tab_archiver.cc
++++ b/chrome/browser/ui/archive/tab_archiver.cc
+@@ -7,6 +7,7 @@
+ #include <vector>
+ 
+ #include "base/functional/bind.h"
++#include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/ui/archive/archive_mark.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/spaces/space_model.h"
+@@ -40,7 +41,8 @@ TabArchiver::~TabArchiver() {
+ 
+ void TabArchiver::Sweep() {
+   const base::TimeDelta threshold = IdleThreshold();
+-  if (threshold.is_zero()) {
++  // private V3: a private tab is never archived.
++  if (threshold.is_zero() || browser_->GetProfile()->IsOffTheRecord()) {
+     return;
+   }
+   TabStripModel* const model = browser_->GetTabStripModel();
+diff --git a/chrome/browser/ui/archive/tab_archiver_unittest.cc b/chrome/browser/ui/archive/tab_archiver_unittest.cc
+index d292ea83793be..507e3074c2503 100644
+--- a/chrome/browser/ui/archive/tab_archiver_unittest.cc
++++ b/chrome/browser/ui/archive/tab_archiver_unittest.cc
+@@ -10,6 +10,7 @@
+ #include "base/test/simple_test_tick_clock.h"
+ #include "base/test/task_environment.h"
+ #include "base/time/time.h"
++#include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/ui/archive/archive_mark.h"
+ #include "chrome/browser/ui/browser.h"
+ #include "chrome/browser/ui/spaces/space_model.h"
+@@ -123,6 +124,24 @@ TEST_F(TabArchiverTest, SweepRecordsSpaceAndReason) {
+   EXPECT_EQ(ArchiveReason::kAuto, reasons[1]);
+ }
+ 
++// private V3: a private window's tabs are never swept.
++TEST_F(TabArchiverTest, SkipsOffTheRecordWindows) {
++  Profile* const otr =
++      profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true);
++  std::unique_ptr<Browser> private_browser =
++      CreateBrowser(otr, Browser::TYPE_NORMAL, /*hosted_app=*/false);
++  AddTab(private_browser.get(), GURL("https://a.example/"));
++  AddTab(private_browser.get(), GURL("https://b.example/"));
++  TabArchiver archiver(*private_browser, *otr->GetPrefs());
++  base::SimpleTestTickClock clock;
++  clock.SetNowTicks(base::TimeTicks::Now());
++  archiver.set_tick_clock_for_testing(&clock);
++  clock.Advance(base::Hours(13));
++  archiver.Sweep();
++  EXPECT_EQ(2, private_browser->tab_strip_model()->count());
++  private_browser->tab_strip_model()->CloseAllTabs();
++}
++
+ // A4: tabs in a folder survive.
+ TEST_F(TabArchiverTest, KeepsFolderTabs) {
+   AddThreeTabs();
+diff --git a/chrome/browser/ui/browser_window/internal/browser_window_features.cc b/chrome/browser/ui/browser_window/internal/browser_window_features.cc
+index cdaa60c6025f0..225177e1576ff 100644
+--- a/chrome/browser/ui/browser_window/internal/browser_window_features.cc
++++ b/chrome/browser/ui/browser_window/internal/browser_window_features.cc
+@@ -3,9 +3,6 @@
+ // found in the LICENSE file.
+ 
+ #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+-#include "chrome/browser/ui/archive/tab_archiver.h"
+-#include "chrome/browser/ui/spaces/space_model.h"
+-#include "chrome/browser/ui/tabs/stedding_folder_session.h"
+ 
+ #include <memory>
+ 
+@@ -50,6 +47,7 @@
+ #include "chrome/browser/tab_group_sync/tab_group_sync_service_factory.h"
+ #include "chrome/browser/ui/ai_overlay_dialog/ai_overlay_dialog_controller.h"
+ #include "chrome/browser/ui/animation/browser_animation_controller.h"
++#include "chrome/browser/ui/archive/tab_archiver.h"
+ #include "chrome/browser/ui/bookmarks/bookmark_bar_controller.h"
+ #include "chrome/browser/ui/bookmarks/bookmarks_service_feature.h"
+ #include "chrome/browser/ui/breadcrumb_manager_browser_agent.h"
+@@ -94,6 +92,7 @@
+ #include "chrome/browser/ui/side_panel/side_panel_registry.h"
+ #include "chrome/browser/ui/side_panel/side_panel_ui.h"
+ #include "chrome/browser/ui/signin/signin_view_controller.h"
++#include "chrome/browser/ui/spaces/space_model.h"
+ #include "chrome/browser/ui/sync/browser_synced_window_delegate.h"
+ #include "chrome/browser/ui/tabs/features.h"
+ #include "chrome/browser/ui/tabs/organizer/organizer_panel_state_controller.h"
+@@ -103,6 +102,7 @@
+ #include "chrome/browser/ui/tabs/saved_tab_groups/shared_tab_group_feedback_controller.h"
+ #include "chrome/browser/ui/tabs/split_tab_highlight_controller.h"
+ #include "chrome/browser/ui/tabs/split_view_iph_controller.h"
++#include "chrome/browser/ui/tabs/stedding_folder_session.h"
+ #include "chrome/browser/ui/tabs/tab_drag_api/desktop_tab_drag_impl/tab_drag_window_adapter_impl.h"
+ #include "chrome/browser/ui/tabs/tab_drag_api/tab_drag_service_feature.h"
+ #include "chrome/browser/ui/tabs/tab_group_deletion_dialog_controller.h"
+@@ -273,7 +273,10 @@ void BrowserWindowFeatures::Init(BrowserWindowInterface* browser) {
+ 
+   // Spaces belong to a window and filter its one tab strip (ADR 0015). Only
+   // normal windows get them; a popup or an app window has nothing to filter.
+-  if (browser->GetType() == BrowserWindowInterface::Type::TYPE_NORMAL) {
++  // A private window has no Spaces and no archive (docs/features/private.md
++  // V3): nothing private reaches the sidebar model or the session's data.
++  if (browser->GetType() == BrowserWindowInterface::Type::TYPE_NORMAL &&
++      !browser->GetProfile()->IsOffTheRecord()) {
+     space_model_ = std::make_unique<spaces::SpaceModel>(*browser);
+     // Auto-archive follows the Space model: it asks it which tabs are pinned.
+     tab_archiver_ = std::make_unique<stedding::TabArchiver>(
+diff --git a/chrome/browser/ui/color/BUILD.gn b/chrome/browser/ui/color/BUILD.gn
+index 83f8bbd772a83..67ede419e3dd6 100644
+--- a/chrome/browser/ui/color/BUILD.gn
++++ b/chrome/browser/ui/color/BUILD.gn
+@@ -136,3 +136,15 @@ if (!is_android) {
+     }
+   }
+ }
++
++source_set("stedding_unit_tests") {
++  testonly = true
++  sources = [ "stedding_color_mixer_unittest.cc" ]
++  deps = [
++    ":mixers",
++    "//base/test:test_support",
++    "//chrome/browser/ui:stedding_ui_metrics",
++    "//testing/gtest",
++    "//ui/color",
++  ]
++}
+diff --git a/chrome/browser/ui/color/stedding_color_mixer.cc b/chrome/browser/ui/color/stedding_color_mixer.cc
+index 0c498f66de71f..5f1d9eccbcff4 100644
+--- a/chrome/browser/ui/color/stedding_color_mixer.cc
++++ b/chrome/browser/ui/color/stedding_color_mixer.cc
+@@ -34,19 +34,28 @@ constexpr SkColor kNewTabLight = SkColorSetRGB(0xFF, 0xFF, 0xFF);
+ 
+ }  // namespace
+ 
++bool IsPrivateColorKey(const ui::ColorProviderKey& key) {
++  return key.color_mode == ui::ColorProviderKey::ColorMode::kDark &&
++         key.user_color_source ==
++             ui::ColorProviderKey::UserColorSource::kGrayscale;
++}
++
+ void AddSteddingColorMixer(ui::ColorProvider* provider,
+                            const ui::ColorProviderKey& key) {
+   if (!base::FeatureList::IsEnabled(stedding::kArcStyleWindow)) {
+     return;
+   }
+   // A user-installed theme still wins: it is added after this mixer.
+-  const bool dark =
+-      key.color_mode == ui::ColorProviderKey::ColorMode::kDark;
+-  SkColor window = dark ? kSteddingDarkWindow : kSteddingLightWindow;
++  const bool dark = key.color_mode == ui::ColorProviderKey::ColorMode::kDark;
++  // A private window is graphite, flat, with no Space tint (private V1).
++  const bool is_private = IsPrivateColorKey(key);
++  SkColor window = is_private ? kSteddingPrivateWindow
++                   : dark     ? kSteddingDarkWindow
++                              : kSteddingLightWindow;
+   // The active Space's colour (the widget's user colour override, set by
+   // SpaceTabVisibilityController) tints the ground the sidebar sits on, as
+   // Arc does, not the pages.
+-  if (key.user_color) {
++  if (key.user_color && !is_private) {
+     window = color_utils::AlphaBlend(*key.user_color, window,
+                                      dark ? kSpaceTintDark : kSpaceTintLight);
+   }
+diff --git a/chrome/browser/ui/color/stedding_color_mixer.h b/chrome/browser/ui/color/stedding_color_mixer.h
+index 054c9f844dabf..9133e2ae91c36 100644
+--- a/chrome/browser/ui/color/stedding_color_mixer.h
++++ b/chrome/browser/ui/color/stedding_color_mixer.h
+@@ -5,6 +5,8 @@
+ #ifndef CHROME_BROWSER_UI_COLOR_STEDDING_COLOR_MIXER_H_
+ #define CHROME_BROWSER_UI_COLOR_STEDDING_COLOR_MIXER_H_
+ 
++#include "third_party/skia/include/core/SkColor.h"
++
+ namespace ui {
+ class ColorProvider;
+ struct ColorProviderKey;
+@@ -13,6 +15,13 @@ struct ColorProviderKey;
+ // Stedding's palette: warm sand in light mode, deep blue in dark. Added after
+ // every Chromium mixer so it wins, but before custom themes so a user theme
+ // still overrides it.
++// docs/features/private.md V1: a private window's ground, flat graphite in
++// both schemes, and the key that names one (Chromium keys an incognito
++// window dark and grayscale, and nothing else in Stedding does).
++inline constexpr SkColor kSteddingPrivateWindow =
++    SkColorSetRGB(0x2C, 0x2D, 0x31);
++bool IsPrivateColorKey(const ui::ColorProviderKey& key);
++
+ void AddSteddingColorMixer(ui::ColorProvider* provider,
+                            const ui::ColorProviderKey& key);
+ 
+diff --git a/chrome/browser/ui/color/stedding_color_mixer_unittest.cc b/chrome/browser/ui/color/stedding_color_mixer_unittest.cc
+new file mode 100644
+index 0000000000000..aa20595387829
+--- /dev/null
++++ b/chrome/browser/ui/color/stedding_color_mixer_unittest.cc
+@@ -0,0 +1,38 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/color/stedding_color_mixer.h"
++
++#include "base/test/scoped_feature_list.h"
++#include "chrome/browser/ui/stedding_ui_metrics.h"
++#include "testing/gtest/include/gtest/gtest.h"
++#include "ui/color/color_id.h"
++#include "ui/color/color_provider.h"
++#include "ui/color/color_provider_key.h"
++
++namespace {
++
++// private V1: an incognito key (dark, grayscale) paints graphite with no
++// Space tint; an ordinary dark key keeps its tint.
++TEST(SteddingColorMixerTest, PrivateWindowsAreGraphite) {
++  base::test::ScopedFeatureList features(stedding::kArcStyleWindow);
++  ui::ColorProviderKey key;
++  key.color_mode = ui::ColorProviderKey::ColorMode::kDark;
++  key.user_color_source = ui::ColorProviderKey::UserColorSource::kGrayscale;
++  key.user_color = SK_ColorRED;
++  EXPECT_TRUE(IsPrivateColorKey(key));
++  ui::ColorProvider provider;
++  AddSteddingColorMixer(&provider, key);
++  provider.GenerateColorMapForTesting();
++  EXPECT_EQ(kSteddingPrivateWindow, provider.GetColor(ui::kColorFrameActive));
++
++  key.user_color_source = ui::ColorProviderKey::UserColorSource::kAccent;
++  EXPECT_FALSE(IsPrivateColorKey(key));
++  ui::ColorProvider tinted;
++  AddSteddingColorMixer(&tinted, key);
++  tinted.GenerateColorMapForTesting();
++  EXPECT_NE(kSteddingPrivateWindow, tinted.GetColor(ui::kColorFrameActive));
++}
++
++}  // namespace
+diff --git a/chrome/browser/ui/spaces/space_commands.cc b/chrome/browser/ui/spaces/space_commands.cc
+index 0c68a69643ea0..0be3aa9f93a02 100644
+--- a/chrome/browser/ui/spaces/space_commands.cc
++++ b/chrome/browser/ui/spaces/space_commands.cc
+@@ -8,6 +8,7 @@
+ 
+ #include "chrome/app/chrome_command_ids.h"
+ #include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/ui/browser_commands.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/spaces/space.h"
+ #include "chrome/browser/ui/stedding/stedding_prefs.h"
+@@ -15,6 +16,7 @@
+ #include "chrome/browser/ui/tabs/tab_strip_user_gesture_details.h"
+ #include "components/prefs/pref_service.h"
+ #include "components/tabs/public/tab_interface.h"
++#include "content/public/browser/web_contents.h"
+ 
+ namespace spaces {
+ 
+@@ -73,6 +75,32 @@ void SwitchSpace(BrowserWindowInterface* browser, bool forward) {
+ void ClearActiveSpace(BrowserWindowInterface* browser) {
+   if (SpaceModel* const model = ModelForCommands(browser)) {
+     model->ClearUnpinnedTabs();
++    return;
++  }
++  // private V2: a private window has no Spaces, so Clear closes every tab
++  // that is not an essential; a fresh tab keeps the window when that would
++  // be all of them.
++  TabStripModel* const tabs = browser ? browser->GetTabStripModel() : nullptr;
++  if (!tabs) {
++    return;
++  }
++  std::vector<content::WebContents*> doomed;
++  for (int i = 0; i < tabs->count(); ++i) {
++    if (!tabs->IsTabPinned(i)) {
++      doomed.push_back(tabs->GetWebContentsAt(i));
++    }
++  }
++  if (doomed.empty()) {
++    return;
++  }
++  if (static_cast<int>(doomed.size()) == tabs->count()) {
++    chrome::ExecuteCommand(browser, IDC_NEW_TAB);
++  }
++  for (content::WebContents* contents : doomed) {
++    const int index = tabs->GetIndexOfWebContents(contents);
++    if (index != TabStripModel::kNoTab) {
++      tabs->CloseWebContentsAt(index, TabCloseTypes::CLOSE_USER_GESTURE);
++    }
+   }
+ }
+ 
+diff --git a/chrome/browser/ui/spaces/space_model_window_unittest.cc b/chrome/browser/ui/spaces/space_model_window_unittest.cc
+index e4562fb3d9d87..b7204afe897e9 100644
+--- a/chrome/browser/ui/spaces/space_model_window_unittest.cc
++++ b/chrome/browser/ui/spaces/space_model_window_unittest.cc
+@@ -748,6 +748,17 @@ TEST_F(PopupSpaceTest, PopupWindowsHaveNoSpaces) {
+   EXPECT_EQ(nullptr, SpaceModel::From(browser()));
+ }
+ 
++// private V3: a private window has no Space model at all.
++TEST_F(SpaceWindowTest, PrivateWindowHasNoSpaceModel) {
++  Profile* const otr =
++      profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true);
++  std::unique_ptr<Browser> private_browser =
++      CreateBrowser(otr, Browser::TYPE_NORMAL, /*hosted_app=*/false);
++  EXPECT_EQ(nullptr, SpaceModel::From(private_browser.get()));
++  EXPECT_NE(nullptr, SpaceModel::From(browser()));
++  private_browser->tab_strip_model()->CloseAllTabs();
++}
++
+ // archive A8: Clear marks what it closes, so the archive can say "clear".
+ TEST_F(SpaceWindowTest, ClearRecordsReason) {
+   std::vector<stedding::ArchiveReason> reasons;
+diff --git a/chrome/browser/ui/views/frame/browser_view.cc b/chrome/browser/ui/views/frame/browser_view.cc
+index 0e2a5525584fa..e175007c552b7 100644
+--- a/chrome/browser/ui/views/frame/browser_view.cc
++++ b/chrome/browser/ui/views/frame/browser_view.cc
+@@ -3681,6 +3681,10 @@ std::u16string BrowserView::GetWindowTitle() const {
+                                        u"\U0001F507");
+   }
+ #endif
++  // Stedding private V2: the window says what it is.
++  if (browser_->GetProfile()->IsOffTheRecord()) {
++    title += u" \u2013 Private";
++  }
+   return title;
+ }
+ 
+diff --git a/chrome/browser/ui/views/frame/stedding_window_background.cc b/chrome/browser/ui/views/frame/stedding_window_background.cc
+index 4056ea8bd89c4..e9fcfcc5413e2 100644
+--- a/chrome/browser/ui/views/frame/stedding_window_background.cc
++++ b/chrome/browser/ui/views/frame/stedding_window_background.cc
+@@ -7,11 +7,9 @@
+ #include <algorithm>
+ 
+ #include "base/functional/bind.h"
+-
+ #include "cc/paint/paint_flags.h"
+ #include "cc/paint/paint_shader.h"
+-#include "third_party/skia/include/core/SkColor.h"
+-#include "third_party/skia/include/core/SkPoint.h"
++#include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/ui/browser_window_theme_observer.h"
+ #include "chrome/browser/ui/stedding/theme/page_bar_color_supplier.h"
+ #include "chrome/browser/ui/stedding/theme/page_theme_color_controller.h"
+@@ -19,17 +17,19 @@
+ #include "chrome/browser/ui/views/frame/browser_view.h"
+ #include "chrome/browser/ui/views/frame/multi_contents_view.h"
+ #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
+-#include "ui/gfx/color_utils.h"
+-#include "ui/gfx/geometry/rect_conversions.h"
+-#include "ui/gfx/geometry/skia_conversions.h"
+-#include "ui/views/view_utils.h"
++#include "third_party/skia/include/core/SkColor.h"
+ #include "third_party/skia/include/core/SkPath.h"
++#include "third_party/skia/include/core/SkPoint.h"
+ #include "third_party/skia/include/core/SkRRect.h"
+ #include "ui/color/color_id.h"
+ #include "ui/color/color_provider.h"
+ #include "ui/gfx/canvas.h"
++#include "ui/gfx/color_utils.h"
++#include "ui/gfx/geometry/rect_conversions.h"
++#include "ui/gfx/geometry/skia_conversions.h"
+ #include "ui/native_theme/native_theme.h"
+ #include "ui/views/view.h"
++#include "ui/views/view_utils.h"
+ 
+ namespace stedding {
+ namespace {
+@@ -48,8 +48,8 @@ SteddingWindowBackground::SteddingWindowBackground(BrowserView* browser_view) {
+           PageThemeColorController::From(browser_view->browser())) {
+     // A new page colour is a new ColorProviderKey (toolbar T7): the widget
+     // re-themes, which repaints everything, the bar included.
+-    page_color_subscription_ = page_color->AddChangedCallback(
+-        base::BindRepeating(
++    page_color_subscription_ =
++        page_color->AddChangedCallback(base::BindRepeating(
+             [](BrowserView* browser_view) {
+               if (auto* observer = BrowserWindowThemeObserver::From(
+                       browser_view->browser())) {
+@@ -85,9 +85,17 @@ void SteddingWindowBackground::Paint(gfx::Canvas* canvas,
+   // white or near-black by that scheme. Not the frame colour's luminance:
+   // sand sits just under color_utils::IsDark's line.
+   const bool dark =
+-      provider ? color_utils::IsDark(provider->GetColor(ui::kColorPrimaryBackground))
+-               : system_dark;
+-  if (!dark) {
++      provider
++          ? color_utils::IsDark(provider->GetColor(ui::kColorPrimaryBackground))
++          : system_dark;
++  // A private window is flat graphite, no gradient (private V1); the mixer
++  // already made the frame that colour.
++  const BrowserView* const private_check =
++      views::AsViewClass<BrowserView>(view);
++  const bool is_private =
++      private_check && private_check->browser() &&
++      private_check->browser()->GetProfile()->IsOffTheRecord();
++  if (!dark || is_private) {
+     canvas->DrawColor(frame);
+   } else {
+     // The gradient's far stop keeps its distance from the near stop whatever
+@@ -95,10 +103,13 @@ void SteddingWindowBackground::Paint(gfx::Canvas* canvas,
+     const auto shifted = [](int base, int from, int to) {
+       return static_cast<U8CPU>(std::clamp(base + (to - from), 0, 255));
+     };
+-    const SkColor to = SkColorSetRGB(
+-        shifted(SkColorGetR(frame), SkColorGetR(kDarkFrom), SkColorGetR(kDarkTo)),
+-        shifted(SkColorGetG(frame), SkColorGetG(kDarkFrom), SkColorGetG(kDarkTo)),
+-        shifted(SkColorGetB(frame), SkColorGetB(kDarkFrom), SkColorGetB(kDarkTo)));
++    const SkColor to =
++        SkColorSetRGB(shifted(SkColorGetR(frame), SkColorGetR(kDarkFrom),
++                              SkColorGetR(kDarkTo)),
++                      shifted(SkColorGetG(frame), SkColorGetG(kDarkFrom),
++                              SkColorGetG(kDarkTo)),
++                      shifted(SkColorGetB(frame), SkColorGetB(kDarkFrom),
++                              SkColorGetB(kDarkTo)));
+ 
+     const SkPoint points[2] = {
+         SkPoint::Make(bounds.x(), bounds.y()),
+@@ -107,8 +118,8 @@ void SteddingWindowBackground::Paint(gfx::Canvas* canvas,
+     const SkColor4f colors[2] = {SkColor4f::FromColor(frame),
+                                  SkColor4f::FromColor(to)};
+     cc::PaintFlags flags;
+-    flags.setShader(cc::PaintShader::MakeLinearGradient(
+-        points, colors, nullptr, 2, SkTileMode::kClamp));
++    flags.setShader(cc::PaintShader::MakeLinearGradient(points, colors, nullptr,
++                                                        2, SkTileMode::kClamp));
+     canvas->DrawRect(gfx::RectF(bounds), flags);
+   }
+ 
+@@ -153,7 +164,8 @@ void SteddingWindowBackground::PaintPageBar(gfx::Canvas* canvas,
+   if (toolbar.IsEmpty() || card.IsEmpty()) {
+     return;
+   }
+-  const float radius = static_cast<float>(stedding::kContentsCornerRadius.Get());
++  const float radius =
++      static_cast<float>(stedding::kContentsCornerRadius.Get());
+   // From the toolbar's top to just under the card's top edge.
+   gfx::RectF surface(toolbar.x(), toolbar.y(), toolbar.width(),
+                      card.y() - toolbar.y() + radius);
+@@ -161,7 +173,8 @@ void SteddingWindowBackground::PaintPageBar(gfx::Canvas* canvas,
+   flags.setAntiAlias(true);
+   flags.setColor(bar);
+   SkRRect rrect;
+-  const SkVector radii[4] = {{radius, radius}, {radius, radius}, {0, 0}, {0, 0}};
++  const SkVector radii[4] = {
++      {radius, radius}, {radius, radius}, {0, 0}, {0, 0}};
+   rrect.setRectRadii(gfx::RectFToSkRect(surface), radii);
+   canvas->DrawPath(SkPath::RRect(rrect), flags);
+ }
+diff --git a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+index 5a0eddc8df203..cfc1c41ff8cbf 100644
+--- a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
++++ b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+@@ -17,6 +17,7 @@
+ #include "base/strings/utf_string_conversions.h"
+ #include "base/time/time.h"
+ #include "chrome/app/chrome_command_ids.h"
++#include "chrome/app/vector_icons/vector_icons.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/ui/actions/chrome_action_id.h"
+ #include "chrome/browser/ui/animation/browser_animation_controller.h"
+@@ -1058,6 +1059,34 @@ void VerticalTabStripRegionView::OnTabStripViewSet() {
+     }
+   }
+ 
++  // private V2: a private window has no Spaces but keeps Stedding's rows --
++  // "Private" where the Space title goes, the New Tab row, the Clear line --
++  // with no "+" pill and no hairline, so it reads as the same sidebar in
++  // another coat.
++  if (!spaces::SpaceModel::From(browser_view()->browser()) &&
++      browser_view()->browser()->GetProfile()->IsOffTheRecord() &&
++      browser_view()->browser()->GetType() ==
++          BrowserWindowInterface::Type::TYPE_NORMAL) {
++    TabStripView* const strip = static_cast<TabStripView*>(tab_strip_view());
++    strip->SetUpSpaceBoundary(
++        base::BindRepeating([](const views::View*) { return false; }));
++    UpdateSpaceTitle();
++    strip->SetSeparatorClearCallback(
++        base::BindRepeating(&VerticalTabStripRegionView::ClearCurrentSpaceTabs,
++                            base::Unretained(this)));
++    strip->SetNewTabCallback(base::BindRepeating(
++        [](VerticalTabStripRegionView* self) {
++          chrome::ExecuteCommand(self->browser_view()->browser(), IDC_NEW_TAB);
++        },
++        base::Unretained(this)));
++    if (bottom_button_container_) {
++      bottom_button_container_->SetNewTabButtonVisible(false);
++    }
++    if (top_button_separator_) {
++      top_button_separator_->SetVisible(false);
++    }
++  }
++
+   // Tabs outside the active Space are hidden the way a collapsed group hides
+   // its tabs. Only normal windows have a SpaceModel; elsewhere this stays null
+   // and every tab shows, as before.
+@@ -1506,6 +1535,14 @@ void VerticalTabStripRegionView::UpdateSpaceTitle() {
+   spaces::SpaceModel* const model =
+       spaces::SpaceModel::From(browser_view()->browser());
+   TabStripView* const strip = static_cast<TabStripView*>(tab_strip_view());
++  // private V2: no Spaces here; the row says what the window is.
++  if (strip && !model &&
++      browser_view()->browser()->GetProfile()->IsOffTheRecord()) {
++    strip->SetSpaceTitleIcon(ui::ImageModel::FromVectorIcon(
++        kIncognitoIcon, kColorTabForegroundInactiveFrameActive, 16));
++    strip->SetSpaceTitle(u"Private", views::Button::PressedCallback());
++    return;
++  }
+   if (!model || !strip) {
+     return;
+   }
+diff --git a/chrome/browser/ui/views/tabs/common/tab_strip_view.cc b/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
+index 0289421a6e07f..c5109dda08372 100644
+--- a/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
++++ b/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
+@@ -306,6 +306,13 @@ void TabStripView::SetSpaceTitle(const std::u16string& title,
+   InvalidateLayout();
+ }
+ 
++void TabStripView::SetSpaceTitleIcon(const ui::ImageModel& icon) {
++  if (space_title_row_) {
++    space_title_row_->SetImageModel(views::Button::STATE_NORMAL, icon);
++    space_title_row_->SetImageLabelSpacing(8);
++  }
++}
++
+ void TabStripView::AddedToWidget() {
+   views::Widget* const widget = GetWidget();
+   paint_as_active_subscription_ = widget->RegisterPaintAsActiveChangedCallback(
+diff --git a/chrome/browser/ui/views/tabs/common/tab_strip_view.h b/chrome/browser/ui/views/tabs/common/tab_strip_view.h
+index 27475b0fffe5c..0e39b697f0793 100644
+--- a/chrome/browser/ui/views/tabs/common/tab_strip_view.h
++++ b/chrome/browser/ui/views/tabs/common/tab_strip_view.h
+@@ -59,6 +59,8 @@ class TabStripView final : public views::View, public views::WidgetObserver {
+   // hides it. `pressed` opens the Space's menu.
+   void SetSpaceTitle(const std::u16string& title,
+                      views::Button::PressedCallback pressed);
++  // private V2: an icon before the title (the incognito glyph).
++  void SetSpaceTitleIcon(const ui::ImageModel& icon);
+   views::LabelButton* GetSpaceTitleRow() const { return space_title_row_; }
+ 
+   PinnedTabContainerView* GetPinnedTabsContainer() const;
+diff --git a/chrome/test/BUILD.gn b/chrome/test/BUILD.gn
+index b42a4c3eec331..90035be13fbed 100644
+--- a/chrome/test/BUILD.gn
++++ b/chrome/test/BUILD.gn
+@@ -5428,6 +5428,7 @@ test("unit_tests") {
+     "//chrome/browser/ui/spaces:unit_tests",
+     "//chrome/browser/ui/archive:unit_tests",
+     "//chrome/browser/ui:stedding_ui_metrics_unit_tests",
++    "//chrome/browser/ui/color:stedding_unit_tests",
+     "//chrome/browser/ui/views/commandbar:unit_tests",
+     "//chrome/browser/ui/views/switcher:unit_tests",
+     "//chrome/browser/ui/stedding:unit_tests",

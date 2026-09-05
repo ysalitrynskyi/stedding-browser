@@ -372,6 +372,15 @@ said otherwise. Each is also in the item's spec.
   file through a dialog, in settings and the bar (I17–I20). Patch 0033. Not
   taken: a tab's user-given name across a restore (it comes back as the title),
   and one snapshot per profile rather than per window (R6-31).
+- **Part U, wave 4 opens with the private coat (R6-32).** The mixer reads
+  Chromium's incognito key (dark, grayscale) and paints graphite with no tint; no
+  Space model or archiver for a private window, so the title row reads "Private"
+  with the incognito glyph over the same New Tab row and Clear line, there is no
+  switcher and nothing private is recorded; the window title says so (V1–V3,
+  V6). Patch 0034. V4 dropped: the address row keeps the avatar button hidden,
+  and the coat, the title row and the window title already say it. V5 dropped:
+  the private new tab page is Chromium's own. Wave 4's ADR for the registry (0016) is written; the
+  little window (R6-30) and the registry (R6-31) follow.
 - **Not in this pass.** R6-19's other J rows (J1, J3, J5, J6 keep their rows for
   the splits pass), and the menus' Move to Folder ▸ with existing folders.
 
@@ -1165,7 +1174,7 @@ From the critic: #7 (this item), #34 (the round trip).
 |---|---|---|---|---|---|---|
 | R6-30 | Little window: links from other apps open small | idea "Little window" (judges 6.33, build×1, maybe×2); judges: effort closer to L, needs 12 and 21 first | L | stedding.little.enabled; shares stedding.spaces.external_default | ⌘O / ⇧⌘O / Esc / ⌃1–9 inside | planned |
 | R6-31 | One sidebar for every window (SpaceRegistry) — needs an ADR first | idea "One sidebar for every window" (judges 6.33, maybe×2, build×1); judges: L, needs its ADR and a design pass before an estimate | L | none | ⌘N; ⌥⇧⌘N | planned |
-| R6-32 | Private windows wear a different coat | idea "Private windows wear a different coat" (judges 8, build×3); mod "Private Mode Highlighting" (judges 6, skip×1, build×1, maybe×1), merged: the avatar badge back for OTR | M | none | ⇧⌘N | planned |
+| R6-32 | Private windows wear a different coat | idea "Private windows wear a different coat" (judges 8, build×3); mod "Private Mode Highlighting" (judges 6, skip×1, build×1, maybe×1), merged: the avatar badge back for OTR | M | none | ⇧⌘N | built (0034) |
 
 #### R6-30 · Little window: links from other apps open small — plan item 15
 

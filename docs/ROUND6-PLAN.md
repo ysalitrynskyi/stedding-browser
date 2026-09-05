@@ -259,9 +259,28 @@ said otherwise. Each is also in the item's spec.
   source reached the harness's typing (HANDOFF trap 13). The sidebar's own
   background menu (Chromium's: Bookmark All Tabs…, Unpin Tab Search, Turn off Auto
   Expanding Tabs) is untouched — a row for R6-14 M3's pass.
+- **Part H, R6-11 (actions mode), the same morning.** The bar gains a second mode:
+  ⇥ in the bar, a leading ">", or ⇧⌘P (`IDC_STEDDING_COMMAND_PALETTE`, in the
+  not-in-main-menu table and the shortcut reference). The list is Stedding's verbs
+  first — Move Tab to <Space> (one row per other Space, none for an essentials tab),
+  Pin/Unpin to This Space, Move Tab to New Folder, Sleep Tab, Clear This Space,
+  Next/Previous Space, New Space, the three captures, Copy Link (plain and Markdown),
+  Collapse or Expand the Sidebar, Show Keyboard Shortcuts, one on/off row per boolean
+  preference and one cycling row per dropdown (K17) — then every visible, enabled
+  item of `BrowserActions`' registry with its label and chord. Chords for Stedding's
+  rows come from the window's accelerator provider (the BrowserView; tests inject
+  one). ⌘L opens the bar with the page URL selected (K12); Escape leaves actions
+  mode, a second Escape closes (K14); private and popup windows list Chromium's
+  actions only (K15). Not yet: "Archive idle tabs now" (the archiver has no window
+  accessor), "Rename tab" from the bar (the row's view is the strip's), the
+  address-row click of K12, and extension actions (K11 covers later commands).
+  The live check found two things the unit tests could not: the field must claim
+  ⇥/⇧⇥ from the Mac focus manager (HANDOFF trap 15) and the panel must resize on
+  every rebuild path; both fixed, ⌘T-then-⇥ shows seven rows with a scroll
+  indicator, ⌘L shows the URL selected. Patch 0022; 18 bar and shortcut tests.
 - **Not in this pass.** R6-14 M2, M3, M7 (page and app menus; the five row-kind
-  menus), R6-15 R7 (folder dim), R6-16 H10–H11, R6-11 (actions mode), R6-12 (⌃⇥
-  strip), R6-19's J rows, B27's drag, T14's download capture. Each keeps its row.
+  menus), R6-15 R7 (folder dim), R6-16 H10–H11, R6-12 (⌃⇥ strip), R6-19's J rows,
+  B27's drag, T14's download capture. Each keeps its row.
 
 #### R6-01 · Shortcut reference block in chrome://settings/stedding
 

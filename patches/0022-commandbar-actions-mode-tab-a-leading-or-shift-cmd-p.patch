@@ -1,0 +1,1106 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Sat, 5 Sep 2026 07:45:09 -0400
+Subject: commandbar: actions mode -- Tab, a leading ">", or Shift-Cmd-P lists
+ commands
+
+The bar's second mode (docs/features/commandbar.md K8-K17): Tab in the bar,
+a leading ">" or Shift-Cmd-P (IDC_STEDDING_COMMAND_PALETTE) turns the rows
+into commands -- Stedding's verbs first (Move Tab to <Space>, Pin/Unpin to
+This Space, Move Tab to New Folder, Sleep Tab, Clear This Space, Next and
+Previous Space, New Space, the three captures, Copy Link, the sidebar, Show
+Keyboard Shortcuts, one on/off row per preference and one cycling row per
+dropdown), then every visible, enabled item of Chromium's action registry
+with its label and chord. Rows fuzzy-match on the label, the chord sits at
+the right, Enter runs the row; a preference row keeps the bar open and
+re-reads. Cmd-L opens the bar with the page URL selected; Escape leaves
+actions mode and a second Escape closes; private and popup windows list
+Chromium's actions only; rows without a target are not built.
+
+Why: docs/ROUND6-PLAN.md wave 2 (R6-11), the highest-scored idea of the Zen
+mods review: one place for every command, reachable from the keyboard.
+Removable when: Chromium ships a command palette of its own.
+---
+ chrome/app/chrome_command_ids.h               |   2 +
+ .../browser/global_keyboard_shortcuts_mac.mm  |   3 +
+ .../browser/ui/browser_command_controller.cc  |  39 +-
+ chrome/browser/ui/views/commandbar/BUILD.gn   |  11 +
+ .../ui/views/commandbar/command_bar_view.cc   | 415 +++++++++++++++++-
+ .../ui/views/commandbar/command_bar_view.h    |  55 ++-
+ .../commandbar/command_bar_view_unittest.cc   | 218 +++++++++
+ .../settings/stedding_shortcuts_handler.cc    |   2 +
+ 8 files changed, 733 insertions(+), 12 deletions(-)
+
+diff --git a/chrome/app/chrome_command_ids.h b/chrome/app/chrome_command_ids.h
+index 55f63fd634b59..00c4ac20b4404 100644
+--- a/chrome/app/chrome_command_ids.h
++++ b/chrome/app/chrome_command_ids.h
+@@ -587,6 +587,8 @@
+ #define IDC_STEDDING_MOVE_TAB_TO_PREVIOUS_SPACE 55125
+ // Stedding: copy the link as Markdown (docs/features/copy-link.md L3).
+ #define IDC_STEDDING_COPY_MARKDOWN_LINK         55130
++// The command bar in actions mode (docs/features/commandbar.md K8).
++#define IDC_STEDDING_COMMAND_PALETTE            55131
+ 
+ #define IDC_FIRST_UNBOUNDED_MENU COMMAND_ID_FIRST_UNBOUNDED
+ // LINT.ThenChange(//chrome/browser/ui/actions/chrome_action_id.h)
+diff --git a/chrome/browser/global_keyboard_shortcuts_mac.mm b/chrome/browser/global_keyboard_shortcuts_mac.mm
+index 05594c582a49b..ad0a60837ab6a 100644
+--- a/chrome/browser/global_keyboard_shortcuts_mac.mm
++++ b/chrome/browser/global_keyboard_shortcuts_mac.mm
+@@ -138,6 +138,9 @@ const std::vector<KeyboardShortcutData>& GetShortcutsNotPresentInMainMenu() {
+       // tab traversal moves to Option-Cmd-Down/Up as in Arc (spaces B19), and
+       // pane focus takes F6 / Shift-F6 as on the other platforms.
+       {true,  false, false, true,  kVK_DownArrow,         IDC_SELECT_NEXT_TAB},
++      // Stedding: Shift-Cmd-P opens the command bar in actions mode
++      // (docs/features/commandbar.md K8); unbound in Chromium on the Mac.
++      {true,  true,  false, false, kVK_ANSI_P,            IDC_STEDDING_COMMAND_PALETTE},
+       {true,  false, false, true,  kVK_UpArrow,           IDC_SELECT_PREVIOUS_TAB},
+       {false, false, false, false, kVK_F6,                IDC_FOCUS_NEXT_PANE},
+       {false, true,  false, false, kVK_F6,                IDC_FOCUS_PREVIOUS_PANE},
+diff --git a/chrome/browser/ui/browser_command_controller.cc b/chrome/browser/ui/browser_command_controller.cc
+index e5efec6257b07..87c89638d2a3f 100644
+--- a/chrome/browser/ui/browser_command_controller.cc
++++ b/chrome/browser/ui/browser_command_controller.cc
+@@ -4,8 +4,6 @@
+ 
+ #include "chrome/browser/ui/browser_command_controller.h"
+ 
+-#include "chrome/browser/ui/stedding/screenshot/screenshot_capture.h"
+-
+ #include <stddef.h>
+ 
+ #include <algorithm>
+@@ -22,6 +20,8 @@
+ #include "base/metrics/user_metrics.h"
+ #include "base/notimplemented.h"
+ #include "base/strings/strcat.h"
++#include "base/strings/utf_string_conversions.h"
++#include "base/task/single_thread_task_runner.h"
+ #include "base/time/time.h"
+ #include "build/branding_buildflags.h"
+ #include "build/build_config.h"
+@@ -59,12 +59,6 @@
+ #include "chrome/browser/ui/browser.h"
+ #include "chrome/browser/ui/browser_actions.h"
+ #include "chrome/browser/ui/browser_commands.h"
+-#include "base/task/single_thread_task_runner.h"
+-#include "base/time/time.h"
+-#include "chrome/browser/ui/spaces/space_commands.h"
+-#include "chrome/browser/ui/stedding/copy_link.h"
+-#include "chrome/browser/ui/stedding_ui_metrics.h"
+-#include "chrome/browser/ui/views/commandbar/command_bar_view.h"
+ #include "chrome/browser/ui/browser_element_identifiers.h"
+ #include "chrome/browser/ui/browser_select_file_dialog_controller.h"
+ #include "chrome/browser/ui/browser_window.h"
+@@ -88,8 +82,12 @@
+ #include "chrome/browser/ui/side_panel/side_panel_entry_id.h"
+ #include "chrome/browser/ui/side_panel/side_panel_ui.h"
+ #include "chrome/browser/ui/singleton_tabs.h"
++#include "chrome/browser/ui/spaces/space_commands.h"
+ #include "chrome/browser/ui/startup/default_browser_prompt/default_browser_prompt_manager.h"
+ #include "chrome/browser/ui/startup/default_browser_prompt/default_browser_prompt_prefs.h"
++#include "chrome/browser/ui/stedding/copy_link.h"
++#include "chrome/browser/ui/stedding/screenshot/screenshot_capture.h"
++#include "chrome/browser/ui/stedding_ui_metrics.h"
+ #include "chrome/browser/ui/tabs/features.h"
+ #include "chrome/browser/ui/tabs/split_tab_metrics.h"
+ #include "chrome/browser/ui/tabs/tab_change_type.h"
+@@ -99,6 +97,7 @@
+ #include "chrome/browser/ui/tabs/vertical_tab_strip_state_controller.h"
+ #include "chrome/browser/ui/toolbar/chrome_labs/chrome_labs_utils.h"
+ #include "chrome/browser/ui/ui_features.h"
++#include "chrome/browser/ui/views/commandbar/command_bar_view.h"
+ #include "chrome/browser/ui/views/frame/browser_view.h"
+ #include "chrome/browser/ui/views/side_panel/tabs_from_other_devices/tabs_from_other_devices_side_panel_coordinator.h"
+ #include "chrome/browser/ui/web_applications/app_browser_controller.h"
+@@ -600,7 +599,6 @@ void BrowserCommandController::GlicActiveInstanceChanged(
+   UpdateGlicState();
+ }
+ 
+-
+ void BrowserCommandController::FindBarVisibilityChanged() {
+   // Block find command updates in locked fullscreen mode unless the instance is
+   // locked for OnTask (only relevant for non-web browser scenarios).
+@@ -1185,8 +1183,24 @@ void BrowserCommandController::HandleCommandWithDisposition(
+         break;
+       }
+       base::RecordAction(base::UserMetricsAction("Accel_Focus_Location"));
++      // Stedding (commandbar K12): Cmd-L opens the bar with the page's URL
++      // selected; Escape leaves the page as it was.
++      if (base::FeatureList::IsEnabled(stedding::kArcStyleWindow) &&
++          browser_->GetType() == BrowserWindowInterface::Type::TYPE_NORMAL) {
++        content::WebContents* const contents =
++            browser_->tab_strip_model()->GetActiveWebContents();
++        stedding::CommandBarView::Show(
++            browser_, stedding::CommandBarView::Mode::kTabs,
++            contents ? base::UTF8ToUTF16(contents->GetVisibleURL().spec())
++                     : std::u16string());
++        break;
++      }
+       FocusLocationBar(browser_);
+       break;
++    case IDC_STEDDING_COMMAND_PALETTE:
++      stedding::CommandBarView::Show(browser_,
++                                     stedding::CommandBarView::Mode::kActions);
++      break;
+     case IDC_FOCUS_SEARCH:
+       base::RecordAction(base::UserMetricsAction("Accel_Focus_Search"));
+       FocusSearch(browser_);
+@@ -2040,6 +2054,13 @@ void BrowserCommandController::InitCommandState() {
+       !sharing_hub::SharingIsDisabledByPolicy(browser_->GetProfile());
+   command_updater_->UpdateCommandEnabled(IDC_COPY_URL, enable_copy_url);
+   // Stedding: the Markdown twin goes wherever the plain copy goes.
++  // The command bar's actions mode: normal windows only (commandbar K15
++  // keeps private and popup windows on Chromium's actions through the bar
++  // itself; the bar does not open there at all).
++  command_updater_->UpdateCommandEnabled(
++      IDC_STEDDING_COMMAND_PALETTE,
++      base::FeatureList::IsEnabled(stedding::kArcStyleWindow) &&
++          browser_->GetType() == BrowserWindowInterface::Type::TYPE_NORMAL);
+   command_updater_->UpdateCommandEnabled(IDC_STEDDING_COPY_MARKDOWN_LINK,
+                                          enable_copy_url);
+   command_updater_->UpdateCommandEnabled(IDC_WEB_APP_SETTINGS,
+diff --git a/chrome/browser/ui/views/commandbar/BUILD.gn b/chrome/browser/ui/views/commandbar/BUILD.gn
+index b188aa57a69fb..31c837ad99d91 100644
+--- a/chrome/browser/ui/views/commandbar/BUILD.gn
++++ b/chrome/browser/ui/views/commandbar/BUILD.gn
+@@ -15,10 +15,16 @@ source_set("commandbar") {
+     "//chrome/browser/profiles:profile",
+     "//chrome/browser/search_engines",
+     "//chrome/browser/ui/navigator",
++    "//chrome/app:command_ids",
++    "//chrome/browser/ui:browser_actions",
+     "//chrome/browser/ui/spaces",
++    "//chrome/browser/ui/stedding:prefs",
++    "//chrome/browser/ui/stedding:sleep_tabs",
+     "//chrome/browser/ui/stedding:tab_names",
+     "//chrome/browser/ui/tabs:tab_strip",
++    "//components/prefs",
+     "//components/search_engines",
++    "//ui/actions",
+     "//chrome/browser/autocomplete",
+     "//components/omnibox/browser",
+     "//third_party/metrics_proto",
+@@ -32,8 +38,13 @@ source_set("unit_tests") {
+   deps = [
+     ":commandbar",
+     "//base",
++    "//chrome/app:command_ids",
+     "//chrome/browser/ui/spaces",
++    "//chrome/browser/ui/stedding:prefs",
+     "//chrome/browser/ui/stedding:tab_names",
++    "//components/prefs",
++    "//ui/base",
++    "//ui/events",
+     "//chrome/browser/ui/tabs:tab_strip",
+     "//chrome/test:test_support",
+     "//testing/gtest",
+diff --git a/chrome/browser/ui/views/commandbar/command_bar_view.cc b/chrome/browser/ui/views/commandbar/command_bar_view.cc
+index ecc14c3ba7658..15adf5dd32ade 100644
+--- a/chrome/browser/ui/views/commandbar/command_bar_view.cc
++++ b/chrome/browser/ui/views/commandbar/command_bar_view.cc
+@@ -13,16 +13,23 @@
+ #include "base/memory/ptr_util.h"
+ #include "base/strings/utf_string_conversions.h"
+ #include "base/task/single_thread_task_runner.h"
++#include "chrome/app/chrome_command_ids.h"
+ #include "chrome/browser/autocomplete/autocomplete_classifier_factory.h"
+ #include "chrome/browser/autocomplete/chrome_autocomplete_provider_client.h"
+ #include "chrome/browser/autocomplete/chrome_autocomplete_scheme_classifier.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/search_engines/template_url_service_factory.h"
+ #include "chrome/browser/ui/browser.h"
++#include "chrome/browser/ui/browser_actions.h"
++#include "chrome/browser/ui/browser_command_controller.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/navigator/browser_navigator.h"
+ #include "chrome/browser/ui/navigator/browser_navigator_params.h"
+ #include "chrome/browser/ui/spaces/space.h"
++#include "chrome/browser/ui/spaces/space_colors.h"
+ #include "chrome/browser/ui/spaces/space_model.h"
++#include "chrome/browser/ui/stedding/sleep_tabs.h"
++#include "chrome/browser/ui/stedding/stedding_prefs.h"
+ #include "chrome/browser/ui/stedding/tab_names.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "chrome/browser/ui/views/frame/browser_view.h"
+@@ -33,10 +40,14 @@
+ #include "components/omnibox/browser/autocomplete_input.h"
+ #include "components/omnibox/browser/autocomplete_match.h"
+ #include "components/omnibox/browser/autocomplete_match_type.h"
++#include "components/prefs/pref_service.h"
+ #include "components/search_engines/template_url.h"
+ #include "components/search_engines/template_url_service.h"
+ #include "third_party/metrics_proto/omnibox_event.pb.h"
++#include "ui/actions/actions.h"
++#include "ui/base/accelerators/accelerator.h"
+ #include "ui/base/metadata/metadata_impl_macros.h"
++#include "ui/base/window_open_disposition.h"
+ #include "ui/color/color_id.h"
+ #include "ui/color/color_provider.h"
+ #include "ui/compositor/layer.h"
+@@ -57,6 +68,24 @@ constexpr int kBarWidth = 720;
+ constexpr int kListHeight = 320;
+ constexpr int kRowHeight = 44;
+ constexpr int kFieldHeight = 52;
++
++// The bar's field. On Mac the focus manager sees a key before the focused view
++// does, and moves focus on Tab; the field claims Tab and Shift-Tab so they
++// reach the bar's controller and switch modes instead (commandbar K8, K13).
++class CommandBarField : public views::Textfield {
++  METADATA_HEADER(CommandBarField, views::Textfield)
++
++ public:
++  using views::Textfield::Textfield;
++
++  bool SkipDefaultKeyEventProcessing(const ui::KeyEvent& event) override {
++    return views::FocusManager::IsTabTraversalKeyEvent(event) ||
++           views::Textfield::SkipDefaultKeyEventProcessing(event);
++  }
++};
++
++BEGIN_METADATA(CommandBarField)
++END_METADATA
+ constexpr int kPanelRadius = 16;
+ constexpr int kRowRadius = 10;
+ constexpr int kPanelInset = 12;
+@@ -95,6 +124,11 @@ END_METADATA
+ 
+ // static
+ void CommandBarView::Show(Browser* browser) {
++  Show(browser, Mode::kTabs);
++}
++
++// static
++void CommandBarView::Show(Browser* browser, Mode mode, std::u16string prefill) {
+   BrowserView* const browser_view =
+       BrowserView::GetBrowserViewForBrowser(browser);
+   if (!browser_view) {
+@@ -102,6 +136,10 @@ void CommandBarView::Show(Browser* browser) {
+   }
+   if (CommandBarView* const open = GetOpenBar(browser_view)) {
+     open->field_->RequestFocus();
++    open->SetMode(mode);
++    if (!prefill.empty()) {
++      open->Prefill(std::move(prefill));
++    }
+     return;
+   }
+   // Last child of the browser view: on top of everything, including the web
+@@ -115,6 +153,299 @@ void CommandBarView::Show(Browser* browser) {
+   bar->UpdateBounds();
+   bar->field_->RequestFocus();
+   bar->watching_focus_ = true;
++  bar->SetMode(mode);
++  if (!prefill.empty()) {
++    bar->Prefill(std::move(prefill));
++  }
++}
++
++void CommandBarView::SetMode(Mode mode) {
++  if (mode == mode_ && (mode == Mode::kTabs || !actions_.empty())) {
++    return;
++  }
++  mode_ = mode;
++  selected_ = 0;
++  if (mode_ == Mode::kActions) {
++    BuildActions();
++  }
++  if (field_) {
++    field_->SetPlaceholderText(mode_ == Mode::kActions
++                                   ? u"Type a command\u2026"
++                                   : u"Search or Enter URL\u2026");
++  }
++  RebuildRows();
++}
++
++void CommandBarView::Prefill(std::u16string text) {
++  if (!field_) {
++    return;
++  }
++  field_->SetText(text);
++  field_->SelectAll(false);
++  UpdateResults(text);
++}
++
++std::u16string CommandBarView::ChordFor(int command_id) const {
++  ui::AcceleratorProvider* provider = accelerator_provider_for_testing_;
++  if (!provider) {
++    provider = BrowserView::GetBrowserViewForBrowser(browser_);
++  }
++  ui::Accelerator accelerator;
++  return provider &&
++                 provider->GetAcceleratorForCommandId(command_id, &accelerator)
++             ? accelerator.GetShortcutText()
++             : std::u16string();
++}
++
++namespace {
++
++// Chromium's registry, depth first: every visible, enabled item with a label
++// (commandbar K9).
++void CollectActionItems(actions::ActionItem* item,
++                        std::vector<actions::ActionItem*>* out) {
++  if (!item) {
++    return;
++  }
++  if (!item->GetText().empty() && item->GetVisible() && item->GetEnabled()) {
++    out->push_back(item);
++  }
++  for (const auto& child : item->GetChildren().children()) {
++    CollectActionItems(child->GetActionItem(), out);
++  }
++}
++
++struct PrefChoice {
++  int value;
++  const char16_t* name;
++};
++
++}  // namespace
++
++void CommandBarView::BuildActions() {
++  actions_.clear();
++  const bool normal_window =
++      browser_->GetType() == BrowserWindowInterface::Type::TYPE_NORMAL &&
++      !browser_->GetProfile()->IsOffTheRecord();
++  TabStripModel* const tabs = browser_->tab_strip_model();
++  spaces::SpaceModel* const spaces = spaces::SpaceModel::From(browser_);
++  tabs::TabInterface* const active = tabs->GetActiveTab();
++  PrefService* const prefs = browser_->GetProfile()->GetPrefs();
++  chrome::BrowserCommandController* const commands =
++      chrome::BrowserCommandController::From(browser_);
++
++  const auto command = [&](int id, std::u16string title) {
++    if (!commands || !commands->IsCommandEnabled(id)) {
++      return;
++    }
++    actions_.push_back(
++        {std::move(title), ChordFor(id),
++         base::BindRepeating([](chrome::BrowserCommandController* controller,
++                                int id) { controller->ExecuteCommand(id); },
++                             base::Unretained(commands), id)});
++  };
++
++  // Stedding's rows first: the sidebar's verbs (K9), only where they have a
++  // target (K15: no Spaces, pins or folders in private and popup windows;
++  // K16: nothing tab-scoped without a tab, nothing Space-scoped for an
++  // essentials tab).
++  if (normal_window && spaces) {
++    if (active && !active->IsPinned()) {
++      const spaces::SpaceId own = spaces->SpaceForTab(active);
++      for (const auto& space : spaces->spaces()) {
++        if (space->id() == own) {
++          continue;
++        }
++        const spaces::SpaceId id = space->id();
++        actions_.push_back(
++            {u"Move Tab to " + spaces->DisplayName(id), std::u16string(),
++             base::BindRepeating(
++                 [](spaces::SpaceModel* model, TabStripModel* strip,
++                    spaces::SpaceId id) {
++                   if (tabs::TabInterface* const tab = strip->GetActiveTab()) {
++                     model->SetSpaceForTab(tab, id);
++                     model->SetActiveSpace(id);
++                   }
++                 },
++                 base::Unretained(spaces), base::Unretained(tabs), id)});
++      }
++      command(IDC_STEDDING_TOGGLE_SPACE_PIN, spaces->IsSpacePinned(active)
++                                                 ? u"Unpin from This Space"
++                                                 : u"Pin to This Space");
++      actions_.push_back({u"Move Tab to New Folder", std::u16string(),
++                          base::BindRepeating(
++                              [](TabStripModel* strip) {
++                                const int index = strip->active_index();
++                                if (index != TabStripModel::kNoTab) {
++                                  strip->ExecuteContextMenuCommand(
++                                      index,
++                                      TabStripModel::CommandMoveTabToNewFolder);
++                                }
++                              },
++                              base::Unretained(tabs))});
++      if (!stedding::TabsToSleep(browser_, active, SleepScope::kThisTab)
++               .empty()) {
++        actions_.push_back(
++            {u"Sleep Tab", std::u16string(),
++             base::BindRepeating(
++                 [](Browser* browser) {
++                   if (tabs::TabInterface* const tab =
++                           browser->tab_strip_model()->GetActiveTab()) {
++                     stedding::SleepTabs(browser, tab, SleepScope::kThisTab);
++                   }
++                 },
++                 base::Unretained(browser_))});
++      }
++    }
++    command(IDC_STEDDING_CLEAR_SPACE, u"Clear This Space");
++    command(IDC_STEDDING_SPACE_NEXT, u"Next Space");
++    command(IDC_STEDDING_SPACE_PREVIOUS, u"Previous Space");
++    actions_.push_back(
++        {u"New Space", std::u16string(),
++         base::BindRepeating(
++             [](spaces::SpaceModel* model) {
++               const auto& choice = spaces::kSpaceColors.at(
++                   model->size() % spaces::kSpaceColors.size());
++               model->SetActiveSpace(
++                   model->AddSpace(std::string(), choice.color)->id());
++             },
++             base::Unretained(spaces))});
++  }
++  if (normal_window) {
++    command(IDC_STEDDING_CAPTURE_VISIBLE, u"Capture the Page");
++    command(IDC_STEDDING_CAPTURE_REGION, u"Capture a Region");
++    command(IDC_STEDDING_CAPTURE_FULL_PAGE, u"Capture the Full Document");
++    command(IDC_COPY_URL, u"Copy Link");
++    command(IDC_STEDDING_COPY_MARKDOWN_LINK, u"Copy Link as Markdown");
++    command(IDC_TOGGLE_VERTICAL_TABS_COLLAPSE,
++            u"Collapse or Expand the Sidebar");
++    actions_.push_back({u"Show Keyboard Shortcuts", std::u16string(),
++                        base::BindRepeating(
++                            [](Browser* browser) {
++                              browser->OpenGURL(
++                                  GURL("chrome://settings/stedding"),
++                                  WindowOpenDisposition::NEW_FOREGROUND_TAB);
++                            },
++                            base::Unretained(browser_))});
++
++    // One on/off row per Stedding preference, and a cycling row per
++    // dropdown (K17): the bar stays open and the row re-reads.
++    if (prefs) {
++      struct BoolPref {
++        const char* key;
++        const char16_t* label;
++      };
++      static constexpr BoolPref kBools[] = {
++          {stedding::prefs::kPeekEnabled,
++           u"Peek links that leave a pinned tab's site"},
++          {stedding::prefs::kUiAnimate, u"Animate the sidebar and overlays"},
++          {stedding::prefs::kCopyStripTracking,
++           u"Copy links without tracking parameters"},
++          {stedding::prefs::kPinsCloseSleeps,
++           u"\u2318W on a pinned tab puts it to sleep"},
++          {stedding::prefs::kMenusShort, u"Short context menus"},
++          {stedding::prefs::kHoldCmdNumbers,
++           u"Row numbers while \u2318 is held"},
++          {stedding::prefs::kNewTabShowHint,
++           u"Command-bar hint on the new tab page"},
++          {stedding::prefs::kNewTabShowShortcuts,
++           u"Shortcuts on the new tab page"},
++      };
++      for (const BoolPref& pref : kBools) {
++        const bool on = prefs->GetBoolean(pref.key);
++        Action action;
++        action.title = std::u16string(pref.label) + (on ? u": On" : u": Off");
++        action.keeps_bar_open = true;
++        action.run = base::BindRepeating(
++            [](PrefService* prefs, const char* key) {
++              prefs->SetBoolean(key, !prefs->GetBoolean(key));
++            },
++            base::Unretained(prefs), pref.key);
++        actions_.push_back(std::move(action));
++      }
++      struct IntPref {
++        const char* key;
++        const char16_t* label;
++        std::vector<PrefChoice> choices;
++      };
++      const IntPref kInts[] = {
++          {stedding::prefs::kArchiveIdleHours,
++           u"Archive idle tabs after",
++           {{0, u"Never"},
++            {6, u"6 hours"},
++            {12, u"12 hours"},
++            {24, u"1 day"},
++            {72, u"3 days"}}},
++          {stedding::prefs::kSpaceSleepMinutes,
++           u"A left Space sleeps after",
++           {{0, u"Never"},
++            {5, u"5 minutes"},
++            {15, u"15 minutes"},
++            {60, u"1 hour"}}},
++      };
++      for (const IntPref& pref : kInts) {
++        const int value = prefs->GetInteger(pref.key);
++        std::u16string name = u"?";
++        size_t at = 0;
++        for (size_t i = 0; i < pref.choices.size(); ++i) {
++          if (pref.choices[i].value == value) {
++            name = pref.choices[i].name;
++            at = i;
++          }
++        }
++        const int next = pref.choices[(at + 1) % pref.choices.size()].value;
++        Action action;
++        action.title = std::u16string(pref.label) + u": " + name + u" \u25B8";
++        action.keeps_bar_open = true;
++        action.run =
++            base::BindRepeating([](PrefService* prefs, const char* key,
++                                   int next) { prefs->SetInteger(key, next); },
++                                base::Unretained(prefs), pref.key, next);
++        actions_.push_back(std::move(action));
++      }
++    }
++  }
++
++  // Chromium's own registry: every action the window offers, with its label
++  // and chord (K9).
++  if (BrowserActions* const browser_actions = BrowserActions::From(browser_)) {
++    std::vector<actions::ActionItem*> items;
++    CollectActionItems(browser_actions->root_action_item(), &items);
++    for (actions::ActionItem* item : items) {
++      actions_.push_back({BrowserActions::GetCleanTitleAndTooltipText(
++                              std::u16string(item->GetText())),
++                          item->GetAccelerator().GetShortcutText(),
++                          base::BindRepeating(
++                              [](actions::ActionItem* item) {
++                                item->InvokeAction(
++                                    actions::ActionInvocationContext());
++                              },
++                              base::Unretained(item))});
++    }
++  }
++}
++
++std::vector<CommandBarView::Action> CommandBarView::FilteredActions() const {
++  std::vector<Action> out;
++  for (const Action& action : actions_) {
++    if (Matches(action.title, query_)) {
++      out.push_back(action);
++    }
++  }
++  return out;
++}
++
++void CommandBarView::Run(const Action& action) {
++  base::WeakPtr<CommandBarView> self = weak_factory_.GetWeakPtr();
++  action.run.Run();
++  if (!self) {
++    return;
++  }
++  if (action.keeps_bar_open) {
++    BuildActions();
++    RebuildRows();
++    return;
++  }
++  Close();
+ }
+ 
+ // static
+@@ -154,7 +485,7 @@ void CommandBarView::BuildContents() {
+   SetLayoutManager(std::make_unique<views::BoxLayout>(
+       views::BoxLayout::Orientation::kVertical, gfx::Insets(), 8));
+ 
+-  auto field = std::make_unique<views::Textfield>();
++  auto field = std::make_unique<CommandBarField>();
+   field->set_controller(this);
+   field->SetPlaceholderText(u"Search or Enter URL...");
+   field->SetPreferredSize(gfx::Size(kBarWidth, kFieldHeight));
+@@ -228,6 +559,11 @@ void CommandBarView::RemovedFromWidget() {
+ 
+ bool CommandBarView::AcceleratorPressed(const ui::Accelerator& accelerator) {
+   if (accelerator.key_code() == ui::VKEY_ESCAPE) {
++    // Escape leaves actions mode first; a second closes (K14).
++    if (mode_ == Mode::kActions) {
++      SetMode(Mode::kTabs);
++      return true;
++    }
+     Close();
+     return true;
+   }
+@@ -321,6 +657,9 @@ void CommandBarView::OnResultChanged(AutocompleteController* controller,
+ }
+ 
+ void CommandBarView::RebuildRows() {
++  if (!list_) {
++    return;
++  }
+   views::View* const contents = list_->contents();
+   contents->RemoveAllChildViews();
+   contents->SetLayoutManager(std::make_unique<views::BoxLayout>(
+@@ -331,6 +670,31 @@ void CommandBarView::RebuildRows() {
+   size_t row_index = 0;
+   const auto chosen = [&] { return row_index++ == selected_; };
+ 
++  // Actions mode: the commands that match, the chord at the right; never a
++  // blank panel (K10, K11).
++  if (mode_ == Mode::kActions) {
++    const std::vector<Action> actions = FilteredActions();
++    if (actions.empty()) {
++      auto row = std::make_unique<ResultRow>(views::Button::PressedCallback(),
++                                             u"No matching command");
++      StyleRow(row.get(), false);
++      row->SetEnabled(false);
++      contents->AddChildView(std::move(row));
++    }
++    for (const Action& action : actions) {
++      auto row = std::make_unique<ResultRow>(
++          base::BindRepeating(&CommandBarView::Run, base::Unretained(this),
++                              action),
++          action.chord.empty() ? action.title
++                               : action.title + u"   \u2014   " + action.chord);
++      StyleRow(row.get(), chosen());
++      contents->AddChildView(std::move(row));
++    }
++    contents->InvalidateLayout();
++    UpdateBounds();
++    return;
++  }
++
+   // What Enter does with the typed text is always shown as a row, so the bar
+   // never looks empty while the user types a URL or a search.
+   GURL typed_destination;
+@@ -370,11 +734,16 @@ void CommandBarView::RebuildRows() {
+     contents->AddChildView(std::move(row));
+   }
+   contents->InvalidateLayout();
++  // The panel takes the height of its rows, up to the clip: a mode switch
++  // or a longer list grows it (K10).
++  UpdateBounds();
+ }
+ 
+ void CommandBarView::MoveSelection(int delta) {
+   const size_t rows =
+-      (query_.empty() ? 0 : 1) + results_.size() + suggestions_.size();
++      mode_ == Mode::kActions
++          ? FilteredActions().size()
++          : (query_.empty() ? 0 : 1) + results_.size() + suggestions_.size();
+   if (rows == 0) {
+     return;
+   }
+@@ -487,6 +856,23 @@ void CommandBarView::OpenTypedText() {
+ 
+ void CommandBarView::ContentsChanged(views::Textfield* sender,
+                                      const std::u16string& new_contents) {
++  // A leading ">" is the other way into actions mode (K8): the text after it
++  // is the filter.
++  if (mode_ == Mode::kTabs && !new_contents.empty() &&
++      new_contents[0] == u'>') {
++    query_ = new_contents.substr(1);
++    SetMode(Mode::kActions);
++    if (field_) {
++      field_->SetText(query_);
++    }
++    return;
++  }
++  if (mode_ == Mode::kActions) {
++    query_ = new_contents;
++    selected_ = 0;
++    RebuildRows();
++    return;
++  }
+   UpdateResults(new_contents);
+ }
+ 
+@@ -495,6 +881,24 @@ bool CommandBarView::HandleKeyEvent(views::Textfield* sender,
+   if (event.type() != ui::EventType::kKeyPressed) {
+     return false;
+   }
++  // Tab switches modes and keeps the text as the filter (K8, K13); Shift-Tab
++  // comes back.
++  if (event.key_code() == ui::VKEY_TAB) {
++    if (event.IsShiftDown()) {
++      if (mode_ == Mode::kActions) {
++        SetMode(Mode::kTabs);
++        UpdateResults(query_);
++      }
++    } else if (mode_ == Mode::kTabs) {
++      SetMode(Mode::kActions);
++    }
++    return true;
++  }
++  if (event.key_code() == ui::VKEY_ESCAPE && mode_ == Mode::kActions) {
++    SetMode(Mode::kTabs);
++    UpdateResults(query_);
++    return true;
++  }
+   if (event.key_code() == ui::VKEY_DOWN) {
+     MoveSelection(1);
+     return true;
+@@ -503,6 +907,13 @@ bool CommandBarView::HandleKeyEvent(views::Textfield* sender,
+     MoveSelection(-1);
+     return true;
+   }
++  if (event.key_code() == ui::VKEY_RETURN && mode_ == Mode::kActions) {
++    const std::vector<Action> actions = FilteredActions();
++    if (selected_ < actions.size()) {
++      Run(actions[selected_]);
++    }
++    return true;
++  }
+   if (event.key_code() == ui::VKEY_RETURN) {
+     // The chosen row, in RebuildRows' order.
+     size_t index = selected_;
+diff --git a/chrome/browser/ui/views/commandbar/command_bar_view.h b/chrome/browser/ui/views/commandbar/command_bar_view.h
+index 295098fc4be74..20f873287358a 100644
+--- a/chrome/browser/ui/views/commandbar/command_bar_view.h
++++ b/chrome/browser/ui/views/commandbar/command_bar_view.h
+@@ -8,10 +8,12 @@
+ #include <memory>
+ #include <vector>
+ 
++#include "base/functional/callback.h"
+ #include "base/memory/raw_ptr.h"
+ #include "base/memory/weak_ptr.h"
+ #include "base/scoped_observation.h"
+ #include "components/omnibox/browser/autocomplete_controller.h"
++#include "ui/base/accelerators/accelerator.h"
+ #include "ui/base/metadata/metadata_header_macros.h"
+ #include "ui/views/controls/textfield/textfield_controller.h"
+ #include "ui/views/focus/focus_manager.h"
+@@ -22,6 +24,10 @@
+ class Browser;
+ class BrowserView;
+ 
++namespace ui {
++class AcceleratorProvider;
++}  // namespace ui
++
+ namespace views {
+ class ScrollView;
+ class Textfield;
+@@ -50,8 +56,34 @@ class CommandBarView : public views::View,
+   METADATA_HEADER(CommandBarView, views::View)
+ 
+  public:
++  // The bar's two modes: rows are tabs and suggestions, or commands
++  // (docs/features/commandbar.md K8).
++  enum class Mode { kTabs, kActions };
++
+   // Opens the command bar for `browser`, or focuses the one already open.
+   static void Show(Browser* browser);
++  // The same in `mode`; `prefill` fills the field, selected (Cmd-L, K12).
++  static void Show(Browser* browser,
++                   Mode mode,
++                   std::u16string prefill = std::u16string());
++
++  Mode mode_for_testing() const { return mode_; }
++  void SetModeForTesting(Mode mode) { SetMode(mode); }
++  void PrefillForTesting(std::u16string text) { Prefill(std::move(text)); }
++  size_t action_count_for_testing() const { return FilteredActions().size(); }
++  std::u16string action_title_for_testing(size_t index) const {
++    return FilteredActions().at(index).title;
++  }
++  std::u16string action_chord_for_testing(size_t index) const {
++    return FilteredActions().at(index).chord;
++  }
++  void RunActionForTesting(size_t index) { Run(FilteredActions().at(index)); }
++  bool closing_for_testing() const { return closing_; }
++  // Chords come from the window's accelerator provider (the BrowserView);
++  // a test window has none, so a test supplies one.
++  void SetAcceleratorProviderForTesting(ui::AcceleratorProvider* provider) {
++    accelerator_provider_for_testing_ = provider;
++  }
+ 
+   // The open bar in `browser_view`, or null.
+   static CommandBarView* GetOpenBar(BrowserView* browser_view);
+@@ -66,6 +98,7 @@ class CommandBarView : public views::View,
+   void Close();
+ 
+   views::Textfield* field_for_testing() { return field_; }
++  views::ScrollView* list_for_testing() { return list_; }
+   size_t result_count_for_testing() const { return results_.size(); }
+   // Goes to the i-th result, as clicking its row would.
+   void GoToResultForTesting(size_t index) { GoTo(results_.at(index)); }
+@@ -99,7 +132,6 @@ class CommandBarView : public views::View,
+   void OnResultChanged(AutocompleteController* controller,
+                        bool default_match_changed) override;
+ 
+-
+  private:
+   // One thing the user can go to.
+   struct Result {
+@@ -112,6 +144,24 @@ class CommandBarView : public views::View,
+     GURL url;
+   };
+ 
++  // One thing the user can do (actions mode, commandbar K9).
++  struct Action {
++    std::u16string title;
++    // Drawn at the right of the row; empty when the command has no chord.
++    std::u16string chord;
++    base::RepeatingClosure run;
++    // A preference row: the bar stays open and the row re-reads (K17).
++    bool keeps_bar_open = false;
++  };
++  void SetMode(Mode mode);
++  void Prefill(std::u16string text);
++  // Every action the window offers right now, unfiltered (K9, K15, K16).
++  void BuildActions();
++  // The actions matching the typed text, in order (K10).
++  std::vector<Action> FilteredActions() const;
++  void Run(const Action& action);
++  std::u16string ChordFor(int command_id) const;
++
+   // Builds the field and the list.
+   void BuildContents();
+ 
+@@ -142,6 +192,9 @@ class CommandBarView : public views::View,
+   void OpenTypedText();
+ 
+   const raw_ptr<Browser> browser_;
++  Mode mode_ = Mode::kTabs;
++  std::vector<Action> actions_;
++  raw_ptr<ui::AcceleratorProvider> accelerator_provider_for_testing_ = nullptr;
+   raw_ptr<views::Textfield> field_ = nullptr;
+   raw_ptr<views::ScrollView> list_ = nullptr;
+   std::vector<Result> results_;
+diff --git a/chrome/browser/ui/views/commandbar/command_bar_view_unittest.cc b/chrome/browser/ui/views/commandbar/command_bar_view_unittest.cc
+index f16612498f03e..ccf691a958dc8 100644
+--- a/chrome/browser/ui/views/commandbar/command_bar_view_unittest.cc
++++ b/chrome/browser/ui/views/commandbar/command_bar_view_unittest.cc
+@@ -5,16 +5,24 @@
+ #include "chrome/browser/ui/views/commandbar/command_bar_view.h"
+ 
+ #include <memory>
++#include <tuple>
++#include <vector>
+ 
++#include "chrome/app/chrome_command_ids.h"
+ #include "chrome/browser/search_engines/template_url_service_factory.h"
+ #include "chrome/browser/ui/browser.h"
+ #include "chrome/browser/ui/spaces/space.h"
+ #include "chrome/browser/ui/spaces/space_model.h"
++#include "chrome/browser/ui/stedding/stedding_prefs.h"
+ #include "chrome/browser/ui/stedding/tab_names.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "chrome/browser/ui/views/frame/browser_view.h"
+ #include "chrome/test/base/browser_with_test_window_test.h"
++#include "components/prefs/pref_service.h"
+ #include "testing/gtest/include/gtest/gtest.h"
++#include "ui/base/accelerators/accelerator.h"
++#include "ui/events/event.h"
++#include "ui/events/keycodes/keyboard_codes.h"
+ #include "ui/views/controls/textfield/textfield.h"
+ #include "url/gurl.h"
+ 
+@@ -52,6 +60,216 @@ TEST_F(CommandBarViewTest, ChoosingATabInAnotherSpaceSwitchesToIt) {
+   EXPECT_EQ(in_work, tabs().GetActiveTab());
+ }
+ 
++namespace {
++
++ui::KeyEvent Press(ui::KeyboardCode code, int flags = ui::EF_NONE) {
++  return ui::KeyEvent(ui::EventType::kKeyPressed, code, flags);
++}
++
++// A window's chords, for a test window that has no BrowserView.
++class FakeAccelerators : public ui::AcceleratorProvider {
++ public:
++  bool GetAcceleratorForCommandId(int command_id,
++                                  ui::Accelerator* accelerator) const override {
++    if (command_id != IDC_STEDDING_CLEAR_SPACE) {
++      return false;
++    }
++    *accelerator =
++        ui::Accelerator(ui::VKEY_K, ui::EF_COMMAND_DOWN | ui::EF_SHIFT_DOWN);
++    return true;
++  }
++};
++
++std::vector<std::u16string> Titles(CommandBarView& bar) {
++  std::vector<std::u16string> out;
++  for (size_t i = 0; i < bar.action_count_for_testing(); ++i) {
++    out.push_back(bar.action_title_for_testing(i));
++  }
++  return out;
++}
++
++bool HasTitle(CommandBarView& bar, const std::u16string& title) {
++  for (const std::u16string& each : Titles(bar)) {
++    if (each == title) {
++      return true;
++    }
++  }
++  return false;
++}
++
++}  // namespace
++
++// commandbar K8: Tab in an empty bar switches to actions mode; a leading ">"
++// does the same.
++TEST_F(CommandBarViewTest, TabFiltersToActions) {
++  AddTab(browser(), GURL("https://example.com/"));
++  auto bar = std::make_unique<CommandBarView>(browser());
++  EXPECT_EQ(CommandBarView::Mode::kTabs, bar->mode_for_testing());
++  bar->HandleKeyEvent(bar->field_for_testing(), Press(ui::VKEY_TAB));
++  EXPECT_EQ(CommandBarView::Mode::kActions, bar->mode_for_testing());
++  EXPECT_GT(bar->action_count_for_testing(), 0u);
++  // The field keeps Tab and Shift-Tab from focus traversal, which on Mac runs
++  // before the field sees the key.
++  EXPECT_TRUE(bar->field_for_testing()->SkipDefaultKeyEventProcessing(
++      Press(ui::VKEY_TAB)));
++  EXPECT_TRUE(bar->field_for_testing()->SkipDefaultKeyEventProcessing(
++      Press(ui::VKEY_TAB, ui::EF_SHIFT_DOWN)));
++  EXPECT_FALSE(bar->field_for_testing()->SkipDefaultKeyEventProcessing(
++      Press(ui::VKEY_ESCAPE)));
++
++  auto other = std::make_unique<CommandBarView>(browser());
++  other->ContentsChanged(other->field_for_testing(), u">cap");
++  EXPECT_EQ(CommandBarView::Mode::kActions, other->mode_for_testing());
++  EXPECT_TRUE(HasTitle(*other, u"Capture the Page"));
++  EXPECT_FALSE(HasTitle(*other, u"Clear This Space"));
++}
++
++// commandbar K10: the panel takes the height of its rows, so a mode switch
++// with more rows than the tabs list had grows it, up to the clip.
++TEST_F(CommandBarViewTest, PanelGrowsWithTheRows) {
++  AddTab(browser(), GURL("https://example.com/"));
++  auto bar = std::make_unique<CommandBarView>(browser());
++  const int tabs_height = bar->GetPreferredSize().height();
++  bar->SetModeForTesting(CommandBarView::Mode::kActions);
++  const int actions_height = bar->GetPreferredSize().height();
++  EXPECT_GT(actions_height, tabs_height);
++}
++
++// commandbar K9: the rows list Chromium's registry plus Stedding's verbs --
++// a row per other Space, the captures, the sidebar, one per preference.
++TEST_F(CommandBarViewTest, ActionRowsListSpacesAndCaptures) {
++  AddTab(browser(), GURL("https://example.com/"));
++  spaces::Space* const work = model().AddSpace("Work", SK_ColorBLUE);
++  auto bar = std::make_unique<CommandBarView>(browser());
++  bar->SetModeForTesting(CommandBarView::Mode::kActions);
++  EXPECT_TRUE(HasTitle(*bar, u"Move Tab to Work"));
++  EXPECT_FALSE(HasTitle(
++      *bar, u"Move Tab to " + model().DisplayName(model().active_id())));
++  EXPECT_TRUE(HasTitle(*bar, u"Capture the Page"));
++  EXPECT_TRUE(HasTitle(*bar, u"Capture a Region"));
++  EXPECT_TRUE(HasTitle(*bar, u"Capture the Full Document"));
++  EXPECT_TRUE(HasTitle(*bar, u"Collapse or Expand the Sidebar"));
++  EXPECT_TRUE(HasTitle(*bar, u"New Space"));
++  EXPECT_TRUE(HasTitle(*bar, u"Short context menus: On"));
++  std::ignore = work;
++}
++
++// commandbar K10: Enter on a Space row moves the tab there, and the chord is
++// drawn from the window's accelerator provider.
++TEST_F(CommandBarViewTest, MoveToSpaceRowMovesTheTab) {
++  AddTab(browser(), GURL("https://example.com/"));
++  tabs::TabInterface* const tab = tabs().GetActiveTab();
++  spaces::Space* const work = model().AddSpace("Work", SK_ColorBLUE);
++  auto bar = std::make_unique<CommandBarView>(browser());
++  bar->SetModeForTesting(CommandBarView::Mode::kActions);
++  bar->ContentsChanged(bar->field_for_testing(), u"move tab to work");
++  ASSERT_EQ(1u, bar->action_count_for_testing());
++  bar->RunActionForTesting(0);
++  EXPECT_EQ(work->id(), model().SpaceForTab(tab));
++  EXPECT_EQ(work->id(), model().active_id());
++}
++
++TEST_F(CommandBarViewTest, ActionRowsCarryAccelerators) {
++  AddTab(browser(), GURL("https://example.com/"));
++  FakeAccelerators accelerators;
++  auto bar = std::make_unique<CommandBarView>(browser());
++  bar->SetAcceleratorProviderForTesting(&accelerators);
++  bar->SetModeForTesting(CommandBarView::Mode::kActions);
++  bar->ContentsChanged(bar->field_for_testing(), u"clear this space");
++  ASSERT_EQ(1u, bar->action_count_for_testing());
++  EXPECT_EQ(u"\u21E7\u2318K", bar->action_chord_for_testing(0));
++}
++
++// commandbar K12: Cmd-L prefills the field with the URL, selected.
++TEST_F(CommandBarViewTest, CmdLPrefillsTheUrlSelected) {
++  AddTab(browser(), GURL("https://example.com/"));
++  auto bar = std::make_unique<CommandBarView>(browser());
++  bar->PrefillForTesting(u"https://example.com/");
++  EXPECT_EQ(u"https://example.com/", bar->field_for_testing()->GetText());
++  EXPECT_TRUE(bar->field_for_testing()->HasSelection());
++  EXPECT_EQ(CommandBarView::Mode::kTabs, bar->mode_for_testing());
++}
++
++// commandbar K13: Tab with text typed filters that text against the actions;
++// Shift-Tab returns to tabs mode with the text kept.
++TEST_F(CommandBarViewTest, TabWithTextFiltersActions) {
++  AddTab(browser(), GURL("https://example.com/"));
++  auto bar = std::make_unique<CommandBarView>(browser());
++  bar->ContentsChanged(bar->field_for_testing(), u"capture");
++  bar->HandleKeyEvent(bar->field_for_testing(), Press(ui::VKEY_TAB));
++  EXPECT_EQ(CommandBarView::Mode::kActions, bar->mode_for_testing());
++  EXPECT_EQ(3u, bar->action_count_for_testing());
++  bar->HandleKeyEvent(bar->field_for_testing(),
++                      Press(ui::VKEY_TAB, ui::EF_SHIFT_DOWN));
++  EXPECT_EQ(CommandBarView::Mode::kTabs, bar->mode_for_testing());
++}
++
++// commandbar K14: Escape leaves actions mode; a second Escape closes.
++TEST_F(CommandBarViewTest, EscapeLeavesActionsModeThenCloses) {
++  AddTab(browser(), GURL("https://example.com/"));
++  auto bar = std::make_unique<CommandBarView>(browser());
++  bar->SetModeForTesting(CommandBarView::Mode::kActions);
++  const ui::Accelerator escape(ui::VKEY_ESCAPE, ui::EF_NONE);
++  EXPECT_TRUE(bar->AcceleratorPressed(escape));
++  EXPECT_EQ(CommandBarView::Mode::kTabs, bar->mode_for_testing());
++  EXPECT_FALSE(bar->closing_for_testing());
++  EXPECT_TRUE(bar->AcceleratorPressed(escape));
++  EXPECT_TRUE(bar->closing_for_testing());
++}
++
++// commandbar K15: a popup window's list holds Chromium's actions only.
++TEST_F(CommandBarViewTest, PopupWindowsListChromiumActionsOnly) {
++  BrowserWindowCreateParams popup_params(Browser::TYPE_POPUP, profile(), true);
++  std::unique_ptr<Browser> popup =
++      CreateBrowserWithTestWindowForParams(std::move(popup_params));
++  // No tab: a popup made by the fixture cannot close one cleanly, and the
++  // list under test does not need one.
++  auto bar = std::make_unique<CommandBarView>(popup.get());
++  bar->SetModeForTesting(CommandBarView::Mode::kActions);
++  EXPECT_FALSE(HasTitle(*bar, u"New Space"));
++  EXPECT_FALSE(HasTitle(*bar, u"Capture the Page"));
++  EXPECT_FALSE(HasTitle(*bar, u"Short context menus: On"));
++  // The bar holds the browser: it goes first.
++  bar.reset();
++  popup.reset();
++}
++
++// commandbar K16: an essentials tab has no Space rows.
++TEST_F(CommandBarViewTest, RowsWithoutATargetAreHidden) {
++  AddTab(browser(), GURL("https://example.com/"));
++  model().AddSpace("Work", SK_ColorBLUE);
++  tabs().SetTabPinned(tabs().active_index(), true);
++  auto bar = std::make_unique<CommandBarView>(browser());
++  bar->SetModeForTesting(CommandBarView::Mode::kActions);
++  EXPECT_FALSE(HasTitle(*bar, u"Move Tab to Work"));
++  EXPECT_FALSE(HasTitle(*bar, u"Pin to This Space"));
++  EXPECT_TRUE(HasTitle(*bar, u"New Space"));
++}
++
++// commandbar K17: a dropdown preference is one cycling row that re-reads.
++TEST_F(CommandBarViewTest, DropdownPrefRowCycles) {
++  AddTab(browser(), GURL("https://example.com/"));
++  PrefService* const prefs = profile()->GetPrefs();
++  prefs->SetInteger(stedding::prefs::kArchiveIdleHours, 12);
++  auto bar = std::make_unique<CommandBarView>(browser());
++  bar->SetModeForTesting(CommandBarView::Mode::kActions);
++  bar->ContentsChanged(bar->field_for_testing(), u"archive idle");
++  ASSERT_EQ(1u, bar->action_count_for_testing());
++  EXPECT_EQ(u"Archive idle tabs after: 12 hours \u25B8",
++            bar->action_title_for_testing(0));
++  bar->RunActionForTesting(0);
++  EXPECT_EQ(24, prefs->GetInteger(stedding::prefs::kArchiveIdleHours));
++  EXPECT_FALSE(bar->closing_for_testing());
++  EXPECT_EQ(u"Archive idle tabs after: 1 day \u25B8",
++            bar->action_title_for_testing(0));
++  // A boolean row toggles the same way.
++  bar->ContentsChanged(bar->field_for_testing(), u"short context");
++  ASSERT_EQ(1u, bar->action_count_for_testing());
++  bar->RunActionForTesting(0);
++  EXPECT_FALSE(prefs->GetBoolean(stedding::prefs::kMenusShort));
++  EXPECT_EQ(u"Short context menus: Off", bar->action_title_for_testing(0));
++}
++
+ // tabs R15: the bar matches the name the user gave a tab.
+ TEST_F(CommandBarViewTest, MatchesCustomTitle) {
+   AddTab(browser(), GURL("https://example.com/"));
+diff --git a/chrome/browser/ui/webui/settings/stedding_shortcuts_handler.cc b/chrome/browser/ui/webui/settings/stedding_shortcuts_handler.cc
+index 03cb991e342c2..e2d2b48e73900 100644
+--- a/chrome/browser/ui/webui/settings/stedding_shortcuts_handler.cc
++++ b/chrome/browser/ui/webui/settings/stedding_shortcuts_handler.cc
+@@ -119,6 +119,8 @@ std::vector<ShortcutGroup> ShortcutReference() {
+   ShortcutGroup& tabs = groups.emplace_back();
+   tabs.title = u"Tabs and the bar";
+   Add(tabs, IDC_NEW_TAB, u"Open the bar: search, a URL, or any open tab");
++  Add(tabs, IDC_STEDDING_COMMAND_PALETTE,
++      u"Open the bar in actions mode (\u21E5 in an empty bar does the same)");
+   {
+     const std::u16string first = ChordFor(IDC_SELECT_TAB_0);
+     const std::u16string last = ChordFor(IDC_SELECT_LAST_TAB);

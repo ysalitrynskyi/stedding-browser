@@ -167,6 +167,21 @@ perform; a param that recreates the state IS the test surface.
     typed event as well as the code; if a capture shows the wrong script, that is
     the first thing to check.
 
+14. **A new `IDC_` id rebuilds most of the browser.** Adding one line to
+    `chrome/app/chrome_command_ids.h` (2026-09-05, `IDC_STEDDING_COMMAND_PALETTE`) put
+    about 2,800 steps on the unit_tests build at roughly 0.5–0.8 steps a second: four
+    15-minute chunks. Batch new ids with other header-wide changes, and start such a
+    build first thing in a session rather than last.
+15. **On the Mac the focus manager sees a key before the focused view does.** A
+    Textfield that wants ⇥ (the command bar's mode switch, 2026-09-05) never gets it:
+    `FocusManager::OnKeyEvent` runs tab traversal first, focus lands on the toolbar
+    and the bar closes on the focus change -- while the unit test, which calls the
+    controller's `HandleKeyEvent` directly, stays green. Claim the key in
+    `SkipDefaultKeyEventProcessing` (as `OmniboxViewViews` does) and assert the claim
+    in the test. The same shape hides a sizing bug: a panel that sizes itself from
+    its rows must recompute its bounds on every rebuild path; a `GetPreferredSize`
+    probe cannot see an early `return`, only the live shot can.
+
 ## Open items
 
 `BACKLOG.md` is the list; do not keep one here. First up: the operator

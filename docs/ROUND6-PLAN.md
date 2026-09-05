@@ -118,6 +118,110 @@ over three scores (Appendix C). Status is `planned` for every row until its test
 | R6-09 | About page version label (S-43) | backlog S-43 (round 5 audit, 2026-09-04) | S | none | none | planned |
 | R6-10 | Space colour on the welcome flow (S-42) | backlog S-42; mod "Zen Colored Picker" (judges 5.33, build×1, maybe×1, skip×1): the five-swatch part | S | welcome step 3 swatches | none | planned |
 
+#### Wave 1 — landing notes (2026-09-04)
+
+Decisions taken while implementing, where the rows above left room or the tree
+said otherwise. Each is also in the item's spec.
+
+- **R6-01.** The model (`stedding::ShortcutReference()`) lives beside its handler in
+  `chrome/browser/ui/webui/settings/stedding_shortcuts_handler.cc`, Mac-only, and reads
+  chords through `GetDefaultMacAcceleratorForCommandId` (both Mac tables, one call). The
+  peek's ⌘O / ⇧⌘O are view accelerators, not commands, so they moved into
+  `chrome/browser/ui/views/peek/peek_accelerators.h` and the model reads them from there.
+  One divergence row carries a literal chord: ⇧⌘D, which Stedding binds to nothing (B21).
+  The "Show keyboard shortcuts" ⌘T action waits for R6-11 as planned.
+- **R6-02.** Chromium's Mac build bound pane focus to ⌥⌘↑/↓ only; those keys now traverse
+  tabs, so F6 / ⇧F6 were added for pane focus, as on the other platforms (B19 says so).
+  `SpaceModel::SetSpacePinned` moves a newly pinned tab under the Clear line itself, so
+  the context menu and ⌘D share one path. The Spaces menu's pin row reads "Pin Tab in
+  This Space", shows a check while pinned and is disabled on an essential
+  (`BrowserNativeWidgetMac::ValidateUserInterfaceItem`, B28). `spaces::SpaceCommandState`
+  keeps Space N enabled only while N Spaces exist (B23) through a callback into the
+  command updater. Strings for the menu bar needed real ids: `chrome/app/stedding_strings.grdp`
+  is the one part for every Stedding string (HANDOFF trap 9).
+- **R6-03.** The rules are pure functions (`stedding_tab_row_rules.cc`), tested as
+  `TabRowRulesTest.*`; the layout asks them. The close slot is reserved on every expanded
+  row, not only the active one, so no row's title ever re-elides on hover. The badge is the
+  alert indicator at the card's bottom-right corner, 2 DIP in; click-to-mute keeps
+  upstream's width rule.
+- **R6-04.** `chrome::CopyURL` now routes through `stedding::CopyLink`, so the app menu,
+  the tab menu and ⇧⌘C all strip and toast. The Markdown twin writes the text plus an
+  anchor through `ScopedClipboardWriter::WriteHyperlink`. Title: the page title, else the
+  host. Inside a peek both chords copy the peek's page (the peek view owns them).
+- **R6-07.** Placement (critic #21): Chromium's anchor stays, top-centre of the page card,
+  straddling the bar/card seam; Arc's bottom placement would need a second anchor view and
+  is not worth a hunk in `ContentsContainerView` now. A toast's colours come from the
+  dialog surface; the "Show in Finder" action reveals the last saved capture.
+- **R6-08.** `stedding::ShouldAnimate(prefs)` gates `BrowserAnimationController` (every
+  sidebar motion), the toast's entry and exit, and the tab hover card; the hover card's
+  gate is static in upstream, so it honours the system and the capture parameter but not
+  the preference. The welcome page's two CSS transitions follow `prefers-reduced-motion`.
+- **R6-09.** `tooling/build-chromium` writes `stedding_version = "<VERSION>"` into
+  `args.gn`; a buildflag header carries it; the About line keeps the "(arm64)" suffix.
+- **Live checks, 2026-09-05.** ⌃2, ⌥⌘→/←, ⌘D and ⇧⌘K verified through `tooling/drive`
+  (Space 2 activated, the pin moved under the Clear line, Clear kept the pin). ⇧⌘C could not
+  be verified by keystroke on the operator's Mac: the clipboard manager Maccy owns ⇧⌘C as a
+  global hotkey there, so the chord never reaches any browser (Arc's ⇧⌘C loses the same way).
+  Copy Link was verified through the File menu instead (the link came back stripped). The
+  chord stays ⇧⌘C for Arc parity; the copy-link spec records the collision.
+- **The card gutter (operator, 2026-09-05 01:10).** "Make sure the distance from the top to
+  the address bar is the same as the right and bottom borders, and a little smaller": one
+  parameter, `card_gutter` (6 DIP, was 8 at the right and bottom and 0 at the top), insets the
+  card on three sides and moves the address row down by it; the find bar follows.
+- **T7 (toolbar).** Landed with wave 1: `PageBarColorSupplier` on the window's colour key.
+  Verified live in light mode: a page with a dark `theme-color` turns the row dark with light
+  icons and URL text; example.com keeps a light row with dark icons.
+- **R6-10.** The welcome page is not a tab, so `stedding::WelcomeHost` (WebContents user
+  data set by the dialog) is how its handler reaches the window's `SpaceModel`; the five
+  colours moved to `chrome/browser/ui/spaces/space_colors.h` so the switcher and the flow
+  share them. Step 5 gained ⌃1–9, ⌘D/⇧⌘K and ⇧⌘C rows and the link to the reference.
+
+- **Gutter follow-up (2026-09-05, morning).** The first build put the address row 12 DIP
+  down with its bottom 6 DIP clipped: `CalculateTopContainerLayout` lays the toolbar out
+  in the top container's own coordinates, so insetting `visual_client_area` at the top
+  moved both the container and the toolbar inside it (the same double offset the strip
+  inset already corrected for x). The container now starts at the window's top edge and
+  grows by the gutter. The 1 DIP line between the row and the page
+  (`MultiContentsView`'s top separator, `kColorToolbarContentAreaSeparator`) is off under
+  the Stedding card: it ran across the gutters as a light hairline on the mat. Measured
+  on `tooling/probes/window.json` (23 probes): row from y=6, page from y=38, mat 6 DIP on
+  the left, right and bottom, no line.
+- **The plus glyphs (operator, 2026-09-05 01:15).** "Replace the + sign too, looks too
+  small and weird now." The New Tab row and the switcher's new-Space button drew a text
+  "+"; both are `vector_icons::kAdd2Icon` now (the wider Material plus; `kAddIcon` from
+  `chrome/app/vector_icons` has shorter arms), the row's at the favicon size in the
+  favicon column, the switcher's at the chip glyph size plus 2, both in the row/label
+  secondary colour.
+- **Seen on the way.** With Google chosen on the welcome flow's first step the new tab
+  page becomes Chromium's first-party page (Google logo, Gmail/Images, "Customize
+  Stedding"), not the local third-party page S-21 promised for every provider. Logged as
+  S-45; not part of round 6.
+
+- **Live checks, 2026-09-05 (second pass, every wave-1 surface).** Through
+  `tooling/drive` with the operator away: the link status pill inside the card (U1), the
+  hovered row's close glyph and the active row without one (R1), a playing essentials
+  card's corner badge in dark and light (R18), ⌥⇧⌘→ moving the tab and following it
+  (B22), the Spaces menu with Space 7–9 disabled past the count (B23), the shortcut
+  reference in dark and light with the divergence rows and the Mission Control note
+  (Z1–Z3), settings search finding it and the welcome link opening it (Z4), the About
+  line in both modes (T10), the ⌘F bubble in dialog colours at the card's right edge in
+  both modes (U3–U4), a split with no Material ring (U6, U8), the capture toast (C5) and
+  the "Link copied, tracking removed" toast (L5), github.com in light mode with a dark
+  row and light icons (T4/T7), the welcome swatches (W7's UI). Three things the pass
+  found: the reference named ⇧⌘] against "Focus the next pane" because `ChordFor`
+  returns the menu's binding first (fixed: divergence and tab rows read the table's
+  ⌥⌘↓/↑ through `TableChordFor`, with a test); choosing a swatch on a fresh profile
+  tinted nothing, because the ground only took a Space colour once a second Space
+  existed (spaces B31: a chosen colour tints a lone Space too, `Space::color_chosen`,
+  persisted); and ⌥⌘N from the harness never reached the window, which was not key on
+  the two-URL runs (grey traffic lights) — the Tab menu path opened the split, so the
+  harness, not the chord, is suspect (HANDOFF trap 10).
+- **Motion O2 stays partial.** Two shots 80 ms apart after ⌘S or ⇧⌘2 were identical in
+  every mode: neither the strip collapse nor the toast shows an intermediate frame at
+  the harness's sampling, so the capture cannot tell the gate. The gate is unit-tested
+  (`MotionTest`) and the call sites are reviewed; a frame-level proof needs a faster
+  capture path.
+
 #### R6-01 · Shortcut reference block in chrome://settings/stedding
 
 - Source: critic #6 (QUALITY.md "UX completeness" 1, ROADMAP.md M6 scope).

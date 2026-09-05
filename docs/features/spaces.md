@@ -1,6 +1,6 @@
 # Feature: Spaces
 
-Status: **B1–B14 built and tested** (patches 0004, 0005).
+Status: **B1–B17 built and tested** (patches 0004, 0005, 0013); **B18–B30 planned** (round 6, `docs/ROUND6-PLAN.md` R6-02, R6-18).
 Owner docs: `docs/decisions/0015-spaces-filter-one-tab-strip.md` (model), `docs/UI-SPEC.md`
 (pixels). Patch: `0004` (the whole feature, since the series was squashed per feature, `S-11`).
 
@@ -37,6 +37,20 @@ sidebar.
 | B16 | With two or more Spaces the active Space's icon and name head the tab list, above its pinned tabs; pressing the row opens the Space menu (icon, colour, rename, delete). | live: `tooling/drive` 2026-09-03 | built |
 | B17 | Space-pinned tabs sit under the title with the Clear line beneath them, then "+ New Tab", then the rest; pinning moves the tab into that run at once and the line appears only when both a pinned run and unpinned tabs exist. | live: `tooling/drive` 2026-09-03 (pin from the context menu) | built |
 | B14 | Popup and app windows have no Spaces and no switcher. | `PopupSpaceTest.PopupWindowsHaveNoSpaces`; live: `tooling/drive` opens a popup from a page button; no switcher in it | built |
+| B18 | ⌃1…⌃9 activate Space N in switcher order (`SpaceModel::SetActiveSpace(spaces()[n-1]->id())`); N past `size()` is a no-op. | `SpaceModelTest.SetActiveSpaceByIndexIgnoresOutOfRange`; `SpaceCommandTest.SpaceNIsDisabledPastTheCount` | built |
+| B19 | ⌥⌘← / ⌥⌘→ activate the previous / next Space through `SwitchToNeighbour` (no wrap, the swipe's path, B15); tab traversal moves to ⌥⌘↑ / ⌥⌘↓ (⇧⌘] / ⇧⌘[ kept); pane focus takes F6 / ⇧F6, as on the other platforms (Chromium's Mac build had it on ⌥⌘↑/↓ only). | `SpaceModelTest.SwitchToNeighbour*` (exists); `ShortcutReferenceTest.EverySteddingCommandWithAnAcceleratorIsListed` (the chords resolve through the accelerator tables); live: `tooling/drive` key ⌥⌘→ then read the switcher | built |
+| B20 | ⇧⌘K runs Clear on the active Space through `SpaceModel::ClearUnpinnedTabs`, the collector moved out of `VerticalTabStripRegionView::ClearCurrentSpaceTabs` so the line and the key share one path; Space-pinned tabs survive. | `SpaceWindowTest.ClearUnpinnedTabsKeepsPins` | built |
+| B21 | ⌘D toggles Pin to This Space; Bookmark This Tab and Bookmark All Tabs keep their menu rows and lose their chords (a divergence row in the shortcut reference, Z2: pinned tabs replace bookmarks, `docs/PRODUCT.md` §1). | `SpaceWindowTest.CmdDTogglesSpacePin` | built |
+| B22 | ⌥⇧⌘← / ⌥⇧⌘→ move the active tab one Space over and follow it (`SetSpaceForTab` then `SetActiveSpace`). | `SpaceWindowTest.MoveTabToNeighbourSpaceFollowsIt` | built |
+| B23 | A "Spaces" menu in the menu bar lists Next Space, Previous Space, Clear This Space and Space 1…Space 9 with their chords; Space N is enabled only when N ≤ `size()`. | capture of the menu; welcome step 5 and the settings hint list ⌃1–9 and ⇧⌘K | built |
+| B28 | ⌘D on an essentials (Chromium-pinned) tab is a no-op and the menu row is disabled (plan D4; folders F8 refuses folders for pins the same way). | `SpaceWindowTest.CmdDOnAnEssentialIsANoOp` | built |
+| B29 | ⌃1–⌃9, ⇧⌘K, ⌥⌘←/→, ⌥⇧⌘←/→ and the Spaces menu rows are disabled in private and popup windows (no Spaces there: B14). | `SpaceCommandTest.SpaceCommandsAreDisabledInPopupAndPrivateWindows` | built |
+| B30 | ⌃1–⌃9 collide with macOS Mission Control "Switch to Desktop N" once a second desktop exists; the Spaces menu (B23) keeps the commands reachable and the shortcut reference notes it (Z3); no remap in round 6 (plan D5). | spec row; Z3 | built |
+| B31 | A colour the user chose for a Space (switcher menu, settings, the welcome swatches) tints the sidebar ground even while it is the window's only Space; a Space that was never given a colour keeps the plain ground until a second Space exists (the lone-Space rule from B11). The choice survives restart with the colour. | `SpaceModelTest.AChosenColourOnALoneSpaceIsRemembered`; live: welcome swatch, sidebar-ground probe | built |
+| B24 | When the chips (24 DIP, kChipGap 12) would exceed the row, inactive chips shrink to 6 DIP dots in their Space colour while the active chip keeps its glyph; the '+' and downloads button never move. Confirm against the Arc reference first (unsure whether Arc collapses to dots at overflow; fix the dot size after the capture). | SpaceSwitcherViewTest.OverflowShrinksInactiveChips on measured widths at 352 and 126 with 12 Spaces. | planned |
+| B25 | Hovering the row grows them back while the pointer is there, with no layout shift outside the row; the name pill and the swipe (B15) keep working. | SpaceSwitcherViewTest.HoverRestoresChipsWithinTheRow; live capture at 12 Spaces. | planned |
+| B26 | Below the overflow threshold nothing changes (B11 holds). | existing B11 capture unchanged. | planned |
+| B27 | A Space chip dragged along the row reorders the switcher; the Space menu offers Move Left / Move Right as the keyboard path (SpaceModel gains MoveSpace); the order persists (B9) and ⌃N follows it (B18). PRODUCT §2 [1.0]; critic #10. | SpaceModelTest.MoveSpaceReordersAndPersists; live: tooling/drive drags a chip past its neighbour, reads the switcher | planned · critic #10 |
 
 "built" means the test exists in the series and passes on the pinned tree. "gap" is a
 behaviour we ship without a test — each one is a backlog item.

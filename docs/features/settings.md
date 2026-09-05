@@ -1,6 +1,6 @@
 # Feature: Settings surface
 
-Status: **T1–T9 built and tested**.
+Status: **T1–T9 built and tested**; **T10 planned** (round 6, `docs/ROUND6-PLAN.md` R6-09, backlog S-43).
 Owner docs: `docs/PRODUCT.md` (settings), `docs/ROADMAP.md` M5. Patch: `0010`.
 
 Stedding's own settings live in one section of chrome://settings, listed first and
@@ -22,3 +22,4 @@ gains a preference adds a row here and a behaviour in its own spec.
 | T7 | A "Sidebar width" slider (126–480, Chromium's clamp) binds `vertical_tabs.uncollapsed_width`; moving it resizes the sidebar at once, and dragging the sidebar's edge moves the slider. | live: `tooling/drive` clicks at three slider positions, content edge measured at three widths (2026-09-02) | built |
 | T8 | "Archive tabs nobody has looked at for" dropdown (Never, 6 h, 12 h, 1 day, 3 days) binds `stedding.archive.idle_hours`; the archiver reads it at every sweep (archive A5). | `TabArchiverTest.ZeroHoursDisables`; capture | built |
 | T9 | A "Spaces" list in the section shows this window's Spaces with swatch and icon; typing a new name renames the Space (the switcher pill follows), the bin deletes one and is disabled for the last; the list refreshes when the sidebar adds, renames or removes a Space. | live: `tooling/drive` adds a Space from the sidebar, renames it from settings, reads the switcher pill, deletes it (2026-09-02); patch `0012` | built |
+| T10 | chrome://settings/help reads "Stedding <VERSION> · Chromium <pin>" with no "(Developer Build)" modifier; `VERSION` (through a GN argument the build tooling sets) and `tooling/chromium-version` are the sources. | `SteddingVersionTest.AboutStringNamesBothVersions`; capture of the About page, dark and light | built |

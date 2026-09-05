@@ -11,17 +11,18 @@ refer to `docs/features/<feature>.md`.
 
 | Id | Item | Feature / spec | Notes |
 |---|---|---|---|
-| S-44 | Round 6: Zen mods and beyond | `docs/ROUND6-PLAN.md` | The plan from the 2026-09-04 review of the 77 Zen Browser community mods (zen-browser.app/mods) plus ideas beyond them: four waves, R6-01 onwards, each with spec rows, setting, shortcut, files; decisions D1–D11 recorded there. Not started; implement wave by wave per `docs/AGENT-LOOP.md` |
-| S-43 | About page version label | `docs/release-notes/v0.2.0-beta.2.md` | chrome://settings/help reads "Version 153.0.8010.12 (Developer Build) (arm64)": the modifier comes from Chromium's channel string for non-official builds. Show "Stedding 0.2.0 beta 2 · Chromium 153.0.8010.12" instead (`VERSION` is the source) |
-| S-40 | Capture toast | `docs/features/screenshot.md` C5 | A brief toast with a thumbnail and "Copied · Saved to Downloads" after ⇧⌘2 / ⌥⇧⌘2 / ⇧⌘1; today the only feedback is the file and the clipboard |
+| S-44 | Round 6: Zen mods and beyond | `docs/ROUND6-PLAN.md` | The plan from the 2026-09-04 review of the 77 Zen Browser community mods (zen-browser.app/mods) plus ideas beyond them: four waves, R6-01 onwards, each with spec rows, setting, shortcut, files; decisions D1–D11 recorded there. Wave 1 (R6-01–R6-10, plus toolbar T7 and the 6 DIP card gutter) landed as patches 0016–0018 on 2026-09-05; waves 2–4 follow in order per `docs/AGENT-LOOP.md` |
 | S-41 | Download progress on the sidebar button | `docs/features/toolbar.md` (downloads, round 5 item 12) | The bottom-left button shows the static icon; Chromium's progress ring and the "download started" animation still target the toolbar button, which appears at the top right during a download |
 | S-42 | Space colour on the welcome flow | `docs/features/welcome.md` W7 | A colour picker on the appearance step that tints the first Space |
+| S-45 | Google's new tab page when Google is the chosen engine | `docs/features/new-tab.md`; S-21 | Choosing Google on the welcome flow (or in settings) switches chrome://newtab to Chromium's first-party page (Google logo, Gmail/Images links, OneGoogleBar requests), not the local third-party page S-21 promised for every provider. Seen 2026-09-05 on the welcome flow's swatch check. Pin the local page whatever the provider (`search::` NTP selection), keep the hint line and the shortcut row |
 | S-17 | Signing, notarisation, updater | ROADMAP M7 | Pipeline verified end to end 2026-09-03: `tooling/sign-release release --development` signed and verified the app through Chromium's own signer with the Apple Development identity in this keychain (local use only; it carries a personal Apple ID). A public release needs a Developer ID Application certificate and a notarytool keychain profile: `export STEDDING_SIGN_IDENTITY=... STEDDING_NOTARY_ARGS=--keychain-profile=...` then `tooling/sign-release release`. The updater is decided (ADR 0014, GitHub Releases; stub in patch 0006) |
 
 ## Done
 
 | Id | Item | Closed by |
 |---|---|---|
+| S-43 | About page version label | chrome://settings/help reads "Stedding <VERSION> · Chromium <pin> (arm64)" through `stedding::AboutVersionString` and a `stedding_version` GN argument `tooling/build-chromium` writes from `VERSION` (patch 0018); settings T10, verified live 2026-09-05 |
+| S-40 | Capture toast | `ToastId::kSteddingCaptureSaved` on Chromium's toast framework, "Copied · Saved to Downloads" with Show in Finder, dialog colours (patch 0017); screenshot C5–C6, verified live 2026-09-05 |
 | S-38 | Fullscreen toolbar over the sidebar | `SteddingBrowserViewLayout::CalculateTopContainerLayout` insets the overlay's toolbar by the strip width while immersive fullscreen is on (patch 0002); ARC-ROUND2 round 4 |
 | S-18 | Proprietary-codecs licensing decision | Decided 2026-08-31 (ADR 0008, Accepted): ship H.264/AAC in every configuration; the licence itself is a 1.0 release-checklist item (`docs/QUALITY.md`), not a code gap |
 | S-36 | Sidebar and Spaces settings rows | Sidebar hover (T6), width slider applied live (T7), auto-archive threshold (T8, patch 0011), Spaces list with rename and delete (T9, patch 0012); the rest in patch 0010, the archiver in 0011 |

@@ -1,0 +1,507 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Sat, 5 Sep 2026 10:29:46 -0400
+Subject: spaces: a chip drag reorders the switcher; splits: a split's panes
+ take a Space, a pin and a sleep together
+
+A Space chip dragged along the switcher row lands on the nearest chip's
+place (SwitcherDropIndex) and the model moves the Space a turn later, since
+the move rebuilds the row that holds the dragged chip (docs/features/
+spaces.md B27). A split's panes are one row: SpaceModel::SetSpaceForTab and
+SetSpacePinned reach both panes through SplitPeers, a pinned split stays
+where it is, and the selection already carries both panes for Sleep
+(docs/features/splits.md J4). The floating Space name is dropped when a
+menu opens on a chip or the row is rebuilt, since the chip never sees the
+pointer leave in either case.
+
+Why: docs/ROUND6-PLAN.md wave 2 (R6-18 B27, R6-19 J4), the last rows of
+the wave.
+Removable when: Chromium's tab strip hosts a Space switcher with drag
+reorder and treats a split as one unit for membership and pins.
+---
+ chrome/browser/ui/spaces/space_model.cc       |  31 ++++-
+ chrome/browser/ui/spaces/space_model.h        |   9 ++
+ .../ui/spaces/space_model_window_unittest.cc  |  37 ++++++
+ chrome/browser/ui/stedding/sleep_tabs.cc      |  19 ++++
+ .../ui/views/spaces/space_switcher_rules.cc   |  12 ++
+ .../ui/views/spaces/space_switcher_rules.h    |   6 +
+ .../spaces/space_switcher_rules_unittest.cc   |  12 ++
+ .../ui/views/spaces/space_switcher_view.cc    | 106 +++++++++++++++++-
+ .../ui/views/spaces/space_switcher_view.h     |  14 +++
+ 9 files changed, 242 insertions(+), 4 deletions(-)
+
+diff --git a/chrome/browser/ui/spaces/space_model.cc b/chrome/browser/ui/spaces/space_model.cc
+index 77f54487b5695..8f2873e21b6b5 100644
+--- a/chrome/browser/ui/spaces/space_model.cc
++++ b/chrome/browser/ui/spaces/space_model.cc
+@@ -39,6 +39,7 @@
+ #include "components/sessions/content/session_tab_helper.h"
+ #include "components/sessions/core/session_service_commands.h"
+ #include "components/split_tabs/split_tab_id.h"
++#include "components/tabs/public/split_tab_data.h"
+ #include "components/tabs/public/tab_interface.h"
+ #include "content/public/browser/web_contents.h"
+ #include "url/gurl.h"
+@@ -811,8 +812,25 @@ SpaceModel::SessionExtraDataForTab(const tabs::TabInterface* tab,
+   return data;
+ }
+ 
++std::vector<tabs::TabInterface*> SpaceModel::SplitPeers(
++    tabs::TabInterface* tab) const {
++  if (tab && tab_strip_model_ && tab->IsSplit()) {
++    if (split_tabs::SplitTabData* const data =
++            tab_strip_model_->GetSplitData(*tab->GetSplit())) {
++      return data->ListTabs();
++    }
++  }
++  return {tab};
++}
++
+ void SpaceModel::SetSpaceForTab(tabs::TabInterface* tab, const SpaceId& id) {
+   CHECK(tab);
++  for (tabs::TabInterface* const each : SplitPeers(tab)) {
++    SetSpaceForOneTab(each, id);
++  }
++}
++
++void SpaceModel::SetSpaceForOneTab(tabs::TabInterface* tab, const SpaceId& id) {
+   if (!GetSpace(id)) {
+     return;
+   }
+@@ -906,6 +924,17 @@ void SpaceModel::SetSpacePinned(tabs::TabInterface* tab, bool pinned) {
+   if (!tab) {
+     return;
+   }
++  // A split pins as a unit and stays where it is: the strip keeps its panes
++  // together (splits J4).
++  const bool move = !tab->IsSplit();
++  for (tabs::TabInterface* const each : SplitPeers(tab)) {
++    SetSpacePinnedOnOneTab(each, pinned, move);
++  }
++}
++
++void SpaceModel::SetSpacePinnedOnOneTab(tabs::TabInterface* tab,
++                                        bool pinned,
++                                        bool move) {
+   if (pinned) {
+     // The page pinned is the home page (pins H1); a re-pin keeps the home.
+     if (!space_pin_homes_.contains(tab->GetHandle())) {
+@@ -913,7 +942,7 @@ void SpaceModel::SetSpacePinned(tabs::TabInterface* tab, bool pinned) {
+     }
+     // A Space-pinned tab lives at the top of the unpinned block, directly
+     // under the Clear line, so pinning moves it there.
+-    if (tab_strip_model_) {
++    if (tab_strip_model_ && move) {
+       const int index = tab_strip_model_->GetIndexOfTab(tab);
+       const int first_unpinned = tab_strip_model_->IndexOfFirstNonPinnedTab();
+       if (index != TabStripModel::kNoTab && index != first_unpinned) {
+diff --git a/chrome/browser/ui/spaces/space_model.h b/chrome/browser/ui/spaces/space_model.h
+index 62402bb73b103..9a0c9a7cf76b4 100644
+--- a/chrome/browser/ui/spaces/space_model.h
++++ b/chrome/browser/ui/spaces/space_model.h
+@@ -213,8 +213,13 @@ class SpaceModel : public TabStripModelObserver {
+   const SpaceId& SpaceForTab(tabs::TabInterface* tab);
+ 
+   // Moves `tab` to `id`. Does nothing if `id` is not a Space in this model.
++  // A split's panes move together (splits J4).
+   void SetSpaceForTab(tabs::TabInterface* tab, const SpaceId& id);
+ 
++  // splits J4: the tabs a verb on `tab` takes -- its split's panes, or
++  // itself alone.
++  std::vector<tabs::TabInterface*> SplitPeers(tabs::TabInterface* tab) const;
++
+   // Arc's second pin tier: pinned within its Space, shown above the Clear
+   // line there, and skipped by Clear -- unlike Chromium-pinned tabs, which are
+   // the essentials row and sit above every Space.
+@@ -266,6 +271,10 @@ class SpaceModel : public TabStripModelObserver {
+ 
+   void SaveTabToSession(tabs::TabInterface* tab, const SpaceId& id);
+ 
++  // One tab's share of SetSpaceForTab and SetSpacePinned (splits J4).
++  void SetSpaceForOneTab(tabs::TabInterface* tab, const SpaceId& id);
++  void SetSpacePinnedOnOneTab(tabs::TabInterface* tab, bool pinned, bool move);
++
+   // If the active tab is not visible in the active Space, activates one that
+   // is, opening a new tab when the Space has none (B3, B4). No-op without a
+   // tab strip, while the window is closing, or when the strip is empty.
+diff --git a/chrome/browser/ui/spaces/space_model_window_unittest.cc b/chrome/browser/ui/spaces/space_model_window_unittest.cc
+index 14d2e065fea4b..63aec5376d794 100644
+--- a/chrome/browser/ui/spaces/space_model_window_unittest.cc
++++ b/chrome/browser/ui/spaces/space_model_window_unittest.cc
+@@ -419,6 +419,43 @@ TEST_F(SpaceWindowTest, RecentTabsCountASplitOnce) {
+   EXPECT_EQ(a, recent[1]);
+ }
+ 
++// splits J4: a split's panes take a Space, a pin and a sleep together.
++TEST_F(SpaceWindowTest, SplitPanesTakeVerbsTogether) {
++  const SpaceId home = model().active_id();
++  tabs::TabInterface* const a = OpenTab();
++  tabs::TabInterface* const b = OpenTab();
++  tabs::TabInterface* const c = OpenTab();
++  tabs().AddToNewSplit({tabs().GetIndexOfTab(b)},
++                       split_tabs::SplitTabVisualData(),
++                       split_tabs::SplitTabCreatedSource::kToolbarButton);
++  ASSERT_TRUE(b->IsSplit() && c->IsSplit());
++  EXPECT_EQ(2u, model().SplitPeers(b).size());
++  EXPECT_EQ(1u, model().SplitPeers(a).size());
++
++  Space* const work = model().AddSpace("Work", kBlue);
++  model().SetSpaceForTab(b, work->id());
++  EXPECT_EQ(work->id(), model().SpaceForTab(b));
++  EXPECT_EQ(work->id(), model().SpaceForTab(c)) << "the pane's peer follows";
++  EXPECT_EQ(home, model().SpaceForTab(a));
++
++  model().SetSpacePinned(c, true);
++  EXPECT_TRUE(model().IsSpacePinned(b));
++  EXPECT_TRUE(model().IsSpacePinned(c));
++  EXPECT_TRUE(model().HomeUrl(b).has_value());
++  model().SetSpacePinned(b, false);
++  EXPECT_FALSE(model().IsSpacePinned(c));
++
++  // The selection carries both panes, so a sleep takes both (tabs R21);
++  // the panes live in Work now, so the window goes there first.
++  model().SetActiveSpace(work->id());
++  tabs().ActivateTabAt(tabs().GetIndexOfTab(b),
++                       TabStripUserGestureDetails(
++                           TabStripUserGestureDetails::GestureType::kOther));
++  const std::vector<tabs::TabInterface*> doomed =
++      stedding::TabsToSleep(browser(), b, stedding::SleepScope::kThisTab);
++  EXPECT_NE(doomed.end(), std::ranges::find(doomed, c));
++}
++
+ // B8
+ TEST_F(SpaceWindowTest, MovingATabNotifiesObservers) {
+   class Recorder : public SpaceModel::Observer {
+diff --git a/chrome/browser/ui/stedding/sleep_tabs.cc b/chrome/browser/ui/stedding/sleep_tabs.cc
+index e5ce5fbb59cd5..9092a0c556dcc 100644
+--- a/chrome/browser/ui/stedding/sleep_tabs.cc
++++ b/chrome/browser/ui/stedding/sleep_tabs.cc
+@@ -10,6 +10,7 @@
+ #include "chrome/browser/resource_coordinator/tab_lifecycle_unit_external.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "components/tabs/public/split_tab_data.h"
+ #include "components/tabs/public/tab_interface.h"
+ #include "content/public/browser/web_contents.h"
+ 
+@@ -55,6 +56,24 @@ std::vector<tabs::TabInterface*> TabsToSleep(BrowserWindowInterface* browser,
+     } else if (CanSleep(tabs, tab, true)) {
+       out.push_back(tab);
+     }
++    // splits J4: a split's panes sleep together.
++    for (size_t i = 0; i < out.size(); ++i) {
++      tabs::TabInterface* const doomed = out[i];
++      if (!doomed->IsSplit()) {
++        continue;
++      }
++      split_tabs::SplitTabData* const split =
++          tabs->GetSplitData(*doomed->GetSplit());
++      if (!split) {
++        continue;
++      }
++      for (tabs::TabInterface* const peer : split->ListTabs()) {
++        if (std::ranges::find(out, peer) == out.end() &&
++            CanSleep(tabs, peer, true)) {
++          out.push_back(peer);
++        }
++      }
++    }
+     return out;
+   }
+   for (int i = 0; i < tabs->count(); ++i) {
+diff --git a/chrome/browser/ui/views/spaces/space_switcher_rules.cc b/chrome/browser/ui/views/spaces/space_switcher_rules.cc
+index 79a0c615d6450..eb11e98b8bb56 100644
+--- a/chrome/browser/ui/views/spaces/space_switcher_rules.cc
++++ b/chrome/browser/ui/views/spaces/space_switcher_rules.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "chrome/browser/ui/views/spaces/space_switcher_rules.h"
+ 
++#include <cstdlib>
++
+ namespace spaces {
+ 
+ bool SwitcherOverflows(int row_width, size_t chip_count) {
+@@ -18,4 +20,14 @@ int SwitcherChipWidth(bool overflow, bool active, bool row_hovered) {
+   return overflow && !active && !row_hovered ? kSwitcherDot : kSwitcherChip;
+ }
+ 
++size_t SwitcherDropIndex(const std::vector<int>& chip_centres, int x) {
++  size_t nearest = 0;
++  for (size_t i = 1; i < chip_centres.size(); ++i) {
++    if (std::abs(chip_centres[i] - x) < std::abs(chip_centres[nearest] - x)) {
++      nearest = i;
++    }
++  }
++  return nearest;
++}
++
+ }  // namespace spaces
+diff --git a/chrome/browser/ui/views/spaces/space_switcher_rules.h b/chrome/browser/ui/views/spaces/space_switcher_rules.h
+index 5bb037a2d589a..2c8ab8b3331cd 100644
+--- a/chrome/browser/ui/views/spaces/space_switcher_rules.h
++++ b/chrome/browser/ui/views/spaces/space_switcher_rules.h
+@@ -6,6 +6,7 @@
+ #define CHROME_BROWSER_UI_VIEWS_SPACES_SPACE_SWITCHER_RULES_H_
+ 
+ #include <cstddef>
++#include <vector>
+ 
+ namespace spaces {
+ 
+@@ -26,6 +27,11 @@ bool SwitcherOverflows(int row_width, size_t chip_count);
+ // otherwise.
+ int SwitcherChipWidth(bool overflow, bool active, bool row_hovered);
+ 
++// spaces B27: where a dragged chip lands -- the index of the chip whose
++// centre is nearest `x`, both in the row's coordinates. A drop over the
++// chip's own place is no move.
++size_t SwitcherDropIndex(const std::vector<int>& chip_centres, int x);
++
+ }  // namespace spaces
+ 
+ #endif  // CHROME_BROWSER_UI_VIEWS_SPACES_SPACE_SWITCHER_RULES_H_
+diff --git a/chrome/browser/ui/views/spaces/space_switcher_rules_unittest.cc b/chrome/browser/ui/views/spaces/space_switcher_rules_unittest.cc
+index 82971d99daf06..cd628e150a362 100644
+--- a/chrome/browser/ui/views/spaces/space_switcher_rules_unittest.cc
++++ b/chrome/browser/ui/views/spaces/space_switcher_rules_unittest.cc
+@@ -11,6 +11,18 @@ namespace {
+ 
+ // spaces B24-B26: a full sidebar (352) holds eight chips and the plus; twelve
+ // overflow; below the threshold nothing changes.
++// spaces B27: a dragged chip lands on the nearest chip's place.
++TEST(SwitcherRulesTest, DropIndexIsTheNearestChip) {
++  const std::vector<int> centres = {20, 60, 100};
++  EXPECT_EQ(0u, SwitcherDropIndex(centres, -10));
++  EXPECT_EQ(0u, SwitcherDropIndex(centres, 39));
++  EXPECT_EQ(1u, SwitcherDropIndex(centres, 41));
++  EXPECT_EQ(1u, SwitcherDropIndex(centres, 60));
++  EXPECT_EQ(2u, SwitcherDropIndex(centres, 95));
++  EXPECT_EQ(2u, SwitcherDropIndex(centres, 400));
++  EXPECT_EQ(0u, SwitcherDropIndex({}, 5));
++}
++
+ TEST(SwitcherRulesTest, OverflowShrinksInactiveChips) {
+   EXPECT_FALSE(SwitcherOverflows(352, 5));
+   EXPECT_FALSE(SwitcherOverflows(352, 8));
+diff --git a/chrome/browser/ui/views/spaces/space_switcher_view.cc b/chrome/browser/ui/views/spaces/space_switcher_view.cc
+index 7ae2d66b03e68..3e1ae3ba31ed0 100644
+--- a/chrome/browser/ui/views/spaces/space_switcher_view.cc
++++ b/chrome/browser/ui/views/spaces/space_switcher_view.cc
+@@ -13,6 +13,7 @@
+ #include "base/strings/strcat.h"
+ #include "base/strings/string_number_conversions.h"
+ #include "base/strings/utf_string_conversions.h"
++#include "base/task/single_thread_task_runner.h"
+ #include "cc/paint/paint_flags.h"
+ #include "chrome/browser/ui/browser.h"
+ #include "chrome/browser/ui/spaces/space.h"
+@@ -108,13 +109,36 @@ class SpaceChipButton : public views::LabelButton {
+   METADATA_HEADER(SpaceChipButton, views::LabelButton)
+ 
+  public:
++  using MouseCallback = base::RepeatingCallback<void(const ui::MouseEvent&)>;
+   SpaceChipButton(PressedCallback pressed,
+                   std::u16string icon,
+-                  base::RepeatingCallback<void(bool)> hovered)
++                  base::RepeatingCallback<void(bool)> hovered,
++                  MouseCallback dragged,
++                  MouseCallback released,
++                  base::RepeatingClosure capture_lost)
+       : views::LabelButton(std::move(pressed), std::move(icon)),
+-        hovered_(std::move(hovered)) {}
++        hovered_(std::move(hovered)),
++        dragged_(std::move(dragged)),
++        released_(std::move(released)),
++        capture_lost_(std::move(capture_lost)) {}
+   ~SpaceChipButton() override = default;
+ 
++  // spaces B27: the row hears the drag and the drop; the button keeps its
++  // click, which a drop elsewhere does not fire.
++  bool OnMouseDragged(const ui::MouseEvent& event) override {
++    dragged_.Run(event);
++    return views::LabelButton::OnMouseDragged(event);
++  }
++  void OnMouseReleased(const ui::MouseEvent& event) override {
++    released_.Run(event);
++    views::LabelButton::OnMouseReleased(event);
++  }
++  // A drop the button never hears (capture moved on) is still a drop.
++  void OnMouseCaptureLost() override {
++    capture_lost_.Run();
++    views::LabelButton::OnMouseCaptureLost();
++  }
++
+   // LabelButton keeps label() protected; the row sets the glyph size.
+   void SetGlyphSize(int pixels) {
+     label()->SetFontList(label()->font_list().DeriveWithSizeDelta(
+@@ -132,6 +156,9 @@ class SpaceChipButton : public views::LabelButton {
+ 
+  private:
+   base::RepeatingCallback<void(bool)> hovered_;
++  MouseCallback dragged_;
++  MouseCallback released_;
++  base::RepeatingClosure capture_lost_;
+ };
+ 
+ BEGIN_METADATA(SpaceChipButton)
+@@ -179,6 +206,9 @@ void SpaceSwitcherView::Rebuild() {
+   }
+   icon_row_->RemoveAllChildViews();
+   chips_.clear();
++  // The chips are new: a floating name left by one of the old chips (a
++  // menu or a drag ended without the pointer leaving it) would stay put.
++  HideHoverName();
+ 
+   const views::FlexSpecification stretch(
+       views::MinimumFlexSizeRule::kScaleToZero,
+@@ -226,7 +256,13 @@ void SpaceSwitcherView::Rebuild() {
+               self->hover_callback_.Run(entered ? name : std::u16string(),
+                                         bounds);
+             },
+-            base::Unretained(this), i, name));
++            base::Unretained(this), i, name),
++        base::BindRepeating(&SpaceSwitcherView::OnChipDragged,
++                            base::Unretained(this), i),
++        base::BindRepeating(&SpaceSwitcherView::OnChipReleased,
++                            base::Unretained(this), i),
++        base::BindRepeating(&SpaceSwitcherView::OnChipCaptureLost,
++                            base::Unretained(this), i));
+     button->SetHorizontalAlignment(gfx::ALIGN_CENTER);
+     button->SetPreferredSize(gfx::Size(kIconSize, kIconSize));
+     button->SetTooltipText(name);
+@@ -293,6 +329,12 @@ void SpaceSwitcherView::OnBoundsChanged(const gfx::Rect& previous_bounds) {
+   }
+ }
+ 
++void SpaceSwitcherView::HideHoverName() {
++  if (hover_callback_) {
++    hover_callback_.Run(std::u16string(), gfx::Rect());
++  }
++}
++
+ void SpaceSwitcherView::OnMouseEntered(const ui::MouseEvent& event) {
+   if (!row_hovered_) {
+     row_hovered_ = true;
+@@ -364,6 +406,8 @@ void SpaceSwitcherView::ShowMenuForSpace(
+   menu_model_->AddItem(kMoveSpaceRightCommand, u"Move Right");
+   menu_model_->AddItem(kRemoveSpaceCommand, u"Delete Space");
+ 
++  // The menu takes the pointer; the chip never hears it leave.
++  HideHoverName();
+   menu_runner_ = std::make_unique<views::MenuRunner>(
+       menu_model_.get(), views::MenuRunner::CONTEXT_MENU);
+   menu_runner_->RunMenuAt(GetWidget(), nullptr, gfx::Rect(point, gfx::Size()),
+@@ -490,6 +534,62 @@ bool SpaceSwitcherView::HandleKeyEvent(views::Textfield* sender,
+   return false;
+ }
+ 
++void SpaceSwitcherView::OnChipDragged(size_t chip_index,
++                                      const ui::MouseEvent& event) {
++  if (chip_index >= chips_.size()) {
++    return;
++  }
++  drag_chip_ = chip_index;
++  // The pointer, in the row's coordinates (spaces B27).
++  gfx::Point point = event.location();
++  views::View::ConvertPointToTarget(chips_[chip_index].first, icon_row_,
++                                    &point);
++  last_drag_point_ = point;
++}
++
++void SpaceSwitcherView::OnChipReleased(size_t chip_index,
++                                       const ui::MouseEvent& event) {
++  if (drag_chip_ && *drag_chip_ == chip_index && chip_index < chips_.size()) {
++    gfx::Point point = event.location();
++    views::View::ConvertPointToTarget(chips_[chip_index].first, icon_row_,
++                                      &point);
++    last_drag_point_ = point;
++  }
++  FinishDrag(chip_index);
++}
++
++void SpaceSwitcherView::OnChipCaptureLost(size_t chip_index) {
++  FinishDrag(chip_index);
++}
++
++void SpaceSwitcherView::FinishDrag(size_t chip_index) {
++  if (!drag_chip_ || *drag_chip_ != chip_index || chip_index >= chips_.size()) {
++    drag_chip_.reset();
++    return;
++  }
++  drag_chip_.reset();
++  std::vector<int> centres;
++  for (const auto& chip : chips_) {
++    centres.push_back(chip.first->bounds().CenterPoint().x());
++  }
++  const size_t target = SwitcherDropIndex(centres, last_drag_point_.x());
++  if (target == chip_index) {
++    return;
++  }
++  // The model's move rebuilds the row, which deletes the chip whose event
++  // this is: a turn later.
++  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
++      FROM_HERE,
++      base::BindOnce(
++          [](base::WeakPtr<SpaceSwitcherView> self, SpaceId id, int delta) {
++            if (self) {
++              self->model_->MoveSpace(id, delta);
++            }
++          },
++          weak_factory_.GetWeakPtr(), chips_[chip_index].second,
++          static_cast<int>(target) - static_cast<int>(chip_index)));
++}
++
+ void SpaceSwitcherView::OnSpacePressed(const SpaceId& id) {
+   model_->SetActiveSpace(id);
+ }
+diff --git a/chrome/browser/ui/views/spaces/space_switcher_view.h b/chrome/browser/ui/views/spaces/space_switcher_view.h
+index 6474e87aef9d6..ee63cbd5ff6e7 100644
+--- a/chrome/browser/ui/views/spaces/space_switcher_view.h
++++ b/chrome/browser/ui/views/spaces/space_switcher_view.h
+@@ -13,10 +13,12 @@
+ 
+ #include "base/memory/raw_ptr.h"
+ #include "base/memory/raw_ref.h"
++#include "base/memory/weak_ptr.h"
+ #include "base/scoped_observation.h"
+ #include "chrome/browser/ui/spaces/space_id.h"
+ #include "chrome/browser/ui/spaces/space_model.h"
+ #include "ui/base/metadata/metadata_header_macros.h"
++#include "ui/gfx/geometry/point.h"
+ #include "ui/menus/simple_menu_model.h"
+ #include "ui/views/context_menu_controller.h"
+ #include "ui/views/controls/textfield/textfield_controller.h"
+@@ -110,6 +112,9 @@ class SpaceSwitcherView : public views::View,
+   // Discards the pills and builds them again from the model. The row is at most
+   // a handful of buttons, so rebuilding is simpler and less error-prone than
+   // reconciling, and it happens only when Spaces change.
++  // Drops the floating Space name, for a chip that will not see the pointer
++  // leave (a rebuild, a menu).
++  void HideHoverName();
+   void Rebuild();
+   // spaces B24-B26: at overflow the inactive chips are dots in their Space
+   // colour until the pointer rests on the row.
+@@ -120,6 +125,12 @@ class SpaceSwitcherView : public views::View,
+ 
+   void OnSpacePressed(const SpaceId& id);
+   void OnNewSpacePressed();
++  // spaces B27: a chip dragged along the row lands on the nearest chip's
++  // place; the model moves the Space and the row rebuilds.
++  void OnChipDragged(size_t chip_index, const ui::MouseEvent& event);
++  void OnChipReleased(size_t chip_index, const ui::MouseEvent& event);
++  void OnChipCaptureLost(size_t chip_index);
++  void FinishDrag(size_t chip_index);
+ 
+   // Swaps the name row for an editable field, and back again.
+   void BeginRename(const SpaceId& id);
+@@ -143,6 +154,9 @@ class SpaceSwitcherView : public views::View,
+   HoverCallback hover_callback_;
+   bool row_hovered_ = false;
+   base::ScopedObservation<SpaceModel, SpaceModel::Observer> observation_{this};
++  std::optional<size_t> drag_chip_;
++  gfx::Point last_drag_point_;
++  base::WeakPtrFactory<SpaceSwitcherView> weak_factory_{this};
+ };
+ 
+ }  // namespace spaces

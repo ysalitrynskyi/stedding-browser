@@ -311,8 +311,13 @@ said otherwise. Each is also in the item's spec.
   is open (commandbar K16). Also in patch 0024: the sidebar's background menu loses
   its Google and pin rows, the short tab menu carries extension rows again, and the
   app menu's new submenus enable themselves.
-- **Not in this pass.** R6-19's other J rows, B27's drag, T14's download capture.
-  Each keeps its row.
+- **Part L, the last of wave 2, the same morning.** A Space chip dragged along
+  the switcher row lands on the nearest chip's place and the model moves it (B27,
+  `SwitcherDropIndex`); a split's panes take a Space, a pin and a sleep together
+  (splits J4, `SpaceModel::SplitPeers`); the download ring on the sidebar's button
+  has its capture (T14). Patch 0025.
+- **Not in this pass.** R6-19's other J rows (J1, J3, J5, J6 keep their rows for
+  the splits pass), and the menus' Move to Folder ▸ with existing folders.
 
 #### R6-01 · Shortcut reference block in chrome://settings/stedding
 

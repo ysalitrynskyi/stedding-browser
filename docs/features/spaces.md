@@ -1,6 +1,6 @@
 # Feature: Spaces
 
-Status: **B1–B17 built and tested** (patches 0004, 0005, 0013); **B18–B30 planned** (round 6, `docs/ROUND6-PLAN.md` R6-02, R6-18).
+Status: **B1–B17 built and tested** (patches 0004, 0005, 0013); **B18–B31 built** (round 6, `docs/ROUND6-PLAN.md` R6-02, R6-18; patches 0016–0021, 0025).
 Owner docs: `docs/decisions/0015-spaces-filter-one-tab-strip.md` (model), `docs/UI-SPEC.md`
 (pixels). Patch: `0004` (the whole feature, since the series was squashed per feature, `S-11`).
 
@@ -50,7 +50,7 @@ sidebar.
 | B24 | When the chips (24 DIP, kChipGap 12) would exceed the row, inactive chips shrink to 6 DIP dots in their Space colour while the active chip keeps its glyph; the '+' and downloads button never move. Confirm against the Arc reference first (unsure whether Arc collapses to dots at overflow; fix the dot size after the capture). | `SwitcherRulesTest.OverflowShrinksInactiveChips` (352 and 126 wide); live capture at 12 Spaces | built |
 | B25 | Hovering the row grows them back while the pointer is there, with no layout shift outside the row; the name pill and the swipe (B15) keep working. | `SwitcherRulesTest.OverflowShrinksInactiveChips` (the hovered row keeps full chips); live capture at 12 Spaces | partial · the pointer on the row grows the dots back (live, 12 Spaces); at that count the full chips run past the "+", which leaves the row until the pointer goes -- a scrolling row is TBD |
 | B26 | Below the overflow threshold nothing changes (B11 holds). | existing B11 capture unchanged. | built |
-| B27 | A Space chip dragged along the row reorders the switcher; the Space menu offers Move Left / Move Right as the keyboard path (SpaceModel gains MoveSpace); the order persists (B9) and ⌃N follows it (B18). PRODUCT §2 [1.0]; critic #10. | SpaceModelTest.MoveSpaceReordersAndPersists; live: tooling/drive drags a chip past its neighbour, reads the switcher | partial · Move Left / Move Right on the Space menu and `SpaceModelTest.MoveSpaceReordersAndPersists`; the chip drag is a later pass |
+| B27 | A Space chip dragged along the row reorders the switcher; the Space menu offers Move Left / Move Right as the keyboard path (SpaceModel gains MoveSpace); the order persists (B9) and ⌃N follows it (B18). PRODUCT §2 [1.0]; critic #10. | SpaceModelTest.MoveSpaceReordersAndPersists (the model), SwitcherRulesTest.DropIndexIsTheNearestChip (where a drop lands); live: `w2_drag_before` / `w2_drag_after` (Space 1 is given the palette icon through its chip menu, then its chip is dragged to the far right and ends last; an anonymous Space's glyph and name follow its index, so two anonymous Spaces show a reorder only in the active highlight and the title row). | built |
 
 "built" means the test exists in the series and passes on the pinned tree. "gap" is a
 behaviour we ship without a test — each one is a backlog item.

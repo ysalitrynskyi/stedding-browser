@@ -117,7 +117,7 @@ Built, with tests or measured captures:
   the welcome flow; the address row takes the page colour on either side of
   the contrast line (toolbar T7) and sits in a 6 DIP gutter like the card's
   other three sides.
-- **Round 6, wave 2** (patches 0019–0024): sleeping tabs with one dimmed look,
+- **Round 6, wave 2** (patches 0019–0025): sleeping tabs with one dimmed look,
   Sleep Tab / Sleep Others and a Space that sleeps after the user leaves it;
   rename in place that survives restore; row numbers while ⌘ is held; verbs
   that act on the selection with plural labels; Stedding's short tab menu
@@ -129,7 +129,8 @@ Built, with tests or measured captures:
   selected); ⌃⇥ through the Space's most recent tabs with a hold-to-see
   strip, ⌥⇧⌘↑/↓ moving the row folder-aware; the page and app menus without
   Google's rows, Import, Screenshot and Spaces in the app menu, a menu per
-  row kind and for the folder header, Move to Space.
+  row kind and for the folder header, Move to Space; a chip drag reorders
+  the Spaces; a split's panes take a Space, a pin and a sleep together.
 
 Read `docs/HANDOFF.md` before touching anything — it carries the working loop,
 every dev parameter, and the traps already paid for. `docs/ARC-ROUND2.md` is
@@ -189,6 +190,6 @@ the body of work under way: `docs/ROUND6-PLAN.md`, the reviewed plan from the Ze
 beyond (four waves, decisions recorded): wave 1 landed 2026-09-05 (patches
 0016–0018) and most of wave 2 the same night (patches 0019–0022, the command
 bar's actions mode included), every row verified live or by unit test, notes
-in the plan, the ⌃⇥ switcher (R6-12) as 0023 and the menus (R6-14) as 0024;
-the remaining pin rows and waves 3–4 follow in order under the operator's
-overnight mandate.
+in the plan, the ⌃⇥ switcher (R6-12) as 0023, the menus (R6-14) as 0024
+and the last rows (B27, J4, T14) as 0025: wave 2 is complete; waves 3–4
+follow in order under the operator's overnight mandate.

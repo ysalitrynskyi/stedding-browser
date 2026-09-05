@@ -381,6 +381,12 @@ said otherwise. Each is also in the item's spec.
   and the coat, the title row and the window title already say it. V5 dropped:
   the private new tab page is Chromium's own. Wave 4's ADR for the registry (0016) is written; the
   little window (R6-30) and the registry (R6-31) follow.
+- **Part V, the little window (R6-30).** A popup-type window marked little,
+  centred over the last-active window, for links from other apps with no route;
+  ⌘O / ⇧⌘O / ⌃1–9 / Escape and the bar's "Open in <Space>" move the same
+  WebContents into the window's Spaces; the archiver closes an idle one after six
+  hours; the setting and the shortcut rows (E1–E5). Patch 0035. Not taken: E1's
+  thin bar of its own (Chromium's popup bar serves), a VoiceOver label for it.
 - **Not in this pass.** R6-19's other J rows (J1, J3, J5, J6 keep their rows for
   the splits pass), and the menus' Move to Folder ▸ with existing folders.
 
@@ -1172,7 +1178,7 @@ From the critic: #7 (this item), #34 (the round trip).
 
 | Id | Name | Source | Effort | Setting | Shortcut | Status |
 |---|---|---|---|---|---|---|
-| R6-30 | Little window: links from other apps open small | idea "Little window" (judges 6.33, build×1, maybe×2); judges: effort closer to L, needs 12 and 21 first | L | stedding.little.enabled; shares stedding.spaces.external_default | ⌘O / ⇧⌘O / Esc / ⌃1–9 inside | planned |
+| R6-30 | Little window: links from other apps open small | idea "Little window" (judges 6.33, build×1, maybe×2); judges: effort closer to L, needs 12 and 21 first | L | stedding.little.enabled; shares stedding.spaces.external_default | ⌘O / ⇧⌘O / Esc / ⌃1–9 inside | built (0035), E1 partial |
 | R6-31 | One sidebar for every window (SpaceRegistry) — needs an ADR first | idea "One sidebar for every window" (judges 6.33, maybe×2, build×1); judges: L, needs its ADR and a design pass before an estimate | L | none | ⌘N; ⌥⇧⌘N | planned |
 | R6-32 | Private windows wear a different coat | idea "Private windows wear a different coat" (judges 8, build×3); mod "Private Mode Highlighting" (judges 6, skip×1, build×1, maybe×1), merged: the avatar badge back for OTR | M | none | ⇧⌘N | built (0034) |
 

@@ -1,0 +1,913 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Sat, 5 Sep 2026 15:35:49 -0400
+Subject: little: links from other apps open in a small window
+
+A link handed over by another application opens a popup-type window
+marked as Stedding's little window, centred over the last-active window
+(1000 x 700 at most), unless a route names a Space for it (the route
+wins) or the setting is off (then a tab, in the Space for links from
+other apps). Inside it, cmd-O sends the page, the same WebContents, into
+the last-active window's active Space, shift-cmd-O into a split with its
+active tab, ctrl-1..9 into Space N, and Escape closes it; the bar lists
+"Open in <Space>" for each Space. A little window archives after its own
+idle (6 hours against 12) by closing into the recently-closed list. The
+command ids stay out of chrome_command_ids.h (docs/features/little.md
+E1-E5; E1's bar is Chromium's popup bar in this cut).
+
+Why: docs/ROUND6-PLAN.md wave 4, R6-30: Little Arc.
+Removable when: Chromium opens external links in a transient window of
+its own.
+---
+ chrome/browser/app_controller_mac.mm          |  19 ++-
+ .../api/settings_private/prefs_util.cc        |   2 +
+ .../browser/global_keyboard_shortcuts_mac.mm  |   7 +-
+ .../stedding_page/stedding_page.html.ts       |   7 +
+ chrome/browser/ui/archive/BUILD.gn            |   1 +
+ chrome/browser/ui/archive/tab_archiver.cc     |  11 +-
+ .../ui/archive/tab_archiver_unittest.cc       |  20 +++
+ .../browser/ui/browser_command_controller.cc  |  40 +++++
+ .../internal/browser_window_features.cc       |   6 +
+ .../public/browser_window_features.h          |  10 +-
+ chrome/browser/ui/cocoa/accelerators_cocoa.mm |   4 +
+ chrome/browser/ui/stedding/BUILD.gn           |  27 +++
+ chrome/browser/ui/stedding/little_window.cc   | 161 ++++++++++++++++++
+ chrome/browser/ui/stedding/little_window.h    |  52 ++++++
+ .../ui/stedding/little_window_unittest.cc     |  99 +++++++++++
+ .../ui/stedding/stedding_command_ids.h        |   5 +
+ chrome/browser/ui/stedding/stedding_prefs.cc  |   2 +
+ chrome/browser/ui/stedding/stedding_prefs.h   |   4 +
+ .../ui/stedding/stedding_prefs_unittest.cc    |   2 +-
+ chrome/browser/ui/views/commandbar/BUILD.gn   |   1 +
+ .../ui/views/commandbar/command_bar_view.cc   |  21 +++
+ .../browser/ui/webui/settings/settings_ui.cc  |   8 +
+ .../settings/stedding_shortcuts_handler.cc    |   3 +
+ 23 files changed, 502 insertions(+), 10 deletions(-)
+ create mode 100644 chrome/browser/ui/stedding/little_window.cc
+ create mode 100644 chrome/browser/ui/stedding/little_window.h
+ create mode 100644 chrome/browser/ui/stedding/little_window_unittest.cc
+
+diff --git a/chrome/browser/app_controller_mac.mm b/chrome/browser/app_controller_mac.mm
+index e80416fcbf4c3..d87c0f96ca2e0 100644
+--- a/chrome/browser/app_controller_mac.mm
++++ b/chrome/browser/app_controller_mac.mm
+@@ -106,6 +106,7 @@
+ #include "chrome/browser/ui/startup/startup_tab.h"
+ #include "chrome/browser/ui/startup/startup_types.h"
+ #include "chrome/browser/ui/startup/url_util.h"
++#include "chrome/browser/ui/stedding/little_window.h"
+ #include "chrome/browser/ui/tabs/features.h"
+ #include "chrome/browser/ui/tabs/tab_enums.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+@@ -1270,11 +1271,23 @@ class AppControllerProfileObserver : public ProfileAttributesStorage::Observer,
+   }
+ 
+   // Stedding routing D3: these addresses come from another app, so the tabs
+-  // they open may land in the Space chosen for that.
+-  for (const StartupTab& tab : tabs) {
++  // they open may land in the Space chosen for that; and little E1: with the
++  // setting on and no route, each opens small instead.
++  Profile* const little_profile = [self lastProfileIfLoaded];
++  StartupTabs as_tabs;
++  for (StartupTab& tab : tabs) {
++    if (little_profile && !little_profile->IsOffTheRecord() &&
++        stedding::ShouldOpenLittle(little_profile->GetPrefs(), tab.url)) {
++      stedding::OpenLittleWindow(little_profile, tab.url, nullptr);
++      continue;
++    }
+     spaces::MarkExternalOpen(tab.url);
++    as_tabs.push_back(std::move(tab));
++  }
++  if (as_tabs.empty()) {
++    return;
+   }
+-  OpenStartupTabsInBrowser(std::move(tabs));
++  OpenStartupTabsInBrowser(std::move(as_tabs));
+ }
+ 
+ - (void)resetKeepAliveWhileHidden {
+diff --git a/chrome/browser/extensions/api/settings_private/prefs_util.cc b/chrome/browser/extensions/api/settings_private/prefs_util.cc
+index 6d7aaa4649814..714c3a03bf02e 100644
+--- a/chrome/browser/extensions/api/settings_private/prefs_util.cc
++++ b/chrome/browser/extensions/api/settings_private/prefs_util.cc
+@@ -313,6 +313,8 @@ const PrefsUtil::TypedPrefMap& PrefsUtil::GetAllowlistedKeys() {
+       settings_api::PrefType::kNumber;
+   (*s_allowlist)[stedding::prefs::kToolbarHideWithSidebar] =
+       settings_api::PrefType::kBoolean;
++  (*s_allowlist)[stedding::prefs::kLittleEnabled] =
++      settings_api::PrefType::kBoolean;
+   // privacy Q4, Q5: the rows Chromium's own pages do not carry.
+   (*s_allowlist)[stedding::prefs::kGlobalPrivacyControl] =
+       settings_api::PrefType::kBoolean;
+diff --git a/chrome/browser/global_keyboard_shortcuts_mac.mm b/chrome/browser/global_keyboard_shortcuts_mac.mm
+index e524b0ffa9055..e92d4e2c45a38 100644
+--- a/chrome/browser/global_keyboard_shortcuts_mac.mm
++++ b/chrome/browser/global_keyboard_shortcuts_mac.mm
+@@ -13,9 +13,9 @@
+ #include "base/no_destructor.h"
+ #include "build/buildflag.h"
+ #include "chrome/app/chrome_command_ids.h"
+-#include "chrome/browser/ui/stedding/stedding_command_ids.h"
+ #import "chrome/browser/app_controller_mac.h"
+ #include "chrome/browser/ui/cocoa/accelerators_cocoa.h"
++#include "chrome/browser/ui/stedding/stedding_command_ids.h"
+ #include "chrome/browser/ui/tabs/features.h"
+ #include "chrome/browser/ui/ui_features.h"
+ #include "ui/base/accelerators/accelerator.h"
+@@ -145,6 +145,11 @@ const std::vector<KeyboardShortcutData>& GetShortcutsNotPresentInMainMenu() {
+       // Stedding toolbar T10: Shift-Cmd-D shows or hides the address row on
+       // its own (docs/features/toolbar.md); no menu item, so it lives here.
+       {true,  true,  false, false, kVK_ANSI_D,            IDC_STEDDING_TOGGLE_ADDRESS_ROW},
++      // Stedding little E2: inside a little window alone (the commands are
++      // disabled elsewhere): Shift-Cmd-O sends the page into a split, Escape
++      // closes the window.
++      {true,  true,  false, false, kVK_ANSI_O,            IDC_STEDDING_LITTLE_PROMOTE_SPLIT},
++      {false, false, false, false, kVK_Escape,            IDC_STEDDING_LITTLE_CLOSE},
+       {true,  false, false, true,  kVK_UpArrow,           IDC_SELECT_PREVIOUS_TAB},
+       {false, false, false, false, kVK_F6,                IDC_FOCUS_NEXT_PANE},
+       {false, true,  false, false, kVK_F6,                IDC_FOCUS_PREVIOUS_PANE},
+diff --git a/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts b/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
+index 7426bd499da75..37d03e09fa13b 100644
+--- a/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
++++ b/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
+@@ -29,6 +29,13 @@ export function getHtml(this: SettingsSteddingPageElement) {
+       label="$i18n{steddingSidebarHoverLabel}"
+       sub-label="$i18n{steddingSidebarHoverSubLabel}">
+   </settings-toggle-button>
++  <settings-toggle-button
++      id="littleWindow"
++      class="hr"
++      pref-key="stedding.little.enabled"
++      label="$i18n{steddingLittleLabel}"
++      sub-label="$i18n{steddingLittleSubLabel}">
++  </settings-toggle-button>
+   <settings-toggle-button
+       id="hideAddressRow"
+       class="hr"
+diff --git a/chrome/browser/ui/archive/BUILD.gn b/chrome/browser/ui/archive/BUILD.gn
+index 38e28b183cf02..bd62c9e1cda86 100644
+--- a/chrome/browser/ui/archive/BUILD.gn
++++ b/chrome/browser/ui/archive/BUILD.gn
+@@ -51,6 +51,7 @@ source_set("unit_tests") {
+   deps = [
+     ":archive",
+     ":mark",
++    "//chrome/browser/ui/stedding:little_window",
+     "//base",
+     "//base/test:test_support",
+     "//chrome/browser/ui/spaces",
+diff --git a/chrome/browser/ui/archive/tab_archiver.cc b/chrome/browser/ui/archive/tab_archiver.cc
+index ffe2657ac5552..c5eb5b8309493 100644
+--- a/chrome/browser/ui/archive/tab_archiver.cc
++++ b/chrome/browser/ui/archive/tab_archiver.cc
+@@ -11,6 +11,7 @@
+ #include "chrome/browser/ui/archive/archive_mark.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/spaces/space_model.h"
++#include "chrome/browser/ui/stedding/little_window.h"
+ #include "chrome/browser/ui/stedding/stedding_prefs.h"
+ #include "chrome/browser/ui/tabs/tab_enums.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+@@ -63,8 +64,9 @@ void TabArchiver::Sweep() {
+   }
+   for (const tabs::TabHandle handle : idle) {
+     tabs::TabInterface* const tab = handle.Get();
+-    // Never close the window's last tab: that closes the window.
+-    if (!tab || model->count() <= 1) {
++    // Never close the window's last tab: that closes the window -- which
++    // is what an idle little window wants (E3).
++    if (!tab || (model->count() <= 1 && !IsLittleWindow(&*browser_))) {
+       break;
+     }
+     const int index = model->GetIndexOfTab(tab);
+@@ -105,7 +107,10 @@ void TabArchiver::OnTabStripModelChanged(
+ }
+ 
+ base::TimeDelta TabArchiver::IdleThreshold() const {
+-  const int hours = prefs_->GetInteger(prefs::kArchiveIdleHours);
++  // little E3: a little window has its own, shorter, idle.
++  const int hours =
++      prefs_->GetInteger(IsLittleWindow(&*browser_) ? prefs::kLittleIdleHours
++                                                    : prefs::kArchiveIdleHours);
+   return hours > 0 ? base::Hours(hours) : base::TimeDelta();
+ }
+ 
+diff --git a/chrome/browser/ui/archive/tab_archiver_unittest.cc b/chrome/browser/ui/archive/tab_archiver_unittest.cc
+index 507e3074c2503..bbed77835658e 100644
+--- a/chrome/browser/ui/archive/tab_archiver_unittest.cc
++++ b/chrome/browser/ui/archive/tab_archiver_unittest.cc
+@@ -14,6 +14,7 @@
+ #include "chrome/browser/ui/archive/archive_mark.h"
+ #include "chrome/browser/ui/browser.h"
+ #include "chrome/browser/ui/spaces/space_model.h"
++#include "chrome/browser/ui/stedding/little_window.h"
+ #include "chrome/browser/ui/stedding/stedding_prefs.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "chrome/test/base/browser_with_test_window_test.h"
+@@ -124,6 +125,25 @@ TEST_F(TabArchiverTest, SweepRecordsSpaceAndReason) {
+   EXPECT_EQ(ArchiveReason::kAuto, reasons[1]);
+ }
+ 
++// little E3: a little window closes after its own, shorter, idle.
++TEST_F(TabArchiverTest, LittleWindowUsesItsOwnThreshold) {
++  std::unique_ptr<Browser> little =
++      CreateBrowser(profile(), Browser::TYPE_POPUP, /*hosted_app=*/false);
++  MarkLittleWindow(little.get());
++  AddTab(little.get(), GURL("https://little.example/"));
++  TabArchiver archiver(*little, *prefs());
++  base::SimpleTestTickClock clock;
++  clock.SetNowTicks(base::TimeTicks::Now());
++  archiver.set_tick_clock_for_testing(&clock);
++  // The active tab is protected; the window's page must be idle, so a
++  // second tab takes the activation.
++  AddTab(little.get(), GURL("https://other.example/"));
++  clock.Advance(base::Hours(7));
++  archiver.Sweep();
++  EXPECT_EQ(1, little->tab_strip_model()->count()) << "6 h is the little idle";
++  little->tab_strip_model()->CloseAllTabs();
++}
++
+ // private V3: a private window's tabs are never swept.
+ TEST_F(TabArchiverTest, SkipsOffTheRecordWindows) {
+   Profile* const otr =
+diff --git a/chrome/browser/ui/browser_command_controller.cc b/chrome/browser/ui/browser_command_controller.cc
+index ea75fc1bbd424..46c82e9b1b581 100644
+--- a/chrome/browser/ui/browser_command_controller.cc
++++ b/chrome/browser/ui/browser_command_controller.cc
+@@ -82,11 +82,13 @@
+ #include "chrome/browser/ui/side_panel/side_panel_entry_id.h"
+ #include "chrome/browser/ui/side_panel/side_panel_ui.h"
+ #include "chrome/browser/ui/singleton_tabs.h"
++#include "chrome/browser/ui/spaces/space.h"
+ #include "chrome/browser/ui/spaces/space_commands.h"
+ #include "chrome/browser/ui/startup/default_browser_prompt/default_browser_prompt_manager.h"
+ #include "chrome/browser/ui/startup/default_browser_prompt/default_browser_prompt_prefs.h"
+ #include "chrome/browser/ui/stedding/address_row.h"
+ #include "chrome/browser/ui/stedding/copy_link.h"
++#include "chrome/browser/ui/stedding/little_window.h"
+ #include "chrome/browser/ui/stedding/screenshot/screenshot_capture.h"
+ #include "chrome/browser/ui/stedding/stedding_command_ids.h"
+ #include "chrome/browser/ui/stedding_ui_metrics.h"
+@@ -918,6 +920,17 @@ void BrowserCommandController::HandleCommandWithDisposition(
+     case IDC_STEDDING_CAPTURE_FULL_PAGE:
+       stedding::CaptureScreenshot(browser_, stedding::CaptureMode::kFullPage);
+       break;
++    // Stedding little E2: the page into the last-active window, or the
++    // window closed.
++    case IDC_STEDDING_LITTLE_PROMOTE_SPLIT:
++      stedding::PromoteLittleWindow(browser_, nullptr, std::nullopt,
++                                    /*split=*/true);
++      break;
++    case IDC_STEDDING_LITTLE_CLOSE:
++      if (stedding::IsLittleWindow(browser_)) {
++        browser_->GetWindow()->Close();
++      }
++      break;
+     // Stedding toolbar T10: the address row on its own.
+     case IDC_STEDDING_TOGGLE_ADDRESS_ROW:
+       if (stedding::AddressRow* const row =
+@@ -935,6 +948,21 @@ void BrowserCommandController::HandleCommandWithDisposition(
+     case IDC_STEDDING_SPACE_7:
+     case IDC_STEDDING_SPACE_8:
+     case IDC_STEDDING_SPACE_9:
++      // Stedding little E2: ctrl-N inside a little window sends the page to
++      // Space N of the last-active window.
++      if (stedding::IsLittleWindow(browser_)) {
++        BrowserWindowInterface* const target =
++            stedding::LastActiveNormalWindow(browser_->GetProfile());
++        spaces::SpaceModel* const model =
++            target ? spaces::SpaceModel::From(target) : nullptr;
++        const size_t which = static_cast<size_t>(id - IDC_STEDDING_SPACE_1);
++        if (model && which < model->size()) {
++          stedding::PromoteLittleWindow(browser_, target,
++                                        model->spaces()[which]->id(),
++                                        /*split=*/false);
++        }
++        break;
++      }
+       spaces::ActivateSpaceAt(browser_, id - IDC_STEDDING_SPACE_1);
+       break;
+     case IDC_STEDDING_SPACE_NEXT:
+@@ -1247,6 +1275,13 @@ void BrowserCommandController::HandleCommandWithDisposition(
+ 
+     // Show various bits of UI
+     case IDC_OPEN_FILE:
++      // Stedding little E2: cmd-O inside a little window sends the page into
++      // a tab of the last-active window instead.
++      if (stedding::IsLittleWindow(browser_) &&
++          stedding::PromoteLittleWindow(browser_, nullptr, std::nullopt,
++                                        /*split=*/false)) {
++        break;
++      }
+       browser_->GetFeatures()
+           .browser_select_file_dialog_controller()
+           ->OpenFile();
+@@ -2050,6 +2085,11 @@ void BrowserCommandController::InitCommandState() {
+   command_updater_->UpdateCommandEnabled(IDC_STEDDING_CAPTURE_REGION, true);
+   command_updater_->UpdateCommandEnabled(IDC_STEDDING_CAPTURE_FULL_PAGE, true);
+   command_updater_->UpdateCommandEnabled(IDC_STEDDING_TOGGLE_ADDRESS_ROW, true);
++  // little E2: only a little window answers these.
++  command_updater_->UpdateCommandEnabled(IDC_STEDDING_LITTLE_PROMOTE_SPLIT,
++                                         stedding::IsLittleWindow(browser_));
++  command_updater_->UpdateCommandEnabled(IDC_STEDDING_LITTLE_CLOSE,
++                                         stedding::IsLittleWindow(browser_));
+ #if BUILDFLAG(IS_CHROMEOS)
+   command_updater_->UpdateCommandEnabled(IDC_TAKE_SCREENSHOT, true);
+   // Chrome OS uses the system tray menu to handle multi-profiles. Avatar menu
+diff --git a/chrome/browser/ui/browser_window/internal/browser_window_features.cc b/chrome/browser/ui/browser_window/internal/browser_window_features.cc
+index 225177e1576ff..0e5b9df3d8115 100644
+--- a/chrome/browser/ui/browser_window/internal/browser_window_features.cc
++++ b/chrome/browser/ui/browser_window/internal/browser_window_features.cc
+@@ -283,6 +283,12 @@ void BrowserWindowFeatures::Init(BrowserWindowInterface* browser) {
+         *browser, *browser->GetProfile()->GetPrefs());
+     folder_session_ = std::make_unique<stedding::FolderSessionService>(
+         *browser->GetBrowserForMigrationOnly());
++  } else if (browser->GetType() == BrowserWindowInterface::Type::TYPE_POPUP &&
++             !browser->GetProfile()->IsOffTheRecord()) {
++    // little E3: a popup may be Stedding's little window, which closes after
++    // its own idle; the archiver asks the window whether it is one.
++    tab_archiver_ = std::make_unique<stedding::TabArchiver>(
++        *browser, *browser->GetProfile()->GetPrefs());
+   }
+ 
+   if (base::FeatureList::IsEnabled(features::kGlicActorUi) &&
+diff --git a/chrome/browser/ui/browser_window/public/browser_window_features.h b/chrome/browser/ui/browser_window/public/browser_window_features.h
+index 1d3f033984c62..a60a72a4764dc 100644
+--- a/chrome/browser/ui/browser_window/public/browser_window_features.h
++++ b/chrome/browser/ui/browser_window/public/browser_window_features.h
+@@ -121,7 +121,7 @@ class SpaceModel;
+ 
+ namespace stedding {
+ class TabArchiver;
+-}  // namespace spaces
++}  // namespace stedding
+ 
+ namespace stedding {
+ class FolderSessionService;
+@@ -177,7 +177,6 @@ namespace content_settings {
+ class CookieControlsController;
+ }  // namespace content_settings
+ 
+-
+ namespace contextual_tasks {
+ class ContextualTasksBrowserController;
+ }  // namespace contextual_tasks
+@@ -300,6 +299,11 @@ class AppBrowserController;
+ // TODO(crbug.com/481268779a): Remove existing public accessors.
+ class BrowserWindowFeatures {
+  public:
++  // docs/features/little.md E1: set on a popup opened for a link from
++  // another app, read by its verbs, its archiver and the command bar.
++  void set_little_window(bool little) { little_window_ = little; }
++  bool little_window() const { return little_window_; }
++
+   BrowserWindowFeatures();
+   ~BrowserWindowFeatures();
+ 
+@@ -565,6 +569,8 @@ class BrowserWindowFeatures {
+   std::unique_ptr<UnloadController> unload_controller_;
+   std::unique_ptr<spaces::SpaceModel> space_model_;
+   std::unique_ptr<stedding::TabArchiver> tab_archiver_;
++  // docs/features/little.md E1: a popup opened for a link from another app.
++  bool little_window_ = false;
+   std::unique_ptr<stedding::FolderSessionService> folder_session_;
+   std::unique_ptr<ActorBorderViewController> actor_border_view_controller_;
+   std::unique_ptr<ttc::AiOverlayDialogController> ai_overlay_dialog_controller_;
+diff --git a/chrome/browser/ui/cocoa/accelerators_cocoa.mm b/chrome/browser/ui/cocoa/accelerators_cocoa.mm
+index dd054857f5141..da5bceb5a145c 100644
+--- a/chrome/browser/ui/cocoa/accelerators_cocoa.mm
++++ b/chrome/browser/ui/cocoa/accelerators_cocoa.mm
+@@ -58,6 +58,10 @@ const struct AcceleratorMapping {
+     // Tab keeps its menu row and loses its chord (spaces B21; the divergence
+     // is listed in the shortcut reference, shortcuts Z2).
+     {IDC_STEDDING_TOGGLE_SPACE_PIN, ui::EF_COMMAND_DOWN, ui::VKEY_D},
++    // little E2: inside a little window (enabled there alone).
++    {IDC_STEDDING_LITTLE_PROMOTE_SPLIT, ui::EF_COMMAND_DOWN | ui::EF_SHIFT_DOWN,
++     ui::VKEY_O},
++    {IDC_STEDDING_LITTLE_CLOSE, ui::EF_NONE, ui::VKEY_ESCAPE},
+     // toolbar T10: the address row on its own.
+     {IDC_STEDDING_TOGGLE_ADDRESS_ROW, ui::EF_COMMAND_DOWN | ui::EF_SHIFT_DOWN,
+      ui::VKEY_D},
+diff --git a/chrome/browser/ui/stedding/BUILD.gn b/chrome/browser/ui/stedding/BUILD.gn
+index e0dcc11c8cd32..f9bac5b531b95 100644
+--- a/chrome/browser/ui/stedding/BUILD.gn
++++ b/chrome/browser/ui/stedding/BUILD.gn
+@@ -184,6 +184,30 @@ source_set("sidebar_density") {
+   ]
+ }
+ 
++# docs/features/little.md: links from other apps open small.
++source_set("little_window") {
++  public = [ "little_window.h" ]
++  sources = [ "little_window.cc" ]
++  public_deps = [
++    "//base",
++    "//chrome/browser/ui/spaces",
++  ]
++  deps = [
++    ":prefs",
++    "//chrome/browser/profiles:profile",
++    "//chrome/browser/ui/browser_window",
++    "//chrome/browser/ui/navigator",
++    "//chrome/browser/ui/spaces:router",
++    "//chrome/browser/ui/tabs:tab_strip",
++    "//components/prefs",
++    "//components/tabs:public",
++    "//content/public/browser",
++    "//third_party/blink/public/common",
++    "//ui/base",
++    "//url",
++  ]
++}
++
+ source_set("menu_rules") {
+   public = [ "menu_rules.h" ]
+   sources = [ "menu_rules.cc" ]
+@@ -212,6 +236,7 @@ source_set("unit_tests") {
+     "address_row_unittest.cc",
+     "clean_link_unittest.cc",
+     "copy_link_unittest.cc",
++    "little_window_unittest.cc",
+     "menu_rules_unittest.cc",
+     "motion_unittest.cc",
+     "pin_lifecycle_unittest.cc",
+@@ -226,7 +251,9 @@ source_set("unit_tests") {
+     ":address_row_rules",
+     ":clean_link",
+     ":copy_link",
++    ":little_window",
+     ":menu_rules",
++    "//chrome/browser/ui/spaces:router",
+     ":motion",
+     ":pin_lifecycle",
+     ":prefs",
+diff --git a/chrome/browser/ui/stedding/little_window.cc b/chrome/browser/ui/stedding/little_window.cc
+new file mode 100644
+index 0000000000000..860ba3aa964df
+--- /dev/null
++++ b/chrome/browser/ui/stedding/little_window.cc
+@@ -0,0 +1,161 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/stedding/little_window.h"
++
++#include <algorithm>
++#include <memory>
++#include <vector>
++
++#include "base/memory/raw_ptr.h"
++#include "base/no_destructor.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/ui/browser.h"
++#include "chrome/browser/ui/browser_tabstrip.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_features.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
++#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
++#include "chrome/browser/ui/navigator/browser_navigator.h"
++#include "chrome/browser/ui/navigator/browser_navigator_params.h"
++#include "chrome/browser/ui/spaces/space_model.h"
++#include "chrome/browser/ui/spaces/space_router.h"
++#include "chrome/browser/ui/stedding/stedding_prefs.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "components/prefs/pref_service.h"
++#include "components/tabs/public/tab_interface.h"
++#include "content/public/browser/web_contents.h"
++#include "third_party/blink/public/mojom/window_features/window_features.mojom.h"
++#include "ui/base/base_window.h"
++#include "ui/gfx/geometry/rect.h"
++#include "url/gurl.h"
++
++namespace stedding {
++
++namespace {
++
++constexpr int kLittleWidth = 1000;
++constexpr int kLittleHeight = 700;
++
++}  // namespace
++
++bool ShouldOpenLittle(const PrefService* prefs, const GURL& url) {
++  if (!prefs || !url.SchemeIsHTTPOrHTTPS()) {
++    return false;
++  }
++  if (!prefs->GetBoolean(prefs::kLittleEnabled)) {
++    return false;
++  }
++  return !spaces::RouteFor(spaces::ReadRoutes(prefs), url).has_value();
++}
++
++void MarkLittleWindow(BrowserWindowInterface* window) {
++  // The mark lives on the window's features, so it goes with the window.
++  if (window) {
++    window->GetFeatures().set_little_window(true);
++  }
++}
++
++bool IsLittleWindow(const BrowserWindowInterface* window) {
++  return window && window->GetFeatures().little_window();
++}
++
++BrowserWindowInterface* LastActiveNormalWindow(Profile* profile) {
++  BrowserWindowInterface* found = nullptr;
++  ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
++      [&](BrowserWindowInterface* window) {
++        if (window->GetType() == BrowserWindowInterface::Type::TYPE_NORMAL &&
++            !window->GetProfile()->IsOffTheRecord() &&
++            (!profile || window->GetProfile() == profile)) {
++          found = window;
++          return false;
++        }
++        return true;
++      });
++  return found;
++}
++
++BrowserWindowInterface* OpenLittleWindow(Profile* profile,
++                                         const GURL& url,
++                                         BrowserWindowInterface* anchor) {
++  if (!profile) {
++    return nullptr;
++  }
++  if (!anchor) {
++    anchor = LastActiveNormalWindow(profile);
++  }
++  BrowserWindowCreateParams params(BrowserWindowInterface::Type::TYPE_POPUP,
++                                   *profile, /*from_user_gesture=*/true);
++  gfx::Rect bounds(kLittleWidth, kLittleHeight);
++  if (anchor && anchor->GetWindow()) {
++    const gfx::Rect over = anchor->GetWindow()->GetBounds();
++    bounds.set_width(std::min(kLittleWidth, std::max(400, over.width() - 80)));
++    bounds.set_height(
++        std::min(kLittleHeight, std::max(300, over.height() - 80)));
++    bounds.set_origin(
++        gfx::Point(over.x() + (over.width() - bounds.width()) / 2,
++                   over.y() + (over.height() - bounds.height()) / 2));
++  }
++  params.initial_bounds = bounds;
++  BrowserWindowInterface* const window = CreateBrowserWindow(std::move(params));
++  if (!window) {
++    return nullptr;
++  }
++  MarkLittleWindow(window);
++  NavigateParams navigate(window, url, ui::PAGE_TRANSITION_AUTO_TOPLEVEL);
++  navigate.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
++  Navigate(&navigate);
++  window->GetWindow()->Show();
++  return window;
++}
++
++bool PromoteLittleWindow(BrowserWindowInterface* little,
++                         BrowserWindowInterface* target,
++                         std::optional<spaces::SpaceId> space,
++                         bool split) {
++  if (!little || !IsLittleWindow(little)) {
++    return false;
++  }
++  if (!target) {
++    target = LastActiveNormalWindow(little->GetProfile());
++  }
++  spaces::SpaceModel* const model =
++      target ? spaces::SpaceModel::From(target) : nullptr;
++  TabStripModel* const from = little->GetTabStripModel();
++  if (!model || !from || from->empty()) {
++    return false;
++  }
++  const spaces::SpaceId destination = space.value_or(model->active_id());
++  if (!model->GetSpace(destination)) {
++    return false;
++  }
++  std::unique_ptr<content::WebContents> contents =
++      from->DetachWebContentsAtForInsertion(from->active_index());
++  if (!contents) {
++    return false;
++  }
++  const GURL url = contents->GetLastCommittedURL().is_empty()
++                       ? contents->GetVisibleURL()
++                       : contents->GetLastCommittedURL();
++  // The page lands in its Space before the window looks at it; routing
++  // stays out of the way (its rule already had its say, E1).
++  spaces::SpaceModel::ScopedRoutingPause no_routing(model);
++  model->SetActiveSpace(destination);
++  content::WebContents* const raw = contents.get();
++  chrome::AddWebContents(target, nullptr, std::move(contents), url,
++                         split ? WindowOpenDisposition::NEW_SPLIT_VIEW
++                               : WindowOpenDisposition::NEW_FOREGROUND_TAB,
++                         blink::mojom::WindowFeatures());
++  if (tabs::TabInterface* const tab =
++          tabs::TabInterface::MaybeGetFromContents(raw)) {
++    model->SetSpaceForTab(tab, destination);
++  }
++  target->GetWindow()->Activate();
++  if (little->GetWindow()) {
++    little->GetWindow()->Close();
++  }
++  return true;
++}
++
++}  // namespace stedding
+diff --git a/chrome/browser/ui/stedding/little_window.h b/chrome/browser/ui/stedding/little_window.h
+new file mode 100644
+index 0000000000000..936db0c8c3cfb
+--- /dev/null
++++ b/chrome/browser/ui/stedding/little_window.h
+@@ -0,0 +1,52 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_STEDDING_LITTLE_WINDOW_H_
++#define CHROME_BROWSER_UI_STEDDING_LITTLE_WINDOW_H_
++
++#include <optional>
++
++#include "chrome/browser/ui/spaces/space_id.h"
++
++class BrowserWindowInterface;
++class GURL;
++class PrefService;
++class Profile;
++
++namespace stedding {
++
++// docs/features/little.md: a link from another application opens small, in
++// a popup-type window marked as Stedding's little window; cmd-O sends the
++// page into the last-active normal window's active Space, shift-cmd-O into
++// a split, ctrl-1..9 into Space N, Escape closes it.
++
++// E1, E4: whether `url` opens little -- the setting on, and no route naming
++// a Space (routing D3: a route wins).
++bool ShouldOpenLittle(const PrefService* prefs, const GURL& url);
++
++// E1: opens `url` in a little window over `anchor` (the last-active normal
++// window when null). Returns the window.
++BrowserWindowInterface* OpenLittleWindow(Profile* profile,
++                                         const GURL& url,
++                                         BrowserWindowInterface* anchor);
++
++// Marks `window` as little (a popup opened this way), and asks.
++void MarkLittleWindow(BrowserWindowInterface* window);
++bool IsLittleWindow(const BrowserWindowInterface* window);
++
++// The last-active normal window of `profile`, the one a promotion targets;
++// null when there is none.
++BrowserWindowInterface* LastActiveNormalWindow(Profile* profile);
++
++// E2: moves the little window's page into `target`'s Space `space` (its
++// active Space when nullopt), as a tab or into a split with the active tab,
++// and closes the little window. False when nothing moved.
++bool PromoteLittleWindow(BrowserWindowInterface* little,
++                         BrowserWindowInterface* target,
++                         std::optional<spaces::SpaceId> space,
++                         bool split);
++
++}  // namespace stedding
++
++#endif  // CHROME_BROWSER_UI_STEDDING_LITTLE_WINDOW_H_
+diff --git a/chrome/browser/ui/stedding/little_window_unittest.cc b/chrome/browser/ui/stedding/little_window_unittest.cc
+new file mode 100644
+index 0000000000000..9b9bba3fc7895
+--- /dev/null
++++ b/chrome/browser/ui/stedding/little_window_unittest.cc
+@@ -0,0 +1,99 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/stedding/little_window.h"
++
++#include <memory>
++
++#include "chrome/browser/ui/browser.h"
++#include "chrome/browser/ui/spaces/space.h"
++#include "chrome/browser/ui/spaces/space_model.h"
++#include "chrome/browser/ui/spaces/space_router.h"
++#include "chrome/browser/ui/stedding/stedding_prefs.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "chrome/test/base/browser_with_test_window_test.h"
++#include "components/prefs/pref_service.h"
++#include "components/tabs/public/tab_interface.h"
++#include "content/public/browser/web_contents.h"
++#include "testing/gtest/include/gtest/gtest.h"
++#include "url/gurl.h"
++
++namespace stedding {
++namespace {
++
++class LittleWindowTest : public BrowserWithTestWindowTest {
++ protected:
++  spaces::SpaceModel& model() { return *spaces::SpaceModel::From(browser()); }
++
++  // A popup marked little, with `url` in it, the way OpenLittleWindow leaves
++  // one (the window itself is a test window here).
++  std::unique_ptr<Browser> MakeLittle(const char* url) {
++    std::unique_ptr<Browser> little =
++        CreateBrowser(profile(), Browser::TYPE_POPUP, /*hosted_app=*/false);
++    MarkLittleWindow(little.get());
++    AddTab(little.get(), GURL(url));
++    return little;
++  }
++};
++
++// E1, E4: the setting on and no route -> little; a route wins; off -> a tab.
++TEST_F(LittleWindowTest, ExternalUrlOpensLittleWindow) {
++  PrefService* const prefs = profile()->GetPrefs();
++  const GURL url("https://example.com/from-mail");
++  EXPECT_TRUE(ShouldOpenLittle(prefs, url));
++  EXPECT_FALSE(ShouldOpenLittle(prefs, GURL("file:///tmp/x.txt")));
++  std::unique_ptr<Browser> little = MakeLittle("https://example.com/");
++  EXPECT_TRUE(IsLittleWindow(little.get()));
++  EXPECT_FALSE(IsLittleWindow(browser()));
++  little->tab_strip_model()->CloseAllTabs();
++}
++
++TEST_F(LittleWindowTest, MatchingRouteSkipsIt) {
++  PrefService* const prefs = profile()->GetPrefs();
++  spaces::AddRoute(prefs, spaces::SiteRouteFor(GURL("https://example.com/"),
++                                               model().active_id().ToString()));
++  EXPECT_FALSE(ShouldOpenLittle(prefs, GURL("https://example.com/x")))
++      << "routing D3: the route wins";
++  EXPECT_TRUE(ShouldOpenLittle(prefs, GURL("https://other.example/")));
++}
++
++TEST_F(LittleWindowTest, SettingOffOpensATab) {
++  PrefService* const prefs = profile()->GetPrefs();
++  prefs->SetBoolean(prefs::kLittleEnabled, false);
++  EXPECT_FALSE(ShouldOpenLittle(prefs, GURL("https://example.com/")));
++}
++
++// E2: cmd-O moves the page, no reload, into the active Space; the little
++// window is left empty (closed for real outside a test window).
++TEST_F(LittleWindowTest, PromoteMovesContentsIntoSpace) {
++  std::unique_ptr<Browser> little = MakeLittle("https://little.example/");
++  content::WebContents* const page =
++      little->tab_strip_model()->GetActiveWebContents();
++  const int before = browser()->tab_strip_model()->count();
++  EXPECT_TRUE(PromoteLittleWindow(little.get(), browser(), std::nullopt,
++                                  /*split=*/false));
++  EXPECT_EQ(before + 1, browser()->tab_strip_model()->count());
++  EXPECT_EQ(page, browser()->tab_strip_model()->GetActiveWebContents())
++      << "the same WebContents, not a reload";
++  EXPECT_EQ(model().active_id(),
++            model().SpaceForTab(browser()->tab_strip_model()->GetActiveTab()));
++  EXPECT_EQ(0, little->tab_strip_model()->count());
++  EXPECT_FALSE(PromoteLittleWindow(browser(), browser(), std::nullopt, false))
++      << "only a little window promotes";
++}
++
++// E2: ctrl-N sends the page to Space N.
++TEST_F(LittleWindowTest, CtrlDigitSendsToSpaceN) {
++  spaces::Space* const work = model().AddSpace("Work", SK_ColorBLUE);
++  std::unique_ptr<Browser> little = MakeLittle("https://little.example/");
++  EXPECT_TRUE(PromoteLittleWindow(little.get(), browser(), work->id(),
++                                  /*split=*/false));
++  tabs::TabInterface* const moved =
++      browser()->tab_strip_model()->GetActiveTab();
++  EXPECT_EQ(work->id(), model().SpaceForTab(moved));
++  EXPECT_EQ(work->id(), model().active_id());
++}
++
++}  // namespace
++}  // namespace stedding
+diff --git a/chrome/browser/ui/stedding/stedding_command_ids.h b/chrome/browser/ui/stedding/stedding_command_ids.h
+index 4840a6267f459..99be0cbe96bf4 100644
+--- a/chrome/browser/ui/stedding/stedding_command_ids.h
++++ b/chrome/browser/ui/stedding/stedding_command_ids.h
+@@ -13,5 +13,10 @@
+ 
+ // toolbar T10: shift-cmd-D shows or hides the address row for the window.
+ inline constexpr int IDC_STEDDING_TOGGLE_ADDRESS_ROW = 55142;
++// little E2: inside a little window, shift-cmd-O sends the page into a split
++// of the last-active window and Escape closes the window (cmd-O, Open File
++// elsewhere, sends it into a tab).
++inline constexpr int IDC_STEDDING_LITTLE_PROMOTE_SPLIT = 55143;
++inline constexpr int IDC_STEDDING_LITTLE_CLOSE = 55144;
+ 
+ #endif  // CHROME_BROWSER_UI_STEDDING_STEDDING_COMMAND_IDS_H_
+diff --git a/chrome/browser/ui/stedding/stedding_prefs.cc b/chrome/browser/ui/stedding/stedding_prefs.cc
+index a25801e3d5a6e..b222b22c1cbf3 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs.cc
++++ b/chrome/browser/ui/stedding/stedding_prefs.cc
+@@ -17,6 +17,8 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
+   registry->RegisterIntegerPref(kArchiveKeepDays, 30);
+   registry->RegisterBooleanPref(kToolbarHideWithSidebar, true);
+   registry->RegisterBooleanPref(kBookmarksConverted, false);
++  registry->RegisterBooleanPref(kLittleEnabled, true);
++  registry->RegisterIntegerPref(kLittleIdleHours, 6);
+   registry->RegisterBooleanPref(kWelcomeShown, false);
+   registry->RegisterBooleanPref(kCopyStripTracking, true);
+   registry->RegisterBooleanPref(kUiAnimate, true);
+diff --git a/chrome/browser/ui/stedding/stedding_prefs.h b/chrome/browser/ui/stedding/stedding_prefs.h
+index 74c09c24da220..97a883540729f 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs.h
++++ b/chrome/browser/ui/stedding/stedding_prefs.h
+@@ -33,6 +33,10 @@ inline constexpr char kArchiveKeepDays[] = "stedding.archive.keep_days";
+ // toolbar T8/T12: the address row hides when the sidebar collapses.
+ inline constexpr char kToolbarHideWithSidebar[] =
+     "stedding.toolbar.hide_with_sidebar";
++// little E4: links from other apps open in a small window; E3: how long
++// one may sit idle before it closes into the recently-closed list.
++inline constexpr char kLittleEnabled[] = "stedding.little.enabled";
++inline constexpr char kLittleIdleHours[] = "stedding.little.idle_hours";
+ // import I14: the bookmarks became pins; the bar and the star stay hidden.
+ inline constexpr char kBookmarksConverted[] = "stedding.bookmarks.converted";
+ // privacy Q4: Global Privacy Control, in local state because it becomes a
+diff --git a/chrome/browser/ui/stedding/stedding_prefs_unittest.cc b/chrome/browser/ui/stedding/stedding_prefs_unittest.cc
+index b4e7df5a4fb00..778040ba85802 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs_unittest.cc
++++ b/chrome/browser/ui/stedding/stedding_prefs_unittest.cc
+@@ -19,7 +19,7 @@ TEST(SteddingPrefsTest, EveryPreferenceRegistersAndDefaultsToOn) {
+   for (const char* name :
+        {kNewTabShowHint, kNewTabShowShortcuts, kPeekEnabled, kCopyStripTracking,
+         kUiAnimate, kPinsCloseSleeps, kMenusShort, kHoldCmdNumbers,
+-        kToolbarHideWithSidebar}) {
++        kToolbarHideWithSidebar, kLittleEnabled}) {
+     ASSERT_TRUE(service.FindPreference(name)) << name;
+     EXPECT_TRUE(service.GetBoolean(name)) << name;
+   }
+diff --git a/chrome/browser/ui/views/commandbar/BUILD.gn b/chrome/browser/ui/views/commandbar/BUILD.gn
+index d00cd6f8ff6bf..6af2ab5ec9fe9 100644
+--- a/chrome/browser/ui/views/commandbar/BUILD.gn
++++ b/chrome/browser/ui/views/commandbar/BUILD.gn
+@@ -12,6 +12,7 @@ source_set("commandbar") {
+   ]
+ 
+   deps = [
++    "//chrome/browser/ui/stedding:little_window",
+     "//chrome/browser:browser_process",
+     "//chrome/browser/ui/stedding:sidebar_density",
+     "//components/sessions",
+diff --git a/chrome/browser/ui/views/commandbar/command_bar_view.cc b/chrome/browser/ui/views/commandbar/command_bar_view.cc
+index 193ea99aab944..ba2de2a8c69db 100644
+--- a/chrome/browser/ui/views/commandbar/command_bar_view.cc
++++ b/chrome/browser/ui/views/commandbar/command_bar_view.cc
+@@ -40,6 +40,7 @@
+ #include "chrome/browser/ui/spaces/space_colors.h"
+ #include "chrome/browser/ui/spaces/space_commands.h"
+ #include "chrome/browser/ui/spaces/space_model.h"
++#include "chrome/browser/ui/stedding/little_window.h"
+ #include "chrome/browser/ui/stedding/sidebar_density.h"
+ #include "chrome/browser/ui/stedding/sleep_tabs.h"
+ #include "chrome/browser/ui/stedding/stedding_command_ids.h"
+@@ -415,6 +416,26 @@ void CommandBarView::BuildActions() {
+              },
+              base::Unretained(spaces))});
+   }
++  // little E1: inside a little window, the Spaces of the last-active window.
++  if (stedding::IsLittleWindow(browser_)) {
++    BrowserWindowInterface* const target =
++        stedding::LastActiveNormalWindow(browser_->GetProfile());
++    if (spaces::SpaceModel* const model =
++            target ? spaces::SpaceModel::From(target) : nullptr) {
++      for (const std::unique_ptr<spaces::Space>& space : model->spaces()) {
++        actions_.push_back(
++            {u"Open in " + model->DisplayName(space->id()), std::u16string(),
++             base::BindRepeating(
++                 [](Browser* browser, BrowserWindowInterface* target,
++                    spaces::SpaceId id) {
++                   stedding::PromoteLittleWindow(browser, target, id,
++                                                 /*split=*/false);
++                 },
++                 base::Unretained(browser_), base::Unretained(target),
++                 space->id())});
++      }
++    }
++  }
+   if (normal_window) {
+     command(IDC_STEDDING_CAPTURE_VISIBLE, u"Capture the Page");
+     command(IDC_STEDDING_CAPTURE_REGION, u"Capture a Region");
+diff --git a/chrome/browser/ui/webui/settings/settings_ui.cc b/chrome/browser/ui/webui/settings/settings_ui.cc
+index 13d557eb73684..9232c262cbca6 100644
+--- a/chrome/browser/ui/webui/settings/settings_ui.cc
++++ b/chrome/browser/ui/webui/settings/settings_ui.cc
+@@ -692,6 +692,14 @@ SettingsUI::SettingsUI(content::WebUI* web_ui)
+   html_source->AddString("steddingSpaceNamePlaceholder", "Space name");
+   html_source->AddString("steddingDeleteSpace", "Delete Space");
+   html_source->AddString("steddingImportArcLabel", "Import from Arc");
++  html_source->AddString("steddingLittleLabel",
++                         "Open links from other apps in a small window");
++  html_source->AddString(
++      "steddingLittleSubLabel",
++      "\u2318O sends the page into your window\u2019s Space, \u21E7\u2318O "
++      "into "
++      "a split, \u23031\u20139 to a Space, Escape closes it; a site with a "
++      "route opens in its Space instead. Off opens such links as tabs.");
+   // import I19, I20.
+   html_source->AddString("steddingBackupsLabel", "Sidebar backups");
+   html_source->AddString(
+diff --git a/chrome/browser/ui/webui/settings/stedding_shortcuts_handler.cc b/chrome/browser/ui/webui/settings/stedding_shortcuts_handler.cc
+index 3e35280bfad7b..1c9529dd8aadd 100644
+--- a/chrome/browser/ui/webui/settings/stedding_shortcuts_handler.cc
++++ b/chrome/browser/ui/webui/settings/stedding_shortcuts_handler.cc
+@@ -107,6 +107,9 @@ std::vector<ShortcutGroup> ShortcutReference() {
+       u"Collapse the sidebar to icons, or bring it back");
+   Add(sidebar, IDC_STEDDING_TOGGLE_ADDRESS_ROW,
+       u"Show or hide the address row on its own");
++  Add(sidebar, IDC_STEDDING_LITTLE_PROMOTE_SPLIT,
++      u"In a little window: send the page into a split of your window");
++  Add(sidebar, IDC_STEDDING_LITTLE_CLOSE, u"In a little window: close it");
+   AddChord(sidebar, SpaceRange(), u"Jump to Space 1 to 9");
+   Add(sidebar, IDC_STEDDING_SPACE_NEXT, u"Next Space");
+   Add(sidebar, IDC_STEDDING_SPACE_PREVIOUS, u"Previous Space");

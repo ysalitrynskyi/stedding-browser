@@ -27,3 +27,7 @@ tooling/dev test shortcuts
 
 - ⇧⌘D shows or hides the address row on its own (toolbar T10); Chromium had no
   chord on it in Stedding's tables, and Bookmark All Tabs keeps its menu item.
+- Inside a little window (little E2), ⌘O sends the page into a tab (Open File
+  elsewhere), ⇧⌘O into a split and Escape closes the window; ⌥⌘N stays the split
+  (welcome W6), where Arc opens a little window: a divergence recorded here, the
+  decision left for later (little E5).

@@ -37,3 +37,12 @@ Chromium's set back.
   declared on `AppMenuModel`, not in `chrome_command_ids.h`, to spare the rebuild
   a new id costs (HANDOFF trap 14); the rows are literals until the UI is
   localised.
+- The sidebar's own background menu (Chromium's system menu on the strip) keeps
+  New Tab, Reopen Closed Tab, Name Window, Collapse and Task Manager under the
+  setting; Bookmark All Tabs, the Tab Search and Glic pins and the auto-expanding
+  toggle go (`system_menu_model_builder.cc`).
+- The short tab menu carries extension rows like Chromium's (`AppendExtensionItems`
+  serves both builders); Chromium's `TabMenuModelTest.ExtensionItems` had been red
+  since the short menu landed and is green again.
+- The Screenshot and Spaces submenus answer their own enabled state: the command
+  updater never registers a container id, so the first capture drew them grey.

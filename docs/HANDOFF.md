@@ -203,6 +203,22 @@ perform; a param that recreates the state IS the test surface.
     their index.** A reorder of two unnamed Spaces is invisible in a capture except
     through the active highlight and the title row; give one an icon through its
     chip menu before capturing a drag.
+20. **Small things that cost a build each, round 6 wave 3:** a `views::View`
+    subclass, even one in an anonymous namespace, needs `METADATA_HEADER` and
+    `BEGIN_METADATA`/`END_METADATA` or `AddChildView` fails a static assert;
+    `views::LabelButton::label()` is protected, so a row whose font must change
+    is a subclass that re-exports it; `switches::kEnableFeatures` is in
+    `base/base_switches.h`, not content's switches; gn targets are named after
+    their directory unless the BUILD file says otherwise
+    (`//components/embedder_support`, `//components/bookmarks/test`); a
+    `Browser` has `GetProfile()`, not `profile()`, and no `window()` (use
+    `BrowserWindow::FromBrowser`); `SkColorGetR` and friends are macros, not
+    functions. In the live checks, chrome://settings' search box finds a row
+    but does not scroll to it: click the page body and press space instead;
+    `tooling/drive-window.py` writes its `shot` files into the current
+    directory, so `cd` to the scratch directory first; the feature params
+    `folder_tabs` and `pin_tabs` do not exist, a folder comes from the ⌘T
+    action "Move Tab to New Folder" and a Space pin from "Pin to This Space".
 
 ## Open items
 

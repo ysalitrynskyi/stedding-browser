@@ -68,7 +68,7 @@ Space icons, the Library, and a `+` control.
 - **Drag tab out → Blank Window** **[1.0]** — a genuinely separate window, distinct
   from a Space-synced one.
 - **Sidebar backups** **[1.0]** — restore prior sidebar states: 10 for today, 1/day for
-  10 days, 1/week for a month, 1/month for a year. Distinct from the tab Archive.
+  10 days, 1/week for a month, 1/month for a year. Distinct from the tab Archive. Built: `docs/features/import.md` I17–I20 (round 6).
 - **Copy URL, and copy as Markdown** **[1.0]** — `⌘⇧C`.
 - **Reopen closed tab** **[1.0]** — `⌘⇧T`.
 

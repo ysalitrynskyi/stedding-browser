@@ -1,8 +1,9 @@
 # Feature: Import from Arc
 
-Status: **I1–I4, I8–I12 built**, **I5–I7 planned** (round 6, `docs/ROUND6-PLAN.md`
-R6-22); **I13–I20 planned** (R6-28, R6-29).
-Owner docs: `docs/PRODUCT.md` §1, `docs/ROADMAP.md`. Patch: 0026.
+Status: **I1–I4, I8–I20 built**, **I5–I7 planned** (round 6, `docs/ROUND6-PLAN.md`
+R6-22, R6-28, R6-29).
+Owner docs: `docs/PRODUCT.md` §1, `docs/ROADMAP.md`. Patches: 0026 (I1–I12), 0032
+(I13–I16), 0033 (I17–I20).
 
 An Arc user opens Stedding and gets their sidebar back: Spaces with their icon and
 colour, the essentials row, the pinned runs, folders with nesting, and the unpinned
@@ -25,14 +26,14 @@ applied, inserted unloaded so a big sidebar costs nothing until a tab is opened.
 | I10 | `windowTheme` maps to the nearest of the five Stedding swatches (`kSpaceColors`). | ArcSidebarImporterTest.ThemeMapsToTheNearestSwatch | built |
 | I11 | Favorites are capped at twelve essentials (nothing in the tree caps essentials); the rest stay where they are and the summary counts them. | ArcSidebarImportWindowTest.FavoritesCapAtTwelve | built |
 | I12 | A second import is idempotent: Arc's ids are remembered in the profile (`stedding.import.arc_ids`, `stedding.import.arc_spaces`) and nothing already present is created again. | ArcSidebarImportWindowTest.SecondImportAddsNothing | built |
-| I13 | After an import that included bookmarks (welcome W3 or chrome://settings/importData), the bookmark tree becomes pins in the active Space: the bookmark bar's bookmarks first, then Other bookmarks; each folder a folder, each bookmark a Space-pinned tab inserted unloaded with the bookmark as its home (pins H1); through the Arc importer's apply path, idempotent on the bookmark ids. | `BookmarksToPinsTest.FolderTreeBecomesPinnedFolders` | planned |
-| I14 | After the conversion the bookmark bar never shows (`stedding.bookmarks.converted`) and the star leaves the address row; the Bookmarks submenu is already gone under short menus (menus M3); Import Bookmarks and Settings stays in the app menu. | `BookmarksToPinsTest.ConversionHidesTheBar`; capture `w3_bookmarks_pins` | planned |
-| I15 | The welcome flow's import step says "Bookmarks become pinned tabs and folders in your first Space"; Skip converts nothing and the bookmark model stays as Chromium filled it (the bar stays hidden by default, as before). | live: `w3_arc_welcome` (the line under the import row) | planned |
-| I16 | A profile that already holds bookmarks converts them on demand: the ⌘T action "Turn Bookmarks into Pinned Tabs" runs the same conversion; no offer on start. | `CommandBarViewTest` (the action is listed); live | planned |
-| I17 | Stedding writes a JSON snapshot of the sidebar into the profile directory on a schedule; the file is this importer's plan format. | TBD | planned · draft |
-| I18 | An export is an import in reverse; a restore applies through the importer's apply path (I3, I12). | SidebarBackupTest.RoundTripIsIdentity | planned · draft |
-| I19 | "Restore sidebar…" lists snapshots by time; a restore never closes an open tab. | SidebarBackupTest.RestoreClosesNothing | planned · draft |
-| I20 | "Export Space…" and "Import sidebar…": the file-based answer to sync, with no account. | SidebarBackupTest.ExportOneSpaceImportsBack | planned · draft |
+| I13 | After an import that included bookmarks (welcome W3 or chrome://settings/importData), the bookmark tree becomes pins in the active Space: the bookmark bar's bookmarks first, then Other bookmarks; each folder a folder, each bookmark a Space-pinned tab inserted unloaded with the bookmark as its home (pins H1); through the Arc importer's apply path, idempotent on the bookmark ids. | `BookmarksToPinsTest.FolderTreeBecomesPinnedFolders` | built |
+| I14 | After the conversion the bookmark bar never shows (`stedding.bookmarks.converted`) and the star leaves the address row; the Bookmarks submenu is already gone under short menus (menus M3); Import Bookmarks and Settings stays in the app menu. | `BookmarksToPinsTest.ConversionHidesTheBar` (the preference the bar and the star read); capture `w3_bookmarks_pins` | built |
+| I15 | The welcome flow's import step says "Bookmarks become pinned tabs and folders in your first Space"; Skip converts nothing and the bookmark model stays as Chromium filled it (the bar stays hidden by default, as before). | live: `w3_arc_welcome` (the line under the import row) | built |
+| I16 | A profile that already holds bookmarks converts them on demand: the ⌘T action "Turn Bookmarks into Pinned Tabs" runs the same conversion; no offer on start. | live: `w3_bookmarks_pins` (the bar action on a profile with a bookmark) | built |
+| I17 | Stedding writes a JSON snapshot of the sidebar into the profile directory on a schedule; the file is this importer's plan format. | `SidebarBackupTest.SnapshotCarriesEveryField`, `SidebarBackupScheduleTest.KeepsTenTodayThenDaysWeeksMonths`, `SidebarBackupScheduleTest.FileNamesCarryTheirTime` | built |
+| I18 | An export is an import in reverse; a restore applies through the importer's apply path (I3, I12). | `SidebarBackupTest.RoundTripIsIdentity` | built |
+| I19 | "Restore sidebar…" lists snapshots by time; a restore never closes an open tab. | `SidebarBackupTest.RestoreClosesNothing` (a merge: a Space named by its own id is that Space, an open tab is skipped); live: `w3_backups` (the list and Restore) | built |
+| I20 | "Export Space…" and "Import sidebar…": the file-based answer to sync, with no account. | `SidebarBackupTest.ExportOneSpaceImportsBack`; live: `w3_backups` (Export Space… writes to Downloads; Import sidebar… reads a file) | built |
 
 ## Notes
 
@@ -59,3 +60,9 @@ applied, inserted unloaded so a big sidebar costs nothing until a tab is opened.
 - The ⌘T row appears once the bar has learned the file exists (a check off the UI
   thread the first time a bar is built), so it is absent from the very first bar
   of a session.
+- Backups (I17–I20) are the plan written in Arc's own shape, so one parser serves
+  Arc's file, a Stedding snapshot and an exported Space. A snapshot names Spaces by
+  their ids and tabs by their session ids; the importer treats a Space it already
+  holds as that Space and skips a tab that is still open, which is what makes a
+  restore a merge. A tab's user-given name comes back as its title, not as a name
+  (tabs R15 stays TBD across a restore).

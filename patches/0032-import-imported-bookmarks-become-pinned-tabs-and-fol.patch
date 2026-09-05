@@ -1,0 +1,665 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Sat, 5 Sep 2026 14:22:18 -0400
+Subject: import: imported bookmarks become pinned tabs and folders
+
+After an import that brought bookmarks (the welcome flow or
+chrome://settings/importData), the bookmark tree becomes pins in the
+window's active Space through the Arc importer's apply path: the bookmark
+bar's bookmarks first, then Other bookmarks, every folder a folder, every
+bookmark a Space-pinned tab inserted unloaded with the bookmark as its
+home, idempotent on the bookmark ids. From then on the bookmark bar never
+shows and the star leaves the address row (stedding.bookmarks.converted).
+The welcome step says so; a profile that already holds bookmarks converts
+them from the bar's "Turn Bookmarks into Pinned Tabs"
+(docs/features/import.md I13-I16).
+
+Why: docs/ROUND6-PLAN.md wave 3, R6-28: PRODUCT has no bookmarks; the
+sidebar is the bookmarks.
+Removable when: Chromium's vertical tab strip pins bookmarks itself.
+---
+ .../browser/resources/stedding_welcome/app.ts |   3 +
+ .../ui/bookmarks/bookmark_bar_controller.cc   |   6 ++
+ chrome/browser/ui/spaces/BUILD.gn             |   8 ++
+ .../browser/ui/spaces/arc_sidebar_importer.cc |  23 ++++
+ .../browser/ui/spaces/arc_sidebar_importer.h  |   7 ++
+ chrome/browser/ui/spaces/bookmarks_to_pins.cc |  87 +++++++++++++++
+ chrome/browser/ui/spaces/bookmarks_to_pins.h  |  34 ++++++
+ .../ui/spaces/bookmarks_to_pins_unittest.cc   | 102 ++++++++++++++++++
+ chrome/browser/ui/stedding/stedding_prefs.cc  |   1 +
+ chrome/browser/ui/stedding/stedding_prefs.h   |   2 +
+ chrome/browser/ui/views/bookmarks/BUILD.gn    |   1 +
+ .../bookmark_page_action_controller.cc        |  10 ++
+ .../bookmark_page_action_controller.h         |   2 +
+ .../ui/views/commandbar/command_bar_view.cc   |   8 ++
+ .../ui/webui/settings/import_data_handler.cc  |  18 ++++
+ .../ui/webui/settings/import_data_handler.h   |  17 +++
+ .../stedding_welcome/stedding_welcome_ui.cc   |  20 +++-
+ 17 files changed, 345 insertions(+), 4 deletions(-)
+ create mode 100644 chrome/browser/ui/spaces/bookmarks_to_pins.cc
+ create mode 100644 chrome/browser/ui/spaces/bookmarks_to_pins.h
+ create mode 100644 chrome/browser/ui/spaces/bookmarks_to_pins_unittest.cc
+
+diff --git a/chrome/browser/resources/stedding_welcome/app.ts b/chrome/browser/resources/stedding_welcome/app.ts
+index 76e3ebd6081e6..7c91b037d0e63 100644
+--- a/chrome/browser/resources/stedding_welcome/app.ts
++++ b/chrome/browser/resources/stedding_welcome/app.ts
+@@ -191,6 +191,9 @@ function renderStep(main: HTMLElement) {
+         main.append(el('p', 'lead', 'No other browser profiles were found.'));
+         break;
+       }
++      // import I15: what happens to the bookmarks.
++      main.append(el('p', 'hint',
++          'Bookmarks become pinned tabs and folders in your first Space; Skip leaves them as they are.'));
+       const list = el('div', 'list');
+       list.setAttribute('role', 'radiogroup');
+       for (const s of state.sources) {
+diff --git a/chrome/browser/ui/bookmarks/bookmark_bar_controller.cc b/chrome/browser/ui/bookmarks/bookmark_bar_controller.cc
+index f985dcebfa70b..597856bcadd47 100644
+--- a/chrome/browser/ui/bookmarks/bookmark_bar_controller.cc
++++ b/chrome/browser/ui/bookmarks/bookmark_bar_controller.cc
+@@ -17,6 +17,7 @@
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/fullscreen/browser_window_fullscreen_controller.h"
+ #include "chrome/browser/ui/sad_tab.h"
++#include "chrome/browser/ui/stedding/stedding_prefs.h"
+ #include "chrome/browser/ui/tabs/saved_tab_groups/saved_tab_group_utils.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "chrome/browser/ui/ui_features.h"
+@@ -224,6 +225,11 @@ bool BookmarkBarController::ShouldShowBookmarkBar() const {
+   if (profile->IsGuestSession()) {
+     return false;
+   }
++  // Stedding import I14: once the bookmarks are pins, the sidebar is the
++  // bookmark bar.
++  if (profile->GetPrefs()->GetBoolean(stedding::prefs::kBookmarksConverted)) {
++    return false;
++  }
+ 
+   PrefService* prefs = profile->GetPrefs();
+   bool should_show_bar =
+diff --git a/chrome/browser/ui/spaces/BUILD.gn b/chrome/browser/ui/spaces/BUILD.gn
+index 074e96e4297eb..ba53c3b804c88 100644
+--- a/chrome/browser/ui/spaces/BUILD.gn
++++ b/chrome/browser/ui/spaces/BUILD.gn
+@@ -19,6 +19,7 @@ source_set("router") {
+ source_set("spaces") {
+   public = [
+     "arc_sidebar_importer.h",
++    "bookmarks_to_pins.h",
+     "space.h",
+     "space_colors.h",
+     "space_commands.h",
+@@ -28,6 +29,7 @@ source_set("spaces") {
+   ]
+   sources = [
+     "arc_sidebar_importer.cc",
++    "bookmarks_to_pins.cc",
+     "space.cc",
+     "space_commands.cc",
+     "space_model.cc",
+@@ -44,6 +46,7 @@ source_set("spaces") {
+ 
+   deps = [
+     ":router",
++    "//chrome/browser/bookmarks",
+     "//chrome/app:command_ids",
+     "//chrome/browser/ui/archive:mark",
+     "//chrome/browser/ui/stedding:address_row",
+@@ -69,6 +72,7 @@ source_set("unit_tests") {
+   testonly = true
+   sources = [
+     "arc_sidebar_importer_unittest.cc",
++    "bookmarks_to_pins_unittest.cc",
+     "session_rebuild_unittest.cc",
+     "space_commands_unittest.cc",
+     "space_model_unittest.cc",
+@@ -78,6 +82,10 @@ source_set("unit_tests") {
+   deps = [
+     ":router",
+     ":spaces",
++    "//components/bookmarks/browser",
++    "//components/bookmarks/test",
++    "//components/bookmarks/browser",
++    "//chrome/browser/bookmarks",
+     "//chrome/browser/ui/archive:mark",
+     "//base",
+     "//chrome/app:command_ids",
+diff --git a/chrome/browser/ui/spaces/arc_sidebar_importer.cc b/chrome/browser/ui/spaces/arc_sidebar_importer.cc
+index 3914446dcb907..a0e42ab45e036 100644
+--- a/chrome/browser/ui/spaces/arc_sidebar_importer.cc
++++ b/chrome/browser/ui/spaces/arc_sidebar_importer.cc
+@@ -734,6 +734,29 @@ ArcImportResult ApplyArcImport(BrowserWindowInterface* browser,
+   return result;
+ }
+ 
++ArcImportResult ImportNodesAsPins(
++    BrowserWindowInterface* browser,
++    const std::vector<ArcImportPlan::Node>& nodes) {
++  ArcImportResult result;
++  SpaceModel* const model = browser ? SpaceModel::From(browser) : nullptr;
++  TabStripModel* const tabs = browser ? browser->GetTabStripModel() : nullptr;
++  Profile* const profile = browser ? browser->GetProfile() : nullptr;
++  if (!model || !tabs || !profile) {
++    return result;
++  }
++  ImportedIds ids(profile->GetPrefs());
++  ApplyContext ctx{browser, model, tabs, profile, &ids, &result};
++  SpaceModel::ScopedRoutingPause no_routing(model);
++  const SpaceId space = model->active_id();
++  std::vector<tabs::TabInterface*> loose =
++      InsertNodes(ctx, nodes, space, nullptr);
++  for (auto it = loose.rbegin(); it != loose.rend(); ++it) {
++    model->SetSpacePinned(*it, true);
++  }
++  ids.Save();
++  return result;
++}
++
+ namespace {
+ 
+ ArcSidebarInfo LoadInfoOnPool() {
+diff --git a/chrome/browser/ui/spaces/arc_sidebar_importer.h b/chrome/browser/ui/spaces/arc_sidebar_importer.h
+index 3a2e9cfeba5b8..2c0a4f36173f5 100644
+--- a/chrome/browser/ui/spaces/arc_sidebar_importer.h
++++ b/chrome/browser/ui/spaces/arc_sidebar_importer.h
+@@ -129,6 +129,13 @@ ArcImportResult ApplyArcImport(BrowserWindowInterface* browser,
+ void PrimeArcSidebarPresence();
+ bool ArcSidebarPresent();
+ 
++// import I13: `nodes` (folders and tabs, as a plan's pinned run) become
++// Space-pinned tabs and folders in the window's active Space, unloaded,
++// idempotent on the nodes' ids like the rest.
++ArcImportResult ImportNodesAsPins(
++    BrowserWindowInterface* browser,
++    const std::vector<ArcImportPlan::Node>& nodes);
++
+ // What the entry points ask before offering an import (I2, I9).
+ struct ArcSidebarInfo {
+   ArcSidebarInfo();
+diff --git a/chrome/browser/ui/spaces/bookmarks_to_pins.cc b/chrome/browser/ui/spaces/bookmarks_to_pins.cc
+new file mode 100644
+index 0000000000000..9c11982c5d7ab
+--- /dev/null
++++ b/chrome/browser/ui/spaces/bookmarks_to_pins.cc
+@@ -0,0 +1,87 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/spaces/bookmarks_to_pins.h"
++
++#include <string>
++
++#include "base/strings/string_number_conversions.h"
++#include "chrome/browser/bookmarks/bookmark_model_factory.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/spaces/space_model.h"
++#include "chrome/browser/ui/stedding/stedding_prefs.h"
++#include "components/bookmarks/browser/bookmark_model.h"
++#include "components/bookmarks/browser/bookmark_node.h"
++#include "components/prefs/pref_service.h"
++
++namespace stedding {
++
++namespace {
++
++using Node = spaces::ArcImportPlan::Node;
++
++std::string IdOf(const bookmarks::BookmarkNode& node) {
++  return "bookmark:" + base::NumberToString(node.id());
++}
++
++void AppendChildren(const bookmarks::BookmarkNode& parent,
++                    std::vector<Node>* out) {
++  for (const auto& child : parent.children()) {
++    Node node;
++    node.arc_id = IdOf(*child);
++    node.title = child->GetTitle();
++    if (child->is_url()) {
++      if (!child->url().is_valid()) {
++        continue;
++      }
++      node.kind = Node::Kind::kTab;
++      node.url = child->url();
++    } else {
++      node.kind = Node::Kind::kFolder;
++      AppendChildren(*child, &node.children);
++      if (node.children.empty()) {
++        continue;
++      }
++    }
++    out->push_back(std::move(node));
++  }
++}
++
++}  // namespace
++
++std::vector<Node> NodesFromBookmarks(const bookmarks::BookmarkModel& model) {
++  std::vector<Node> nodes;
++  if (!model.loaded()) {
++    return nodes;
++  }
++  for (const bookmarks::BookmarkNode* root :
++       {static_cast<const bookmarks::BookmarkNode*>(model.bookmark_bar_node()),
++        static_cast<const bookmarks::BookmarkNode*>(model.other_node())}) {
++    if (root) {
++      AppendChildren(*root, &nodes);
++    }
++  }
++  return nodes;
++}
++
++spaces::ArcImportResult ConvertBookmarksToPins(
++    BrowserWindowInterface* browser) {
++  spaces::ArcImportResult result;
++  if (!browser || !spaces::SpaceModel::From(browser)) {
++    return result;
++  }
++  Profile* const profile = browser->GetProfile();
++  bookmarks::BookmarkModel* const model =
++      BookmarkModelFactory::GetForBrowserContextIfExists(profile);
++  if (!model || !model->loaded()) {
++    return result;
++  }
++  result = spaces::ImportNodesAsPins(browser, NodesFromBookmarks(*model));
++  // I14: from now on the sidebar is the bookmarks.
++  profile->GetPrefs()->SetBoolean(prefs::kBookmarksConverted, true);
++  return result;
++}
++
++}  // namespace stedding
+diff --git a/chrome/browser/ui/spaces/bookmarks_to_pins.h b/chrome/browser/ui/spaces/bookmarks_to_pins.h
+new file mode 100644
+index 0000000000000..931906b5b5f23
+--- /dev/null
++++ b/chrome/browser/ui/spaces/bookmarks_to_pins.h
+@@ -0,0 +1,34 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_SPACES_BOOKMARKS_TO_PINS_H_
++#define CHROME_BROWSER_UI_SPACES_BOOKMARKS_TO_PINS_H_
++
++#include <vector>
++
++#include "chrome/browser/ui/spaces/arc_sidebar_importer.h"
++
++class BrowserWindowInterface;
++
++namespace bookmarks {
++class BookmarkModel;
++}
++
++namespace stedding {
++
++// docs/features/import.md I13: the bookmark tree as a plan's nodes -- the
++// bookmark bar's first, then Other bookmarks; every folder a folder, every
++// bookmark a tab. Ids are "bookmark:<id>", so a second run adds nothing.
++std::vector<spaces::ArcImportPlan::Node> NodesFromBookmarks(
++    const bookmarks::BookmarkModel& model);
++
++// I13, I14: turns the profile's bookmarks into Space-pinned tabs and folders
++// in `browser`'s active Space, and hides the bookmark bar and the star from
++// then on (stedding.bookmarks.converted). Nothing happens without a loaded
++// bookmark model or without a Space model.
++spaces::ArcImportResult ConvertBookmarksToPins(BrowserWindowInterface* browser);
++
++}  // namespace stedding
++
++#endif  // CHROME_BROWSER_UI_SPACES_BOOKMARKS_TO_PINS_H_
+diff --git a/chrome/browser/ui/spaces/bookmarks_to_pins_unittest.cc b/chrome/browser/ui/spaces/bookmarks_to_pins_unittest.cc
+new file mode 100644
+index 0000000000000..f9afa7e602778
+--- /dev/null
++++ b/chrome/browser/ui/spaces/bookmarks_to_pins_unittest.cc
+@@ -0,0 +1,102 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/spaces/bookmarks_to_pins.h"
++
++#include <vector>
++
++#include "chrome/browser/bookmarks/bookmark_model_factory.h"
++#include "chrome/browser/ui/browser.h"
++#include "chrome/browser/ui/spaces/space_model.h"
++#include "chrome/browser/ui/stedding/stedding_prefs.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "chrome/test/base/browser_with_test_window_test.h"
++#include "chrome/test/base/testing_profile.h"
++#include "components/bookmarks/browser/bookmark_model.h"
++#include "components/bookmarks/test/bookmark_test_helpers.h"
++#include "components/prefs/pref_service.h"
++#include "components/tabs/public/folder_tab_collection.h"
++#include "components/tabs/public/tab_collection.h"
++#include "components/tabs/public/tab_interface.h"
++#include "content/public/browser/web_contents.h"
++#include "testing/gtest/include/gtest/gtest.h"
++
++namespace stedding {
++namespace {
++
++class BookmarksToPinsTest : public BrowserWithTestWindowTest {
++ protected:
++  TestingProfile::TestingFactories GetTestingFactories() override {
++    return {TestingProfile::TestingFactory{
++        BookmarkModelFactory::GetInstance(),
++        BookmarkModelFactory::GetDefaultFactory()}};
++  }
++
++  bookmarks::BookmarkModel* model() {
++    bookmarks::BookmarkModel* const model =
++        BookmarkModelFactory::GetForBrowserContext(profile());
++    bookmarks::test::WaitForBookmarkModelToLoad(model);
++    return model;
++  }
++  TabStripModel& tabs() { return *browser()->tab_strip_model(); }
++};
++
++// I13: the bar's bookmarks first, folders nested, every bookmark a pin.
++TEST_F(BookmarksToPinsTest, FolderTreeBecomesPinnedFolders) {
++  bookmarks::BookmarkModel* const bookmarks = model();
++  const bookmarks::BookmarkNode* const bar = bookmarks->bookmark_bar_node();
++  const bookmarks::BookmarkNode* const docs =
++      bookmarks->AddFolder(bar, 0, u"Docs");
++  bookmarks->AddURL(docs, 0, u"A", GURL("https://a.example/"));
++  bookmarks->AddURL(bar, 1, u"B", GURL("https://b.example/"));
++  bookmarks->AddURL(bookmarks->other_node(), 0, u"C",
++                    GURL("https://c.example/"));
++  bookmarks->AddFolder(bar, 2, u"Empty");
++
++  const std::vector<spaces::ArcImportPlan::Node> nodes =
++      NodesFromBookmarks(*bookmarks);
++  ASSERT_EQ(3u, nodes.size()) << "the empty folder is skipped";
++  EXPECT_EQ(spaces::ArcImportPlan::Node::Kind::kFolder, nodes[0].kind);
++  EXPECT_EQ(u"Docs", nodes[0].title);
++  EXPECT_EQ(u"B", nodes[1].title);
++  EXPECT_EQ(u"C", nodes[2].title) << "Other bookmarks after the bar";
++
++  const spaces::ArcImportResult result = ConvertBookmarksToPins(browser());
++  EXPECT_EQ(3u, result.tabs);
++  EXPECT_EQ(1u, result.folders);
++  spaces::SpaceModel& spaces = *spaces::SpaceModel::From(browser());
++  int pinned = 0;
++  int in_folder = 0;
++  for (int i = 0; i < tabs().count(); ++i) {
++    tabs::TabInterface* const tab = tabs().GetTabAtIndex(i);
++    if (spaces.IsSpacePinned(tab)) {
++      ++pinned;
++      EXPECT_TRUE(spaces.HomeUrl(tab).has_value()) << "pins H1";
++    }
++    const tabs::TabCollection* const parent = tab->GetParentCollection();
++    if (parent && parent->type() == tabs::TabCollection::Type::FOLDER) {
++      ++in_folder;
++      EXPECT_EQ("Docs",
++                static_cast<const tabs::FolderTabCollection*>(parent)->title());
++    }
++    EXPECT_TRUE(tab->GetContents()->WasDiscarded()) << "unloaded (I3)";
++  }
++  EXPECT_EQ(2, pinned) << "B and C are Space-pinned";
++  EXPECT_EQ(1, in_folder) << "A sits in the Docs folder";
++
++  const spaces::ArcImportResult again = ConvertBookmarksToPins(browser());
++  EXPECT_EQ(0u, again.tabs) << "idempotent on the bookmark ids";
++  EXPECT_EQ(0u, again.folders);
++}
++
++// I14: the conversion hides the bookmark bar and the star from then on.
++TEST_F(BookmarksToPinsTest, ConversionHidesTheBar) {
++  model();
++  EXPECT_FALSE(profile()->GetPrefs()->GetBoolean(prefs::kBookmarksConverted));
++  ConvertBookmarksToPins(browser());
++  EXPECT_TRUE(profile()->GetPrefs()->GetBoolean(prefs::kBookmarksConverted));
++}
++
++}  // namespace
++}  // namespace stedding
+diff --git a/chrome/browser/ui/stedding/stedding_prefs.cc b/chrome/browser/ui/stedding/stedding_prefs.cc
+index 3d30309dd1c22..a25801e3d5a6e 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs.cc
++++ b/chrome/browser/ui/stedding/stedding_prefs.cc
+@@ -16,6 +16,7 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
+   registry->RegisterIntegerPref(kArchiveIdleHours, 12);
+   registry->RegisterIntegerPref(kArchiveKeepDays, 30);
+   registry->RegisterBooleanPref(kToolbarHideWithSidebar, true);
++  registry->RegisterBooleanPref(kBookmarksConverted, false);
+   registry->RegisterBooleanPref(kWelcomeShown, false);
+   registry->RegisterBooleanPref(kCopyStripTracking, true);
+   registry->RegisterBooleanPref(kUiAnimate, true);
+diff --git a/chrome/browser/ui/stedding/stedding_prefs.h b/chrome/browser/ui/stedding/stedding_prefs.h
+index 2bfb66daf30b1..74c09c24da220 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs.h
++++ b/chrome/browser/ui/stedding/stedding_prefs.h
+@@ -33,6 +33,8 @@ inline constexpr char kArchiveKeepDays[] = "stedding.archive.keep_days";
+ // toolbar T8/T12: the address row hides when the sidebar collapses.
+ inline constexpr char kToolbarHideWithSidebar[] =
+     "stedding.toolbar.hide_with_sidebar";
++// import I14: the bookmarks became pins; the bar and the star stay hidden.
++inline constexpr char kBookmarksConverted[] = "stedding.bookmarks.converted";
+ // privacy Q4: Global Privacy Control, in local state because it becomes a
+ // process-wide feature at startup (Sec-GPC: 1, navigator.globalPrivacyControl).
+ inline constexpr char kGlobalPrivacyControl[] = "stedding.privacy.gpc";
+diff --git a/chrome/browser/ui/views/bookmarks/BUILD.gn b/chrome/browser/ui/views/bookmarks/BUILD.gn
+index eeae178bc668e..26f96391948da 100644
+--- a/chrome/browser/ui/views/bookmarks/BUILD.gn
++++ b/chrome/browser/ui/views/bookmarks/BUILD.gn
+@@ -84,6 +84,7 @@ source_set("impl") {
+   }
+ 
+   deps = [
++    "//chrome/browser/ui/stedding:prefs",
+     ":bookmarks",
+     "//chrome/app:command_ids",
+     "//chrome/app/vector_icons",
+diff --git a/chrome/browser/ui/views/bookmarks/bookmark_page_action_controller.cc b/chrome/browser/ui/views/bookmarks/bookmark_page_action_controller.cc
+index ffe4536ee19f1..824e8d90ccd6c 100644
+--- a/chrome/browser/ui/views/bookmarks/bookmark_page_action_controller.cc
++++ b/chrome/browser/ui/views/bookmarks/bookmark_page_action_controller.cc
+@@ -12,6 +12,7 @@
+ #include "chrome/browser/ui/bookmarks/bookmark_tab_helper.h"
+ #include "chrome/browser/ui/page_action/page_action_controller.h"
+ #include "chrome/browser/ui/page_action/page_action_triggers.h"
++#include "chrome/browser/ui/stedding/stedding_prefs.h"
+ #include "chrome/browser/ui/tabs/contents_observing_tab_feature.h"
+ #include "chrome/browser/ui/ui_features.h"
+ #include "chrome/browser/ui/views/location_bar/content_setting_image_view.h"
+@@ -54,6 +55,11 @@ BookmarkPageActionController::BookmarkPageActionController(
+       base::BindRepeating(
+           &BookmarkPageActionController::UpdatePageActionVisibility,
+           base::Unretained(this)));
++  bookmarks_converted_.Init(
++      stedding::prefs::kBookmarksConverted, pref_service,
++      base::BindRepeating(
++          &BookmarkPageActionController::UpdatePageActionVisibility,
++          base::Unretained(this)));
+   UpdatePageActionVisibility();
+   ObserveBookmarkTabHelper(tab.GetContents());
+ }
+@@ -131,6 +137,10 @@ void BookmarkPageActionController::UpdatePageActionVisibility() {
+ 
+ bool BookmarkPageActionController::ShouldShowPageAction() const {
+   const auto& url = tab().GetContents()->GetLastCommittedURL();
++  // Stedding import I14: no star once the bookmarks are pins.
++  if (bookmarks_converted_.GetValue()) {
++    return false;
++  }
+   return browser_defaults::bookmarks_enabled &&
+          edit_bookmarks_enabled_.GetValue() && url.is_valid() && !IsNTPUrl(url);
+ }
+diff --git a/chrome/browser/ui/views/bookmarks/bookmark_page_action_controller.h b/chrome/browser/ui/views/bookmarks/bookmark_page_action_controller.h
+index 9053d8bb774cc..a3ad220cd0716 100644
+--- a/chrome/browser/ui/views/bookmarks/bookmark_page_action_controller.h
++++ b/chrome/browser/ui/views/bookmarks/bookmark_page_action_controller.h
+@@ -75,6 +75,8 @@ class BookmarkPageActionController : public BookmarkTabHelperObserver,
+ 
+   const raw_ref<page_actions::PageActionController> page_action_controller_;
+   BooleanPrefMember edit_bookmarks_enabled_;
++  // Stedding import I14: the star leaves the moment the bookmarks are pins.
++  BooleanPrefMember bookmarks_converted_;
+ 
+   base::ScopedObservation<BookmarkTabHelper, BookmarkTabHelperObserver>
+       tab_helper_observation_{this};
+diff --git a/chrome/browser/ui/views/commandbar/command_bar_view.cc b/chrome/browser/ui/views/commandbar/command_bar_view.cc
+index f3c45e2fbb534..420f009f3f041 100644
+--- a/chrome/browser/ui/views/commandbar/command_bar_view.cc
++++ b/chrome/browser/ui/views/commandbar/command_bar_view.cc
+@@ -34,6 +34,7 @@
+ #include "chrome/browser/ui/navigator/browser_navigator_params.h"
+ #include "chrome/browser/ui/singleton_tabs.h"
+ #include "chrome/browser/ui/spaces/arc_sidebar_importer.h"
++#include "chrome/browser/ui/spaces/bookmarks_to_pins.h"
+ #include "chrome/browser/ui/spaces/space.h"
+ #include "chrome/browser/ui/spaces/space_colors.h"
+ #include "chrome/browser/ui/spaces/space_commands.h"
+@@ -348,6 +349,13 @@ void CommandBarView::BuildActions() {
+                               },
+                               value)});
+     }
++    // import I16: bookmarks a profile already holds.
++    actions_.push_back({u"Turn Bookmarks into Pinned Tabs", std::u16string(),
++                        base::BindRepeating(
++                            [](Browser* browser) {
++                              stedding::ConvertBookmarksToPins(browser);
++                            },
++                            base::Unretained(browser_))});
+     // archive A7: the archived view.
+     actions_.push_back({u"Show Archived Tabs", std::u16string(),
+                         base::BindRepeating(
+diff --git a/chrome/browser/ui/webui/settings/import_data_handler.cc b/chrome/browser/ui/webui/settings/import_data_handler.cc
+index 07ad45a8be20a..475dcdfee0025 100644
+--- a/chrome/browser/ui/webui/settings/import_data_handler.cc
++++ b/chrome/browser/ui/webui/settings/import_data_handler.cc
+@@ -28,6 +28,7 @@
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+ #include "chrome/browser/ui/select_file_policy/chrome_select_file_policy.h"
++#include "chrome/browser/ui/spaces/bookmarks_to_pins.h"
+ #include "chrome/common/pref_names.h"
+ #include "content/public/browser/browser_thread.h"
+ #include "content/public/browser/web_ui.h"
+@@ -92,6 +93,7 @@ void ImportDataHandler::OnJavascriptDisallowed() {
+ void ImportDataHandler::StartImport(
+     const user_data_importer::SourceProfile& source_profile,
+     uint16_t imported_items) {
++  last_imported_items_ = imported_items;
+   DCHECK_CURRENTLY_ON(BrowserThread::UI);
+ 
+   if (!imported_items) {
+@@ -261,6 +263,22 @@ void ImportDataHandler::ImportEnded() {
+   importer_host_->set_observer(nullptr);
+   importer_host_ = nullptr;
+ 
++  // Stedding import I13: the bookmarks that came in become pins and folders
++  // in the window behind this page (a settings tab, or the welcome flow's
++  // window through WelcomeHost).
++  if (import_did_succeed_ &&
++      (last_imported_items_ & user_data_importer::FAVORITES)) {
++    BrowserWindowInterface* browser =
++        GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
++            web_ui()->GetWebContents());
++    if (!browser && stedding_browser_for_conversion_) {
++      browser = stedding_browser_for_conversion_.Run();
++    }
++    if (browser) {
++      stedding::ConvertBookmarksToPins(browser);
++    }
++  }
++
+   FireWebUIListener("import-data-status-changed",
+                     base::Value(import_did_succeed_ ? kImportStatusSucceeded
+                                                     : kImportStatusFailed));
+diff --git a/chrome/browser/ui/webui/settings/import_data_handler.h b/chrome/browser/ui/webui/settings/import_data_handler.h
+index 89cd5efda8587..40cf88ae75f59 100644
+--- a/chrome/browser/ui/webui/settings/import_data_handler.h
++++ b/chrome/browser/ui/webui/settings/import_data_handler.h
+@@ -9,6 +9,7 @@
+ 
+ #include <memory>
+ 
++#include "base/functional/callback.h"
+ #include "base/memory/raw_ptr.h"
+ #include "chrome/browser/importer/importer_progress_observer.h"
+ #include "chrome/browser/ui/webui/settings/settings_page_ui_handler.h"
+@@ -18,6 +19,8 @@
+ class ExternalProcessImporterHost;
+ class ImporterList;
+ 
++class BrowserWindowInterface;
++
+ namespace settings {
+ 
+ // Chrome personal stuff import data overlay UI handler.
+@@ -72,6 +75,20 @@ class ImportDataHandler : public SettingsPageUIHandler,
+   raw_ptr<ExternalProcessImporterHost> importer_host_;  // weak
+ 
+   bool import_did_succeed_{false};
++  // Stedding import I13: what the last import asked for, so bookmarks that
++  // came in can become pins when it ends.
++  uint16_t last_imported_items_ = 0;
++
++ public:
++  // The welcome flow's page is no tab: it names its window this way.
++  void set_stedding_browser_for_conversion(
++      base::RepeatingCallback<BrowserWindowInterface*()> browser) {
++    stedding_browser_for_conversion_ = std::move(browser);
++  }
++
++ private:
++  base::RepeatingCallback<BrowserWindowInterface*()>
++      stedding_browser_for_conversion_;
+   bool importer_list_loaded_{false};
+ 
+   scoped_refptr<ui::SelectFileDialog> select_file_dialog_;
+diff --git a/chrome/browser/ui/webui/stedding_welcome/stedding_welcome_ui.cc b/chrome/browser/ui/webui/stedding_welcome/stedding_welcome_ui.cc
+index a2092543cc95f..ca5fef553e35e 100644
+--- a/chrome/browser/ui/webui/stedding_welcome/stedding_welcome_ui.cc
++++ b/chrome/browser/ui/webui/stedding_welcome/stedding_welcome_ui.cc
+@@ -6,9 +6,12 @@
+ 
+ #include <memory>
+ 
++#include "base/functional/bind.h"
+ #include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/webui/settings/import_data_handler.h"
+ #include "chrome/browser/ui/webui/stedding_welcome/stedding_welcome_handler.h"
++#include "chrome/browser/ui/webui/stedding_welcome/welcome_host.h"
+ #include "chrome/common/webui_url_constants.h"
+ #include "chrome/grit/stedding_welcome_resources.h"
+ #include "chrome/grit/stedding_welcome_resources_map.h"
+@@ -21,10 +24,11 @@
+ 
+ namespace stedding {
+ 
+-WelcomeUI::WelcomeUI(content::WebUI* web_ui) : content::WebUIController(web_ui) {
++WelcomeUI::WelcomeUI(content::WebUI* web_ui)
++    : content::WebUIController(web_ui) {
+   Profile* const profile = Profile::FromWebUI(web_ui);
+-  content::WebUIDataSource* const source = content::WebUIDataSource::CreateAndAdd(
+-      profile, kWelcomeHost);
++  content::WebUIDataSource* const source =
++      content::WebUIDataSource::CreateAndAdd(profile, kWelcomeHost);
+   webui::SetupWebUIDataSource(source, kSteddingWelcomeResources,
+                               IDR_STEDDING_WELCOME_STEDDING_WELCOME_HTML);
+   // The search-engine icons come from chrome://theme.
+@@ -33,7 +37,15 @@ WelcomeUI::WelcomeUI(content::WebUI* web_ui) : content::WebUIController(web_ui)
+       "img-src chrome://theme chrome://resources 'self' data:;");
+   web_ui->AddMessageHandler(std::make_unique<WelcomeHandler>());
+   // Chromium's own importer UI logic: "initializeImportDialog", "importData".
+-  web_ui->AddMessageHandler(std::make_unique<settings::ImportDataHandler>());
++  auto import_handler = std::make_unique<settings::ImportDataHandler>();
++  // import I13: the page is a dialog over the window, not a tab of it.
++  import_handler->set_stedding_browser_for_conversion(base::BindRepeating(
++      [](content::WebContents* contents) -> BrowserWindowInterface* {
++        const WelcomeHost* const host = WelcomeHost::FromWebContents(contents);
++        return host ? host->browser() : nullptr;
++      },
++      web_ui->GetWebContents()));
++  web_ui->AddMessageHandler(std::move(import_handler));
+ }
+ 
+ WelcomeUI::~WelcomeUI() = default;

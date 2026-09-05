@@ -160,4 +160,6 @@ the operator retests it against Arc. `S-17` signing waits on Apple's organisatio
 `tooling/sign-release` and a signed re-release), `S-18` on a licensing
 decision; `S-40`–`S-43` are the small gaps found while verifying round 5
 (capture toast, download progress on the sidebar button, a Space colour on
-the welcome flow, the About page's version label).
+the welcome flow, the About page's version label). `S-44` is the next body
+of work: `docs/ROUND6-PLAN.md`, the reviewed plan from the Zen mods and
+beyond (four waves, decisions recorded), waiting for the operator's go.

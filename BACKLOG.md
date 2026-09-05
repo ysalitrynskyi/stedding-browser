@@ -11,6 +11,7 @@ refer to `docs/features/<feature>.md`.
 
 | Id | Item | Feature / spec | Notes |
 |---|---|---|---|
+| S-44 | Round 6: Zen mods and beyond | `docs/ROUND6-PLAN.md` | The plan from the 2026-09-04 review of the 77 Zen Browser community mods (zen-browser.app/mods) plus ideas beyond them: four waves, R6-01 onwards, each with spec rows, setting, shortcut, files; decisions D1–D11 recorded there. Not started; implement wave by wave per `docs/AGENT-LOOP.md` |
 | S-43 | About page version label | `docs/release-notes/v0.2.0-beta.2.md` | chrome://settings/help reads "Version 153.0.8010.12 (Developer Build) (arm64)": the modifier comes from Chromium's channel string for non-official builds. Show "Stedding 0.2.0 beta 2 · Chromium 153.0.8010.12" instead (`VERSION` is the source) |
 | S-40 | Capture toast | `docs/features/screenshot.md` C5 | A brief toast with a thumbnail and "Copied · Saved to Downloads" after ⇧⌘2 / ⌥⇧⌘2 / ⇧⌘1; today the only feedback is the file and the clipboard |
 | S-41 | Download progress on the sidebar button | `docs/features/toolbar.md` (downloads, round 5 item 12) | The bottom-left button shows the static icon; Chromium's progress ring and the "download started" animation still target the toolbar button, which appears at the top right during a download |

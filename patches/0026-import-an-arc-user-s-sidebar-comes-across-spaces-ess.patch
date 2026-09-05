@@ -28,18 +28,19 @@ export.
  .../resources/stedding_welcome/app.css        |  21 +
  .../browser/resources/stedding_welcome/app.ts |  46 +
  chrome/browser/ui/spaces/BUILD.gn             |   4 +
- .../browser/ui/spaces/arc_sidebar_importer.cc | 813 ++++++++++++++++++
- .../browser/ui/spaces/arc_sidebar_importer.h  | 158 ++++
+ .../browser/ui/spaces/arc_sidebar_importer.cc | 836 ++++++++++++++++++
+ .../browser/ui/spaces/arc_sidebar_importer.h  | 163 ++++
  .../spaces/arc_sidebar_importer_unittest.cc   | 275 ++++++
+ chrome/browser/ui/spaces/space_model.cc       |   5 +
  chrome/browser/ui/stedding/stedding_prefs.cc  |   2 +
  chrome/browser/ui/stedding/stedding_prefs.h   |   4 +
- .../ui/views/commandbar/command_bar_view.cc   |  36 +
+ .../ui/views/commandbar/command_bar_view.cc   |  16 +
  .../browser/ui/webui/settings/settings_ui.cc  |   2 +
  .../webui/settings/stedding_spaces_handler.cc |  59 +-
  .../webui/settings/stedding_spaces_handler.h  |  12 +
  .../stedding_welcome_handler.cc               |  78 +-
  .../stedding_welcome_handler.h                |  12 +-
- 16 files changed, 1533 insertions(+), 17 deletions(-)
+ 17 files changed, 1546 insertions(+), 17 deletions(-)
  create mode 100644 chrome/browser/ui/spaces/arc_sidebar_importer.cc
  create mode 100644 chrome/browser/ui/spaces/arc_sidebar_importer.h
  create mode 100644 chrome/browser/ui/spaces/arc_sidebar_importer_unittest.cc
@@ -264,10 +265,10 @@ index c8cffabe64462..8625123d73b6b 100644
      "space_model_unittest.cc",
 diff --git a/chrome/browser/ui/spaces/arc_sidebar_importer.cc b/chrome/browser/ui/spaces/arc_sidebar_importer.cc
 new file mode 100644
-index 0000000000000..48ae161ef502a
+index 0000000000000..3914446dcb907
 --- /dev/null
 +++ b/chrome/browser/ui/spaces/arc_sidebar_importer.cc
-@@ -0,0 +1,813 @@
+@@ -0,0 +1,836 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -1040,6 +1041,29 @@ index 0000000000000..48ae161ef502a
 +
 +}  // namespace
 +
++namespace {
++bool& ArcSidebarPresence() {
++  static bool present = false;
++  return present;
++}
++}  // namespace
++
++void PrimeArcSidebarPresence() {
++  static bool asked = false;
++  if (asked) {
++    return;
++  }
++  asked = true;
++  base::ThreadPool::PostTaskAndReplyWithResult(
++      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
++      base::BindOnce([] { return base::PathExists(ArcSidebarPath()); }),
++      base::BindOnce([](bool exists) { ArcSidebarPresence() = exists; }));
++}
++
++bool ArcSidebarPresent() {
++  return ArcSidebarPresence();
++}
++
 +void LoadArcSidebarInfo(ArcSidebarInfoCallback callback) {
 +  base::ThreadPool::PostTaskAndReplyWithResult(
 +      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
@@ -1083,10 +1107,10 @@ index 0000000000000..48ae161ef502a
 +}  // namespace spaces
 diff --git a/chrome/browser/ui/spaces/arc_sidebar_importer.h b/chrome/browser/ui/spaces/arc_sidebar_importer.h
 new file mode 100644
-index 0000000000000..bfd5d57c8ddfe
+index 0000000000000..3a2e9cfeba5b8
 --- /dev/null
 +++ b/chrome/browser/ui/spaces/arc_sidebar_importer.h
-@@ -0,0 +1,158 @@
+@@ -0,0 +1,163 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -1212,6 +1236,11 @@ index 0000000000000..bfd5d57c8ddfe
 +ArcImportResult ApplyArcImport(BrowserWindowInterface* browser,
 +                               const ArcImportPlan& plan,
 +                               const ArcImportOptions& options);
++
++// I4: whether this Mac has the file, learned once off the UI thread at the
++// first window, so the bar can offer the import from its first opening.
++void PrimeArcSidebarPresence();
++bool ArcSidebarPresent();
 +
 +// What the entry points ask before offering an import (I2, I9).
 +struct ArcSidebarInfo {
@@ -1526,6 +1555,29 @@ index 0000000000000..4faa22de4d297
 +
 +}  // namespace
 +}  // namespace spaces
+diff --git a/chrome/browser/ui/spaces/space_model.cc b/chrome/browser/ui/spaces/space_model.cc
+index 8f2873e21b6b5..aef5c5f622e1f 100644
+--- a/chrome/browser/ui/spaces/space_model.cc
++++ b/chrome/browser/ui/spaces/space_model.cc
+@@ -24,6 +24,8 @@
+ #include "chrome/browser/ui/browser.h"
+ #include "chrome/browser/ui/browser_init_state.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/spaces/arc_sidebar_importer.h"
++#include "chrome/browser/ui/spaces/space_router.h"
+ #include "chrome/browser/ui/spaces/tab_space_restore_data.h"
+ #include "chrome/browser/ui/stedding/sleep_tabs.h"
+ #include "chrome/browser/ui/stedding/stedding_prefs.h"
+@@ -74,6 +76,9 @@ SpaceModel::SpaceModel(BrowserWindowInterface& browser) : SpaceModel() {
+   scoped_user_data_.emplace(browser.GetUnownedUserDataHost(), *this);
+   page_theme_color_ =
+       std::make_unique<stedding::PageThemeColorController>(browser);
++  // import I4: the bar's "Import from Arc" row needs to know by the first
++  // opening whether the file exists.
++  PrimeArcSidebarPresence();
+ 
+   // Once per process: the session log is rebuilt from the live browser at
+   // startup and periodically, and Spaces must be re-emitted into it or they
 diff --git a/chrome/browser/ui/stedding/stedding_prefs.cc b/chrome/browser/ui/stedding/stedding_prefs.cc
 index f6ebd39a8727e..49db88131d0df 100644
 --- a/chrome/browser/ui/stedding/stedding_prefs.cc
@@ -1555,7 +1607,7 @@ index 6619d4286e6d4..f97cfb8f0b96d 100644
  void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
  
 diff --git a/chrome/browser/ui/views/commandbar/command_bar_view.cc b/chrome/browser/ui/views/commandbar/command_bar_view.cc
-index 0e7189469f84b..11ca1160cc6d1 100644
+index 0e7189469f84b..f2f307d732635 100644
 --- a/chrome/browser/ui/views/commandbar/command_bar_view.cc
 +++ b/chrome/browser/ui/views/commandbar/command_bar_view.cc
 @@ -9,10 +9,13 @@
@@ -1580,40 +1632,13 @@ index 0e7189469f84b..11ca1160cc6d1 100644
  #include "chrome/browser/ui/spaces/space.h"
  #include "chrome/browser/ui/spaces/space_colors.h"
  #include "chrome/browser/ui/spaces/space_commands.h"
-@@ -221,6 +225,26 @@ struct PrefChoice {
-   const char16_t* name;
- };
- 
-+// import I4: whether this Mac has an Arc sidebar, learned once on the
-+// thread pool; false until known.
-+bool& ArcSidebarKnownFlag() {
-+  static bool known = false;
-+  return known;
-+}
-+
-+bool ArcSidebarKnown() {
-+  static bool asked = false;
-+  if (!asked) {
-+    asked = true;
-+    base::ThreadPool::PostTaskAndReplyWithResult(
-+        FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
-+        base::BindOnce(
-+            [] { return base::PathExists(spaces::ArcSidebarPath()); }),
-+        base::BindOnce([](bool exists) { ArcSidebarKnownFlag() = exists; }));
-+  }
-+  return ArcSidebarKnownFlag();
-+}
-+
- }  // namespace
- 
- void CommandBarView::BuildActions() {
-@@ -305,6 +329,18 @@ void CommandBarView::BuildActions() {
+@@ -305,6 +309,18 @@ void CommandBarView::BuildActions() {
                   base::Unretained(browser_))});
        }
      }
-+    // import I4: the Arc sidebar, when this Mac has one (the check runs
-+    // once, off the UI thread; the row appears from the next bar on).
-+    if (ArcSidebarKnown()) {
++    // import I4: the Arc sidebar, when this Mac has one (the window primed
++    // the check off the UI thread).
++    if (spaces::ArcSidebarPresent()) {
 +      actions_.push_back({u"Import from Arc", std::u16string(),
 +                          base::BindRepeating(
 +                              [](Browser* browser) {

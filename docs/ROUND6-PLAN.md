@@ -316,6 +316,22 @@ said otherwise. Each is also in the item's spec.
   `SwitcherDropIndex`); a split's panes take a Space, a pin and a sleep together
   (splits J4, `SpaceModel::SplitPeers`); the download ring on the sidebar's button
   has its capture (T14). Patch 0025.
+- **Part N, routing (R6-23).** `spaces::SpaceRouter` over `stedding.spaces.routes`
+  and `external_default`; a routed insert or a typed address in a fresh tab moves
+  the tab and the window follows a turn later; links from other apps are marked
+  in `openStartupTabsReplacingNTP:`; the toast undoes; the tab menu's "Always
+  Open <site> in ▸" and the settings page's per-Space rules and dropdown
+  (routing D1–D6, D5 partial). Patch 0027. Not taken: "Route sites here…" on the
+  Space menu and "Sort open tabs by these rules now" (D5's second pass), and the
+  multi-window question (critic #26, TBD until R6-31).
+- **Part M, wave 3 opens (R6-22).** Import from Arc: `ParseArcSidebar` reads
+  Arc's sidebar file into a plan and `ApplyArcImport` applies it (Spaces with icon
+  and nearest swatch, twelve essentials at most, Space-pinned tabs with their
+  home, lists as folders, every tab a discarded restored entry), read through a
+  copy, idempotent on Arc's ids, with the profile binding named in the summary
+  (import I1–I4, I8–I12); rows on the welcome flow and the settings page, and a
+  bar action. Patch 0026. Not taken: I5 (the 400-tab budget run), I6 (history and
+  passwords), I7 (splits and the archive, which wait for J1 and A8).
 - **Not in this pass.** R6-19's other J rows (J1, J3, J5, J6 keep their rows for
   the splits pass), and the menus' Move to Folder ▸ with existing folders.
 
@@ -877,8 +893,8 @@ From the critic: #11 (owner).
 
 | Id | Name | Source | Effort | Setting | Shortcut | Status |
 |---|---|---|---|---|---|---|
-| R6-22 | Import from Arc (StorableSidebar.json): Spaces, pins, folders, favorites | idea "Import from Arc" (judges 8.33, build×3) | M | button "Import from Arc…"; welcome row | none; ⌘T "Import from Arc" | planned |
-| R6-23 | Air Traffic Control: route sites to Spaces | idea "Air Traffic Control" (judges 7.33, build×3) | M | per-Space Routes list; stedding.spaces.external_default | none | planned |
+| R6-22 | Import from Arc (StorableSidebar.json): Spaces, pins, folders, favorites | idea "Import from Arc" (judges 8.33, build×3) | M | button "Import from Arc…"; welcome row | none; ⌘T "Import from Arc" | built (0026) |
+| R6-23 | Air Traffic Control: route sites to Spaces | idea "Air Traffic Control" (judges 7.33, build×3) | M | per-Space Routes list; stedding.spaces.external_default | none | built (0027) |
 | R6-24 | Archived view: what auto-archive and Clear closed, restorable to its Space | idea "Archived view" (judges 7.33, build×3); Floating History's Library panel deferred to grow around this data layer | M | stedding.archive.keep_days | none; ⌘T "Show archived tabs" | planned |
 | R6-25 | The address row hides with the sidebar; ⇧⌘D shows it on its own | idea "The bar goes with the sidebar" (judges 7, build×2, maybe×1); mod "Hide Toolbar" (judges 6, maybe×2, build×1), merged: ⇧⌘D, the localhost exception | M (T8 first; T10 and T13 are the second half) | stedding.toolbar.hide_with_sidebar | ⌘S; ⇧⌘D | planned |
 | R6-26 | Tracker-free defaults as one Privacy block | idea "Tracker-free defaults as one settings block" (judges 7.67, build×3); mod "No Top Sites" (judges 5.67, build×1, maybe×2): the kSearchSuggestEnabled default flip merged as Q7 | M (Q4 is the M-sized piece; the rest is default flips) | Privacy block (Chromium prefs + stedding.privacy.gpc) | none | planned |

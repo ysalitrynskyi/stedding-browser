@@ -219,6 +219,20 @@ perform; a param that recreates the state IS the test surface.
     directory, so `cd` to the scratch directory first; the feature params
     `folder_tabs` and `pin_tabs` do not exist, a folder comes from the ⌘T
     action "Move Tab to New Folder" and a Space pin from "Pin to This Space".
+21. **Wave 4's lessons.** `content::WebContents::Create` makes a plain
+    WebContents; `WebContentsTester::For` on it is a wrong cast that only
+    sometimes faults (patch 0027's restored-tab test did, once the layout
+    shifted): a test that drives navigation makes its contents with
+    `WebContentsTester::CreateTestWebContents`. A view's `UnownedUserData` must
+    die before its window: a per-window mark lives on `BrowserWindowFeatures`
+    as a plain flag. `tooling/drive` passes `--window-size` and
+    `--window-position`, which the window sizer applies to every window the
+    process opens, so a little window's own bounds only show on a plain
+    launch; and its `shot` picks the window behind when two share a position:
+    `screencapture -x -R x,y,w,h` of the front one instead. The
+    `extra_spaces` feature param adds a Space to every new window, and with
+    the registry that Space is shared: make the second Space through the
+    sidebar's "+" when capturing a second window.
 
 ## Open items
 

@@ -387,8 +387,15 @@ said otherwise. Each is also in the item's spec.
   WebContents into the window's Spaces; the archiver closes an idle one after six
   hours; the setting and the shortcut rows (E1–E5). Patch 0035. Not taken: E1's
   thin bar of its own (Chromium's popup bar serves), a VoiceOver label for it.
+- **Part W, the registry (R6-31), the last of the round.** `SpaceRegistry`
+  (KeyedService, `stedding.spaces.registry`); every normal window's model mirrors
+  it and forwards its mutators; the first window seeds it from its session; a
+  Blank Window opts out (G0, G1, G3–G5). Patch 0036. Not taken: ghost rows and
+  the click that moves a pinned tab between windows (G2), one backup per
+  profile.
 - **Not in this pass.** R6-19's other J rows (J1, J3, J5, J6 keep their rows for
-  the splits pass), and the menus' Move to Folder ▸ with existing folders.
+  the splits pass), the menus' Move to Folder ▸ with existing folders, G2, the
+  little window's own bar (E1), and T13.
 
 #### R6-01 · Shortcut reference block in chrome://settings/stedding
 
@@ -1179,7 +1186,7 @@ From the critic: #7 (this item), #34 (the round trip).
 | Id | Name | Source | Effort | Setting | Shortcut | Status |
 |---|---|---|---|---|---|---|
 | R6-30 | Little window: links from other apps open small | idea "Little window" (judges 6.33, build×1, maybe×2); judges: effort closer to L, needs 12 and 21 first | L | stedding.little.enabled; shares stedding.spaces.external_default | ⌘O / ⇧⌘O / Esc / ⌃1–9 inside | built (0035), E1 partial |
-| R6-31 | One sidebar for every window (SpaceRegistry) — needs an ADR first | idea "One sidebar for every window" (judges 6.33, maybe×2, build×1); judges: L, needs its ADR and a design pass before an estimate | L | none | ⌘N; ⌥⇧⌘N | planned |
+| R6-31 | One sidebar for every window (SpaceRegistry) — needs an ADR first | idea "One sidebar for every window" (judges 6.33, maybe×2, build×1); judges: L, needs its ADR and a design pass before an estimate | L | none | ⌘N; ⌥⇧⌘N | built (0036), G2 open |
 | R6-32 | Private windows wear a different coat | idea "Private windows wear a different coat" (judges 8, build×3); mod "Private Mode Highlighting" (judges 6, skip×1, build×1, maybe×1), merged: the avatar badge back for OTR | M | none | ⇧⌘N | built (0034) |
 
 #### R6-30 · Little window: links from other apps open small — plan item 15

@@ -1,0 +1,1035 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Sat, 5 Sep 2026 16:17:32 -0400
+Subject: spaces: one sidebar for every window, the SpaceRegistry
+
+A profile-level SpaceRegistry (a KeyedService, kept in the preference
+stedding.spaces.registry) owns the Space list: order, names, icons,
+colours, and a profile id that stays empty in round 6. Every normal
+window's SpaceModel mirrors it: the first window of a profile seeds the
+registry with the Spaces its session brought, later windows merge theirs
+and then follow the registry whole, and every mutator (add, remove, move,
+rename, icon, colour) goes through the registry and comes back to every
+window through its observer. The window keeps only its active Space and
+its tabs' memberships, so the session's per-window data and the rebuild
+path stay as they were. A Blank Window (opt-shift-cmd-N, the bar) opts out
+with one Space of its own; a private window has no model at all
+(docs/features/windows.md G0-G1, G3-G5; ADR 0016).
+
+Why: docs/ROUND6-PLAN.md wave 4, R6-31: cmd-N must show the same sidebar.
+Removable when: Chromium's tab strip keeps workspaces per profile.
+---
+ .../browser/global_keyboard_shortcuts_mac.mm  |   2 +
+ ...hrome_browser_main_extra_parts_profiles.cc |   2 +
+ .../browser/ui/browser_command_controller.cc  |   8 +
+ chrome/browser/ui/cocoa/accelerators_cocoa.mm |   3 +
+ chrome/browser/ui/spaces/BUILD.gn             |   5 +
+ chrome/browser/ui/spaces/space_commands.cc    |   9 +
+ chrome/browser/ui/spaces/space_commands.h     |   5 +
+ chrome/browser/ui/spaces/space_model.cc       | 157 ++++++++++++++++
+ chrome/browser/ui/spaces/space_model.h        |  20 +-
+ .../ui/spaces/space_model_window_unittest.cc  |  40 ++++
+ chrome/browser/ui/spaces/space_registry.cc    | 175 ++++++++++++++++++
+ chrome/browser/ui/spaces/space_registry.h     |  88 +++++++++
+ .../ui/spaces/space_registry_factory.cc       |  43 +++++
+ .../ui/spaces/space_registry_factory.h        |  35 ++++
+ .../ui/spaces/space_registry_unittest.cc      |  58 ++++++
+ .../ui/stedding/stedding_command_ids.h        |   2 +
+ chrome/browser/ui/stedding/stedding_prefs.cc  |   1 +
+ chrome/browser/ui/stedding/stedding_prefs.h   |   2 +
+ .../ui/views/commandbar/command_bar_view.cc   |   1 +
+ .../settings/stedding_shortcuts_handler.cc    |   2 +
+ 20 files changed, 657 insertions(+), 1 deletion(-)
+ create mode 100644 chrome/browser/ui/spaces/space_registry.cc
+ create mode 100644 chrome/browser/ui/spaces/space_registry.h
+ create mode 100644 chrome/browser/ui/spaces/space_registry_factory.cc
+ create mode 100644 chrome/browser/ui/spaces/space_registry_factory.h
+ create mode 100644 chrome/browser/ui/spaces/space_registry_unittest.cc
+
+diff --git a/chrome/browser/global_keyboard_shortcuts_mac.mm b/chrome/browser/global_keyboard_shortcuts_mac.mm
+index e92d4e2c45a38..b1b0418e4444f 100644
+--- a/chrome/browser/global_keyboard_shortcuts_mac.mm
++++ b/chrome/browser/global_keyboard_shortcuts_mac.mm
+@@ -150,6 +150,8 @@ const std::vector<KeyboardShortcutData>& GetShortcutsNotPresentInMainMenu() {
+       // closes the window.
+       {true,  true,  false, false, kVK_ANSI_O,            IDC_STEDDING_LITTLE_PROMOTE_SPLIT},
+       {false, false, false, false, kVK_Escape,            IDC_STEDDING_LITTLE_CLOSE},
++      // Stedding windows G4: Option-Shift-Cmd-N opens a Blank Window.
++      {true,  true,  false, true,  kVK_ANSI_N,            IDC_STEDDING_NEW_BLANK_WINDOW},
+       {true,  false, false, true,  kVK_UpArrow,           IDC_SELECT_PREVIOUS_TAB},
+       {false, false, false, false, kVK_F6,                IDC_FOCUS_NEXT_PANE},
+       {false, true,  false, false, kVK_F6,                IDC_FOCUS_PREVIOUS_PANE},
+diff --git a/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc b/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
+index de5cbeb641bb5..37938d5c0cdc5 100644
+--- a/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
++++ b/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
+@@ -268,6 +268,7 @@
+ #include "chrome/browser/ui/safety_hub/revoked_permissions_os_notification_display_manager_factory.h"
+ #include "chrome/browser/ui/safety_hub/revoked_permissions_service_factory.h"
+ #include "chrome/browser/ui/signin/dice_migration_service_factory.h"
++#include "chrome/browser/ui/spaces/space_registry_factory.h"
+ #include "chrome/browser/ui/tabs/pinned_tab_service_factory.h"
+ #include "chrome/browser/ui/toolbar/pinned_toolbar/pinned_toolbar_actions_model_factory.h"
+ #include "chrome/browser/ui/toolbar/toolbar_actions_model_factory.h"
+@@ -1555,6 +1556,7 @@ void ChromeBrowserMainExtraPartsProfiles::
+   SyncServiceFactory::GetInstance();
+   tab_groups::TabGroupSyncServiceFactory::GetInstance();
+   TabRestoreServiceFactory::GetInstance();
++  spaces::SpaceRegistryFactory::GetInstance();
+ #if BUILDFLAG(IS_ANDROID)
+   tabs::TabStateStorageServiceFactory::GetInstance();
+ #endif
+diff --git a/chrome/browser/ui/browser_command_controller.cc b/chrome/browser/ui/browser_command_controller.cc
+index 46c82e9b1b581..34f371c920187 100644
+--- a/chrome/browser/ui/browser_command_controller.cc
++++ b/chrome/browser/ui/browser_command_controller.cc
+@@ -931,6 +931,10 @@ void BrowserCommandController::HandleCommandWithDisposition(
+         browser_->GetWindow()->Close();
+       }
+       break;
++    // Stedding windows G4.
++    case IDC_STEDDING_NEW_BLANK_WINDOW:
++      spaces::OpenBlankWindow(browser_->GetProfile());
++      break;
+     // Stedding toolbar T10: the address row on its own.
+     case IDC_STEDDING_TOGGLE_ADDRESS_ROW:
+       if (stedding::AddressRow* const row =
+@@ -2085,6 +2089,10 @@ void BrowserCommandController::InitCommandState() {
+   command_updater_->UpdateCommandEnabled(IDC_STEDDING_CAPTURE_REGION, true);
+   command_updater_->UpdateCommandEnabled(IDC_STEDDING_CAPTURE_FULL_PAGE, true);
+   command_updater_->UpdateCommandEnabled(IDC_STEDDING_TOGGLE_ADDRESS_ROW, true);
++  command_updater_->UpdateCommandEnabled(
++      IDC_STEDDING_NEW_BLANK_WINDOW, !browser_->GetProfile()->IsOffTheRecord());
++  command_updater_->UpdateCommandEnabled(
++      IDC_STEDDING_NEW_BLANK_WINDOW, !browser_->GetProfile()->IsOffTheRecord());
+   // little E2: only a little window answers these.
+   command_updater_->UpdateCommandEnabled(IDC_STEDDING_LITTLE_PROMOTE_SPLIT,
+                                          stedding::IsLittleWindow(browser_));
+diff --git a/chrome/browser/ui/cocoa/accelerators_cocoa.mm b/chrome/browser/ui/cocoa/accelerators_cocoa.mm
+index da5bceb5a145c..43a700fcadd34 100644
+--- a/chrome/browser/ui/cocoa/accelerators_cocoa.mm
++++ b/chrome/browser/ui/cocoa/accelerators_cocoa.mm
+@@ -62,6 +62,9 @@ const struct AcceleratorMapping {
+     {IDC_STEDDING_LITTLE_PROMOTE_SPLIT, ui::EF_COMMAND_DOWN | ui::EF_SHIFT_DOWN,
+      ui::VKEY_O},
+     {IDC_STEDDING_LITTLE_CLOSE, ui::EF_NONE, ui::VKEY_ESCAPE},
++    // windows G4: a Blank Window.
++    {IDC_STEDDING_NEW_BLANK_WINDOW,
++     ui::EF_COMMAND_DOWN | ui::EF_SHIFT_DOWN | ui::EF_ALT_DOWN, ui::VKEY_N},
+     // toolbar T10: the address row on its own.
+     {IDC_STEDDING_TOGGLE_ADDRESS_ROW, ui::EF_COMMAND_DOWN | ui::EF_SHIFT_DOWN,
+      ui::VKEY_D},
+diff --git a/chrome/browser/ui/spaces/BUILD.gn b/chrome/browser/ui/spaces/BUILD.gn
+index bec70322d4901..1f40efe23295e 100644
+--- a/chrome/browser/ui/spaces/BUILD.gn
++++ b/chrome/browser/ui/spaces/BUILD.gn
+@@ -22,6 +22,8 @@ source_set("spaces") {
+     "bookmarks_to_pins.h",
+     "sidebar_backup.h",
+     "space.h",
++    "space_registry.h",
++    "space_registry_factory.h",
+     "space_colors.h",
+     "space_commands.h",
+     "space_id.h",
+@@ -33,6 +35,8 @@ source_set("spaces") {
+     "bookmarks_to_pins.cc",
+     "sidebar_backup.cc",
+     "space.cc",
++    "space_registry.cc",
++    "space_registry_factory.cc",
+     "space_commands.cc",
+     "space_model.cc",
+     "tab_space_restore_data.cc",
+@@ -78,6 +82,7 @@ source_set("unit_tests") {
+     "session_rebuild_unittest.cc",
+     "sidebar_backup_unittest.cc",
+     "space_commands_unittest.cc",
++    "space_registry_unittest.cc",
+     "space_model_unittest.cc",
+     "space_model_window_unittest.cc",
+     "space_router_unittest.cc",
+diff --git a/chrome/browser/ui/spaces/space_commands.cc b/chrome/browser/ui/spaces/space_commands.cc
+index 0be3aa9f93a02..4172878a0e983 100644
+--- a/chrome/browser/ui/spaces/space_commands.cc
++++ b/chrome/browser/ui/spaces/space_commands.cc
+@@ -11,6 +11,7 @@
+ #include "chrome/browser/ui/browser_commands.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/spaces/space.h"
++#include "chrome/browser/ui/spaces/space_model.h"
+ #include "chrome/browser/ui/stedding/stedding_prefs.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "chrome/browser/ui/tabs/tab_strip_user_gesture_details.h"
+@@ -20,6 +21,14 @@
+ 
+ namespace spaces {
+ 
++void OpenBlankWindow(Profile* profile) {
++  if (!profile) {
++    return;
++  }
++  SpaceModel::SetNextWindowBlank();
++  chrome::NewEmptyWindow(profile, /*should_trigger_session_restore=*/false);
++}
++
+ namespace {
+ 
+ SpaceModel* ModelForCommands(BrowserWindowInterface* browser) {
+diff --git a/chrome/browser/ui/spaces/space_commands.h b/chrome/browser/ui/spaces/space_commands.h
+index 9294dfabbc0cd..0e279754320de 100644
+--- a/chrome/browser/ui/spaces/space_commands.h
++++ b/chrome/browser/ui/spaces/space_commands.h
+@@ -13,9 +13,14 @@
+ #include "chrome/browser/ui/spaces/space_model.h"
+ 
+ class BrowserWindowInterface;
++class Profile;
+ 
+ namespace spaces {
+ 
++// windows G4: a new window that opts out of the registry -- Arc's Blank
++// Window -- with one Space of its own.
++void OpenBlankWindow(Profile* profile);
++
+ // Arc's keyboard for Spaces (docs/features/spaces.md B18-B23), as free
+ // functions the command controller and the menu bar call. Each is a no-op in
+ // a window without Spaces.
+diff --git a/chrome/browser/ui/spaces/space_model.cc b/chrome/browser/ui/spaces/space_model.cc
+index f96ab42d2e512..909afbb5dc073 100644
+--- a/chrome/browser/ui/spaces/space_model.cc
++++ b/chrome/browser/ui/spaces/space_model.cc
+@@ -20,6 +20,7 @@
+ #include "base/token.h"
+ #include "base/values.h"
+ #include "chrome/browser/browser_process.h"
++#include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/sessions/session_service.h"
+ #include "chrome/browser/sessions/session_service_factory.h"
+ #include "chrome/browser/ui/archive/archive_mark.h"
+@@ -28,6 +29,8 @@
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/spaces/arc_sidebar_importer.h"
+ #include "chrome/browser/ui/spaces/sidebar_backup.h"
++#include "chrome/browser/ui/spaces/space_registry.h"
++#include "chrome/browser/ui/spaces/space_registry_factory.h"
+ #include "chrome/browser/ui/spaces/space_router.h"
+ #include "chrome/browser/ui/spaces/tab_space_restore_data.h"
+ #include "chrome/browser/ui/stedding/address_row.h"
+@@ -53,6 +56,16 @@
+ 
+ namespace spaces {
+ 
++namespace {
++
++// windows G4: set by SetNextWindowBlank, consumed by the next model made.
++bool& NextWindowIsBlank() {
++  static bool blank = false;
++  return blank;
++}
++
++}  // namespace
++
+ DEFINE_USER_DATA(SpaceModel);
+ 
+ // static
+@@ -130,6 +143,17 @@ SpaceModel::SpaceModel(BrowserWindowInterface& browser) : SpaceModel() {
+     }
+   }
+ 
++  // windows G1: every normal window of a profile mirrors one registry; a
++  // Blank Window (G4) and a private window keep a list of their own.
++  if (!std::exchange(NextWindowIsBlank(), false) &&
++      !browser.GetProfile()->IsOffTheRecord()) {
++    registry_ = SpaceRegistryFactory::GetForProfile(browser.GetProfile());
++    if (registry_) {
++      SyncWithRegistry(/*seed=*/true);
++      registry_observation_.Observe(registry_);
++    }
++  }
++
+   // A window can be asked to start with more than one Space so that multi-Space
+   // states can be screenshotted and tested. Zero in normal use.
+   for (int i = 0; i < stedding::kExtraSpacesForTesting.Get(); ++i) {
+@@ -229,7 +253,121 @@ void SpaceModel::AppendRebuildCommands(
+   }
+ }
+ 
++// static
++void SpaceModel::SetNextWindowBlank() {
++  NextWindowIsBlank() = true;
++}
++
++void SpaceModel::OnRegistryChanged() {
++  SyncWithRegistry(/*seed=*/false);
++}
++
++void SpaceModel::SyncWithRegistry(bool seed) {
++  if (!registry_) {
++    return;
++  }
++  if (seed) {
++    // What this window brought joins the registry, kept by id: the first
++    // window of a profile fills it with whatever it has; a later window adds
++    // only Spaces its session gave a name, an icon or a chosen colour, never
++    // the bare default Space every new window starts with.
++    const bool first = registry_->empty();
++    for (const std::unique_ptr<Space>& space : spaces_) {
++      if (!first && space->name().empty() && space->icon().empty() &&
++          !space->color_chosen()) {
++        continue;
++      }
++      RegistryEntry entry(space->id(), space->name(), space->color());
++      entry.icon = space->icon();
++      entry.color_chosen = space->color_chosen();
++      registry_->AddExisting(entry);
++    }
++  }
++  // Then the window is the registry: kept objects updated, new ones made,
++  // gone ones dropped with their tabs moved, all in the registry's order.
++  std::vector<std::unique_ptr<Space>> old = std::move(spaces_);
++  spaces_.clear();
++  std::vector<SpaceId> added;
++  std::vector<SpaceId> changed;
++  for (const RegistryEntry& entry : registry_->entries()) {
++    auto it = std::ranges::find_if(old, [&](const std::unique_ptr<Space>& s) {
++      return s && s->id() == entry.id;
++    });
++    if (it != old.end()) {
++      Space* const space = it->get();
++      const bool differs = space->name() != entry.name ||
++                           space->icon() != entry.icon ||
++                           space->color() != entry.color;
++      space->SetName(entry.name);
++      space->SetIcon(entry.icon);
++      space->SetColor(entry.color);
++      space->set_color_chosen(entry.color_chosen);
++      if (differs) {
++        changed.push_back(entry.id);
++      }
++      spaces_.push_back(std::move(*it));
++    } else {
++      auto space = std::make_unique<Space>(entry.id, entry.name, entry.color);
++      space->SetIcon(entry.icon);
++      space->set_color_chosen(entry.color_chosen);
++      spaces_.push_back(std::move(space));
++      added.push_back(entry.id);
++    }
++  }
++  if (spaces_.empty()) {
++    // A registry with nothing in it: this window's own list stays.
++    spaces_ = std::move(old);
++    return;
++  }
++  std::vector<SpaceId> removed;
++  for (std::unique_ptr<Space>& space : old) {
++    if (space) {
++      removed.push_back(space->id());
++    }
++  }
++  if (!GetSpace(active_id_)) {
++    active_id_ = spaces_.front()->id();
++  }
++  std::vector<tabs::TabInterface*> moved;
++  for (const SpaceId& id : removed) {
++    last_active_.erase(id);
++    history_.erase(id);
++    for (auto& [handle, space_id] : tab_spaces_) {
++      if (space_id == id) {
++        space_id = active_id_;
++        if (tabs::TabInterface* const tab = handle.Get()) {
++          SaveTabToSession(tab, active_id_);
++          moved.push_back(tab);
++        }
++      }
++    }
++  }
++  for (tabs::TabInterface* const tab : moved) {
++    observers_.Notify(&Observer::OnTabSpaceChanged, tab);
++  }
++  for (const SpaceId& id : added) {
++    observers_.Notify(&Observer::OnSpaceAdded, id);
++  }
++  for (const SpaceId& id : removed) {
++    observers_.Notify(&Observer::OnSpaceRemoved, id);
++  }
++  for (const SpaceId& id : changed) {
++    observers_.Notify(&Observer::OnSpaceMetadataChanged, id);
++  }
++  if (added.empty() && removed.empty() && changed.empty()) {
++    // An order change: the switcher rebuilds on any metadata change.
++    observers_.Notify(&Observer::OnSpaceMetadataChanged, active_id_);
++  }
++  SaveToSession();
++}
++
+ Space* SpaceModel::AddSpace(std::string name, SkColor color) {
++  if (registry_) {
++    // The registry's change comes back through OnRegistryChanged, which
++    // makes this window's Space (windows G1).
++    const SpaceId id = registry_->Add(std::move(name), color);
++    return GetSpace(id);
++  }
+   spaces_.push_back(
+       std::make_unique<Space>(SpaceId::GenerateNew(), std::move(name), color));
+   Space* added = spaces_.back().get();
+@@ -239,6 +377,9 @@ Space* SpaceModel::AddSpace(std::string name, SkColor color) {
+ }
+ 
+ bool SpaceModel::MoveSpace(const SpaceId& id, int delta) {
++  if (registry_) {
++    return registry_->Move(id, delta);
++  }
+   const auto it = std::ranges::find_if(
+       spaces_, [&](const auto& space) { return space->id() == id; });
+   if (it == spaces_.end() || delta == 0) {
+@@ -265,6 +406,10 @@ bool SpaceModel::RemoveSpace(const SpaceId& id) {
+   if (spaces_.size() <= 1u || id == active_id_) {
+     return false;
+   }
++  if (registry_) {
++    // The sync moves the tabs and tells the observers.
++    return registry_->Remove(id);
++  }
+   auto it = std::ranges::find_if(
+       spaces_,
+       [&id](const std::unique_ptr<Space>& s) { return s->id() == id; });
+@@ -732,6 +877,10 @@ void SpaceModel::ClearUnpinnedTabs() {
+ }
+ 
+ void SpaceModel::SetSpaceName(const SpaceId& id, std::string name) {
++  if (registry_) {
++    registry_->SetName(id, std::move(name));
++    return;
++  }
+   Space* space = GetSpace(id);
+   if (!space) {
+     return;
+@@ -742,6 +891,10 @@ void SpaceModel::SetSpaceName(const SpaceId& id, std::string name) {
+ }
+ 
+ void SpaceModel::SetSpaceColor(const SpaceId& id, SkColor color) {
++  if (registry_) {
++    registry_->SetColor(id, color, /*chosen=*/true);
++    return;
++  }
+   Space* space = GetSpace(id);
+   if (!space) {
+     return;
+@@ -752,6 +905,10 @@ void SpaceModel::SetSpaceColor(const SpaceId& id, SkColor color) {
+ }
+ 
+ void SpaceModel::SetSpaceIcon(const SpaceId& id, std::string icon) {
++  if (registry_) {
++    registry_->SetIcon(id, std::move(icon));
++    return;
++  }
+   Space* const space = GetSpace(id);
+   if (!space) {
+     return;
+diff --git a/chrome/browser/ui/spaces/space_model.h b/chrome/browser/ui/spaces/space_model.h
+index 674aaed83699e..a311b1b316258 100644
+--- a/chrome/browser/ui/spaces/space_model.h
++++ b/chrome/browser/ui/spaces/space_model.h
+@@ -18,11 +18,13 @@
+ #include "base/memory/weak_ptr.h"
+ #include "base/observer_list.h"
+ #include "base/observer_list_types.h"
++#include "base/scoped_observation.h"
+ #include "base/time/time.h"
+ #include "base/timer/timer.h"
+ #include "chrome/browser/sessions/stedding_session_rebuild.h"
+ #include "chrome/browser/ui/spaces/space.h"
+ #include "chrome/browser/ui/spaces/space_id.h"
++#include "chrome/browser/ui/spaces/space_registry.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
+ #include "components/prefs/pref_change_registrar.h"
+ #include "components/sessions/core/session_id.h"
+@@ -66,7 +68,8 @@ inline constexpr char kSessionTabHomeKey[] = "stedding.home";
+ // The model observes the tab strip so that membership is decided when a tab
+ // arrives, not when something happens to ask: a tab opened in a Space belongs
+ // to that Space from its first frame (B1), and a tab that leaves is forgotten.
+-class SpaceModel : public TabStripModelObserver {
++class SpaceModel : public TabStripModelObserver,
++                   public SpaceRegistry::Observer {
+  public:
+   DECLARE_USER_DATA(SpaceModel);
+ 
+@@ -105,6 +108,11 @@ class SpaceModel : public TabStripModelObserver {
+     const raw_ptr<SpaceModel> model_;
+   };
+ 
++  // windows G4: the next window made opts out of the registry (a Blank
++  // Window); consumed by that window's model.
++  static void SetNextWindowBlank();
++  bool follows_registry() const { return registry_ != nullptr; }
++
+   // A model with no window: nothing is observed and no tab is ever activated.
+   // For tests and for windows that have Spaces in name only.
+   SpaceModel();
+@@ -113,6 +121,9 @@ class SpaceModel : public TabStripModelObserver {
+   SpaceModel(const SpaceModel&) = delete;
+   SpaceModel& operator=(const SpaceModel&) = delete;
+ 
++  // SpaceRegistry::Observer:
++  void OnRegistryChanged() override;
++
+   void AddObserver(Observer* observer);
+   void RemoveObserver(Observer* observer);
+ 
+@@ -317,6 +328,13 @@ class SpaceModel : public TabStripModelObserver {
+   // tab strip, while the window is closing, or when the strip is empty.
+   void EnsureActiveSpaceHasAVisibleTab();
+ 
++  // windows G1: the registry this window mirrors, or null for a blank
++  // window, a test model, or a private window.
++  void SyncWithRegistry(bool seed);
++  raw_ptr<SpaceRegistry> registry_ = nullptr;
++  base::ScopedObservation<SpaceRegistry, SpaceRegistry::Observer>
++      registry_observation_{this};
++
+   std::vector<std::unique_ptr<Space>> spaces_;
+   SpaceId active_id_;
+   base::ObserverList<Observer> observers_;
+diff --git a/chrome/browser/ui/spaces/space_model_window_unittest.cc b/chrome/browser/ui/spaces/space_model_window_unittest.cc
+index 7a296aed2b3c7..cf0f5d4c9a3d4 100644
+--- a/chrome/browser/ui/spaces/space_model_window_unittest.cc
++++ b/chrome/browser/ui/spaces/space_model_window_unittest.cc
+@@ -748,6 +748,46 @@ TEST_F(PopupSpaceTest, PopupWindowsHaveNoSpaces) {
+   EXPECT_EQ(nullptr, SpaceModel::From(browser()));
+ }
+ 
++// windows G1: a second window of the profile shows the same Spaces, and a
++// change in one shows in the other.
++TEST_F(SpaceWindowTest, SecondWindowSeesTheSameSpaces) {
++  ASSERT_TRUE(model().follows_registry());
++  Space* const work = model().AddSpace("Work", SK_ColorBLUE);
++  std::unique_ptr<Browser> second =
++      CreateBrowser(profile(), Browser::TYPE_NORMAL, /*hosted_app=*/false);
++  SpaceModel* const other = SpaceModel::From(second.get());
++  ASSERT_TRUE(other);
++  ASSERT_EQ(2u, other->size());
++  EXPECT_EQ(model().spaces()[0]->id(), other->spaces()[0]->id());
++  EXPECT_EQ(work->id(), other->spaces()[1]->id());
++  EXPECT_EQ("Work", other->GetSpace(work->id())->name());
++
++  other->SetSpaceName(work->id(), "Office");
++  EXPECT_EQ("Office", work->name()) << "renamed in one, renamed in all";
++  Space* const play = other->AddSpace("Play", SK_ColorGREEN);
++  ASSERT_EQ(3u, model().size());
++  EXPECT_EQ("Play", model().GetSpace(play->id())->name());
++  EXPECT_TRUE(model().MoveSpace(play->id(), -2));
++  EXPECT_EQ(play->id(), other->spaces()[0]->id()) << "the order is shared";
++  second->tab_strip_model()->CloseAllTabs();
++}
++
++// windows G4: a Blank Window keeps a list of its own.
++TEST_F(SpaceWindowTest, BlankWindowHasItsOwnSpaces) {
++  model().AddSpace("Work", SK_ColorBLUE);
++  SpaceModel::SetNextWindowBlank();
++  std::unique_ptr<Browser> blank =
++      CreateBrowser(profile(), Browser::TYPE_NORMAL, /*hosted_app=*/false);
++  SpaceModel* const other = SpaceModel::From(blank.get());
++  ASSERT_TRUE(other);
++  EXPECT_FALSE(other->follows_registry());
++  EXPECT_EQ(1u, other->size());
++  other->AddSpace("Mine", SK_ColorRED);
++  EXPECT_EQ(2u, other->size());
++  EXPECT_EQ(2u, model().size()) << "nothing reaches the registry";
++  blank->tab_strip_model()->CloseAllTabs();
++}
++
+ // private V3: a private window has no Space model at all.
+ TEST_F(SpaceWindowTest, PrivateWindowHasNoSpaceModel) {
+   Profile* const otr =
+diff --git a/chrome/browser/ui/spaces/space_registry.cc b/chrome/browser/ui/spaces/space_registry.cc
+new file mode 100644
+index 0000000000000..8d216273c8413
+--- /dev/null
++++ b/chrome/browser/ui/spaces/space_registry.cc
+@@ -0,0 +1,175 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/spaces/space_registry.h"
++
++#include <algorithm>
++#include <utility>
++
++#include "base/token.h"
++#include "chrome/browser/ui/stedding/stedding_prefs.h"
++#include "components/prefs/pref_service.h"
++
++namespace spaces {
++
++RegistryEntry::RegistryEntry(SpaceId id, std::string name, SkColor color)
++    : id(id), name(std::move(name)), color(color) {}
++RegistryEntry::RegistryEntry(const RegistryEntry& other) = default;
++RegistryEntry& RegistryEntry::operator=(const RegistryEntry& other) = default;
++RegistryEntry::~RegistryEntry() = default;
++
++SpaceRegistry::SpaceRegistry(PrefService* prefs) : prefs_(prefs) {
++  if (prefs_) {
++    entries_ = FromValue(prefs_->GetList(stedding::prefs::kSpaceRegistry));
++  }
++}
++
++SpaceRegistry::~SpaceRegistry() = default;
++
++const RegistryEntry* SpaceRegistry::Find(const SpaceId& id) const {
++  const auto it = std::ranges::find_if(
++      entries_, [&](const RegistryEntry& entry) { return entry.id == id; });
++  return it == entries_.end() ? nullptr : &*it;
++}
++
++RegistryEntry* SpaceRegistry::FindMutable(const SpaceId& id) {
++  const auto it = std::ranges::find_if(
++      entries_, [&](const RegistryEntry& entry) { return entry.id == id; });
++  return it == entries_.end() ? nullptr : &*it;
++}
++
++SpaceId SpaceRegistry::Add(std::string name, SkColor color) {
++  const SpaceId id = SpaceId::GenerateNew();
++  entries_.emplace_back(id, std::move(name), color);
++  Changed();
++  return id;
++}
++
++void SpaceRegistry::AddExisting(const RegistryEntry& entry) {
++  if (Find(entry.id)) {
++    return;
++  }
++  entries_.push_back(entry);
++  Changed();
++}
++
++bool SpaceRegistry::Remove(const SpaceId& id) {
++  if (entries_.size() <= 1u || !Find(id)) {
++    return false;
++  }
++  std::erase_if(entries_,
++                [&](const RegistryEntry& entry) { return entry.id == id; });
++  Changed();
++  return true;
++}
++
++bool SpaceRegistry::Move(const SpaceId& id, int delta) {
++  const auto it = std::ranges::find_if(
++      entries_, [&](const RegistryEntry& entry) { return entry.id == id; });
++  if (it == entries_.end() || delta == 0) {
++    return false;
++  }
++  const int from = static_cast<int>(it - entries_.begin());
++  const int to =
++      std::clamp(from + delta, 0, static_cast<int>(entries_.size()) - 1);
++  if (to == from) {
++    return false;
++  }
++  RegistryEntry entry = *it;
++  entries_.erase(it);
++  entries_.insert(entries_.begin() + to, std::move(entry));
++  Changed();
++  return true;
++}
++
++void SpaceRegistry::SetName(const SpaceId& id, std::string name) {
++  if (RegistryEntry* const entry = FindMutable(id)) {
++    entry->name = std::move(name);
++    Changed();
++  }
++}
++
++void SpaceRegistry::SetIcon(const SpaceId& id, std::string icon) {
++  if (RegistryEntry* const entry = FindMutable(id)) {
++    entry->icon = std::move(icon);
++    Changed();
++  }
++}
++
++void SpaceRegistry::SetColor(const SpaceId& id, SkColor color, bool chosen) {
++  if (RegistryEntry* const entry = FindMutable(id)) {
++    entry->color = color;
++    entry->color_chosen = chosen;
++    Changed();
++  }
++}
++
++void SpaceRegistry::AddObserver(Observer* observer) {
++  observers_.AddObserver(observer);
++}
++
++void SpaceRegistry::RemoveObserver(Observer* observer) {
++  observers_.RemoveObserver(observer);
++}
++
++void SpaceRegistry::Changed() {
++  if (prefs_) {
++    prefs_->SetList(stedding::prefs::kSpaceRegistry, ToValue(entries_));
++  }
++  observers_.Notify(&Observer::OnRegistryChanged);
++}
++
++// static
++base::ListValue SpaceRegistry::ToValue(
++    const std::vector<RegistryEntry>& entries) {
++  base::ListValue list;
++  for (const RegistryEntry& entry : entries) {
++    base::DictValue dict;
++    dict.Set("id", entry.id.ToString());
++    dict.Set("name", entry.name);
++    dict.Set("icon", entry.icon);
++    dict.Set("color", static_cast<int>(entry.color));
++    dict.Set("color_chosen", entry.color_chosen);
++    dict.Set("profile", entry.profile_id);
++    list.Append(std::move(dict));
++  }
++  return list;
++}
++
++// static
++std::vector<RegistryEntry> SpaceRegistry::FromValue(
++    const base::ListValue& value) {
++  std::vector<RegistryEntry> entries;
++  for (const base::Value& item : value) {
++    const base::DictValue* const dict = item.GetIfDict();
++    if (!dict) {
++      continue;
++    }
++    const std::string* const id_text = dict->FindString("id");
++    const std::optional<base::Token> token =
++        id_text ? base::Token::FromString(*id_text) : std::nullopt;
++    if (!token) {
++      continue;
++    }
++    const std::string* const name = dict->FindString("name");
++    RegistryEntry entry(
++        SpaceId::FromRawToken(*token), name ? *name : std::string(),
++        static_cast<SkColor>(dict->FindInt("color").value_or(0)));
++    if (const std::string* const icon = dict->FindString("icon")) {
++      entry.icon = *icon;
++    }
++    entry.color_chosen = dict->FindBool("color_chosen").value_or(false);
++    if (const std::string* const profile = dict->FindString("profile")) {
++      entry.profile_id = *profile;
++    }
++    if (std::ranges::none_of(entries, [&](const RegistryEntry& existing) {
++          return existing.id == entry.id;
++        })) {
++      entries.push_back(std::move(entry));
++    }
++  }
++  return entries;
++}
++
++}  // namespace spaces
+diff --git a/chrome/browser/ui/spaces/space_registry.h b/chrome/browser/ui/spaces/space_registry.h
+new file mode 100644
+index 0000000000000..1fb6018216e3d
+--- /dev/null
++++ b/chrome/browser/ui/spaces/space_registry.h
+@@ -0,0 +1,88 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_SPACES_SPACE_REGISTRY_H_
++#define CHROME_BROWSER_UI_SPACES_SPACE_REGISTRY_H_
++
++#include <string>
++#include <vector>
++
++#include "base/memory/raw_ptr.h"
++#include "base/observer_list.h"
++#include "base/observer_list_types.h"
++#include "base/values.h"
++#include "chrome/browser/ui/spaces/space_id.h"
++#include "components/keyed_service/core/keyed_service.h"
++#include "third_party/skia/include/core/SkColor.h"
++
++class PrefService;
++
++namespace spaces {
++
++// One Space as the profile knows it (ADR 0016). `profile_id` is empty in
++// round 6; the field exists so per-Space profiles need no second migration
++// (docs/features/windows.md G5).
++struct RegistryEntry {
++  RegistryEntry(SpaceId id, std::string name, SkColor color);
++  RegistryEntry(const RegistryEntry& other);
++  RegistryEntry& operator=(const RegistryEntry& other);
++  ~RegistryEntry();
++
++  SpaceId id;
++  std::string name;
++  std::string icon;
++  SkColor color;
++  bool color_chosen = false;
++  std::string profile_id;
++};
++
++// The profile's Space list -- order, names, icons, colours -- which every
++// window's SpaceModel mirrors (docs/features/windows.md G1, G3). Kept in
++// the preference stedding.spaces.registry, written on every change.
++class SpaceRegistry : public KeyedService {
++ public:
++  class Observer : public base::CheckedObserver {
++   public:
++    // The list changed in some way; a mirror re-reads it whole.
++    virtual void OnRegistryChanged() {}
++  };
++
++  explicit SpaceRegistry(PrefService* prefs);
++  SpaceRegistry(const SpaceRegistry&) = delete;
++  SpaceRegistry& operator=(const SpaceRegistry&) = delete;
++  ~SpaceRegistry() override;
++
++  const std::vector<RegistryEntry>& entries() const { return entries_; }
++  bool empty() const { return entries_.empty(); }
++  const RegistryEntry* Find(const SpaceId& id) const;
++
++  SpaceId Add(std::string name, SkColor color);
++  // A Space a window brought from its session: kept with its id, at the end,
++  // unless the registry has it already.
++  void AddExisting(const RegistryEntry& entry);
++  // Never the last one.
++  bool Remove(const SpaceId& id);
++  bool Move(const SpaceId& id, int delta);
++  void SetName(const SpaceId& id, std::string name);
++  void SetIcon(const SpaceId& id, std::string icon);
++  void SetColor(const SpaceId& id, SkColor color, bool chosen);
++
++  void AddObserver(Observer* observer);
++  void RemoveObserver(Observer* observer);
++
++  static base::ListValue ToValue(const std::vector<RegistryEntry>& entries);
++  static std::vector<RegistryEntry> FromValue(const base::ListValue& value);
++
++ private:
++  RegistryEntry* FindMutable(const SpaceId& id);
++  void Changed();
++
++  const raw_ptr<PrefService> prefs_;
++  std::vector<RegistryEntry> entries_;
++  base::ObserverList<Observer> observers_;
++};
++
++}  // namespace spaces
++
++#endif  // CHROME_BROWSER_UI_SPACES_SPACE_REGISTRY_H_
+diff --git a/chrome/browser/ui/spaces/space_registry_factory.cc b/chrome/browser/ui/spaces/space_registry_factory.cc
+new file mode 100644
+index 0000000000000..f36b883838eab
+--- /dev/null
++++ b/chrome/browser/ui/spaces/space_registry_factory.cc
+@@ -0,0 +1,43 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/spaces/space_registry_factory.h"
++
++#include <memory>
++
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/ui/spaces/space_registry.h"
++
++namespace spaces {
++
++// static
++SpaceRegistry* SpaceRegistryFactory::GetForProfile(Profile* profile) {
++  return static_cast<SpaceRegistry*>(
++      GetInstance()->GetServiceForBrowserContext(profile, /*create=*/true));
++}
++
++// static
++SpaceRegistryFactory* SpaceRegistryFactory::GetInstance() {
++  static base::NoDestructor<SpaceRegistryFactory> instance;
++  return instance.get();
++}
++
++SpaceRegistryFactory::SpaceRegistryFactory()
++    : ProfileKeyedServiceFactory(
++          "spaces::SpaceRegistry",
++          ProfileSelections::Builder()
++              .WithRegular(ProfileSelection::kOriginalOnly)
++              .WithGuest(ProfileSelection::kOriginalOnly)
++              .Build()) {}
++
++SpaceRegistryFactory::~SpaceRegistryFactory() = default;
++
++std::unique_ptr<KeyedService>
++SpaceRegistryFactory::BuildServiceInstanceForBrowserContext(
++    content::BrowserContext* context) const {
++  return std::make_unique<SpaceRegistry>(
++      Profile::FromBrowserContext(context)->GetPrefs());
++}
++
++}  // namespace spaces
+diff --git a/chrome/browser/ui/spaces/space_registry_factory.h b/chrome/browser/ui/spaces/space_registry_factory.h
+new file mode 100644
+index 0000000000000..155ea576cebc7
+--- /dev/null
++++ b/chrome/browser/ui/spaces/space_registry_factory.h
+@@ -0,0 +1,35 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_SPACES_SPACE_REGISTRY_FACTORY_H_
++#define CHROME_BROWSER_UI_SPACES_SPACE_REGISTRY_FACTORY_H_
++
++#include "base/no_destructor.h"
++#include "chrome/browser/profiles/profile_keyed_service_factory.h"
++
++class Profile;
++
++namespace spaces {
++
++class SpaceRegistry;
++
++// One registry per regular profile (ADR 0016); none for a private profile,
++// whose windows have no Spaces.
++class SpaceRegistryFactory : public ProfileKeyedServiceFactory {
++ public:
++  static SpaceRegistry* GetForProfile(Profile* profile);
++  static SpaceRegistryFactory* GetInstance();
++
++ private:
++  friend base::NoDestructor<SpaceRegistryFactory>;
++  SpaceRegistryFactory();
++  ~SpaceRegistryFactory() override;
++
++  std::unique_ptr<KeyedService> BuildServiceInstanceForBrowserContext(
++      content::BrowserContext* context) const override;
++};
++
++}  // namespace spaces
++
++#endif  // CHROME_BROWSER_UI_SPACES_SPACE_REGISTRY_FACTORY_H_
+diff --git a/chrome/browser/ui/spaces/space_registry_unittest.cc b/chrome/browser/ui/spaces/space_registry_unittest.cc
+new file mode 100644
+index 0000000000000..6b9e425345460
+--- /dev/null
++++ b/chrome/browser/ui/spaces/space_registry_unittest.cc
+@@ -0,0 +1,58 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/spaces/space_registry.h"
++
++#include "chrome/browser/ui/stedding/stedding_prefs.h"
++#include "components/prefs/pref_registry_simple.h"
++#include "components/prefs/testing_pref_service.h"
++#include "testing/gtest/include/gtest/gtest.h"
++
++namespace spaces {
++namespace {
++
++// G3, G5: what goes into the preference comes back whole, the empty
++// profile id included; the mutators write through.
++TEST(SpaceRegistryTest, RoundTrip) {
++  TestingPrefServiceSimple prefs;
++  prefs.registry()->RegisterListPref(stedding::prefs::kSpaceRegistry);
++  SpaceId work_id = SpaceId::GenerateNew();
++  {
++    SpaceRegistry registry(&prefs);
++    EXPECT_TRUE(registry.empty());
++    work_id = registry.Add("Work", SK_ColorBLUE);
++    const SpaceId play = registry.Add("Play", SK_ColorGREEN);
++    registry.SetIcon(work_id, "💼");
++    registry.SetColor(play, SK_ColorRED, /*chosen=*/true);
++    EXPECT_TRUE(registry.Move(play, -1));
++    ASSERT_EQ(2u, registry.entries().size());
++    EXPECT_EQ(play, registry.entries()[0].id);
++    EXPECT_TRUE(registry.entries()[0].profile_id.empty()) << "G5";
++    EXPECT_FALSE(registry.Remove(SpaceId::GenerateNew())) << "unknown";
++  }
++  SpaceRegistry again(&prefs);
++  ASSERT_EQ(2u, again.entries().size());
++  EXPECT_EQ("Play", again.entries()[0].name);
++  EXPECT_EQ(SK_ColorRED, again.entries()[0].color);
++  EXPECT_TRUE(again.entries()[0].color_chosen);
++  EXPECT_EQ("Work", again.entries()[1].name);
++  EXPECT_EQ("💼", again.entries()[1].icon);
++  EXPECT_EQ(work_id, again.entries()[1].id);
++  EXPECT_TRUE(again.entries()[1].profile_id.empty());
++  EXPECT_TRUE(again.Remove(again.entries()[0].id));
++  EXPECT_FALSE(again.Remove(work_id)) << "never the last one";
++  ASSERT_EQ(1u, again.entries().size());
++
++  // A window's session brings a Space the registry lacks: kept with its id.
++  RegistryEntry restored(SpaceId::GenerateNew(), "Study", SK_ColorYELLOW);
++  again.AddExisting(restored);
++  again.AddExisting(restored);
++  EXPECT_EQ(2u, again.entries().size());
++  EXPECT_EQ(
++      2u,
++      SpaceRegistry::FromValue(SpaceRegistry::ToValue(again.entries())).size());
++}
++
++}  // namespace
++}  // namespace spaces
+diff --git a/chrome/browser/ui/stedding/stedding_command_ids.h b/chrome/browser/ui/stedding/stedding_command_ids.h
+index 99be0cbe96bf4..5a6c14cd5eff8 100644
+--- a/chrome/browser/ui/stedding/stedding_command_ids.h
++++ b/chrome/browser/ui/stedding/stedding_command_ids.h
+@@ -18,5 +18,7 @@ inline constexpr int IDC_STEDDING_TOGGLE_ADDRESS_ROW = 55142;
+ // elsewhere, sends it into a tab).
+ inline constexpr int IDC_STEDDING_LITTLE_PROMOTE_SPLIT = 55143;
+ inline constexpr int IDC_STEDDING_LITTLE_CLOSE = 55144;
++// windows G4: a window with Spaces of its own (opt-alt-shift-cmd-N).
++inline constexpr int IDC_STEDDING_NEW_BLANK_WINDOW = 55145;
+ 
+ #endif  // CHROME_BROWSER_UI_STEDDING_STEDDING_COMMAND_IDS_H_
+diff --git a/chrome/browser/ui/stedding/stedding_prefs.cc b/chrome/browser/ui/stedding/stedding_prefs.cc
+index b222b22c1cbf3..eb6442238c33f 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs.cc
++++ b/chrome/browser/ui/stedding/stedding_prefs.cc
+@@ -17,6 +17,7 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
+   registry->RegisterIntegerPref(kArchiveKeepDays, 30);
+   registry->RegisterBooleanPref(kToolbarHideWithSidebar, true);
+   registry->RegisterBooleanPref(kBookmarksConverted, false);
++  registry->RegisterListPref(kSpaceRegistry);
+   registry->RegisterBooleanPref(kLittleEnabled, true);
+   registry->RegisterIntegerPref(kLittleIdleHours, 6);
+   registry->RegisterBooleanPref(kWelcomeShown, false);
+diff --git a/chrome/browser/ui/stedding/stedding_prefs.h b/chrome/browser/ui/stedding/stedding_prefs.h
+index 97a883540729f..5955ed5a4535d 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs.h
++++ b/chrome/browser/ui/stedding/stedding_prefs.h
+@@ -37,6 +37,8 @@ inline constexpr char kToolbarHideWithSidebar[] =
+ // one may sit idle before it closes into the recently-closed list.
+ inline constexpr char kLittleEnabled[] = "stedding.little.enabled";
+ inline constexpr char kLittleIdleHours[] = "stedding.little.idle_hours";
++// windows G3: the profile's Space list (ADR 0016).
++inline constexpr char kSpaceRegistry[] = "stedding.spaces.registry";
+ // import I14: the bookmarks became pins; the bar and the star stay hidden.
+ inline constexpr char kBookmarksConverted[] = "stedding.bookmarks.converted";
+ // privacy Q4: Global Privacy Control, in local state because it becomes a
+diff --git a/chrome/browser/ui/views/commandbar/command_bar_view.cc b/chrome/browser/ui/views/commandbar/command_bar_view.cc
+index ba2de2a8c69db..8be058892fb6d 100644
+--- a/chrome/browser/ui/views/commandbar/command_bar_view.cc
++++ b/chrome/browser/ui/views/commandbar/command_bar_view.cc
+@@ -445,6 +445,7 @@ void CommandBarView::BuildActions() {
+     command(IDC_TOGGLE_VERTICAL_TABS_COLLAPSE,
+             u"Collapse or Expand the Sidebar");
+     command(IDC_STEDDING_TOGGLE_ADDRESS_ROW, u"Show or Hide the Address Row");
++    command(IDC_STEDDING_NEW_BLANK_WINDOW, u"New Blank Window");
+     actions_.push_back({u"Show Keyboard Shortcuts", std::u16string(),
+                         base::BindRepeating(
+                             [](Browser* browser) {
+diff --git a/chrome/browser/ui/webui/settings/stedding_shortcuts_handler.cc b/chrome/browser/ui/webui/settings/stedding_shortcuts_handler.cc
+index 1c9529dd8aadd..49ecbce274a69 100644
+--- a/chrome/browser/ui/webui/settings/stedding_shortcuts_handler.cc
++++ b/chrome/browser/ui/webui/settings/stedding_shortcuts_handler.cc
+@@ -110,6 +110,8 @@ std::vector<ShortcutGroup> ShortcutReference() {
+   Add(sidebar, IDC_STEDDING_LITTLE_PROMOTE_SPLIT,
+       u"In a little window: send the page into a split of your window");
+   Add(sidebar, IDC_STEDDING_LITTLE_CLOSE, u"In a little window: close it");
++  Add(sidebar, IDC_STEDDING_NEW_BLANK_WINDOW,
++      u"New Blank Window: a window with Spaces of its own");
+   AddChord(sidebar, SpaceRange(), u"Jump to Space 1 to 9");
+   Add(sidebar, IDC_STEDDING_SPACE_NEXT, u"Next Space");
+   Add(sidebar, IDC_STEDDING_SPACE_PREVIOUS, u"Previous Space");

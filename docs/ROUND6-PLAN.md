@@ -303,8 +303,16 @@ said otherwise. Each is also in the item's spec.
   after Rename (M1's missing row). Patch 0024. Not taken: Move to Folder ▸ with
   existing folders (M1, TBD), and a browser test of the built app menu (the model
   needs a real window; the id set is unit-tested and the menu captured).
-- **Not in this pass.** R6-15 R7 (folder dim), R6-16 H10–H11, R6-19's other J
-  rows, B27's drag, T14's download capture. Each keeps its row.
+- **Part K, the small rows, the same morning.** A folder dims once every tab
+  inside sleeps (tabs R7); a pin's hover card carries "Pinned in <Space> · home
+  <host>" on its domain row (pins H8); a drifted essentials card shows a ↺ control
+  in its corner while the pointer rests on it, and a click loads home (H10); the
+  last pin's close has its test (H11); the bar's tab rows step aside while a peek
+  is open (commandbar K16). Also in patch 0024: the sidebar's background menu loses
+  its Google and pin rows, the short tab menu carries extension rows again, and the
+  app menu's new submenus enable themselves.
+- **Not in this pass.** R6-19's other J rows, B27's drag, T14's download capture.
+  Each keeps its row.
 
 #### R6-01 · Shortcut reference block in chrome://settings/stedding
 

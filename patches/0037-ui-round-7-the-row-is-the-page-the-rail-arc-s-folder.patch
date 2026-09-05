@@ -49,7 +49,7 @@ on upstream's vertical tabs rather than patched onto them.
  .../page_theme_color_controller_unittest.cc   |  66 +++++++++
  chrome/browser/ui/stedding_ui_metrics.cc      |  12 ++
  chrome/browser/ui/stedding_ui_metrics.h       |   7 +
- .../layout/stedding_browser_view_layout.cc    |  21 ++-
+ .../layout/stedding_browser_view_layout.cc    |  38 ++++-
  .../views/frame/stedding_window_background.cc |  22 ++-
  .../frame/vertical_tab_strip_region_view.cc   |  41 +++++-
  .../frame/vertical_tab_strip_region_view.h    |   4 +
@@ -67,12 +67,12 @@ on upstream's vertical tabs rather than patched onto them.
  .../browser/ui/views/tabs/common/tab_view.cc  |  27 +++-
  .../browser/ui/views/tabs/common/tab_view.h   |   3 +
  .../tabs/common/tab_view_vertical_layout.cc   |  11 ++
- .../vertical_tab_strip_top_container.cc       |  42 ++++--
+ .../vertical_tab_strip_top_container.cc       |  40 ++++--
  .../vertical_tab_strip_top_container.h        |   8 ++
- ...rtical_tab_strip_top_container_unittest.cc |  48 +++++++
+ ...rtical_tab_strip_top_container_unittest.cc |  47 ++++++
  .../browser/ui/views/toolbar/toolbar_view.cc  |  57 ++++++--
  .../browser/ui/views/toolbar/toolbar_view.h   |   5 +
- 32 files changed, 711 insertions(+), 86 deletions(-)
+ 32 files changed, 725 insertions(+), 86 deletions(-)
  create mode 100644 chrome/browser/ui/stedding/theme/page_bar_color_supplier_unittest.cc
  create mode 100644 chrome/browser/ui/stedding/theme/page_theme_color_controller_unittest.cc
  create mode 100644 chrome/browser/ui/views/tabs/common/folder_view_unittest.cc
@@ -398,7 +398,7 @@ index abce46e678541..b5c1b7ccb001d 100644
  // starts with. Zero in normal use. This exists so multi-Space states can be
  // screenshotted and tested without a UI gesture, the same reason the metrics
 diff --git a/chrome/browser/ui/views/frame/layout/stedding_browser_view_layout.cc b/chrome/browser/ui/views/frame/layout/stedding_browser_view_layout.cc
-index 5b12a954bbd80..7545e6011ce24 100644
+index 5b12a954bbd80..5e1a58ef7bf04 100644
 --- a/chrome/browser/ui/views/frame/layout/stedding_browser_view_layout.cc
 +++ b/chrome/browser/ui/views/frame/layout/stedding_browser_view_layout.cc
 @@ -7,6 +7,7 @@
@@ -409,21 +409,38 @@ index 5b12a954bbd80..7545e6011ce24 100644
  #include "chrome/browser/ui/immersive/immersive_mode_controller.h"
  #include "chrome/browser/ui/stedding_ui_metrics.h"
  #include "chrome/browser/ui/views/frame/custom_corners_background.h"
-@@ -49,6 +50,13 @@ SteddingBrowserViewLayout::CalculateProposedLayout(
+@@ -49,6 +50,30 @@ SteddingBrowserViewLayout::CalculateProposedLayout(
              : views().top_container->GetPreferredSize().height();
      strip->SetToolbarHeightForLayout(toolbar_height);
    }
-+  // sidebar Y7: the collapsed rail's toggle clears the traffic lights by
-+  // their own height, not by the toolbar's (which carries the card gutter).
++  // sidebar Y7: with the address row hidden, upstream drops the collapsed
++  // rail a caption's height down the window so nothing sits under the
++  // traffic lights (GetCollapsedVerticalTabStripRelativeTop), and its toggle
++  // then sat at 57 DIP. The rail stays at the window's top and its toggle
++  // clears the lights on its own, by their own height and a small gap
++  // (VerticalTabStripTopContainer::CaptionClearance), so it sits just under
++  // them.
 +  if (strip && delegate().ShouldDrawVerticalTabStrip()) {
++    const auto lift = [&layout](views::View* view) {
++      if (!view) {
++        return;
++      }
++      const auto child = layout.children.find(view);
++      if (child == layout.children.end() || child->second.bounds.y() <= 0) {
++        return;
++      }
++      gfx::Rect& bounds = child->second.bounds;
++      bounds.set_height(bounds.height() + bounds.y());
++      bounds.set_y(0);
++    };
++    lift(strip);
 +    strip->SetCaptionButtonHeightForLayout(
-+        base::ClampCeil(params.leading_exclusion.content.height() +
-+                        params.leading_exclusion.vertical_padding));
++        base::ClampCeil(params.leading_exclusion.content.height()));
 +  }
    return layout;
  }
  
-@@ -151,16 +159,21 @@ void SteddingBrowserViewLayout::DoPostLayoutVisualAdjustments(
+@@ -151,16 +176,21 @@ void SteddingBrowserViewLayout::DoPostLayoutVisualAdjustments(
      return;
    }
  
@@ -1358,7 +1375,7 @@ index 006289fcf0823..353ac4d8e1784 100644
    NOTREACHED() << "Unknown tab child view";
  }
 diff --git a/chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_top_container.cc b/chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_top_container.cc
-index a9990ce8d2362..2fcf7a886c1ce 100644
+index a9990ce8d2362..09c3297515df9 100644
 --- a/chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_top_container.cc
 +++ b/chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_top_container.cc
 @@ -8,6 +8,7 @@
@@ -1419,7 +1436,7 @@ index a9990ce8d2362..2fcf7a886c1ce 100644
                     (GetLayoutConstant(LayoutConstant::kBookmarkBarHeight) -
                      GetLayoutConstant(
                          LayoutConstant::kBookmarkBarButtonImageLabelPadding)) /
-@@ -415,6 +419,24 @@ void VerticalTabStripTopContainer::SetCaptionButtonWidthForLayout(
+@@ -415,6 +419,22 @@ void VerticalTabStripTopContainer::SetCaptionButtonWidthForLayout(
    InvalidateLayout(/*avoid_propagate_during_layout=*/true);
  }
  
@@ -1433,19 +1450,17 @@ index a9990ce8d2362..2fcf7a886c1ce 100644
 +}
 +
 +int VerticalTabStripTopContainer::CaptionClearance() const {
-+  return caption_button_height_ > 0
-+             ? caption_button_height_ +
-+                   GetLayoutConstant(
-+                       LayoutConstant::
-+                           kVerticalTabStripCollapsedVerticalPadding)
-+             : toolbar_height_;
++  // Just under the traffic lights: their bottom and a 6 DIP gap.
++  constexpr int kCaptionGap = 6;
++  return caption_button_height_ > 0 ? caption_button_height_ + kCaptionGap
++                                    : toolbar_height_;
 +}
 +
  void VerticalTabStripTopContainer::SetIsExitingExpandOnHoverForLayout(
      bool is_exiting_expand_on_hover) {
    if (is_exiting_expand_on_hover_ == is_exiting_expand_on_hover) {
 diff --git a/chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_top_container.h b/chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_top_container.h
-index 27763751c72b7..1b35e2f967698 100644
+index 27763751c72b7..83774a48c0280 100644
 --- a/chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_top_container.h
 +++ b/chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_top_container.h
 @@ -82,6 +82,7 @@ class VerticalTabStripTopContainer : public views::View,
@@ -1461,8 +1476,8 @@ index 27763751c72b7..1b35e2f967698 100644
    int GetBaselineMinHeight() const;
  
 +  // Stedding (sidebar Y7): how far down a button must start to clear the
-+  // caption buttons: their own bottom with the collapsed padding when the
-+  // frame said, the toolbar's height otherwise.
++  // caption buttons: their own bottom and a small gap when the frame said,
++  // the toolbar's height otherwise.
 +  int CaptionClearance() const;
 +
    raw_ptr<tabs::VerticalTabStripStateController> state_controller_ = nullptr;
@@ -1472,13 +1487,13 @@ index 27763751c72b7..1b35e2f967698 100644
    // rendered inside of it becaused that area is reserved for outside UI
    // elements.
    int caption_button_width_ = 0;
-+  // The caption buttons' bottom edge, with their padding (sidebar Y7).
++  // The caption buttons' bottom edge (sidebar Y7).
 +  int caption_button_height_ = 0;
    // This is true when the width of the tab strip needs to shrink while exiting
    // the expand-on-hover animation. This is because the final state needs to be
    // within the wrapped state bounds when leading caption buttons are present.
 diff --git a/chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_top_container_unittest.cc b/chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_top_container_unittest.cc
-index fa4d141d3d822..7b4fd288110d7 100644
+index fa4d141d3d822..12564d9fc738f 100644
 --- a/chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_top_container_unittest.cc
 +++ b/chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_top_container_unittest.cc
 @@ -89,6 +89,14 @@ class VerticalTabStripTopContainerTest : public ChromeViewsTestBase {
@@ -1496,13 +1511,13 @@ index fa4d141d3d822..7b4fd288110d7 100644
    void LayoutView() {
      // Pass an arbitrarily large height for the available size bounds so the
      // widget can adjust as needed.
-@@ -158,6 +166,46 @@ TEST_F(VerticalTabStripTopContainerTest, LayoutWithFullWidthExclusionZone) {
+@@ -158,6 +166,45 @@ TEST_F(VerticalTabStripTopContainerTest, LayoutWithFullWidthExclusionZone) {
    EXPECT_EQ(collapse_bounds.right_center().y(), expected_y_center);
  }
  
 +// Stedding (sidebar Y7): collapsed, the collapse button clears the caption
-+// buttons by their own height plus the collapsed padding, not by the
-+// toolbar's height, which carries the card gutter and sat the button too low.
++// buttons by their own height and a small gap, not by the toolbar's height,
++// which carries the card gutter and sat the button too low.
 +TEST_F(VerticalTabStripTopContainerTest,
 +       CollapsedButtonClearsTheCaptionButtonsByTheirOwnHeight) {
 +  constexpr int kCaptionWidth = 70;
@@ -1516,10 +1531,9 @@ index fa4d141d3d822..7b4fd288110d7 100644
 +  const gfx::Rect caption(0, 0, kCaptionWidth, kCaptionHeight);
 +  const gfx::Rect collapse_bounds = collapse_button()->bounds();
 +  EXPECT_FALSE(collapse_bounds.Intersects(caption));
-+  EXPECT_EQ(kCaptionHeight +
-+                GetLayoutConstant(
-+                    LayoutConstant::kVerticalTabStripCollapsedVerticalPadding),
-+            collapse_bounds.y());
++  // The container's own gap under the caption buttons.
++  constexpr int kCaptionGap = 6;
++  EXPECT_EQ(kCaptionHeight + kCaptionGap, collapse_bounds.y());
 +  EXPECT_LT(collapse_bounds.y(), kToolbarHeight);
 +}
 +

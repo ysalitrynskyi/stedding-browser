@@ -8,6 +8,7 @@
 #   tooling/build-chromium official          # shipping configuration
 #   tooling/build-chromium release chrome unit_tests
 #   tooling/build-chromium release chrome --budget 45   # allow 45 minutes; 0 = unlimited
+#   tooling/build-chromium release unit_tests --keep-going  # report every error, not the first
 #
 # Budget: a build gets 15 minutes of wall clock by default. Every minute the
 # wrapper prints elapsed time, object count and active compilers, and when the
@@ -39,6 +40,9 @@ main() {
     while [ $# -gt 0 ]; do
       case "$1" in
         --budget) shift; BUDGET_MIN="${1:?--budget needs minutes}" ;;
+        # Keep compiling past the first failure so one run reports every error
+        # a batch of edits introduced (autoninja's -k 0).
+        --keep-going) KEEP_GOING=1 ;;
         --budget=*) BUDGET_MIN="${1#--budget=}" ;;
         *) positional+=("$1") ;;
       esac
@@ -59,8 +63,12 @@ main() {
 
     # The sync-time floor covered the checkout. A build writes tens of GB more, and
     # running the volume dry three hours in wastes the whole run. Measured output sizes
-    # are in docs/ARCHITECTURE.md.
-    require_free_gb "$CHROMIUM_ROOT" 60
+    # are in docs/ARCHITECTURE.md. An incremental chunk on an existing out/ dir writes
+    # far less: STEDDING_MIN_FREE_GB lowers the floor for those (never under 20; a
+    # macOS update staging 14 GB overnight took the margin, 2026-09-05).
+    min_free="${STEDDING_MIN_FREE_GB:-60}"
+    [ "$min_free" -ge 20 ] 2>/dev/null || die "STEDDING_MIN_FREE_GB must be a number of at least 20"
+    require_free_gb "$CHROMIUM_ROOT" "$min_free"
 
     OUT_DIR="out/$CONFIG"
     ABS_OUT="$CHROMIUM_SRC/$OUT_DIR"
@@ -125,6 +133,12 @@ main() {
     trap "rm -rf '$LOCK'" EXIT INT TERM
 
     cp "$ARGS_FILE" "$ABS_OUT/args.gn"
+    # Stedding's own version rides into the binary as a GN argument, so the About
+    # page can name it (docs/features/settings.md T10). VERSION is the one source.
+    stedding_version="$(tr -d '[:space:]' < "$STEDDING_ROOT/VERSION")"
+    [ -n "$stedding_version" ] || die "VERSION is empty"
+    printf '\n# Set by tooling/build-chromium from VERSION; do not edit here.\nstedding_version = "%s"\n' \
+      "$stedding_version" >> "$ABS_OUT/args.gn"
 
     log "gn gen"
     gn gen "$OUT_DIR"
@@ -150,7 +164,11 @@ main() {
     else
       log "autoninja -C $OUT_DIR ${TARGETS[*]}  (budget: $BUDGET_MIN min; progress every minute)"
     fi
-    autoninja -C "$OUT_DIR" "${TARGETS[@]}" &
+    if [ "${KEEP_GOING:-0}" -eq 1 ]; then
+      autoninja -C "$OUT_DIR" -k 0 "${TARGETS[@]}" &
+    else
+      autoninja -C "$OUT_DIR" "${TARGETS[@]}" &
+    fi
     build_pid=$!
     build_status=""
     first_objects=""

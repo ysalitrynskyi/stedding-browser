@@ -106,6 +106,17 @@ Built, with tests or measured captures:
 - **Welcome flow**: `chrome://stedding-welcome` over a profile's first window:
   search engine, import, appearance, default browser, shortcuts
   (`docs/features/welcome.md`).
+- **Round 6, wave 1** (`docs/ROUND6-PLAN.md`, patches 0016–0018): Arc's keys for
+  Spaces (⌃1–9, ⌥⌘←/→, ⌘D pins, ⇧⌘K clears, ⌥⇧⌘←/→ moves the tab) and a
+  Spaces menu in the menu bar; ⇧⌘C copies a clean link, ⌥⇧⌘C a Markdown one;
+  the close glyph only on hover, alerts as a corner badge on essentials; the
+  shortcut reference in chrome://settings/stedding; the status pill and the
+  find bar inside the card, no ring around split panes; the capture and
+  copy-link toasts; motion follows macOS Reduce Motion and a setting; the
+  About line reads "Stedding <VERSION> · Chromium <pin>"; Space swatches on
+  the welcome flow; the address row takes the page colour on either side of
+  the contrast line (toolbar T7) and sits in a 6 DIP gutter like the card's
+  other three sides.
 
 Read `docs/HANDOFF.md` before touching anything — it carries the working loop,
 every dev parameter, and the traps already paid for. `docs/ARC-ROUND2.md` is
@@ -158,8 +169,10 @@ Arc parity work, screenshots, the welcome flow, the fixes from the visual
 audit of every surface and from the first look at beta 2 (`docs/ARC-ROUND2.md`);
 the operator retests it against Arc. `S-17` signing waits on Apple's organisation enrolment (then
 `tooling/sign-release` and a signed re-release), `S-18` on a licensing
-decision; `S-40`–`S-43` are the small gaps found while verifying round 5
-(capture toast, download progress on the sidebar button, a Space colour on
-the welcome flow, the About page's version label). `S-44` is the next body
-of work: `docs/ROUND6-PLAN.md`, the reviewed plan from the Zen mods and
-beyond (four waves, decisions recorded), waiting for the operator's go.
+decision. Of the small gaps found while verifying round 5, `S-40`, `S-42`
+and `S-43` (capture toast, welcome swatches, About version) closed with wave
+1; `S-41` (download progress on the sidebar button) is wave 2's. `S-44` is
+the body of work under way: `docs/ROUND6-PLAN.md`, the reviewed plan from the Zen mods and
+beyond (four waves, decisions recorded): wave 1 landed 2026-09-05 (patches
+0016–0018, every row verified live or by unit test, notes in the plan), waves
+2–4 follow in order under the operator's overnight mandate.

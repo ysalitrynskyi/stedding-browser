@@ -129,6 +129,31 @@ perform; a param that recreates the state IS the test surface.
    stash must pop in an EXIT trap; `ls out/release/*.app` says which product
    the last build made.
 
+9. **A new `.grdp` part must also be listed in `chrome/app/generated_resources.grd.gritdeps`**
+   (2026-09-04: `stedding_strings.grdp`, the one file for every string this fork
+   adds, failed the first build at `generated_resources_check_gritdeps` with a
+   "gritdeps mismatch" diff; the manifest is sorted, add the line where the
+   diff says). Stedding strings that reach a macOS menu or a toast need real
+   `IDS_` ids; the settings page and the command bar still use literals.
+
+10. **A drive's keys go nowhere when the window is not key.** Two runs that
+    opened two URLs (`https://example.com/ https://example.org/`) came up with grey
+    traffic lights; `activate` twice did not help, and ⌥⌘N never reached the window.
+    Read the traffic lights in the shot before blaming a chord. The fallback that
+    works for anything with a menu row is System Events from the foreground shell
+    while the drive parks: `click menu item "Add Tab to New Split View" of menu 1 of
+    menu bar item "Tab" of menu bar 1` (2026-09-05).
+11. **`tooling/dev build` refuses under 60 GB free, and drives eat the margin.**
+    Every `tooling/drive` profile keeps 100–500 MB of cache; a batch of ten leaves
+    the volume 3 GB lighter and the next build exits at once with "need 60 GB free".
+    Delete the scratch profiles after each batch (`rm -rf <scratchpad>/p-*`), then
+    the reclaims in the disk runbook (old Playwright browsers, `npm cache clean`).
+    The browser itself leaks `$TMPDIR/dev.stedding.Stedding.chromium_chrome_url_fetcher_.*`
+    (25 MB each; 323 of them, 8.3 GB, after two days of drives) — delete those too.
+    `df -k` is the number the check reads; Finder's figure includes purgeable space.
+    For an incremental chunk `STEDDING_MIN_FREE_GB=40 tooling/dev build …` lowers the
+    floor (20 is the least it accepts); the 60 stays the default for full builds.
+
 ## Open items
 
 `BACKLOG.md` is the list; do not keep one here. First up: the operator

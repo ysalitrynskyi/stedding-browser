@@ -278,9 +278,22 @@ said otherwise. Each is also in the item's spec.
   ⇥/⇧⇥ from the Mac focus manager (HANDOFF trap 15) and the panel must resize on
   every rebuild path; both fixed, ⌘T-then-⇥ shows seven rows with a scroll
   indicator, ⌘L shows the URL selected. Patch 0022; 18 bar and shortcut tests.
+- **Part I, R6-12 (⌃⇥), the same morning.** `SpaceModel` keeps an activation
+  history per Space (X1); ⌃⇥ / ⌃⇧⇥ walk the five most recent tabs of the active
+  Space through `spaces::CycleRecentTab` ahead of Chromium's `kCtrlTabMru` (off),
+  a tap is one step (X2), a ⌃ held past 150 ms shows the strip — a layered child
+  of the BrowserView with favicon, title and the Space's colour per cell, the
+  position highlighted; ⌃ up commits, Escape cancels, a mouse press or a key
+  without ⌃ commits (X3). ⌥⇧⌘↑/↓ move the row within its container: a row inside
+  a folder stays inside, a folder beside a row is jumped as one row, and moves
+  that touch no folder keep Chromium's group rules, so its tests stay green (X4).
+  The setting `stedding.tabs.ctrl_tab_mru` (on) returns ⌃⇥ to strip order when
+  off (X5); the shortcut reference lists the four chords and the divergence; the
+  bar carries "Go to the Most Recent Tab". The recent list counts a split once
+  (splits J2, the ⌃⇥ half). Patch 0023.
 - **Not in this pass.** R6-14 M2, M3, M7 (page and app menus; the five row-kind
-  menus), R6-15 R7 (folder dim), R6-16 H10–H11, R6-12 (⌃⇥ strip), R6-19's J rows,
-  B27's drag, T14's download capture. Each keeps its row.
+  menus), R6-15 R7 (folder dim), R6-16 H10–H11, R6-19's other J rows, B27's
+  drag, T14's download capture. Each keeps its row.
 
 #### R6-01 · Shortcut reference block in chrome://settings/stedding
 

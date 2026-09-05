@@ -1,0 +1,1694 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Sat, 5 Sep 2026 08:21:07 -0400
+Subject: switcher: Ctrl-Tab through the Space's recent tabs, a hold-to-see
+ strip, folder-aware row moves
+
+SpaceModel keeps an activation history per Space (docs/features/switcher.md
+X1); Ctrl-Tab and Ctrl-Shift-Tab walk the five most recent tabs of the
+active Space through spaces::CycleRecentTab, ahead of Chromium's kCtrlTabMru,
+which stays off. A tap is one step (X2). Ctrl held past 150 ms shows a strip
+over the page -- a layered child of the BrowserView with favicon, title and
+the Space's colour per cell, the position highlighted; releasing Ctrl
+commits the run, Escape cancels it, a mouse press or a key without Ctrl
+commits (X3). Option-Shift-Cmd-Down / Up move the row within its container:
+a row inside a folder stays inside, a folder beside a row is jumped as one
+row, and moves that touch no folder keep Chromium's group rules (X4). The
+setting stedding.tabs.ctrl_tab_mru returns Ctrl-Tab to strip order when off
+(X5). The recent list counts a split once (splits J2). The shortcut
+reference lists the chords and the divergence; the bar's actions mode gains
+"Go to the Most Recent Tab".
+
+Why: docs/ROUND6-PLAN.md wave 2 (R6-12), Arc's Ctrl-Tab and its travel keys.
+Removable when: Chromium's Ctrl-Tab MRU is scoped to a window's visible tabs
+and shows a strip, and its relative tab move understands folders.
+---
+ .../api/settings_private/prefs_util.cc        |   2 +
+ .../browser/global_keyboard_shortcuts_mac.mm  |   4 +
+ .../stedding_page/stedding_page.html.ts       |   7 +
+ chrome/browser/ui/BUILD.gn                    |   1 +
+ .../browser/ui/browser_command_controller.cc  |  11 +
+ chrome/browser/ui/spaces/space_commands.cc    |  16 +
+ chrome/browser/ui/spaces/space_commands.h     |   5 +
+ chrome/browser/ui/spaces/space_model.cc       | 180 ++++++++++
+ chrome/browser/ui/spaces/space_model.h        |  39 ++
+ .../ui/spaces/space_model_window_unittest.cc  | 168 +++++++++
+ chrome/browser/ui/stedding/stedding_prefs.cc  |   1 +
+ chrome/browser/ui/stedding/stedding_prefs.h   |   3 +
+ chrome/browser/ui/tabs/tab_strip_model.cc     |  19 +
+ .../ui/tabs/tab_strip_model_unittest.cc       |  57 ++-
+ .../ui/views/commandbar/command_bar_view.cc   |  16 +
+ chrome/browser/ui/views/switcher/BUILD.gn     |  42 +++
+ .../switcher/recent_tabs_switcher_view.cc     | 335 ++++++++++++++++++
+ .../switcher/recent_tabs_switcher_view.h      |  86 +++++
+ .../recent_tabs_switcher_view_unittest.cc     |  93 +++++
+ .../browser/ui/webui/settings/settings_ui.cc  |   6 +
+ .../settings/stedding_shortcuts_handler.cc    |  11 +
+ chrome/test/BUILD.gn                          |   1 +
+ components/tabs/impl/tab_strip_collection.cc  | 119 ++++++-
+ components/tabs/public/tab_strip_collection.h |  28 ++
+ 24 files changed, 1243 insertions(+), 7 deletions(-)
+ create mode 100644 chrome/browser/ui/views/switcher/BUILD.gn
+ create mode 100644 chrome/browser/ui/views/switcher/recent_tabs_switcher_view.cc
+ create mode 100644 chrome/browser/ui/views/switcher/recent_tabs_switcher_view.h
+ create mode 100644 chrome/browser/ui/views/switcher/recent_tabs_switcher_view_unittest.cc
+
+diff --git a/chrome/browser/extensions/api/settings_private/prefs_util.cc b/chrome/browser/extensions/api/settings_private/prefs_util.cc
+index f8a010cd76d34..184b0582b76e8 100644
+--- a/chrome/browser/extensions/api/settings_private/prefs_util.cc
++++ b/chrome/browser/extensions/api/settings_private/prefs_util.cc
+@@ -323,6 +323,8 @@ const PrefsUtil::TypedPrefMap& PrefsUtil::GetAllowlistedKeys() {
+       settings_api::PrefType::kBoolean;
+   (*s_allowlist)[stedding::prefs::kHoldCmdNumbers] =
+       settings_api::PrefType::kBoolean;
++  (*s_allowlist)[stedding::prefs::kCtrlTabMru] =
++      settings_api::PrefType::kBoolean;
+   (*s_allowlist)[contextual_search::kDriveConsentState] =
+       settings_api::PrefType::kNumber;
+   (*s_allowlist)[::prefs::kShowForwardButton] =
+diff --git a/chrome/browser/global_keyboard_shortcuts_mac.mm b/chrome/browser/global_keyboard_shortcuts_mac.mm
+index ad0a60837ab6a..6fe5d27db5d51 100644
+--- a/chrome/browser/global_keyboard_shortcuts_mac.mm
++++ b/chrome/browser/global_keyboard_shortcuts_mac.mm
+@@ -146,6 +146,10 @@ const std::vector<KeyboardShortcutData>& GetShortcutsNotPresentInMainMenu() {
+       {false, true,  false, false, kVK_F6,                IDC_FOCUS_PREVIOUS_PANE},
+       {false, true,  true,  false, kVK_PageDown,          IDC_MOVE_TAB_NEXT},
+       {false, true,  true,  false, kVK_PageUp,            IDC_MOVE_TAB_PREVIOUS},
++      // Stedding: Option-Shift-Cmd-Down / Up move the row within its container
++      // (docs/features/switcher.md X4), beside Option-Cmd-Down / Up.
++      {true,  true,  false, true,  kVK_DownArrow,         IDC_MOVE_TAB_NEXT},
++      {true,  true,  false, true,  kVK_UpArrow,           IDC_MOVE_TAB_PREVIOUS},
+ 
+       // Cmd-0..8 select the nth tab, with cmd-9 being "last tab".
+       {true,  false, false, false, kVK_ANSI_1,            IDC_SELECT_TAB_0},
+diff --git a/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts b/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
+index fca3354ed819c..31c1b75aa8ece 100644
+--- a/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
++++ b/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
+@@ -64,6 +64,13 @@ export function getHtml(this: SettingsSteddingPageElement) {
+       label="$i18n{steddingHoldCmdNumbersLabel}"
+       sub-label="$i18n{steddingHoldCmdNumbersSubLabel}">
+   </settings-toggle-button>
++  <settings-toggle-button
++      id="ctrlTabMru"
++      class="hr"
++      pref-key="stedding.tabs.ctrl_tab_mru"
++      label="$i18n{steddingCtrlTabMruLabel}"
++      sub-label="$i18n{steddingCtrlTabMruSubLabel}">
++  </settings-toggle-button>
+   <div class="hr settings-box">
+     <div class="start" id="sidebarWidthLabel">
+       <div class="label">$i18n{steddingSidebarWidthLabel}</div>
+diff --git a/chrome/browser/ui/BUILD.gn b/chrome/browser/ui/BUILD.gn
+index c3dad3cbcc9ed..4e32306ac46f2 100644
+--- a/chrome/browser/ui/BUILD.gn
++++ b/chrome/browser/ui/BUILD.gn
+@@ -1358,6 +1358,7 @@ static_library("ui") {
+       "//chrome/browser/ui/stedding:motion",
+       "//chrome/browser/ui/views/commandbar",
+       "//chrome/browser/ui/views/peek",
++      "//chrome/browser/ui/views/switcher",
+       ":uma_browsing_activity_observer",
+       "//base",
+       "//chrome/app/vector_icons",
+diff --git a/chrome/browser/ui/browser_command_controller.cc b/chrome/browser/ui/browser_command_controller.cc
+index 87c89638d2a3f..e86bbb0cfe60f 100644
+--- a/chrome/browser/ui/browser_command_controller.cc
++++ b/chrome/browser/ui/browser_command_controller.cc
+@@ -100,6 +100,7 @@
+ #include "chrome/browser/ui/views/commandbar/command_bar_view.h"
+ #include "chrome/browser/ui/views/frame/browser_view.h"
+ #include "chrome/browser/ui/views/side_panel/tabs_from_other_devices/tabs_from_other_devices_side_panel_coordinator.h"
++#include "chrome/browser/ui/views/switcher/recent_tabs_switcher_view.h"
+ #include "chrome/browser/ui/web_applications/app_browser_controller.h"
+ #include "chrome/browser/ui/web_applications/web_app_dialog_utils.h"
+ #include "chrome/browser/ui/web_applications/web_app_launch_utils.h"
+@@ -811,6 +812,12 @@ void BrowserCommandController::HandleCommandWithDisposition(
+               TabStripUserGestureDetails::GestureType::kKeyboard, time_stamp));
+       break;
+     case IDC_CYCLE_TO_NEXT_TAB:
++      // Stedding (docs/features/switcher.md X1-X3): the Space's most recent
++      // tabs, with the strip while Ctrl stays down.
++      if (spaces::CycleRecentTab(browser_, 1)) {
++        stedding::RecentTabsSwitcherView::Show(browser_);
++        break;
++      }
+       if (IsCtrlTabMruEnabled(browser_)) {
+         base::RecordAction(base::UserMetricsAction("Accel_CycleToNextTab"));
+         CycleToMruTab(browser_,
+@@ -826,6 +833,10 @@ void BrowserCommandController::HandleCommandWithDisposition(
+       }
+       break;
+     case IDC_CYCLE_TO_PREV_TAB:
++      if (spaces::CycleRecentTab(browser_, -1)) {
++        stedding::RecentTabsSwitcherView::Show(browser_);
++        break;
++      }
+       if (IsCtrlTabMruEnabled(browser_)) {
+         base::RecordAction(base::UserMetricsAction("Accel_CycleToPrevTab"));
+         CycleToMruTab(browser_,
+diff --git a/chrome/browser/ui/spaces/space_commands.cc b/chrome/browser/ui/spaces/space_commands.cc
+index ce550617a4b87..0c68a69643ea0 100644
+--- a/chrome/browser/ui/spaces/space_commands.cc
++++ b/chrome/browser/ui/spaces/space_commands.cc
+@@ -10,8 +10,10 @@
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/spaces/space.h"
++#include "chrome/browser/ui/stedding/stedding_prefs.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "chrome/browser/ui/tabs/tab_strip_user_gesture_details.h"
++#include "components/prefs/pref_service.h"
+ #include "components/tabs/public/tab_interface.h"
+ 
+ namespace spaces {
+@@ -155,4 +157,18 @@ void SpaceCommandState::OnSpaceRemoved(const SpaceId& id) {
+   Refresh();
+ }
+ 
++bool CycleRecentTab(BrowserWindowInterface* browser, int delta) {
++  if (!SupportsSpaceCommands(browser) ||
++      !browser->GetProfile()->GetPrefs()->GetBoolean(
++          stedding::prefs::kCtrlTabMru)) {
++    return false;
++  }
++  SpaceModel* const model = SpaceModel::From(browser);
++  if (!model) {
++    return false;
++  }
++  model->CycleRecent(delta);
++  return true;
++}
++
+ }  // namespace spaces
+diff --git a/chrome/browser/ui/spaces/space_commands.h b/chrome/browser/ui/spaces/space_commands.h
+index cac62ff369763..9294dfabbc0cd 100644
+--- a/chrome/browser/ui/spaces/space_commands.h
++++ b/chrome/browser/ui/spaces/space_commands.h
+@@ -44,6 +44,11 @@ void ToggleSpacePinOnActiveTab(BrowserWindowInterface* browser);
+ void MoveActiveTabToNeighbourSpace(BrowserWindowInterface* browser,
+                                    bool forward);
+ 
++// Ctrl-Tab / Ctrl-Shift-Tab (docs/features/switcher.md X1, X5): one step
++// through the active Space's most recent tabs, when the setting is on and the
++// window has Spaces. False leaves the key to Chromium's sidebar order.
++bool CycleRecentTab(BrowserWindowInterface* browser, int delta);
++
+ // Keeps the enabled state of the Space commands current: Space N only while
+ // N <= size() (B23), everything off where SupportsSpaceCommands is false
+ // (B29). `setter` is the command updater's UpdateCommandEnabled; the class
+diff --git a/chrome/browser/ui/spaces/space_model.cc b/chrome/browser/ui/spaces/space_model.cc
+index 5aa207463ba6d..77f54487b5695 100644
+--- a/chrome/browser/ui/spaces/space_model.cc
++++ b/chrome/browser/ui/spaces/space_model.cc
+@@ -38,6 +38,8 @@
+ #include "components/prefs/pref_service.h"
+ #include "components/sessions/content/session_tab_helper.h"
+ #include "components/sessions/core/session_service_commands.h"
++#include "components/split_tabs/split_tab_id.h"
++#include "components/tabs/public/tab_interface.h"
+ #include "content/public/browser/web_contents.h"
+ #include "url/gurl.h"
+ 
+@@ -253,6 +255,7 @@ bool SpaceModel::RemoveSpace(const SpaceId& id) {
+   }
+   spaces_.erase(it);
+   last_active_.erase(id);
++  history_.erase(id);
+ 
+   // The Space's tabs are not closed: deleting a container must not delete its
+   // contents (B5). They join the active Space, where the user is looking, so
+@@ -295,6 +298,8 @@ void SpaceModel::SetActiveSpace(const SpaceId& id) {
+   if (id == active_id_) {
+     return;
+   }
++  // switcher X1: a run ends where it is when the user leaves the Space.
++  EndCycle();
+   const SpaceId previous = active_id_;
+   active_id_ = id;
+   // The content pane must follow the sidebar: settle the active tab before any
+@@ -435,6 +440,7 @@ void SpaceModel::OnTabStripModelChanged(
+   // really in it: an essentials tab is in every Space and remembering it would
+   // make every Space reopen on the same tab.
+   if (selection.active_tab_changed()) {
++    RecordActivation(tab_strip_model->GetActiveTab());
+     if (tabs::TabInterface* const active = tab_strip_model->GetActiveTab();
+         active && !active->IsPinned()) {
+       if (const auto it = tab_spaces_.find(active->GetHandle());
+@@ -468,6 +474,15 @@ void SpaceModel::OnTabStripModelChanged(
+       tab_spaces_.erase(removed.tab->GetHandle());
+       space_pin_homes_.erase(removed.tab->GetHandle());
+       essential_homes_.erase(removed.tab->GetHandle());
++      for (auto& [space, history] : history_) {
++        std::erase(history, removed.tab->GetHandle());
++      }
++      if (cycle_) {
++        std::erase(cycle_->tabs, removed.tab->GetHandle());
++        if (cycle_->position >= cycle_->tabs.size()) {
++          cycle_->position = 0;
++        }
++      }
+     }
+     // The strip has already chosen a replacement active tab, and with every
+     // tab of this Space gone that choice is a hidden one. Fixing it here
+@@ -493,6 +508,171 @@ void SpaceModel::SetActiveSpaceByIndex(size_t index) {
+   }
+ }
+ 
++namespace {
++// switcher X1: how much of a Space's past is kept; the strip shows five.
++constexpr size_t kHistoryCap = 40;
++constexpr size_t kCycleLength = 5;
++}  // namespace
++
++SpaceModel::Cycle::Cycle(SpaceId in_space) : space(std::move(in_space)) {}
++SpaceModel::Cycle::Cycle(Cycle&& other) = default;
++SpaceModel::Cycle& SpaceModel::Cycle::operator=(Cycle&& other) = default;
++SpaceModel::Cycle::~Cycle() = default;
++
++void SpaceModel::RecordActivation(tabs::TabInterface* tab) {
++  if (!tab || cycle_ || !IsTabInActiveSpace(tab)) {
++    return;
++  }
++  std::vector<tabs::TabHandle>& history = history_[active_id_];
++  std::erase(history, tab->GetHandle());
++  history.insert(history.begin(), tab->GetHandle());
++  if (history.size() > kHistoryCap) {
++    history.resize(kHistoryCap);
++  }
++}
++
++std::vector<tabs::TabInterface*> SpaceModel::RecentTabs(const SpaceId& id,
++                                                        size_t limit) const {
++  std::vector<tabs::TabInterface*> out;
++  if (!tab_strip_model_) {
++    return out;
++  }
++  std::vector<split_tabs::SplitTabId> splits_seen;
++  // Still in this Space, or an essential, which is in every Space; a split
++  // counts once.
++  const auto take = [&](tabs::TabInterface* tab) {
++    if (!tab->IsPinned()) {
++      const auto member = tab_spaces_.find(tab->GetHandle());
++      if (member == tab_spaces_.end() || member->second != id) {
++        return false;
++      }
++    }
++    if (const std::optional<split_tabs::SplitTabId> split = tab->GetSplit()) {
++      if (std::ranges::find(splits_seen, *split) != splits_seen.end()) {
++        return false;
++      }
++      splits_seen.push_back(*split);
++    }
++    out.push_back(tab);
++    return true;
++  };
++  if (const auto it = history_.find(id); it != history_.end()) {
++    for (const tabs::TabHandle& handle : it->second) {
++      tabs::TabInterface* const tab = handle.Get();
++      if (!tab ||
++          tab_strip_model_->GetIndexOfTab(tab) == TabStripModel::kNoTab) {
++        continue;
++      }
++      take(tab);
++      if (out.size() >= limit) {
++        return out;
++      }
++    }
++  }
++  // Then the tabs the user never activated, in sidebar order, skipping the
++  // ones a collapsed folder hides.
++  for (int i = 0; i < tab_strip_model_->count() && out.size() < limit; ++i) {
++    tabs::TabInterface* const tab = tab_strip_model_->GetTabAtIndex(i);
++    if (std::ranges::find(out, tab) != out.end() ||
++        tab_strip_model_->IsTabHidden(i)) {
++      continue;
++    }
++    take(tab);
++  }
++  return out;
++}
++
++bool SpaceModel::CycleRecent(int delta) {
++  if (!tab_strip_model_ || delta == 0) {
++    return false;
++  }
++  if (!cycle_) {
++    std::vector<tabs::TabInterface*> recent =
++        RecentTabs(active_id_, kCycleLength);
++    // The run starts on the active tab, whatever the history says.
++    if (tabs::TabInterface* const active = tab_strip_model_->GetActiveTab()) {
++      std::erase(recent, active);
++      recent.insert(recent.begin(), active);
++      if (recent.size() > kCycleLength) {
++        recent.resize(kCycleLength);
++      }
++    }
++    if (recent.size() < 2) {
++      return false;
++    }
++    Cycle cycle(active_id_);
++    for (tabs::TabInterface* const tab : recent) {
++      cycle.tabs.push_back(tab->GetHandle());
++    }
++    cycle.origin = recent.front()->GetHandle();
++    cycle_ = std::move(cycle);
++  }
++  std::erase_if(cycle_->tabs,
++                [](const tabs::TabHandle& handle) { return !handle.Get(); });
++  const int n = static_cast<int>(cycle_->tabs.size());
++  if (n < 2) {
++    cycle_.reset();
++    return false;
++  }
++  int position = (static_cast<int>(cycle_->position) + delta) % n;
++  if (position < 0) {
++    position += n;
++  }
++  cycle_->position = static_cast<size_t>(position);
++  const int index =
++      tab_strip_model_->GetIndexOfTab(cycle_->tabs[cycle_->position].Get());
++  if (index != TabStripModel::kNoTab) {
++    tab_strip_model_->ActivateTabAt(
++        index, TabStripUserGestureDetails(
++                   TabStripUserGestureDetails::GestureType::kKeyboard));
++  }
++  return true;
++}
++
++void SpaceModel::EndCycle() {
++  if (!cycle_) {
++    return;
++  }
++  cycle_.reset();
++  if (tab_strip_model_) {
++    RecordActivation(tab_strip_model_->GetActiveTab());
++  }
++}
++
++void SpaceModel::CancelCycle() {
++  if (!cycle_) {
++    return;
++  }
++  tabs::TabInterface* const origin = cycle_->origin.Get();
++  cycle_.reset();
++  if (!tab_strip_model_ || !origin) {
++    return;
++  }
++  const int index = tab_strip_model_->GetIndexOfTab(origin);
++  if (index != TabStripModel::kNoTab) {
++    tab_strip_model_->ActivateTabAt(
++        index, TabStripUserGestureDetails(
++                   TabStripUserGestureDetails::GestureType::kOther));
++  }
++}
++
++std::vector<tabs::TabInterface*> SpaceModel::cycle_tabs() const {
++  std::vector<tabs::TabInterface*> out;
++  if (!cycle_) {
++    return out;
++  }
++  for (const tabs::TabHandle& handle : cycle_->tabs) {
++    if (tabs::TabInterface* const tab = handle.Get()) {
++      out.push_back(tab);
++    }
++  }
++  return out;
++}
++
++size_t SpaceModel::cycle_position() const {
++  return cycle_ ? cycle_->position : 0;
++}
++
+ Space* SpaceModel::NeighbourSpace(bool forward) {
+   for (size_t i = 0; i < spaces_.size(); ++i) {
+     if (spaces_[i]->id() != active_id_) {
+diff --git a/chrome/browser/ui/spaces/space_model.h b/chrome/browser/ui/spaces/space_model.h
+index 0d515535ce5a1..62402bb73b103 100644
+--- a/chrome/browser/ui/spaces/space_model.h
++++ b/chrome/browser/ui/spaces/space_model.h
+@@ -146,6 +146,30 @@ class SpaceModel : public TabStripModelObserver {
+   // null at the ends.
+   Space* NeighbourSpace(bool forward);
+ 
++  // switcher X1: the tabs of `id` in most-recently-active order, the active
++  // tab first when it is in `id`, then the Space's tabs the user never
++  // activated in sidebar order (a fresh window has no history yet), at most
++  // `limit` of them. An essentials tab counts in the Space it was used in; a
++  // closed tab drops out; a split's panes are one entry (splits J2); tabs
++  // hidden in a collapsed folder are reached only through the history.
++  // Empty without a window.
++  std::vector<tabs::TabInterface*> RecentTabs(const SpaceId& id,
++                                              size_t limit = 5) const;
++
++  // switcher X1, X2: Ctrl-Tab. The first call of a run starts it: the recent
++  // list of the active Space freezes so a held Ctrl walks it -- one step is
++  // the previous tab, the next the one before that, wrapping -- and `delta`
++  // moves the position. EndCycle() commits the run: the tab the user is on
++  // becomes the most recent. CancelCycle() goes back to the tab the run
++  // started on. False without a window or with fewer than two tabs to walk.
++  bool CycleRecent(int delta);
++  void EndCycle();
++  void CancelCycle();
++  bool in_cycle() const { return cycle_.has_value(); }
++  // The run's frozen list and the position on it, for the strip.
++  std::vector<tabs::TabInterface*> cycle_tabs() const;
++  size_t cycle_position() const;
++
+   // tabs R6: `delay` after the user leaves a Space without coming back,
+   // `sleep` runs with that Space's id and its sleepable tabs (unpinned, not
+   // essentials); a zero delay disables. The window binds `sleep` to the tab
+@@ -259,6 +283,21 @@ class SpaceModel : public TabStripModelObserver {
+   // The tab the user last had active in each Space, so coming back to a Space
+   // lands where they left it rather than on whichever tab sorts first.
+   std::map<SpaceId, tabs::TabHandle> last_active_;
++  // switcher X1: per Space, the tabs in most-recently-active order. `tab`
++  // was just activated in the active Space; a run in progress freezes it.
++  void RecordActivation(tabs::TabInterface* tab);
++  std::map<SpaceId, std::vector<tabs::TabHandle>> history_;
++  struct Cycle {
++    explicit Cycle(SpaceId in_space);
++    Cycle(Cycle&& other);
++    Cycle& operator=(Cycle&& other);
++    ~Cycle();
++    SpaceId space;
++    std::vector<tabs::TabHandle> tabs;
++    size_t position = 0;
++    tabs::TabHandle origin;
++  };
++  std::optional<Cycle> cycle_;
+   // tabs R6: one timer per Space the user has left.
+   void ArmSleepTimer(const SpaceId& left);
+   void OnSleepTimer(const SpaceId& id);
+diff --git a/chrome/browser/ui/spaces/space_model_window_unittest.cc b/chrome/browser/ui/spaces/space_model_window_unittest.cc
+index fc28c0010105d..76a9f3c0ecb5a 100644
+--- a/chrome/browser/ui/spaces/space_model_window_unittest.cc
++++ b/chrome/browser/ui/spaces/space_model_window_unittest.cc
+@@ -14,6 +14,7 @@
+ #include <utility>
+ #include <vector>
+ 
++#include "chrome/app/chrome_command_ids.h"
+ #include "chrome/browser/ui/browser.h"
+ #include "chrome/browser/ui/browser_commands.h"
+ #include "chrome/browser/ui/spaces/space.h"
+@@ -23,11 +24,14 @@
+ #include "chrome/browser/ui/stedding/pin_lifecycle.h"
+ #include "chrome/browser/ui/stedding/sleep_tabs.h"
+ #include "chrome/browser/ui/stedding/stedding_prefs.h"
++#include "chrome/browser/ui/tabs/split_tab_metrics.h"
++#include "chrome/browser/ui/tabs/tab_enums.h"
+ #include "chrome/browser/ui/tabs/tab_model.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "chrome/browser/ui/tabs/tab_strip_user_gesture_details.h"
+ #include "chrome/test/base/browser_with_test_window_test.h"
+ #include "components/prefs/pref_service.h"
++#include "components/split_tabs/split_tab_visual_data.h"
+ #include "components/tabs/public/tab_interface.h"
+ #include "content/public/browser/web_contents.h"
+ #include "testing/gtest/include/gtest/gtest.h"
+@@ -250,6 +254,170 @@ TEST_F(SpaceWindowTest, NextTabSkipsOtherSpaces) {
+   EXPECT_EQ(a, tabs().GetActiveTab());
+ }
+ 
++// switcher X1
++TEST_F(SpaceWindowTest, ActivationHistoryIsPerSpace) {
++  const SpaceId home = model().active_id();
++  tabs::TabInterface* const a = OpenTab();
++  tabs::TabInterface* const b = OpenTab();
++  Space* const work = model().AddSpace("Work", kBlue);
++  model().SetActiveSpace(work->id());
++  tabs::TabInterface* const c = OpenTab();
++  const std::vector<tabs::TabInterface*> in_work =
++      model().RecentTabs(work->id());
++  ASSERT_FALSE(in_work.empty());
++  EXPECT_EQ(c, in_work.front());
++  EXPECT_EQ(in_work.end(), std::ranges::find(in_work, a));
++  EXPECT_EQ(in_work.end(), std::ranges::find(in_work, b));
++  EXPECT_EQ((std::vector<tabs::TabInterface*>{b, a}), model().RecentTabs(home));
++
++  model().SetActiveSpace(home);
++  EXPECT_EQ(b, tabs().GetActiveTab());
++  EXPECT_EQ((std::vector<tabs::TabInterface*>{b, a}), model().RecentTabs(home));
++
++  // An essential used here counts here; a closed tab drops out.
++  tabs().ActivateTabAt(tabs().GetIndexOfTab(a),
++                       TabStripUserGestureDetails(
++                           TabStripUserGestureDetails::GestureType::kOther));
++  tabs().SetTabPinned(tabs().GetIndexOfTab(a), true);
++  EXPECT_EQ((std::vector<tabs::TabInterface*>{a, b}), model().RecentTabs(home));
++  tabs().CloseWebContentsAt(tabs().GetIndexOfTab(b),
++                            TabCloseTypes::CLOSE_USER_GESTURE);
++  EXPECT_EQ((std::vector<tabs::TabInterface*>{a}), model().RecentTabs(home));
++}
++
++// switcher X1: tabs the user never activated follow the history in sidebar
++// order, so Ctrl-Tab has somewhere to go in a fresh window.
++TEST_F(SpaceWindowTest, RecentTabsFallBackToSidebarOrder) {
++  const SpaceId home = model().active_id();
++  tabs::TabInterface* const a = OpenTab();
++  const auto open_in_background = [&] {
++    std::unique_ptr<content::WebContents> contents =
++        content::WebContents::Create(
++            content::WebContents::CreateParams(profile()));
++    tabs().AppendTab(
++        std::make_unique<tabs::TabModel>(std::move(contents), &tabs()),
++        /*foreground=*/false);
++    return tabs().GetTabAtIndex(tabs().count() - 1);
++  };
++  tabs::TabInterface* const b = open_in_background();
++  tabs::TabInterface* const c = open_in_background();
++  ASSERT_EQ(a, tabs().GetActiveTab());
++  EXPECT_EQ((std::vector<tabs::TabInterface*>{a, b, c}),
++            model().RecentTabs(home));
++
++  // A tap goes to b, the next in sidebar order; the next tap comes back.
++  EXPECT_TRUE(model().CycleRecent(1));
++  model().EndCycle();
++  EXPECT_EQ(b, tabs().GetActiveTab());
++  EXPECT_EQ((std::vector<tabs::TabInterface*>{b, a, c}),
++            model().RecentTabs(home));
++  EXPECT_TRUE(model().CycleRecent(1));
++  model().EndCycle();
++  EXPECT_EQ(a, tabs().GetActiveTab());
++}
++
++// switcher X1: through the command, as the key arrives.
++TEST_F(SpaceWindowTest, CtrlTabWalksRecentTabsOfTheActiveSpace) {
++  const SpaceId home = model().active_id();
++  tabs::TabInterface* const a = OpenTab();
++  tabs::TabInterface* const b = OpenTab();
++  tabs::TabInterface* const c = OpenTab();
++  Space* const work = model().AddSpace("Work", kBlue);
++  model().SetActiveSpace(work->id());
++  OpenTab();
++  model().SetActiveSpace(home);
++  ASSERT_EQ(c, tabs().GetActiveTab());
++
++  chrome::ExecuteCommand(browser(), IDC_CYCLE_TO_NEXT_TAB);
++  EXPECT_EQ(b, tabs().GetActiveTab());
++  EXPECT_TRUE(model().in_cycle());
++  EXPECT_EQ(1u, model().cycle_position());
++  chrome::ExecuteCommand(browser(), IDC_CYCLE_TO_NEXT_TAB);
++  EXPECT_EQ(a, tabs().GetActiveTab());
++  chrome::ExecuteCommand(browser(), IDC_CYCLE_TO_NEXT_TAB);
++  EXPECT_EQ(c, tabs().GetActiveTab()) << "wraps; never a tab of Work";
++  chrome::ExecuteCommand(browser(), IDC_CYCLE_TO_PREV_TAB);
++  EXPECT_EQ(a, tabs().GetActiveTab());
++  EXPECT_EQ((std::vector<tabs::TabInterface*>{c, b, a}), model().cycle_tabs());
++
++  model().EndCycle();
++  EXPECT_FALSE(model().in_cycle());
++  EXPECT_EQ(a, tabs().GetActiveTab());
++  EXPECT_EQ((std::vector<tabs::TabInterface*>{a, c, b}),
++            model().RecentTabs(home));
++}
++
++// switcher X2: a tap is one step and a commit; the next tap comes back.
++TEST_F(SpaceWindowTest, CtrlTabTapGoesToPreviousTab) {
++  OpenTab();
++  tabs::TabInterface* const b = OpenTab();
++  tabs::TabInterface* const c = OpenTab();
++  ASSERT_EQ(c, tabs().GetActiveTab());
++  EXPECT_TRUE(model().CycleRecent(1));
++  model().EndCycle();
++  EXPECT_EQ(b, tabs().GetActiveTab());
++  EXPECT_TRUE(model().CycleRecent(1));
++  model().EndCycle();
++  EXPECT_EQ(c, tabs().GetActiveTab());
++
++  // Escape mid-run: back where the run started.
++  EXPECT_TRUE(model().CycleRecent(1));
++  EXPECT_EQ(b, tabs().GetActiveTab());
++  model().CancelCycle();
++  EXPECT_FALSE(model().in_cycle());
++  EXPECT_EQ(c, tabs().GetActiveTab());
++}
++
++// switcher X5: the setting off returns Ctrl-Tab to sidebar order.
++TEST_F(SpaceWindowTest, CtrlTabSettingOffUsesStripOrder) {
++  tabs::TabInterface* const a = OpenTab();
++  tabs::TabInterface* const b = OpenTab();
++  tabs::TabInterface* const c = OpenTab();
++  // Recent order c, a, b; sidebar order c, b, a.
++  tabs().ActivateTabAt(tabs().GetIndexOfTab(a),
++                       TabStripUserGestureDetails(
++                           TabStripUserGestureDetails::GestureType::kOther));
++  tabs().ActivateTabAt(tabs().GetIndexOfTab(c),
++                       TabStripUserGestureDetails(
++                           TabStripUserGestureDetails::GestureType::kOther));
++  profile()->GetPrefs()->SetBoolean(stedding::prefs::kCtrlTabMru, false);
++  chrome::ExecuteCommand(browser(), IDC_CYCLE_TO_NEXT_TAB);
++  EXPECT_EQ(b, tabs().GetActiveTab()) << "sidebar order, not the recent one";
++  EXPECT_FALSE(model().in_cycle());
++
++  profile()->GetPrefs()->SetBoolean(stedding::prefs::kCtrlTabMru, true);
++  tabs().ActivateTabAt(tabs().GetIndexOfTab(c),
++                       TabStripUserGestureDetails(
++                           TabStripUserGestureDetails::GestureType::kOther));
++  chrome::ExecuteCommand(browser(), IDC_CYCLE_TO_NEXT_TAB);
++  EXPECT_EQ(b, tabs().GetActiveTab());
++  model().EndCycle();
++}
++
++// splits J2: a split's panes are one entry of the recent list.
++TEST_F(SpaceWindowTest, RecentTabsCountASplitOnce) {
++  const SpaceId home = model().active_id();
++  tabs::TabInterface* const a = OpenTab();
++  tabs::TabInterface* const b = OpenTab();
++  tabs::TabInterface* const c = OpenTab();
++  // c is active; the split takes c and b.
++  tabs().AddToNewSplit({tabs().GetIndexOfTab(b)},
++                       split_tabs::SplitTabVisualData(),
++                       split_tabs::SplitTabCreatedSource::kToolbarButton);
++  ASSERT_TRUE(b->IsSplit());
++  ASSERT_TRUE(c->IsSplit());
++  tabs().ActivateTabAt(tabs().GetIndexOfTab(a),
++                       TabStripUserGestureDetails(
++                           TabStripUserGestureDetails::GestureType::kOther));
++  tabs().ActivateTabAt(tabs().GetIndexOfTab(b),
++                       TabStripUserGestureDetails(
++                           TabStripUserGestureDetails::GestureType::kOther));
++  const std::vector<tabs::TabInterface*> recent = model().RecentTabs(home);
++  ASSERT_EQ(2u, recent.size());
++  EXPECT_TRUE(recent[0]->IsSplit());
++  EXPECT_EQ(a, recent[1]);
++}
++
+ // B8
+ TEST_F(SpaceWindowTest, MovingATabNotifiesObservers) {
+   class Recorder : public SpaceModel::Observer {
+diff --git a/chrome/browser/ui/stedding/stedding_prefs.cc b/chrome/browser/ui/stedding/stedding_prefs.cc
+index c5ab1d69668c2..f6ebd39a8727e 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs.cc
++++ b/chrome/browser/ui/stedding/stedding_prefs.cc
+@@ -20,6 +20,7 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
+   registry->RegisterIntegerPref(kSpaceSleepMinutes, 15);
+   registry->RegisterBooleanPref(kMenusShort, true);
+   registry->RegisterBooleanPref(kHoldCmdNumbers, true);
++  registry->RegisterBooleanPref(kCtrlTabMru, true);
+ }
+ 
+ }  // namespace stedding::prefs
+diff --git a/chrome/browser/ui/stedding/stedding_prefs.h b/chrome/browser/ui/stedding/stedding_prefs.h
+index aab131e6b68f0..6619d4286e6d4 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs.h
++++ b/chrome/browser/ui/stedding/stedding_prefs.h
+@@ -53,6 +53,9 @@ inline constexpr char kMenusShort[] = "stedding.menus.short";
+ 
+ // Row numbers 1-9 appear while Cmd is held (docs/features/tabs.md R11, R12).
+ inline constexpr char kHoldCmdNumbers[] = "stedding.sidebar.hold_cmd_numbers";
++// switcher X1, X5: Ctrl-Tab walks the active Space's most recent tabs; off,
++// it walks the sidebar in order.
++inline constexpr char kCtrlTabMru[] = "stedding.tabs.ctrl_tab_mru";
+ 
+ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
+ 
+diff --git a/chrome/browser/ui/tabs/tab_strip_model.cc b/chrome/browser/ui/tabs/tab_strip_model.cc
+index 37ccf967c79a2..d74f707f9d1ce 100644
+--- a/chrome/browser/ui/tabs/tab_strip_model.cc
++++ b/chrome/browser/ui/tabs/tab_strip_model.cc
+@@ -4238,6 +4238,25 @@ void TabStripModel::MoveTabRelative(TabRelativeDirection direction) {
+           ? GetIndexRangeOfSplit(active_tab->GetSplit().value())
+           : gfx::Range{active_tab_index, active_tab_index + 1};
+ 
++  // Stedding (docs/features/switcher.md X4): a move that touches a folder
++  // keeps the row inside its container and jumps a folder as one row.
++  {
++    const int delta = direction == TabRelativeDirection::kNext ? 1 : -1;
++    if (const std::optional<tabs::TabStripCollection::RelativeMove> plan =
++            contents_data_->PlanRelativeMoveInFolder(active_tab_index, delta)) {
++      if (plan->moves) {
++        MoveTabsWithNotifications(
++            moving_index_range.ToIntVector(),
++            static_cast<int>(plan->destination),
++            base::BindOnce(
++                &tabs::TabStripCollection::MoveTabRelativeInContainer,
++                base::Unretained(contents_data_.get()), active_tab_index,
++                delta));
++      }
++      return;
++    }
++  }
++
+   // Calculate the target index the tabs needs to moved to. This will be the
+   // destination index of the current tab at moving_index_range.start().
+   int target_index = moving_index_range.start();
+diff --git a/chrome/browser/ui/tabs/tab_strip_model_unittest.cc b/chrome/browser/ui/tabs/tab_strip_model_unittest.cc
+index c71efd256f81c..76c2bff383bca 100644
+--- a/chrome/browser/ui/tabs/tab_strip_model_unittest.cc
++++ b/chrome/browser/ui/tabs/tab_strip_model_unittest.cc
+@@ -55,9 +55,9 @@
+ #include "components/split_tabs/split_tab_visual_data.h"
+ #include "components/tab_groups/tab_group_color.h"
+ #include "components/tab_groups/tab_group_id.h"
++#include "components/tabs/public/folder_tab_collection.h"
+ #include "components/tabs/public/split_tab_data.h"
+ #include "components/tabs/public/tab_group.h"
+-#include "components/tabs/public/folder_tab_collection.h"
+ #include "components/tabs/public/tab_group_tab_collection.h"
+ #include "components/tabs/public/tab_interface.h"
+ #include "components/web_modal/web_contents_modal_dialog_manager.h"
+@@ -6300,8 +6300,7 @@ TEST_F(TabStripModelTest, AddToNewFolderKeepsTabsAndNests) {
+   tabs::TabInterface* const moved_a = tabstrip()->GetTabAtIndex(1);
+   tabs::TabInterface* const moved_b = tabstrip()->GetTabAtIndex(2);
+ 
+-  tabs::FolderTabCollection* const folder =
+-      tabstrip()->AddToNewFolder({1, 2});
++  tabs::FolderTabCollection* const folder = tabstrip()->AddToNewFolder({1, 2});
+   ASSERT_NE(nullptr, folder);
+ 
+   // No tab was lost, and the folder holds exactly the two moved tabs.
+@@ -6321,6 +6320,58 @@ TEST_F(TabStripModelTest, AddToNewFolderKeepsTabsAndNests) {
+       << "the nested tab still counts inside the outer folder";
+ }
+ 
++// Stedding switcher X4: Option-Shift-Cmd-Down / Up move the row among the
++// rows the user sees -- a folder beside it is one row to jump, and a row
++// inside a folder stays inside it.
++TEST_F(TabStripModelTest, MoveTabRelativeStaysInsideItsFolder) {
++  ASSERT_NO_FATAL_FAILURE(
++      PrepareTabstripForSelectionTest(tabstrip(), 4, 0, {0}));
++  tabs::TabInterface* const a = tabstrip()->GetTabAtIndex(0);
++  tabs::TabInterface* const b = tabstrip()->GetTabAtIndex(1);
++  tabs::TabInterface* const c = tabstrip()->GetTabAtIndex(2);
++  tabs::TabInterface* const d = tabstrip()->GetTabAtIndex(3);
++  tabs::FolderTabCollection* const folder = tabstrip()->AddToNewFolder({1, 2});
++  ASSERT_NE(nullptr, folder);
++  const auto activate = [&](tabs::TabInterface* tab) {
++    tabstrip()->ActivateTabAt(
++        tabstrip()->GetIndexOfTab(tab),
++        TabStripUserGestureDetails(
++            TabStripUserGestureDetails::GestureType::kOther));
++  };
++
++  // Inside the folder: c is its last row, so down is a no-op; b moves under c
++  // and both stay in the folder.
++  activate(c);
++  tabstrip()->MoveTabNext();
++  EXPECT_EQ(2, tabstrip()->GetIndexOfTab(c));
++  EXPECT_EQ(folder, c->GetParentCollection());
++  activate(b);
++  tabstrip()->MoveTabNext();
++  EXPECT_EQ(2, tabstrip()->GetIndexOfTab(b));
++  EXPECT_EQ(1, tabstrip()->GetIndexOfTab(c));
++  EXPECT_EQ(folder, b->GetParentCollection());
++  EXPECT_EQ(2u, folder->TabCountRecursive());
++  tabstrip()->MoveTabPrevious();
++  EXPECT_EQ(1, tabstrip()->GetIndexOfTab(b));
++  EXPECT_EQ(folder, b->GetParentCollection());
++
++  // Beside the folder: a jumps over it as one row and comes back; d jumps up
++  // over it too. The folder never gains or loses a tab.
++  activate(a);
++  tabstrip()->MoveTabNext();
++  EXPECT_EQ(2, tabstrip()->GetIndexOfTab(a));
++  EXPECT_NE(folder, a->GetParentCollection());
++  EXPECT_EQ(3, tabstrip()->GetIndexOfTab(d));
++  tabstrip()->MoveTabPrevious();
++  EXPECT_EQ(0, tabstrip()->GetIndexOfTab(a));
++  activate(d);
++  tabstrip()->MoveTabPrevious();
++  EXPECT_EQ(1, tabstrip()->GetIndexOfTab(d));
++  EXPECT_NE(folder, d->GetParentCollection());
++  EXPECT_EQ(2u, folder->TabCountRecursive());
++  EXPECT_EQ(4, tabstrip()->count());
++}
++
+ // Stedding folders: a tab dropped on a folder joins it at the end; tabs move
+ // one by one so the tree stays valid; pinned tabs are refused untouched.
+ TEST_F(TabStripModelTest, MoveTabsToFolderAppendsNestsAndRefusesPins) {
+diff --git a/chrome/browser/ui/views/commandbar/command_bar_view.cc b/chrome/browser/ui/views/commandbar/command_bar_view.cc
+index 15adf5dd32ade..25c9fc7c1d298 100644
+--- a/chrome/browser/ui/views/commandbar/command_bar_view.cc
++++ b/chrome/browser/ui/views/commandbar/command_bar_view.cc
+@@ -27,6 +27,7 @@
+ #include "chrome/browser/ui/navigator/browser_navigator_params.h"
+ #include "chrome/browser/ui/spaces/space.h"
+ #include "chrome/browser/ui/spaces/space_colors.h"
++#include "chrome/browser/ui/spaces/space_commands.h"
+ #include "chrome/browser/ui/spaces/space_model.h"
+ #include "chrome/browser/ui/stedding/sleep_tabs.h"
+ #include "chrome/browser/ui/stedding/stedding_prefs.h"
+@@ -296,6 +297,19 @@ void CommandBarView::BuildActions() {
+                  base::Unretained(browser_))});
+       }
+     }
++    // switcher X2 from the bar: a tap, since no Ctrl is held.
++    actions_.push_back({u"Go to the Most Recent Tab",
++                        ChordFor(IDC_CYCLE_TO_NEXT_TAB),
++                        base::BindRepeating(
++                            [](Browser* browser) {
++                              if (spaces::CycleRecentTab(browser, 1)) {
++                                if (spaces::SpaceModel* const model =
++                                        spaces::SpaceModel::From(browser)) {
++                                  model->EndCycle();
++                                }
++                              }
++                            },
++                            base::Unretained(browser_))});
+     command(IDC_STEDDING_CLEAR_SPACE, u"Clear This Space");
+     command(IDC_STEDDING_SPACE_NEXT, u"Next Space");
+     command(IDC_STEDDING_SPACE_PREVIOUS, u"Previous Space");
+@@ -345,6 +359,8 @@ void CommandBarView::BuildActions() {
+           {stedding::prefs::kMenusShort, u"Short context menus"},
+           {stedding::prefs::kHoldCmdNumbers,
+            u"Row numbers while \u2318 is held"},
++          {stedding::prefs::kCtrlTabMru,
++           u"\u2303\u21E5 cycles the most recent tabs"},
+           {stedding::prefs::kNewTabShowHint,
+            u"Command-bar hint on the new tab page"},
+           {stedding::prefs::kNewTabShowShortcuts,
+diff --git a/chrome/browser/ui/views/switcher/BUILD.gn b/chrome/browser/ui/views/switcher/BUILD.gn
+new file mode 100644
+index 0000000000000..9e855fb33ef21
+--- /dev/null
++++ b/chrome/browser/ui/views/switcher/BUILD.gn
+@@ -0,0 +1,42 @@
++# Copyright 2026 The Stedding Authors
++# Use of this source code is governed by a BSD-style license that can be
++# found in the LICENSE file.
++
++source_set("switcher") {
++  public = [ "recent_tabs_switcher_view.h" ]
++  sources = [ "recent_tabs_switcher_view.cc" ]
++
++  public_deps = [
++    "//base",
++    "//ui/views",
++  ]
++
++  deps = [
++    "//chrome/browser/profiles:profile",
++    "//chrome/browser/ui/spaces",
++    "//chrome/browser/ui/stedding:motion",
++    "//chrome/browser/ui/tabs:tab_strip",
++    "//components/prefs",
++    "//components/tabs:public",
++    "//ui/base",
++    "//ui/compositor",
++    "//ui/events",
++    "//ui/gfx",
++  ]
++}
++
++source_set("unit_tests") {
++  testonly = true
++  sources = [ "recent_tabs_switcher_view_unittest.cc" ]
++  deps = [
++    ":switcher",
++    "//base",
++    "//chrome/browser/ui/spaces",
++    "//chrome/browser/ui/tabs:tab_strip",
++    "//chrome/test:test_support",
++    "//components/tabs:public",
++    "//testing/gtest",
++    "//ui/events",
++    "//ui/views",
++  ]
++}
+diff --git a/chrome/browser/ui/views/switcher/recent_tabs_switcher_view.cc b/chrome/browser/ui/views/switcher/recent_tabs_switcher_view.cc
+new file mode 100644
+index 0000000000000..f39c722f2799f
+--- /dev/null
++++ b/chrome/browser/ui/views/switcher/recent_tabs_switcher_view.cc
+@@ -0,0 +1,335 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/views/switcher/recent_tabs_switcher_view.h"
++
++#include <memory>
++#include <string>
++#include <utility>
++#include <vector>
++
++#include "base/functional/bind.h"
++#include "base/task/single_thread_task_runner.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/ui/browser.h"
++#include "chrome/browser/ui/spaces/space.h"
++#include "chrome/browser/ui/spaces/space_model.h"
++#include "chrome/browser/ui/stedding/motion.h"
++#include "chrome/browser/ui/tab_ui_helper.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "chrome/browser/ui/views/frame/browser_view.h"
++#include "components/prefs/pref_service.h"
++#include "components/tabs/public/tab_interface.h"
++#include "ui/base/metadata/metadata_impl_macros.h"
++#include "ui/color/color_id.h"
++#include "ui/color/color_provider.h"
++#include "ui/compositor/layer.h"
++#include "ui/compositor/scoped_layer_animation_settings.h"
++#include "ui/events/event.h"
++#include "ui/events/event_observer.h"
++#include "ui/events/keycodes/keyboard_codes.h"
++#include "ui/gfx/geometry/rect_conversions.h"
++#include "ui/gfx/geometry/rect_f.h"
++#include "ui/gfx/text_constants.h"
++#include "ui/views/background.h"
++#include "ui/views/border.h"
++#include "ui/views/controls/image_view.h"
++#include "ui/views/controls/label.h"
++#include "ui/views/layout/box_layout.h"
++#include "ui/views/view_utils.h"
++#include "ui/views/widget/widget.h"
++
++namespace stedding {
++namespace {
++
++// Ctrl held this long after Ctrl-Tab shows the strip; a tap never sees it.
++constexpr base::TimeDelta kHoldDelay = base::Milliseconds(150);
++constexpr int kPanelRadius = 16;
++constexpr int kPanelInset = 10;
++constexpr int kCellSpacing = 4;
++constexpr int kCellRadius = 10;
++constexpr int kCellWidth = 152;
++constexpr int kCellHeight = 88;
++constexpr int kFaviconSize = 20;
++constexpr int kDotSize = 6;
++constexpr SkAlpha kHighlightAlpha = 0x1F;
++
++RecentTabsSwitcherView* GetOpen(BrowserView* browser_view) {
++  for (views::View* child : browser_view->children()) {
++    if (auto* const strip = views::AsViewClass<RecentTabsSwitcherView>(child)) {
++      return strip;
++    }
++  }
++  return nullptr;
++}
++
++bool IsControl(const ui::KeyEvent& event) {
++  return event.key_code() == ui::VKEY_CONTROL ||
++         event.key_code() == ui::VKEY_LCONTROL ||
++         event.key_code() == ui::VKEY_RCONTROL;
++}
++
++}  // namespace
++
++class RecentTabsSwitcherView::Watcher : public ui::EventObserver {
++ public:
++  explicit Watcher(RecentTabsSwitcherView* strip) : strip_(strip) {}
++  ~Watcher() override = default;
++
++  // ui::EventObserver:
++  void OnEvent(const ui::Event& event) override {
++    strip_->OnWatchedEvent(event);
++  }
++
++ private:
++  const raw_ptr<RecentTabsSwitcherView> strip_;
++};
++
++// static
++void RecentTabsSwitcherView::Show(Browser* browser) {
++  BrowserView* const browser_view =
++      BrowserView::GetBrowserViewForBrowser(browser);
++  spaces::SpaceModel* const model = spaces::SpaceModel::From(browser);
++  if (!browser_view || !model || !model->in_cycle()) {
++    return;
++  }
++  if (RecentTabsSwitcherView* const open = GetOpen(browser_view)) {
++    open->Refresh();
++    return;
++  }
++  // Last child of the browser view: over the page, on its own layer.
++  RecentTabsSwitcherView* const strip = browser_view->AddChildView(
++      std::make_unique<RecentTabsSwitcherView>(browser));
++  strip->SetPaintToLayer();
++  strip->layer()->SetFillsBoundsOpaquely(false);
++  strip->layer()->SetName("SteddingRecentTabs");
++  strip->SetVisible(false);
++  strip->Refresh();
++  strip->hold_timer_.Start(
++      FROM_HERE, kHoldDelay,
++      base::BindOnce(&RecentTabsSwitcherView::Reveal, base::Unretained(strip)));
++}
++
++// static
++RecentTabsSwitcherView* RecentTabsSwitcherView::GetOpenForTesting(
++    Browser* browser) {
++  BrowserView* const browser_view =
++      BrowserView::GetBrowserViewForBrowser(browser);
++  return browser_view ? GetOpen(browser_view) : nullptr;
++}
++
++RecentTabsSwitcherView::RecentTabsSwitcherView(Browser* browser)
++    : browser_(browser) {
++  SetBackground(views::CreateRoundedRectBackground(ui::kColorDialogBackground,
++                                                   kPanelRadius));
++  SetBorder(views::CreateEmptyBorder(gfx::Insets(kPanelInset)));
++  SetLayoutManager(std::make_unique<views::BoxLayout>(
++      views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), kCellSpacing));
++}
++
++RecentTabsSwitcherView::~RecentTabsSwitcherView() = default;
++
++void RecentTabsSwitcherView::Refresh() {
++  spaces::SpaceModel* const model = spaces::SpaceModel::From(browser_);
++  if (closing_ || !model) {
++    return;
++  }
++  if (!model->in_cycle()) {
++    Close();
++    return;
++  }
++  RemoveAllChildViews();
++  cells_.clear();
++  const std::vector<tabs::TabInterface*> tabs = model->cycle_tabs();
++  highlighted_ = model->cycle_position();
++  const ui::ColorProvider* const provider = GetColorProvider();
++  const SkColor text =
++      provider ? provider->GetColor(ui::kColorLabelForeground) : SK_ColorWHITE;
++  const spaces::Space* const space = model->active_space();
++  const SkColor dot = space ? space->color() : text;
++  for (size_t i = 0; i < tabs.size(); ++i) {
++    tabs::TabInterface* const tab = tabs[i];
++    auto cell = std::make_unique<views::View>();
++    auto* const layout =
++        cell->SetLayoutManager(std::make_unique<views::BoxLayout>(
++            views::BoxLayout::Orientation::kVertical, gfx::Insets::VH(14, 12),
++            8));
++    layout->set_cross_axis_alignment(
++        views::BoxLayout::CrossAxisAlignment::kCenter);
++    cell->SetPreferredSize(gfx::Size(kCellWidth, kCellHeight));
++    if (i == highlighted_) {
++      cell->SetBackground(views::CreateRoundedRectBackground(
++          SkColorSetA(text, kHighlightAlpha), kCellRadius));
++    }
++
++    auto favicon = std::make_unique<views::ImageView>();
++    if (TabUIHelper* const helper = TabUIHelper::From(tab)) {
++      favicon->SetImage(helper->GetFavicon());
++    }
++    favicon->SetImageSize(gfx::Size(kFaviconSize, kFaviconSize));
++    cell->AddChildView(std::move(favicon));
++
++    // The title with the Space's colour beside it.
++    auto row = std::make_unique<views::View>();
++    auto* const row_layout =
++        row->SetLayoutManager(std::make_unique<views::BoxLayout>(
++            views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), 6));
++    row_layout->set_cross_axis_alignment(
++        views::BoxLayout::CrossAxisAlignment::kCenter);
++    auto swatch = std::make_unique<views::View>();
++    swatch->SetPreferredSize(gfx::Size(kDotSize, kDotSize));
++    swatch->SetBackground(
++        views::CreateRoundedRectBackground(dot, kDotSize / 2));
++    row->AddChildView(std::move(swatch));
++    const TabUIHelper* const helper = TabUIHelper::From(tab);
++    auto title = std::make_unique<views::Label>(
++        helper ? helper->GetTitle() : tab->GetContents()->GetTitle());
++    title->SetElideBehavior(gfx::ELIDE_TAIL);
++    title->SetMaximumWidthSingleLine(kCellWidth - 2 * 12 - kDotSize - 6);
++    title->SetEnabledColor(ui::kColorLabelForeground);
++    row->AddChildView(std::move(title));
++    cell->AddChildView(std::move(row));
++
++    cells_.push_back(AddChildView(std::move(cell)));
++  }
++  InvalidateLayout();
++  UpdateBounds();
++}
++
++void RecentTabsSwitcherView::OnWatchedEvent(const ui::Event& event) {
++  if (closing_) {
++    return;
++  }
++  if (event.IsMouseEvent()) {
++    Commit();
++    return;
++  }
++  if (!event.IsKeyEvent()) {
++    return;
++  }
++  const ui::KeyEvent& key = *event.AsKeyEvent();
++  if (key.type() == ui::EventType::kKeyReleased) {
++    if (IsControl(key)) {
++      Commit();
++    }
++    return;
++  }
++  if (key.type() != ui::EventType::kKeyPressed) {
++    return;
++  }
++  if (key.key_code() == ui::VKEY_ESCAPE) {
++    Cancel();
++    return;
++  }
++  // Tab with Ctrl is the accelerator that steps the run; Show() refreshes.
++  if (key.key_code() == ui::VKEY_TAB || IsControl(key)) {
++    return;
++  }
++  if (!key.IsControlDown()) {
++    // A key without Ctrl: the release was missed, the run is over.
++    Commit();
++  }
++}
++
++void RecentTabsSwitcherView::AddedToWidget() {
++  views::View::AddedToWidget();
++  if (views::Widget* const widget = GetWidget();
++      widget && widget->GetNativeWindow()) {
++    watcher_ = std::make_unique<Watcher>(this);
++    monitor_ = views::EventMonitor::CreateWindowMonitor(
++        watcher_.get(), widget->GetNativeWindow(),
++        {ui::EventType::kKeyPressed, ui::EventType::kKeyReleased,
++         ui::EventType::kMousePressed});
++  }
++}
++
++void RecentTabsSwitcherView::RemovedFromWidget() {
++  monitor_.reset();
++  watcher_.reset();
++  hold_timer_.Stop();
++  views::View::RemovedFromWidget();
++}
++
++void RecentTabsSwitcherView::OnKeyEventForTesting(const ui::KeyEvent& event) {
++  OnWatchedEvent(event);
++}
++
++void RecentTabsSwitcherView::FireHoldTimerForTesting() {
++  hold_timer_.Stop();
++  Reveal();
++}
++
++void RecentTabsSwitcherView::Reveal() {
++  if (closing_ || revealed_) {
++    return;
++  }
++  revealed_ = true;
++  UpdateBounds();
++  SetVisible(true);
++  if (layer() && browser_ &&
++      ShouldAnimate(browser_->GetProfile()->GetPrefs())) {
++    layer()->SetOpacity(0.0f);
++    ui::ScopedLayerAnimationSettings settings(layer()->GetAnimator());
++    settings.SetTransitionDuration(base::Milliseconds(80));
++    layer()->SetOpacity(1.0f);
++  }
++}
++
++void RecentTabsSwitcherView::Commit() {
++  if (spaces::SpaceModel* const model = spaces::SpaceModel::From(browser_)) {
++    model->EndCycle();
++  }
++  Close();
++}
++
++void RecentTabsSwitcherView::Cancel() {
++  if (spaces::SpaceModel* const model = spaces::SpaceModel::From(browser_)) {
++    model->CancelCycle();
++  }
++  Close();
++}
++
++void RecentTabsSwitcherView::Close() {
++  if (closing_) {
++    return;
++  }
++  closing_ = true;
++  hold_timer_.Stop();
++  monitor_.reset();
++  watcher_.reset();
++  SetVisible(false);
++  // Deleting a view from inside an event it observes is not safe; a turn
++  // later it is.
++  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
++      FROM_HERE, base::BindOnce(
++                     [](base::WeakPtr<RecentTabsSwitcherView> strip) {
++                       if (strip && strip->parent()) {
++                         std::unique_ptr<views::View> owned =
++                             strip->parent()->RemoveChildViewT(strip.get());
++                       }
++                     },
++                     weak_factory_.GetWeakPtr()));
++}
++
++void RecentTabsSwitcherView::UpdateBounds() {
++  views::View* const window = parent();
++  BrowserView* const browser_view =
++      BrowserView::GetBrowserViewForBrowser(browser_);
++  if (!window || !browser_view) {
++    return;
++  }
++  gfx::RectF contents_f(browser_view->contents_container()->GetLocalBounds());
++  views::View::ConvertRectToTarget(browser_view->contents_container(), window,
++                                   &contents_f);
++  const gfx::Rect contents = gfx::ToEnclosingRect(contents_f);
++  const gfx::Size size = GetPreferredSize();
++  SetBoundsRect(gfx::Rect(contents.x() + (contents.width() - size.width()) / 2,
++                          contents.y() + contents.height() / 3, size.width(),
++                          size.height()));
++}
++
++BEGIN_METADATA(RecentTabsSwitcherView)
++END_METADATA
++
++}  // namespace stedding
+diff --git a/chrome/browser/ui/views/switcher/recent_tabs_switcher_view.h b/chrome/browser/ui/views/switcher/recent_tabs_switcher_view.h
+new file mode 100644
+index 0000000000000..faa1f70eb98a5
+--- /dev/null
++++ b/chrome/browser/ui/views/switcher/recent_tabs_switcher_view.h
+@@ -0,0 +1,86 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_VIEWS_SWITCHER_RECENT_TABS_SWITCHER_VIEW_H_
++#define CHROME_BROWSER_UI_VIEWS_SWITCHER_RECENT_TABS_SWITCHER_VIEW_H_
++
++#include <memory>
++#include <vector>
++
++#include "base/memory/raw_ptr.h"
++#include "base/memory/weak_ptr.h"
++#include "base/timer/timer.h"
++#include "ui/base/metadata/metadata_header_macros.h"
++#include "ui/views/event_monitor.h"
++#include "ui/views/view.h"
++
++class Browser;
++
++namespace stedding {
++
++// docs/features/switcher.md X3: the strip of the active Space's most recent
++// tabs that appears over the page while Ctrl stays down after Ctrl-Tab. It
++// is a layered child of the BrowserView, like the command bar. The model
++// (SpaceModel's run) owns the order and the position; the strip shows them
++// and ends the run: releasing Ctrl commits, Escape cancels, and a mouse
++// press or a key without Ctrl commits too, since the run is over either way.
++class RecentTabsSwitcherView : public views::View {
++  METADATA_HEADER(RecentTabsSwitcherView, views::View)
++
++ public:
++  // Shows the strip for `browser`'s window once Ctrl has been held past the
++  // delay, or refreshes it when it is already up. No-op without a BrowserView
++  // or without a run in progress.
++  static void Show(Browser* browser);
++  static RecentTabsSwitcherView* GetOpenForTesting(Browser* browser);
++
++  explicit RecentTabsSwitcherView(Browser* browser);
++  RecentTabsSwitcherView(const RecentTabsSwitcherView&) = delete;
++  RecentTabsSwitcherView& operator=(const RecentTabsSwitcherView&) = delete;
++  ~RecentTabsSwitcherView() override;
++
++  // Rebuilds the cells from the model's run: one per tab, the position
++  // highlighted. Closes when the run is over.
++  void Refresh();
++
++  // The window monitor's events: Ctrl up, Escape, a mouse press, a key
++  // without Ctrl.
++  void OnWatchedEvent(const ui::Event& event);
++
++  // views::View:
++  void AddedToWidget() override;
++  void RemovedFromWidget() override;
++
++  // Test seams: the paths the window monitor and the hold timer take.
++  void OnKeyEventForTesting(const ui::KeyEvent& event);
++  void FireHoldTimerForTesting();
++  bool closing_for_testing() const { return closing_; }
++  size_t cell_count_for_testing() const { return cells_.size(); }
++  size_t highlighted_for_testing() const { return highlighted_; }
++
++ private:
++  void Reveal();
++  void Commit();
++  void Cancel();
++  void Close();
++  void UpdateBounds();
++
++  // ui::EventObserver clashes with views::View::OnEvent, so a small object
++  // listens and forwards.
++  class Watcher;
++
++  const raw_ptr<Browser> browser_;
++  std::unique_ptr<Watcher> watcher_;
++  std::unique_ptr<views::EventMonitor> monitor_;
++  base::OneShotTimer hold_timer_;
++  bool closing_ = false;
++  bool revealed_ = false;
++  std::vector<raw_ptr<views::View>> cells_;
++  size_t highlighted_ = 0;
++  base::WeakPtrFactory<RecentTabsSwitcherView> weak_factory_{this};
++};
++
++}  // namespace stedding
++
++#endif  // CHROME_BROWSER_UI_VIEWS_SWITCHER_RECENT_TABS_SWITCHER_VIEW_H_
+diff --git a/chrome/browser/ui/views/switcher/recent_tabs_switcher_view_unittest.cc b/chrome/browser/ui/views/switcher/recent_tabs_switcher_view_unittest.cc
+new file mode 100644
+index 0000000000000..06fa3f257af37
+--- /dev/null
++++ b/chrome/browser/ui/views/switcher/recent_tabs_switcher_view_unittest.cc
+@@ -0,0 +1,93 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/views/switcher/recent_tabs_switcher_view.h"
++
++#include <memory>
++#include <vector>
++
++#include "chrome/browser/ui/browser.h"
++#include "chrome/browser/ui/spaces/space_model.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "chrome/test/base/browser_with_test_window_test.h"
++#include "components/tabs/public/tab_interface.h"
++#include "testing/gtest/include/gtest/gtest.h"
++#include "ui/events/event.h"
++#include "ui/events/keycodes/keyboard_codes.h"
++#include "url/gurl.h"
++
++namespace stedding {
++namespace {
++
++class RecentTabsSwitcherViewTest : public BrowserWithTestWindowTest {
++ protected:
++  spaces::SpaceModel& model() {
++    spaces::SpaceModel* const model = spaces::SpaceModel::From(browser());
++    CHECK(model);
++    return *model;
++  }
++  TabStripModel& tabs() { return *browser()->tab_strip_model(); }
++  tabs::TabInterface* OpenTab() {
++    AddTab(browser(), GURL("https://example.com/"));
++    return tabs().GetActiveTab();
++  }
++};
++
++// switcher X3: the strip shows the run's tabs with the position highlighted;
++// releasing Ctrl commits the run and Escape cancels it.
++TEST_F(RecentTabsSwitcherViewTest, ReleaseCommitsEscapeCancels) {
++  tabs::TabInterface* const a = OpenTab();
++  tabs::TabInterface* const b = OpenTab();
++  tabs::TabInterface* const c = OpenTab();
++  ASSERT_EQ(c, tabs().GetActiveTab());
++
++  ASSERT_TRUE(model().CycleRecent(1));
++  auto strip = std::make_unique<RecentTabsSwitcherView>(browser());
++  strip->Refresh();
++  EXPECT_EQ(3u, strip->cell_count_for_testing());
++  EXPECT_EQ(1u, strip->highlighted_for_testing());
++  EXPECT_EQ(b, tabs().GetActiveTab());
++  strip->FireHoldTimerForTesting();
++  EXPECT_TRUE(strip->GetVisible());
++
++  // A step while the strip is up moves the highlight.
++  ASSERT_TRUE(model().CycleRecent(1));
++  strip->Refresh();
++  EXPECT_EQ(2u, strip->highlighted_for_testing());
++  EXPECT_EQ(a, tabs().GetActiveTab());
++
++  strip->OnKeyEventForTesting(
++      ui::KeyEvent(ui::EventType::kKeyReleased, ui::VKEY_CONTROL, ui::EF_NONE));
++  EXPECT_TRUE(strip->closing_for_testing());
++  EXPECT_FALSE(model().in_cycle());
++  EXPECT_EQ(a, tabs().GetActiveTab());
++  EXPECT_EQ((std::vector<tabs::TabInterface*>{a, c, b}),
++            model().RecentTabs(model().active_id()));
++
++  // Escape: back to the tab the run started on.
++  ASSERT_TRUE(model().CycleRecent(1));
++  EXPECT_EQ(c, tabs().GetActiveTab());
++  auto second = std::make_unique<RecentTabsSwitcherView>(browser());
++  second->Refresh();
++  second->OnKeyEventForTesting(
++      ui::KeyEvent(ui::EventType::kKeyPressed, ui::VKEY_ESCAPE, ui::EF_NONE));
++  EXPECT_TRUE(second->closing_for_testing());
++  EXPECT_FALSE(model().in_cycle());
++  EXPECT_EQ(a, tabs().GetActiveTab());
++
++  // A key without Ctrl means the release was missed: the run commits.
++  ASSERT_TRUE(model().CycleRecent(1));
++  auto third = std::make_unique<RecentTabsSwitcherView>(browser());
++  third->Refresh();
++  third->OnKeyEventForTesting(ui::KeyEvent(ui::EventType::kKeyPressed,
++                                           ui::VKEY_TAB, ui::EF_CONTROL_DOWN));
++  EXPECT_FALSE(third->closing_for_testing()) << "Ctrl-Tab steps, never ends";
++  third->OnKeyEventForTesting(
++      ui::KeyEvent(ui::EventType::kKeyPressed, ui::VKEY_A, ui::EF_NONE));
++  EXPECT_TRUE(third->closing_for_testing());
++  EXPECT_FALSE(model().in_cycle());
++}
++
++}  // namespace
++}  // namespace stedding
+diff --git a/chrome/browser/ui/webui/settings/settings_ui.cc b/chrome/browser/ui/webui/settings/settings_ui.cc
+index ec8762a0aaf3c..993e243dcbcf2 100644
+--- a/chrome/browser/ui/webui/settings/settings_ui.cc
++++ b/chrome/browser/ui/webui/settings/settings_ui.cc
+@@ -723,6 +723,12 @@ SettingsUI::SettingsUI(content::WebUI* web_ui)
+       "steddingHoldCmdNumbersSubLabel",
+       "\u23181\u2013\u23189 jump to the first nine rows you can see; hold "
+       "\u2318 a moment to see which is which.");
++  html_source->AddString("steddingCtrlTabMruLabel",
++                         "\u2303\u21E5 cycles the most recently used tabs");
++  html_source->AddString(
++      "steddingCtrlTabMruSubLabel",
++      "A tap goes to the previous tab of the Space; hold \u2303 to see the "
++      "five most recent. Off, \u2303\u21E5 walks the sidebar in order.");
+   html_source->AddString("steddingNewTabHintLabel",
+                          "Show the command-bar hint on the new tab page");
+   html_source->AddString("steddingNewTabHintSubLabel",
+diff --git a/chrome/browser/ui/webui/settings/stedding_shortcuts_handler.cc b/chrome/browser/ui/webui/settings/stedding_shortcuts_handler.cc
+index e2d2b48e73900..cb8c6b54163d4 100644
+--- a/chrome/browser/ui/webui/settings/stedding_shortcuts_handler.cc
++++ b/chrome/browser/ui/webui/settings/stedding_shortcuts_handler.cc
+@@ -138,6 +138,15 @@ std::vector<ShortcutGroup> ShortcutReference() {
+   AddChord(tabs,
+            TableChordFor(IDC_SELECT_PREVIOUS_TAB, kMacKeyUpArrow, ui::VKEY_UP),
+            u"Previous tab, up the sidebar");
++  Add(tabs, IDC_CYCLE_TO_NEXT_TAB,
++      u"Most recent tab of the Space; hold \u2303 to see the five most recent");
++  Add(tabs, IDC_CYCLE_TO_PREV_TAB, u"Most recent tabs, the other way round");
++  AddChord(tabs,
++           TableChordFor(IDC_MOVE_TAB_NEXT, kMacKeyDownArrow, ui::VKEY_DOWN),
++           u"Move the row down (a folder beside it is one row)");
++  AddChord(tabs,
++           TableChordFor(IDC_MOVE_TAB_PREVIOUS, kMacKeyUpArrow, ui::VKEY_UP),
++           u"Move the row up");
+   Add(tabs, IDC_NEW_SPLIT_TAB, u"Split the current tab with a new one");
+   AddChord(tabs, PeekPromoteAccelerator().GetShortcutText(),
+            u"Turn a peek into a tab");
+@@ -170,6 +179,8 @@ std::vector<ShortcutGroup> ShortcutReference() {
+   AddChord(diverges,
+            TableChordFor(IDC_SELECT_PREVIOUS_TAB, kMacKeyUpArrow, ui::VKEY_UP),
+            u"Previous tab", u"Focus the previous pane (now ⇧F6)");
++  Add(diverges, IDC_CYCLE_TO_NEXT_TAB, u"Most recent tab of the Space",
++      u"Next tab, in strip order");
+   Add(diverges, IDC_STEDDING_SPACE_NEXT, u"Next Space", u"Next tab");
+   Add(diverges, IDC_STEDDING_SPACE_PREVIOUS, u"Previous Space",
+       u"Previous tab");
+diff --git a/chrome/test/BUILD.gn b/chrome/test/BUILD.gn
+index 5f89444e0f070..b3745b091f9b8 100644
+--- a/chrome/test/BUILD.gn
++++ b/chrome/test/BUILD.gn
+@@ -5428,6 +5428,7 @@ test("unit_tests") {
+     "//chrome/browser/ui/spaces:unit_tests",
+     "//chrome/browser/ui/archive:unit_tests",
+     "//chrome/browser/ui/views/commandbar:unit_tests",
++    "//chrome/browser/ui/views/switcher:unit_tests",
+     "//chrome/browser/ui/stedding:unit_tests",
+     "//chrome/browser/ui/webui/stedding_welcome:unit_tests",
+     "//chrome/browser/ui/views/peek:unit_tests",
+diff --git a/components/tabs/impl/tab_strip_collection.cc b/components/tabs/impl/tab_strip_collection.cc
+index 5f779cfa333dd..501c1f49aa17e 100644
+--- a/components/tabs/impl/tab_strip_collection.cc
++++ b/components/tabs/impl/tab_strip_collection.cc
+@@ -4,8 +4,6 @@
+ 
+ #include "components/tabs/public/tab_strip_collection.h"
+ 
+-#include "components/tabs/public/folder_tab_collection.h"
+-
+ #include <memory>
+ #include <optional>
+ #include <set>
+@@ -14,6 +12,7 @@
+ #include "base/memory/ptr_util.h"
+ #include "components/split_tabs/split_tab_id.h"
+ #include "components/split_tabs/split_tab_visual_data.h"
++#include "components/tabs/public/folder_tab_collection.h"
+ #include "components/tabs/public/pinned_tab_collection.h"
+ #include "components/tabs/public/split_tab_collection.h"
+ #include "components/tabs/public/tab_collection.h"
+@@ -145,8 +144,7 @@ FolderTabCollection* TabStripCollection::MoveTabsToNewFolderRecursive(
+   // inside an existing folder, which is what nesting is.
+   TabCollection::Position folder_position;
+   if (parent_folder) {
+-    folder_position = {parent_folder->GetHandle(),
+-                       parent_folder->ChildCount()};
++    folder_position = {parent_folder->GetHandle(), parent_folder->ChildCount()};
+   } else {
+     folder_position = GetMovePosition(tab_or_collections, destination_index,
+                                       std::nullopt, false);
+@@ -923,4 +921,117 @@ TabCollection::Position TabStripCollection::GetNodePosition(
+   }
+ }
+ 
++// Stedding (docs/features/switcher.md X4).
++bool TabStripCollection::FindRowNode(size_t tab_index, RowNode* out) {
++  if (tab_index >= TabCountRecursive()) {
++    return false;
++  }
++  TabInterface* const tab = GetTabAtIndexRecursive(tab_index);
++  TabCollection* const parent = tab->GetParentCollection(GetPassKey());
++  if (!parent) {
++    return false;
++  }
++  if (parent->type() == TabCollection::Type::SPLIT) {
++    TabCollection* const container = parent->GetParentCollection();
++    if (!container) {
++      return false;
++    }
++    out->node = DanglingUntriagedTabCollection(parent);
++    out->container = container;
++    out->child_index = container->GetIndexOfCollection(parent).value();
++    out->tab_count = parent->TabCountRecursive();
++    out->first_tab_index =
++        GetIndexOfTabRecursive(parent->GetTabAtIndexRecursive(0)).value();
++    return true;
++  }
++  out->node = DanglingUntriagedTabInterface(tab);
++  out->container = parent;
++  out->child_index = parent->GetIndexOfTab(tab).value();
++  out->tab_count = 1;
++  out->first_tab_index = tab_index;
++  return true;
++}
++
++namespace {
++
++// The child of `container` that holds `tab`: how many tabs it spans and
++// whether it is a folder. Nullopt if `tab` is not under `container`.
++struct NeighbourRow {
++  size_t tab_count = 1;
++  bool folder = false;
++};
++std::optional<NeighbourRow> NeighbourRowOf(const TabCollection* container,
++                                           const TabInterface* tab) {
++  const TabCollection* node = tab->GetParentCollection();
++  if (node == container) {
++    return NeighbourRow{1, false};
++  }
++  while (node && node->GetParentCollection() != container) {
++    node = node->GetParentCollection();
++  }
++  if (!node) {
++    return std::nullopt;
++  }
++  return NeighbourRow{node->TabCountRecursive(),
++                      node->type() == TabCollection::Type::FOLDER};
++}
++
++}  // namespace
++
++std::optional<TabStripCollection::RelativeMove>
++TabStripCollection::PlanRelativeMoveInFolder(size_t tab_index, int delta) {
++  RowNode row;
++  if (delta == 0 || !FindRowNode(tab_index, &row)) {
++    return std::nullopt;
++  }
++  const bool in_folder = row.container->type() == TabCollection::Type::FOLDER;
++  const size_t count = row.container->ChildCount();
++  const bool at_edge =
++      delta < 0 ? row.child_index == 0 : row.child_index + 1 >= count;
++  if (at_edge) {
++    // A row inside a folder stays inside it; elsewhere Chromium decides.
++    if (in_folder) {
++      return RelativeMove{.moves = false, .destination = row.first_tab_index};
++    }
++    return std::nullopt;
++  }
++  const size_t probe =
++      delta < 0 ? row.first_tab_index - 1 : row.first_tab_index + row.tab_count;
++  if (probe >= TabCountRecursive()) {
++    return std::nullopt;
++  }
++  const std::optional<NeighbourRow> neighbour =
++      NeighbourRowOf(row.container, GetTabAtIndexRecursive(probe));
++  if (!neighbour || (!in_folder && !neighbour->folder)) {
++    return std::nullopt;
++  }
++  return RelativeMove{
++      .moves = true,
++      .destination = delta < 0 ? row.first_tab_index - neighbour->tab_count
++                               : row.first_tab_index + neighbour->tab_count};
++}
++
++void TabStripCollection::MoveTabRelativeInContainer(size_t tab_index,
++                                                    int delta) {
++  RowNode row;
++  if (delta == 0 || !FindRowNode(tab_index, &row)) {
++    return;
++  }
++  const size_t count = row.container->ChildCount();
++  if (delta < 0 ? row.child_index == 0 : row.child_index + 1 >= count) {
++    return;
++  }
++  // The Impl functions take one off the index when the node leaves a slot
++  // before its destination, so "after the next child" is child_index + 2.
++  TabCollection::Position position{
++      row.container->GetHandle(),
++      delta < 0 ? row.child_index - 1 : row.child_index + 2};
++  if (auto* const tab = std::get_if<DanglingUntriagedTabInterface>(&row.node)) {
++    MoveTabImpl(tab->get(), position);
++  } else {
++    MoveCollectionImpl(std::get<DanglingUntriagedTabCollection>(row.node).get(),
++                       position);
++  }
++}
++
+ }  // namespace tabs
+diff --git a/components/tabs/public/tab_strip_collection.h b/components/tabs/public/tab_strip_collection.h
+index 668667bd6de64..a95ebf5d485d4 100644
+--- a/components/tabs/public/tab_strip_collection.h
++++ b/components/tabs/public/tab_strip_collection.h
+@@ -81,6 +81,23 @@ class TabStripCollection : public TabCollection {
+   bool CanMoveTabsIntoFolder(const std::vector<int>& tab_indices,
+                              const FolderTabCollection* folder);
+ 
++  // Stedding (docs/features/switcher.md X4): a relative move that involves a
++  // folder. The row that carries `tab_index` -- the tab, or its whole split
++  // -- moves one child over among the children of its own collection, so a
++  // folder beside it is jumped as a unit and a row inside a folder stays
++  // inside it: at the folder's edge nothing moves. A move that touches no
++  // folder returns nullopt, and the caller keeps Chromium's group rules.
++  struct RelativeMove {
++    // False at the edge of a folder: the move is taken, and is a no-op.
++    bool moves = false;
++    // The recursive index the row's first tab will have.
++    size_t destination = 0;
++  };
++  std::optional<RelativeMove> PlanRelativeMoveInFolder(size_t tab_index,
++                                                       int delta);
++  // Applies the move PlanRelativeMoveInFolder() described with `moves` true.
++  void MoveTabRelativeInContainer(size_t tab_index, int delta);
++
+   void MoveTabsRecursive(
+       const std::vector<int>& tab_indices,
+       size_t destination_index,
+@@ -217,6 +234,17 @@ class TabStripCollection : public TabCollection {
+                            FolderTabCollection* folder,
+                            TabCollection::Position position);
+ 
++  // Stedding (switcher X4): the sidebar row that carries a tab -- the tab,
++  // or its split -- as a child of its own collection.
++  struct RowNode {
++    ChildPtr node;
++    raw_ptr<TabCollection> container = nullptr;
++    size_t child_index = 0;
++    size_t tab_count = 0;
++    size_t first_tab_index = 0;
++  };
++  bool FindRowNode(size_t tab_index, RowNode* out);
++
+   void MoveTabImpl(TabInterface* tab_ptr, TabCollection::Position& position);
+   void MoveCollectionImpl(TabCollection* collection_ptr,
+                           TabCollection::Position& position);

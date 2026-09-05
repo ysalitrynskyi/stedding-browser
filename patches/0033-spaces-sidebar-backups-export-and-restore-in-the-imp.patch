@@ -1,0 +1,1517 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Sat, 5 Sep 2026 14:41:20 -0400
+Subject: spaces: sidebar backups, export and restore, in the importer's file
+ format
+
+SnapshotSidebar reads a window's sidebar into the Arc importer's plan
+(Spaces with name, icon, colour and order; the essentials; per Space the
+pinned run with its homes and the folders with their nesting; the loose
+tabs; the user's tab names) and PlanToJson writes it in the shape
+ParseArcSidebar reads, so an export is an import in reverse and a restore
+applies through the importer: a merge that closes nothing, since a Space
+named by its own id is that Space and a tab still open is skipped. Every
+window writes a snapshot a minute after it opens and hourly after, into
+the profile's "Sidebar Backups", kept as ten for today, one a day for ten
+days, one a week for a month, one a month for a year. chrome://settings/
+stedding lists the snapshots to restore, backs up now, exports the active
+Space to Downloads and imports a sidebar file; the bar backs up and opens
+the page (docs/features/import.md I17-I20).
+
+Why: docs/ROUND6-PLAN.md wave 3, R6-29: PRODUCT's sidebar backups, and
+the file-based answer to sync with no account.
+Removable when: Chromium keeps versioned snapshots of its tab strip.
+---
+ .../stedding_page/stedding_page.html.ts       |  24 +
+ .../settings/stedding_page/stedding_page.ts   |  54 ++
+ chrome/browser/ui/spaces/BUILD.gn             |   3 +
+ .../browser/ui/spaces/arc_sidebar_importer.cc |  31 +-
+ chrome/browser/ui/spaces/sidebar_backup.cc    | 519 ++++++++++++++++++
+ chrome/browser/ui/spaces/sidebar_backup.h     |  96 ++++
+ .../ui/spaces/sidebar_backup_unittest.cc      | 212 +++++++
+ chrome/browser/ui/spaces/space_model.cc       |   2 +
+ chrome/browser/ui/spaces/space_model.h        |   3 +
+ .../ui/views/commandbar/command_bar_view.cc   |  24 +
+ .../browser/ui/webui/settings/settings_ui.cc  |  21 +
+ .../webui/settings/stedding_spaces_handler.cc | 179 ++++++
+ .../webui/settings/stedding_spaces_handler.h  |  27 +-
+ 13 files changed, 1192 insertions(+), 3 deletions(-)
+ create mode 100644 chrome/browser/ui/spaces/sidebar_backup.cc
+ create mode 100644 chrome/browser/ui/spaces/sidebar_backup.h
+ create mode 100644 chrome/browser/ui/spaces/sidebar_backup_unittest.cc
+
+diff --git a/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts b/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
+index 85dd953927a61..7426bd499da75 100644
+--- a/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
++++ b/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
+@@ -289,6 +289,30 @@ export function getHtml(this: SettingsSteddingPageElement) {
+           @change="${this.onRouteAddChange_}">
+       </cr-input>
+     </div>`)}
++  <div class="settings-box continuation" id="backups">
++    <div class="flex">
++      <div class="label">$i18n{steddingBackupsLabel}</div>
++      <div class="secondary">${this.backupStatus_ || '$i18n{steddingBackupsSubLabel}'}</div>
++    </div>
++    <select id="backupList" class="md-select" aria-label="$i18n{steddingBackupsLabel}"
++        @change="${this.onBackupListChange_}">
++      <option value="">$i18n{steddingBackupsPick}</option>
++      ${this.backups_.map(backup => html`
++        <option value="${backup.path}">${backup.label}</option>`)}
++    </select>
++    <cr-button ?disabled="${!this.backupPath_}" @click="${this.onRestoreBackupClick_}">
++      $i18n{steddingRestoreBackup}
++    </cr-button>
++    <cr-button @click="${this.onBackUpNowClick_}">$i18n{steddingBackUpNow}</cr-button>
++  </div>
++  <div class="settings-box continuation" id="sidebarFiles">
++    <div class="flex">
++      <div class="label">$i18n{steddingSidebarFilesLabel}</div>
++      <div class="secondary">${this.exportStatus_ || '$i18n{steddingSidebarFilesSubLabel}'}</div>
++    </div>
++    <cr-button @click="${this.onExportSpaceClick_}">$i18n{steddingExportSpace}</cr-button>
++    <cr-button @click="${this.onImportSidebarClick_}">$i18n{steddingImportSidebar}</cr-button>
++  </div>
+   ${this.arcSummary_ ? html`
+     <div class="settings-box continuation" id="arcImport">
+       <div class="flex">
+diff --git a/chrome/browser/resources/settings/stedding_page/stedding_page.ts b/chrome/browser/resources/settings/stedding_page/stedding_page.ts
+index e26dddcb8b95c..b3f4e639fd4f5 100644
+--- a/chrome/browser/resources/settings/stedding_page/stedding_page.ts
++++ b/chrome/browser/resources/settings/stedding_page/stedding_page.ts
+@@ -79,6 +79,10 @@ export class SettingsSteddingPageElement extends
+       spaces_: {type: Array},
+       shortcuts_: {type: Array},
+       arcSummary_: {type: String},
++      backups_: {type: Array},
++      backupPath_: {type: String},
++      backupStatus_: {type: String},
++      exportStatus_: {type: String},
+       arcImporting_: {type: Boolean},
+     };
+   }
+@@ -87,6 +91,11 @@ export class SettingsSteddingPageElement extends
+   protected accessor shortcuts_: SteddingShortcutGroup[] = [];
+   // import I4: Arc's sidebar summary, or '' when this Mac has none.
+   protected accessor arcSummary_: string = '';
++  // import I19, I20.
++  protected accessor backups_: Array<{path: string, label: string}> = [];
++  protected accessor backupPath_: string = '';
++  protected accessor backupStatus_: string = '';
++  protected accessor exportStatus_: string = '';
+   protected accessor arcImporting_: boolean = false;
+ 
+   override connectedCallback() {
+@@ -103,6 +112,10 @@ export class SettingsSteddingPageElement extends
+     sendWithPromise('steddingGetArcImport').then((summary: unknown) => {
+       this.arcSummary_ = String(summary || '');
+     });
++    this.refreshBackups_();
++    this.addWebUiListener('stedding-sidebar-imported', (line: unknown) => {
++      this.exportStatus_ = String(line);
++    });
+   }
+ 
+   protected onSpaceNameChange_(e: Event) {
+@@ -137,6 +150,47 @@ export class SettingsSteddingPageElement extends
+     }
+   }
+ 
++  private refreshBackups_() {
++    sendWithPromise('steddingListBackups').then((list: unknown) => {
++      this.backups_ = list as Array<{path: string, label: string}>;
++    });
++  }
++
++  protected onBackupListChange_(e: Event) {
++    this.backupPath_ = (e.target as HTMLSelectElement).value;
++  }
++
++  protected onRestoreBackupClick_() {
++    if (!this.backupPath_) {
++      return;
++    }
++    this.backupStatus_ = loadTimeData.getString('steddingRestoring');
++    sendWithPromise('steddingRestoreBackup', this.backupPath_).then((line: unknown) => {
++      this.backupStatus_ = String(line);
++    });
++  }
++
++  protected onBackUpNowClick_() {
++    chrome.send('steddingBackUpNow');
++    this.backupStatus_ = loadTimeData.getString('steddingBackedUp');
++    setTimeout(() => this.refreshBackups_(), 1500);
++  }
++
++  protected onExportSpaceClick_() {
++    const active = this.spaces_.find(space => space.active) || this.spaces_[0];
++    if (!active) {
++      return;
++    }
++    sendWithPromise('steddingExportSpace', active.id).then((path: unknown) => {
++      this.exportStatus_ = path ? loadTimeData.getStringF('steddingExported', String(path)) :
++                                  loadTimeData.getString('steddingExportFailed');
++    });
++  }
++
++  protected onImportSidebarClick_() {
++    chrome.send('steddingImportSidebarFile');
++  }
++
+   protected onImportArcClick_() {
+     this.arcImporting_ = true;
+     sendWithPromise('steddingImportFromArc').then((line: unknown) => {
+diff --git a/chrome/browser/ui/spaces/BUILD.gn b/chrome/browser/ui/spaces/BUILD.gn
+index ba53c3b804c88..bec70322d4901 100644
+--- a/chrome/browser/ui/spaces/BUILD.gn
++++ b/chrome/browser/ui/spaces/BUILD.gn
+@@ -20,6 +20,7 @@ source_set("spaces") {
+   public = [
+     "arc_sidebar_importer.h",
+     "bookmarks_to_pins.h",
++    "sidebar_backup.h",
+     "space.h",
+     "space_colors.h",
+     "space_commands.h",
+@@ -30,6 +31,7 @@ source_set("spaces") {
+   sources = [
+     "arc_sidebar_importer.cc",
+     "bookmarks_to_pins.cc",
++    "sidebar_backup.cc",
+     "space.cc",
+     "space_commands.cc",
+     "space_model.cc",
+@@ -74,6 +76,7 @@ source_set("unit_tests") {
+     "arc_sidebar_importer_unittest.cc",
+     "bookmarks_to_pins_unittest.cc",
+     "session_rebuild_unittest.cc",
++    "sidebar_backup_unittest.cc",
+     "space_commands_unittest.cc",
+     "space_model_unittest.cc",
+     "space_model_window_unittest.cc",
+diff --git a/chrome/browser/ui/spaces/arc_sidebar_importer.cc b/chrome/browser/ui/spaces/arc_sidebar_importer.cc
+index a0e42ab45e036..ece00573305e7 100644
+--- a/chrome/browser/ui/spaces/arc_sidebar_importer.cc
++++ b/chrome/browser/ui/spaces/arc_sidebar_importer.cc
+@@ -33,6 +33,7 @@
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "components/prefs/pref_service.h"
+ #include "components/prefs/scoped_user_pref_update.h"
++#include "components/sessions/content/session_tab_helper.h"
+ #include "components/tabs/public/folder_tab_collection.h"
+ #include "components/tabs/public/tab_interface.h"
+ #include "content/public/browser/navigation_controller.h"
+@@ -338,8 +339,23 @@ struct ApplyContext {
+   raw_ptr<Profile> profile;
+   raw_ptr<ImportedIds> ids;
+   raw_ptr<ArcImportResult> result;
++  // I19: the ids of the tabs open now ("tab:<session id>"), which a
++  // snapshot of this window would insert twice.
++  std::set<std::string> open_tabs;
+ };
+ 
++std::set<std::string> OpenTabIds(TabStripModel* tabs) {
++  std::set<std::string> ids;
++  for (int i = 0; i < tabs->count(); ++i) {
++    if (content::WebContents* const contents = tabs->GetWebContentsAt(i)) {
++      ids.insert("tab:" +
++                 base::NumberToString(
++                     sessions::SessionTabHelper::IdForTab(contents).id()));
++    }
++  }
++  return ids;
++}
++
+ // Inserts `nodes` into `space`: loose tabs, and folders with their tabs, in
+ // order. Returns the loose tabs, for the pinned run.
+ std::vector<tabs::TabInterface*> InsertNodes(
+@@ -349,7 +365,7 @@ std::vector<tabs::TabInterface*> InsertNodes(
+     tabs::FolderTabCollection* parent_folder) {
+   std::vector<tabs::TabInterface*> loose;
+   for (const Node& node : nodes) {
+-    if (ctx.ids->Contains(node.arc_id)) {
++    if (ctx.ids->Contains(node.arc_id) || ctx.open_tabs.contains(node.arc_id)) {
+       ++ctx.result->skipped;
+       continue;
+     }
+@@ -381,7 +397,8 @@ std::vector<tabs::TabInterface*> InsertNodes(
+         subfolders.push_back(&child);
+         continue;
+       }
+-      if (ctx.ids->Contains(child.arc_id)) {
++      if (ctx.ids->Contains(child.arc_id) ||
++          ctx.open_tabs.contains(child.arc_id)) {
+         ++ctx.result->skipped;
+         continue;
+       }
+@@ -657,6 +674,7 @@ ArcImportResult ApplyArcImport(BrowserWindowInterface* browser,
+   }
+   ImportedIds ids(profile->GetPrefs());
+   ApplyContext ctx{browser, model, tabs, profile, &ids, &result};
++  ctx.open_tabs = OpenTabIds(tabs);
+   // Every tab here knows its Space; no route moves it (routing D2).
+   SpaceModel::ScopedRoutingPause no_routing(model);
+ 
+@@ -690,6 +708,14 @@ ArcImportResult ApplyArcImport(BrowserWindowInterface* browser,
+       if (const std::optional<SpaceId> known = ids.SpaceFor(arc_space.arc_id)) {
+         space = model->GetSpace(*known);
+       }
++      // A snapshot of this profile names Spaces by their own ids (I18).
++      if (!space) {
++        if (const std::optional<SpaceId> own = SpaceId::FromOptionalToken(
++                base::Token::FromString(arc_space.arc_id));
++            own && model->GetSpace(*own)) {
++          space = model->GetSpace(*own);
++        }
++      }
+       if (!space) {
+         // A lone unnamed default Space is the first Space's to take.
+         if (!default_taken && model->size() == 1 &&
+@@ -746,6 +772,7 @@ ArcImportResult ImportNodesAsPins(
+   }
+   ImportedIds ids(profile->GetPrefs());
+   ApplyContext ctx{browser, model, tabs, profile, &ids, &result};
++  ctx.open_tabs = OpenTabIds(tabs);
+   SpaceModel::ScopedRoutingPause no_routing(model);
+   const SpaceId space = model->active_id();
+   std::vector<tabs::TabInterface*> loose =
+diff --git a/chrome/browser/ui/spaces/sidebar_backup.cc b/chrome/browser/ui/spaces/sidebar_backup.cc
+new file mode 100644
+index 0000000000000..0446ebbd1caac
+--- /dev/null
++++ b/chrome/browser/ui/spaces/sidebar_backup.cc
+@@ -0,0 +1,519 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/spaces/sidebar_backup.h"
++
++#include <algorithm>
++#include <map>
++#include <set>
++#include <string_view>
++#include <utility>
++
++#include "base/files/file_enumerator.h"
++#include "base/files/file_util.h"
++#include "base/functional/bind.h"
++#include "base/json/json_writer.h"
++#include "base/strings/string_number_conversions.h"
++#include "base/strings/stringprintf.h"
++#include "base/strings/utf_string_conversions.h"
++#include "base/task/thread_pool.h"
++#include "base/values.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/spaces/space.h"
++#include "chrome/browser/ui/spaces/space_model.h"
++#include "chrome/browser/ui/stedding/tab_names.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "components/sessions/content/session_tab_helper.h"
++#include "components/tabs/public/folder_tab_collection.h"
++#include "components/tabs/public/tab_collection.h"
++#include "components/tabs/public/tab_interface.h"
++#include "content/public/browser/web_contents.h"
++
++namespace spaces {
++
++namespace {
++
++using Node = ArcImportPlan::Node;
++
++std::string TabId(content::WebContents* contents) {
++  return "tab:" + base::NumberToString(
++                      sessions::SessionTabHelper::IdForTab(contents).id());
++}
++
++std::string ContainerId(const tabs::TabCollection* collection) {
++  return base::StringPrintf("folder:%p", static_cast<const void*>(collection));
++}
++
++Node TabNode(SpaceModel* model, tabs::TabInterface* tab) {
++  content::WebContents* const contents = tab->GetContents();
++  Node node;
++  node.kind = Node::Kind::kTab;
++  node.arc_id = TabId(contents);
++  // The user's name for the tab first (tabs R15), then the page title.
++  node.title = stedding::TabName(contents);
++  if (node.title.empty()) {
++    node.title = tab->GetTitle();
++  }
++  // A pin's home is what it comes back as (pins H1).
++  node.url = model->HomeUrl(tab).value_or(contents->GetLastCommittedURL());
++  if (!node.url.is_valid()) {
++    node.url = contents->GetVisibleURL();
++  }
++  return node;
++}
++
++// The folders a tab sits in, outermost first.
++std::vector<const tabs::TabCollection*> FolderChain(tabs::TabInterface* tab) {
++  std::vector<const tabs::TabCollection*> chain;
++  for (const tabs::TabCollection* collection = tab->GetParentCollection();
++       collection; collection = collection->GetParentCollection()) {
++    if (collection->type() == tabs::TabCollection::Type::FOLDER) {
++      chain.insert(chain.begin(), collection);
++    }
++  }
++  return chain;
++}
++
++// Builds one Space's pinned and unpinned nodes: folders nest under the
++// pinned run (the importer keeps them there), loose Space-pinned tabs join
++// it, loose plain tabs are the unpinned run.
++void FillSpace(SpaceModel* model,
++               TabStripModel* tabs,
++               ArcImportPlan::Space* space,
++               const SpaceId& id) {
++  std::map<const tabs::TabCollection*, size_t> folder_index;
++  std::vector<Node> folders;
++  const auto folder_for =
++      [&](const std::vector<const tabs::TabCollection*>& chain) -> Node* {
++    Node* parent = nullptr;
++    std::vector<Node>* siblings = &folders;
++    for (const tabs::TabCollection* collection : chain) {
++      Node* found = nullptr;
++      for (Node& candidate : *siblings) {
++        if (candidate.kind == Node::Kind::kFolder &&
++            candidate.arc_id == ContainerId(collection)) {
++          found = &candidate;
++          break;
++        }
++      }
++      if (!found) {
++        Node folder;
++        folder.kind = Node::Kind::kFolder;
++        folder.arc_id = ContainerId(collection);
++        folder.title = base::UTF8ToUTF16(
++            static_cast<const tabs::FolderTabCollection*>(collection)->title());
++        siblings->push_back(std::move(folder));
++        found = &siblings->back();
++      }
++      parent = found;
++      siblings = &found->children;
++    }
++    return parent;
++  };
++  std::vector<Node> loose_pinned;
++  std::vector<Node> loose_plain;
++  for (int i = 0; i < tabs->count(); ++i) {
++    tabs::TabInterface* const tab = tabs->GetTabAtIndex(i);
++    if (tab->IsPinned() || model->SpaceForTab(tab) != id) {
++      continue;
++    }
++    const std::vector<const tabs::TabCollection*> chain = FolderChain(tab);
++    if (!chain.empty()) {
++      folder_for(chain)->children.push_back(TabNode(model, tab));
++    } else if (model->IsSpacePinned(tab)) {
++      loose_pinned.push_back(TabNode(model, tab));
++    } else {
++      loose_plain.push_back(TabNode(model, tab));
++    }
++  }
++  space->pinned = std::move(loose_pinned);
++  for (Node& folder : folders) {
++    space->pinned.push_back(std::move(folder));
++  }
++  space->unpinned = std::move(loose_plain);
++}
++
++ArcImportPlan::Space SpaceEntry(SpaceModel* model, const Space& space) {
++  ArcImportPlan::Space entry;
++  entry.arc_id = space.id().ToString();
++  entry.title = base::UTF16ToUTF8(model->DisplayName(space.id()));
++  entry.emoji = space.icon();
++  entry.color = space.color();
++  return entry;
++}
++
++base::DictValue ItemContainer(const std::string& id,
++                              const std::vector<std::string>& children,
++                              const char* type) {
++  base::DictValue item;
++  item.Set("id", id);
++  item.Set("parentID", base::Value());
++  base::ListValue child_ids;
++  for (const std::string& child : children) {
++    child_ids.Append(child);
++  }
++  item.Set("childrenIds", std::move(child_ids));
++  item.Set("title", "");
++  base::DictValue container_type;
++  container_type.Set(type, base::DictValue());
++  base::DictValue container;
++  container.Set("containerType", std::move(container_type));
++  base::DictValue data;
++  data.Set("itemContainer", std::move(container));
++  item.Set("data", std::move(data));
++  return item;
++}
++
++// Appends `node` and its children to `items` (Arc's flat, id-then-dict
++// list) and returns its id.
++std::string AppendItem(const Node& node,
++                       const std::string& parent,
++                       base::ListValue* items) {
++  base::DictValue item;
++  item.Set("id", node.arc_id);
++  item.Set("parentID", parent);
++  base::ListValue child_ids;
++  base::DictValue data;
++  if (node.kind == Node::Kind::kTab) {
++    item.Set("title", "");
++    base::DictValue tab;
++    tab.Set("savedURL", node.url.spec());
++    tab.Set("savedTitle", node.title);
++    data.Set("tab", std::move(tab));
++  } else {
++    item.Set("title", node.title);
++    data.Set("list", base::DictValue());
++  }
++  for (const Node& child : node.children) {
++    child_ids.Append(child.arc_id);
++  }
++  item.Set("childrenIds", std::move(child_ids));
++  item.Set("data", std::move(data));
++  items->Append(node.arc_id);
++  items->Append(std::move(item));
++  for (const Node& child : node.children) {
++    AppendItem(child, node.arc_id, items);
++  }
++  return node.arc_id;
++}
++
++std::vector<std::string> ChildIds(const std::vector<Node>& nodes) {
++  std::vector<std::string> ids;
++  for (const Node& node : nodes) {
++    ids.push_back(node.arc_id);
++  }
++  return ids;
++}
++
++double Channel(unsigned channel) {
++  return channel / 255.0;
++}
++
++}  // namespace
++
++ArcImportPlan SnapshotSidebar(BrowserWindowInterface* browser) {
++  ArcImportPlan plan;
++  SpaceModel* const model = browser ? SpaceModel::From(browser) : nullptr;
++  TabStripModel* const tabs = browser ? browser->GetTabStripModel() : nullptr;
++  if (!model || !tabs) {
++    return plan;
++  }
++  for (int i = 0; i < tabs->count(); ++i) {
++    tabs::TabInterface* const tab = tabs->GetTabAtIndex(i);
++    if (tab->IsPinned()) {
++      plan.essentials.push_back(TabNode(model, tab));
++    }
++  }
++  for (const std::unique_ptr<Space>& space : model->spaces()) {
++    ArcImportPlan::Space entry = SpaceEntry(model, *space);
++    FillSpace(model, tabs, &entry, space->id());
++    plan.spaces.push_back(std::move(entry));
++  }
++  return plan;
++}
++
++ArcImportPlan SnapshotSpace(BrowserWindowInterface* browser,
++                            const SpaceId& id) {
++  ArcImportPlan plan;
++  SpaceModel* const model = browser ? SpaceModel::From(browser) : nullptr;
++  TabStripModel* const tabs = browser ? browser->GetTabStripModel() : nullptr;
++  Space* const space = model ? model->GetSpace(id) : nullptr;
++  if (!space || !tabs) {
++    return plan;
++  }
++  ArcImportPlan::Space entry = SpaceEntry(model, *space);
++  FillSpace(model, tabs, &entry, id);
++  plan.spaces.push_back(std::move(entry));
++  return plan;
++}
++
++std::string PlanToJson(const ArcImportPlan& plan) {
++  base::ListValue spaces;
++  base::ListValue items;
++  for (const ArcImportPlan::Space& space : plan.spaces) {
++    const std::string pinned_id = space.arc_id + ":pinned";
++    const std::string unpinned_id = space.arc_id + ":unpinned";
++    base::DictValue entry;
++    entry.Set("id", space.arc_id);
++    entry.Set("title", space.title);
++    base::DictValue profile;
++    profile.Set("default", base::DictValue());
++    entry.Set("profile", std::move(profile));
++    base::ListValue container_ids;
++    container_ids.Append("pinned");
++    container_ids.Append(pinned_id);
++    container_ids.Append("unpinned");
++    container_ids.Append(unpinned_id);
++    entry.Set("containerIDs", std::move(container_ids));
++    base::DictValue custom;
++    base::DictValue icon;
++    icon.Set("emoji_v2", space.emoji);
++    custom.Set("iconType", std::move(icon));
++    if (space.color) {
++      base::DictValue tone;
++      tone.Set("red", Channel(SkColorGetR(*space.color)));
++      tone.Set("green", Channel(SkColorGetG(*space.color)));
++      tone.Set("blue", Channel(SkColorGetB(*space.color)));
++      tone.Set("alpha", 1.0);
++      base::DictValue palette;
++      palette.Set("midTone", std::move(tone));
++      base::DictValue theme;
++      theme.Set("primaryColorPalette", std::move(palette));
++      custom.Set("windowTheme", std::move(theme));
++    }
++    entry.Set("customInfo", std::move(custom));
++    spaces.Append(space.arc_id);
++    spaces.Append(std::move(entry));
++
++    items.Append(pinned_id);
++    items.Append(
++        ItemContainer(pinned_id, ChildIds(space.pinned), "spaceItems"));
++    items.Append(unpinned_id);
++    items.Append(
++        ItemContainer(unpinned_id, ChildIds(space.unpinned), "spaceItems"));
++    for (const Node& node : space.pinned) {
++      AppendItem(node, pinned_id, &items);
++    }
++    for (const Node& node : space.unpinned) {
++      AppendItem(node, unpinned_id, &items);
++    }
++  }
++  const std::string top_id = "essentials";
++  items.Append(top_id);
++  items.Append(ItemContainer(top_id, ChildIds(plan.essentials), "topApps"));
++  for (const Node& node : plan.essentials) {
++    AppendItem(node, top_id, &items);
++  }
++  base::ListValue top_ids;
++  base::DictValue default_top;
++  default_top.Set("default", top_id);
++  top_ids.Append(std::move(default_top));
++  top_ids.Append(top_id);
++
++  base::DictValue sidebar_container;
++  sidebar_container.Set("spaces", std::move(spaces));
++  sidebar_container.Set("items", std::move(items));
++  sidebar_container.Set("topAppsContainerIDs", std::move(top_ids));
++  base::DictValue global;
++  global.Set("global", base::DictValue());
++  base::ListValue containers;
++  containers.Append(std::move(global));
++  containers.Append(std::move(sidebar_container));
++  base::DictValue sidebar;
++  sidebar.Set("containers", std::move(containers));
++  base::DictValue root;
++  root.Set("version", 1);
++  root.Set("sidebar", std::move(sidebar));
++  root.Set("writer", "Stedding");
++  std::string json;
++  base::JSONWriter::WriteWithOptions(
++      root, base::JSONWriter::OPTIONS_PRETTY_PRINT, &json);
++  return json;
++}
++
++base::FilePath BackupDirectory(const base::FilePath& profile_path) {
++  return profile_path.Append("Sidebar Backups");
++}
++
++base::FilePath BackupFileName(base::Time when) {
++  base::Time::Exploded exploded;
++  when.LocalExplode(&exploded);
++  return base::FilePath(base::StringPrintf(
++      "sidebar-%04d%02d%02d-%02d%02d%02d.json", exploded.year, exploded.month,
++      exploded.day_of_month, exploded.hour, exploded.minute, exploded.second));
++}
++
++std::optional<base::Time> TimeFromBackupFileName(const base::FilePath& path) {
++  // sidebar-YYYYMMDD-HHMMSS
++  const std::string name = path.BaseName().RemoveExtension().value();
++  constexpr std::string_view kPrefix = "sidebar-";
++  constexpr size_t kDigits = 15;
++  if (name.size() != kPrefix.size() + kDigits || !name.starts_with(kPrefix) ||
++      name[kPrefix.size() + 8] != '-') {
++    return std::nullopt;
++  }
++  const std::string_view text(name);
++  const size_t at = kPrefix.size();
++  const auto field = [&](size_t offset, size_t length, int* out) {
++    return base::StringToInt(text.substr(at + offset, length), out);
++  };
++  base::Time::Exploded exploded = {};
++  if (!field(0, 4, &exploded.year) || !field(4, 2, &exploded.month) ||
++      !field(6, 2, &exploded.day_of_month) || !field(9, 2, &exploded.hour) ||
++      !field(11, 2, &exploded.minute) || !field(13, 2, &exploded.second)) {
++    return std::nullopt;
++  }
++  base::Time time;
++  if (!base::Time::FromLocalExploded(exploded, &time)) {
++    return std::nullopt;
++  }
++  return time;
++}
++
++std::vector<BackupFile> ListBackups(const base::FilePath& directory) {
++  std::vector<BackupFile> files;
++  base::FileEnumerator it(directory, false, base::FileEnumerator::FILES,
++                          FILE_PATH_LITERAL("sidebar-*.json"));
++  for (base::FilePath path = it.Next(); !path.empty(); path = it.Next()) {
++    if (const std::optional<base::Time> time = TimeFromBackupFileName(path)) {
++      files.push_back({path, *time});
++    }
++  }
++  std::sort(
++      files.begin(), files.end(),
++      [](const BackupFile& a, const BackupFile& b) { return a.time > b.time; });
++  return files;
++}
++
++std::vector<bool> KeepUnderSchedule(const std::vector<base::Time>& times,
++                                    base::Time now) {
++  std::vector<bool> keep(times.size(), false);
++  size_t today = 0;
++  std::set<int> days;
++  std::set<int> weeks;
++  std::set<int> months;
++  for (size_t i = 0; i < times.size(); ++i) {
++    const base::TimeDelta age = now - times[i];
++    if (age < base::Days(1)) {
++      keep[i] = today++ < 10;
++    } else if (age < base::Days(11)) {
++      keep[i] = days.size() < 10 && days.insert(age.InDays()).second;
++    } else if (age < base::Days(11 + 4 * 7)) {
++      keep[i] = weeks.size() < 4 && weeks.insert(age.InDays() / 7).second;
++    } else if (age < base::Days(11 + 4 * 7 + 12 * 30)) {
++      keep[i] = months.size() < 12 && months.insert(age.InDays() / 30).second;
++    }
++  }
++  return keep;
++}
++
++void WriteBackup(const base::FilePath& directory,
++                 const std::string& json,
++                 base::Time now) {
++  if (!base::CreateDirectory(directory)) {
++    return;
++  }
++  base::WriteFile(directory.Append(BackupFileName(now)), json);
++  const std::vector<BackupFile> files = ListBackups(directory);
++  std::vector<base::Time> times;
++  for (const BackupFile& file : files) {
++    times.push_back(file.time);
++  }
++  const std::vector<bool> keep = KeepUnderSchedule(times, now);
++  for (size_t i = 0; i < files.size(); ++i) {
++    if (!keep[i]) {
++      base::DeleteFile(files[i].path);
++    }
++  }
++}
++
++SidebarBackupScheduler::SidebarBackupScheduler(BrowserWindowInterface& browser)
++    : browser_(browser) {
++  first_.Start(FROM_HERE, kFirstDelay,
++               base::BindOnce(&SidebarBackupScheduler::WriteNow,
++                              base::Unretained(this)));
++  timer_.Start(FROM_HERE, kInterval,
++               base::BindRepeating(&SidebarBackupScheduler::WriteNow,
++                                   base::Unretained(this)));
++}
++
++SidebarBackupScheduler::~SidebarBackupScheduler() = default;
++
++void SidebarBackupScheduler::WriteNow() {
++  Profile* const profile = browser_->GetProfile();
++  if (!profile || profile->IsOffTheRecord()) {
++    return;
++  }
++  const std::string json = PlanToJson(SnapshotSidebar(&*browser_));
++  base::ThreadPool::PostTask(
++      FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
++      base::BindOnce(&WriteBackup, BackupDirectory(profile->GetPath()), json,
++                     base::Time::Now()));
++}
++
++namespace {
++
++std::optional<std::string> ReadFileOnPool(const base::FilePath& path) {
++  std::string json;
++  if (!base::ReadFileToString(path, &json)) {
++    return std::nullopt;
++  }
++  return json;
++}
++
++void ApplyRestore(base::WeakPtr<BrowserWindowInterface> browser,
++                  RestoreDoneCallback done,
++                  std::optional<std::string> json) {
++  if (!browser || !json) {
++    std::move(done).Run(std::nullopt);
++    return;
++  }
++  const std::optional<ArcImportPlan> plan = ParseArcSidebar(*json);
++  if (!plan) {
++    std::move(done).Run(std::nullopt);
++    return;
++  }
++  std::move(done).Run(ApplyArcImport(browser.get(), *plan, ArcImportOptions()));
++}
++
++base::FilePath WriteExportOnPool(const base::FilePath& directory,
++                                 const std::string& stem,
++                                 const std::string& json) {
++  base::Time::Exploded exploded;
++  base::Time::Now().LocalExplode(&exploded);
++  const base::FilePath path = directory.Append(base::StringPrintf(
++      "%s %04d-%02d-%02d %02d.%02d.json", stem.c_str(), exploded.year,
++      exploded.month, exploded.day_of_month, exploded.hour, exploded.minute));
++  return base::CreateDirectory(directory) && base::WriteFile(path, json)
++             ? path
++             : base::FilePath();
++}
++
++}  // namespace
++
++void RestoreBackupAsync(BrowserWindowInterface* browser,
++                        const base::FilePath& path,
++                        RestoreDoneCallback done) {
++  if (!browser) {
++    std::move(done).Run(std::nullopt);
++    return;
++  }
++  base::ThreadPool::PostTaskAndReplyWithResult(
++      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
++      base::BindOnce(&ReadFileOnPool, path),
++      base::BindOnce(&ApplyRestore, browser->GetWeakPtr(), std::move(done)));
++}
++
++void ExportPlanAsync(const ArcImportPlan& plan,
++                     const base::FilePath& directory,
++                     const std::string& stem,
++                     base::OnceCallback<void(base::FilePath)> done) {
++  base::ThreadPool::PostTaskAndReplyWithResult(
++      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
++      base::BindOnce(&WriteExportOnPool, directory, stem, PlanToJson(plan)),
++      std::move(done));
++}
++
++}  // namespace spaces
+diff --git a/chrome/browser/ui/spaces/sidebar_backup.h b/chrome/browser/ui/spaces/sidebar_backup.h
+new file mode 100644
+index 0000000000000..dd773f73f0e53
+--- /dev/null
++++ b/chrome/browser/ui/spaces/sidebar_backup.h
+@@ -0,0 +1,96 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_SPACES_SIDEBAR_BACKUP_H_
++#define CHROME_BROWSER_UI_SPACES_SIDEBAR_BACKUP_H_
++
++#include <optional>
++#include <string>
++#include <vector>
++
++#include "base/files/file_path.h"
++#include "base/functional/callback.h"
++#include "base/memory/raw_ref.h"
++#include "base/time/time.h"
++#include "base/timer/timer.h"
++#include "chrome/browser/ui/spaces/arc_sidebar_importer.h"
++#include "chrome/browser/ui/spaces/space_id.h"
++
++class BrowserWindowInterface;
++
++namespace spaces {
++
++// docs/features/import.md I17: the window's sidebar as a plan -- Spaces
++// with name, icon, colour and order; the essentials; per Space the pinned
++// run with its homes and the folders with their nesting; the loose tabs.
++// Ids: a Space's own id, "tab:<session id>" for a tab.
++ArcImportPlan SnapshotSidebar(BrowserWindowInterface* browser);
++
++// I20: one Space of it.
++ArcImportPlan SnapshotSpace(BrowserWindowInterface* browser, const SpaceId& id);
++
++// I18: the plan in Arc's file shape, which ParseArcSidebar reads back.
++std::string PlanToJson(const ArcImportPlan& plan);
++
++// The profile's backup folder and its files (I17, I19).
++base::FilePath BackupDirectory(const base::FilePath& profile_path);
++base::FilePath BackupFileName(base::Time when);
++std::optional<base::Time> TimeFromBackupFileName(const base::FilePath& path);
++
++struct BackupFile {
++  base::FilePath path;
++  base::Time time;
++};
++// Blocking. Newest first.
++std::vector<BackupFile> ListBackups(const base::FilePath& directory);
++
++// PRODUCT §1: 10 for today, one a day for 10 days, one a week for a month,
++// one a month for a year. `times` newest first; true keeps.
++std::vector<bool> KeepUnderSchedule(const std::vector<base::Time>& times,
++                                    base::Time now);
++
++// Blocking: writes `json` as a new snapshot and prunes the rest.
++void WriteBackup(const base::FilePath& directory,
++                 const std::string& json,
++                 base::Time now);
++
++// I17: one per window; a snapshot a minute after the window opens and every
++// hour after, on the thread pool.
++class SidebarBackupScheduler {
++ public:
++  static constexpr base::TimeDelta kFirstDelay = base::Minutes(1);
++  static constexpr base::TimeDelta kInterval = base::Hours(1);
++
++  explicit SidebarBackupScheduler(BrowserWindowInterface& browser);
++  SidebarBackupScheduler(const SidebarBackupScheduler&) = delete;
++  SidebarBackupScheduler& operator=(const SidebarBackupScheduler&) = delete;
++  ~SidebarBackupScheduler();
++
++  void WriteNow();
++
++ private:
++  const raw_ref<BrowserWindowInterface> browser_;
++  base::OneShotTimer first_;
++  base::RepeatingTimer timer_;
++};
++
++using RestoreDoneCallback =
++    base::OnceCallback<void(std::optional<ArcImportResult>)>;
++
++// I19: reads a snapshot on the thread pool and applies it to the window
++// through the importer: a merge, which never closes an open tab.
++void RestoreBackupAsync(BrowserWindowInterface* browser,
++                        const base::FilePath& path,
++                        RestoreDoneCallback done);
++
++// I20: writes `plan` to `directory` as "<stem> <time>.json" on the thread
++// pool and answers with the path.
++void ExportPlanAsync(const ArcImportPlan& plan,
++                     const base::FilePath& directory,
++                     const std::string& stem,
++                     base::OnceCallback<void(base::FilePath)> done);
++
++}  // namespace spaces
++
++#endif  // CHROME_BROWSER_UI_SPACES_SIDEBAR_BACKUP_H_
+diff --git a/chrome/browser/ui/spaces/sidebar_backup_unittest.cc b/chrome/browser/ui/spaces/sidebar_backup_unittest.cc
+new file mode 100644
+index 0000000000000..2fab736567465
+--- /dev/null
++++ b/chrome/browser/ui/spaces/sidebar_backup_unittest.cc
+@@ -0,0 +1,212 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/spaces/sidebar_backup.h"
++
++#include <string>
++#include <vector>
++
++#include "base/files/file_util.h"
++#include "base/files/scoped_temp_dir.h"
++#include "base/time/time.h"
++#include "chrome/browser/ui/browser.h"
++#include "chrome/browser/ui/spaces/space.h"
++#include "chrome/browser/ui/spaces/space_colors.h"
++#include "chrome/browser/ui/spaces/space_model.h"
++#include "chrome/browser/ui/stedding/tab_names.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "chrome/test/base/browser_with_test_window_test.h"
++#include "components/tabs/public/folder_tab_collection.h"
++#include "components/tabs/public/tab_interface.h"
++#include "content/public/browser/web_contents.h"
++#include "testing/gtest/include/gtest/gtest.h"
++
++namespace spaces {
++namespace {
++
++class SidebarBackupTest : public BrowserWithTestWindowTest {
++ protected:
++  SpaceModel& model() { return *SpaceModel::From(browser()); }
++  TabStripModel& tabs() { return *browser()->tab_strip_model(); }
++  tabs::TabInterface* Open(const char* url) {
++    AddTab(browser(), GURL(url));
++    return tabs().GetActiveTab();
++  }
++};
++
++// I17: every field a sidebar has.
++TEST_F(SidebarBackupTest, SnapshotCarriesEveryField) {
++  Space* const work = model().AddSpace("Work", kSpaceColors[1].color);
++  model().SetSpaceIcon(work->id(), "💼");
++  tabs::TabInterface* const essential = Open("https://e.example/");
++  tabs().SetTabPinned(0, true);
++  tabs::TabInterface* const plain = Open("https://plain.example/");
++  tabs::TabInterface* const pinned = Open("https://pin.example/");
++  model().SetSpacePinned(pinned, true);
++  tabs::TabInterface* const in_folder = Open("https://f.example/");
++  stedding::SetTabName(browser(), in_folder, u"My name");
++  tabs::FolderTabCollection* const folder =
++      tabs().AddToNewFolder({tabs().GetIndexOfTab(in_folder)});
++  folder->SetTitle("Docs");
++  (void)essential;
++  (void)plain;
++
++  const ArcImportPlan plan = SnapshotSidebar(browser());
++  ASSERT_EQ(1u, plan.essentials.size());
++  EXPECT_EQ(GURL("https://e.example/"), plan.essentials[0].url);
++  ASSERT_EQ(2u, plan.spaces.size()) << "the default Space and Work, in order";
++  EXPECT_EQ("Space 1", plan.spaces[0].title);
++  EXPECT_EQ("Work", plan.spaces[1].title);
++  EXPECT_EQ("💼", plan.spaces[1].emoji);
++  EXPECT_EQ(kSpaceColors[1].color, *plan.spaces[1].color);
++  const ArcImportPlan::Space& home = plan.spaces[0];
++  ASSERT_EQ(2u, home.pinned.size()) << "the pin, then the folder";
++  EXPECT_EQ(ArcImportPlan::Node::Kind::kTab, home.pinned[0].kind);
++  EXPECT_EQ(GURL("https://pin.example/"), home.pinned[0].url) << "its home";
++  EXPECT_EQ(ArcImportPlan::Node::Kind::kFolder, home.pinned[1].kind);
++  EXPECT_EQ(u"Docs", home.pinned[1].title);
++  ASSERT_EQ(1u, home.pinned[1].children.size());
++  EXPECT_EQ(u"My name", home.pinned[1].children[0].title) << "tabs R15";
++  ASSERT_EQ(1u, home.unpinned.size());
++  EXPECT_EQ(GURL("https://plain.example/"), home.unpinned[0].url);
++}
++
++// I18: the file is the importer's format; what is written is read back
++// whole.
++TEST_F(SidebarBackupTest, RoundTripIsIdentity) {
++  Space* const work = model().AddSpace("Work", kSpaceColors[2].color);
++  model().SetSpaceIcon(work->id(), "💼");
++  Open("https://a.example/");
++  tabs::TabInterface* const pinned = Open("https://pin.example/");
++  model().SetSpacePinned(pinned, true);
++  tabs::TabInterface* const in_folder = Open("https://f.example/");
++  tabs().AddToNewFolder({tabs().GetIndexOfTab(in_folder)})->SetTitle("Docs");
++  const ArcImportPlan before = SnapshotSidebar(browser());
++  const std::optional<ArcImportPlan> after =
++      ParseArcSidebar(PlanToJson(before));
++  ASSERT_TRUE(after.has_value());
++  ASSERT_EQ(before.spaces.size(), after->spaces.size());
++  for (size_t i = 0; i < before.spaces.size(); ++i) {
++    EXPECT_EQ(before.spaces[i].arc_id, after->spaces[i].arc_id);
++    EXPECT_EQ(before.spaces[i].title, after->spaces[i].title);
++    EXPECT_EQ(before.spaces[i].emoji, after->spaces[i].emoji);
++    EXPECT_EQ(before.spaces[i].color, after->spaces[i].color);
++    ASSERT_EQ(before.spaces[i].pinned.size(), after->spaces[i].pinned.size());
++    ASSERT_EQ(before.spaces[i].unpinned.size(),
++              after->spaces[i].unpinned.size());
++    for (size_t j = 0; j < before.spaces[i].pinned.size(); ++j) {
++      EXPECT_EQ(before.spaces[i].pinned[j].kind,
++                after->spaces[i].pinned[j].kind);
++      EXPECT_EQ(before.spaces[i].pinned[j].arc_id,
++                after->spaces[i].pinned[j].arc_id);
++      EXPECT_EQ(before.spaces[i].pinned[j].title,
++                after->spaces[i].pinned[j].title);
++      EXPECT_EQ(before.spaces[i].pinned[j].url, after->spaces[i].pinned[j].url);
++      EXPECT_EQ(before.spaces[i].pinned[j].children.size(),
++                after->spaces[i].pinned[j].children.size());
++    }
++  }
++  EXPECT_EQ(before.essentials.size(), after->essentials.size());
++}
++
++// I19: a restore adds what is missing and closes nothing.
++TEST_F(SidebarBackupTest, RestoreClosesNothing) {
++  tabs::TabInterface* const kept = Open("https://kept.example/");
++  Open("https://lost.example/");
++  const std::string json = PlanToJson(SnapshotSidebar(browser()));
++  tabs().CloseWebContentsAt(tabs().GetIndexOfTab(tabs().GetActiveTab()),
++                            TabCloseTypes::CLOSE_NONE);
++  ASSERT_EQ(1, tabs().count());
++  const std::optional<ArcImportPlan> plan = ParseArcSidebar(json);
++  ASSERT_TRUE(plan.has_value());
++  const ArcImportResult result =
++      ApplyArcImport(browser(), *plan, ArcImportOptions());
++  EXPECT_EQ(1u, result.tabs) << "the lost tab came back";
++  EXPECT_EQ(0u, result.spaces) << "the Space is its own, by id";
++  EXPECT_EQ(2, tabs().count());
++  EXPECT_EQ(kept, tabs().GetTabAtIndex(tabs().GetIndexOfTab(kept)))
++      << "the open tab was left alone";
++  EXPECT_EQ(1u, model().size());
++}
++
++// I20: one Space exported reads back as one Space.
++TEST_F(SidebarBackupTest, ExportOneSpaceImportsBack) {
++  Space* const work = model().AddSpace("Work", kSpaceColors[3].color);
++  model().SetActiveSpace(work->id());
++  Open("https://work.example/");
++  const ArcImportPlan one = SnapshotSpace(browser(), work->id());
++  ASSERT_EQ(1u, one.spaces.size());
++  EXPECT_EQ("Work", one.spaces[0].title);
++  const std::optional<ArcImportPlan> back = ParseArcSidebar(PlanToJson(one));
++  ASSERT_TRUE(back.has_value());
++  ASSERT_EQ(1u, back->spaces.size());
++  EXPECT_EQ("Work", back->spaces[0].title);
++  ASSERT_EQ(1u, back->spaces[0].unpinned.size());
++  EXPECT_EQ(GURL("https://work.example/"), back->spaces[0].unpinned[0].url);
++  EXPECT_TRUE(back->essentials.empty());
++}
++
++// PRODUCT §1's schedule, over a year of hourly files.
++TEST(SidebarBackupScheduleTest, KeepsTenTodayThenDaysWeeksMonths) {
++  const base::Time now = base::Time::Now();
++  std::vector<base::Time> times;
++  for (int hours = 0; hours < 24 * 400; ++hours) {
++    times.push_back(now - base::Hours(hours));
++  }
++  const std::vector<bool> keep = KeepUnderSchedule(times, now);
++  int today = 0;
++  int days = 0;
++  int weeks = 0;
++  int months = 0;
++  int older = 0;
++  for (size_t i = 0; i < times.size(); ++i) {
++    if (!keep[i]) {
++      continue;
++    }
++    const base::TimeDelta age = now - times[i];
++    if (age < base::Days(1)) {
++      ++today;
++    } else if (age < base::Days(11)) {
++      ++days;
++    } else if (age < base::Days(11 + 28)) {
++      ++weeks;
++    } else if (age < base::Days(11 + 28 + 360)) {
++      ++months;
++    } else {
++      ++older;
++    }
++  }
++  EXPECT_EQ(10, today);
++  EXPECT_EQ(10, days);
++  EXPECT_EQ(4, weeks);
++  EXPECT_EQ(12, months);
++  EXPECT_EQ(0, older);
++}
++
++TEST(SidebarBackupScheduleTest, FileNamesCarryTheirTime) {
++  base::Time::Exploded exploded = {};
++  exploded.year = 2026;
++  exploded.month = 9;
++  exploded.day_of_month = 5;
++  exploded.hour = 14;
++  exploded.minute = 30;
++  exploded.second = 7;
++  base::Time when;
++  ASSERT_TRUE(base::Time::FromLocalExploded(exploded, &when));
++  const base::FilePath name = BackupFileName(when);
++  EXPECT_EQ("sidebar-20260905-143007.json", name.value());
++  EXPECT_EQ(when, *TimeFromBackupFileName(base::FilePath("/x/y").Append(name)));
++  EXPECT_FALSE(TimeFromBackupFileName(base::FilePath("/x/other.json")));
++
++  base::ScopedTempDir dir;
++  ASSERT_TRUE(dir.CreateUniqueTempDir());
++  WriteBackup(dir.GetPath(), "{}", when);
++  WriteBackup(dir.GetPath(), "{}", when + base::Minutes(1));
++  const std::vector<BackupFile> files = ListBackups(dir.GetPath());
++  ASSERT_EQ(2u, files.size());
++  EXPECT_EQ(when + base::Minutes(1), files[0].time) << "newest first";
++}
++
++}  // namespace
++}  // namespace spaces
+diff --git a/chrome/browser/ui/spaces/space_model.cc b/chrome/browser/ui/spaces/space_model.cc
+index d2a36ee3e7d05..f96ab42d2e512 100644
+--- a/chrome/browser/ui/spaces/space_model.cc
++++ b/chrome/browser/ui/spaces/space_model.cc
+@@ -27,6 +27,7 @@
+ #include "chrome/browser/ui/browser_init_state.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/spaces/arc_sidebar_importer.h"
++#include "chrome/browser/ui/spaces/sidebar_backup.h"
+ #include "chrome/browser/ui/spaces/space_router.h"
+ #include "chrome/browser/ui/spaces/tab_space_restore_data.h"
+ #include "chrome/browser/ui/stedding/address_row.h"
+@@ -81,6 +82,7 @@ SpaceModel::SpaceModel(BrowserWindowInterface& browser) : SpaceModel() {
+   page_theme_color_ =
+       std::make_unique<stedding::PageThemeColorController>(browser);
+   address_row_ = std::make_unique<stedding::AddressRow>(browser);
++  backup_scheduler_ = std::make_unique<SidebarBackupScheduler>(browser);
+   // sidebar Y1: the process-wide metrics, filled before this window's first
+   // layout.
+   if (g_browser_process) {
+diff --git a/chrome/browser/ui/spaces/space_model.h b/chrome/browser/ui/spaces/space_model.h
+index 7c3301dca1476..674aaed83699e 100644
+--- a/chrome/browser/ui/spaces/space_model.h
++++ b/chrome/browser/ui/spaces/space_model.h
+@@ -41,6 +41,7 @@ class PageThemeColorController;
+ }  // namespace stedding
+ 
+ namespace spaces {
++class SidebarBackupScheduler;
+ 
+ // The key Spaces are written under in the session's per-window extra data.
+ inline constexpr char kSessionSpacesKey[] = "stedding.spaces";
+@@ -359,6 +360,8 @@ class SpaceModel : public TabStripModelObserver {
+   // toolbar T8: the window's address-row controller, owned here for the
+   // same reason as the page colour below.
+   std::unique_ptr<stedding::AddressRow> address_row_;
++  // import I17: the hourly sidebar snapshot, one per window.
++  std::unique_ptr<SidebarBackupScheduler> backup_scheduler_;
+   // The active page's theme colour for this window's address row. Owned here
+   // because this model is already the per-window Stedding object
+   // BrowserWindowFeatures creates; adding a member to that header rebuilds
+diff --git a/chrome/browser/ui/views/commandbar/command_bar_view.cc b/chrome/browser/ui/views/commandbar/command_bar_view.cc
+index 420f009f3f041..193ea99aab944 100644
+--- a/chrome/browser/ui/views/commandbar/command_bar_view.cc
++++ b/chrome/browser/ui/views/commandbar/command_bar_view.cc
+@@ -35,6 +35,7 @@
+ #include "chrome/browser/ui/singleton_tabs.h"
+ #include "chrome/browser/ui/spaces/arc_sidebar_importer.h"
+ #include "chrome/browser/ui/spaces/bookmarks_to_pins.h"
++#include "chrome/browser/ui/spaces/sidebar_backup.h"
+ #include "chrome/browser/ui/spaces/space.h"
+ #include "chrome/browser/ui/spaces/space_colors.h"
+ #include "chrome/browser/ui/spaces/space_commands.h"
+@@ -349,6 +350,29 @@ void CommandBarView::BuildActions() {
+                               },
+                               value)});
+     }
++    // import I17, I20: the sidebar's snapshots.
++    actions_.push_back(
++        {u"Back Up the Sidebar Now", std::u16string(),
++         base::BindRepeating(
++             [](Browser* browser) {
++               Profile* const profile = browser->GetProfile();
++               base::ThreadPool::PostTask(
++                   FROM_HERE,
++                   {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
++                   base::BindOnce(
++                       &spaces::WriteBackup,
++                       spaces::BackupDirectory(profile->GetPath()),
++                       spaces::PlanToJson(spaces::SnapshotSidebar(browser)),
++                       base::Time::Now()));
++             },
++             base::Unretained(browser_))});
++    actions_.push_back({u"Restore the Sidebar\u2026", std::u16string(),
++                        base::BindRepeating(
++                            [](Browser* browser) {
++                              ShowSingletonTab(
++                                  browser, GURL("chrome://settings/stedding"));
++                            },
++                            base::Unretained(browser_))});
+     // import I16: bookmarks a profile already holds.
+     actions_.push_back({u"Turn Bookmarks into Pinned Tabs", std::u16string(),
+                         base::BindRepeating(
+diff --git a/chrome/browser/ui/webui/settings/settings_ui.cc b/chrome/browser/ui/webui/settings/settings_ui.cc
+index 4e2592fc556e7..13d557eb73684 100644
+--- a/chrome/browser/ui/webui/settings/settings_ui.cc
++++ b/chrome/browser/ui/webui/settings/settings_ui.cc
+@@ -692,6 +692,27 @@ SettingsUI::SettingsUI(content::WebUI* web_ui)
+   html_source->AddString("steddingSpaceNamePlaceholder", "Space name");
+   html_source->AddString("steddingDeleteSpace", "Delete Space");
+   html_source->AddString("steddingImportArcLabel", "Import from Arc");
++  // import I19, I20.
++  html_source->AddString("steddingBackupsLabel", "Sidebar backups");
++  html_source->AddString(
++      "steddingBackupsSubLabel",
++      "A snapshot an hour, kept as ten for today, one a day for ten days, one "
++      "a week for a month, one a month for a year. A restore adds what is "
++      "missing and closes nothing.");
++  html_source->AddString("steddingBackupsPick", "Choose a snapshot\u2026");
++  html_source->AddString("steddingRestoreBackup", "Restore");
++  html_source->AddString("steddingBackUpNow", "Back up now");
++  html_source->AddString("steddingRestoring", "Restoring\u2026");
++  html_source->AddString("steddingBackedUp", "Snapshot written.");
++  html_source->AddString("steddingSidebarFilesLabel", "Export and import");
++  html_source->AddString(
++      "steddingSidebarFilesSubLabel",
++      "Export the active Space as a file, or import a sidebar file: the "
++      "answer to sync, with no account.");
++  html_source->AddString("steddingExportSpace", "Export Space\u2026");
++  html_source->AddString("steddingImportSidebar", "Import sidebar\u2026");
++  html_source->AddString("steddingExported", "Written to $1");
++  html_source->AddString("steddingExportFailed", "Nothing was written.");
+   // sidebar Y1, Y2.
+   html_source->AddString("steddingDensityLabel", "Sidebar density");
+   html_source->AddString(
+diff --git a/chrome/browser/ui/webui/settings/stedding_spaces_handler.cc b/chrome/browser/ui/webui/settings/stedding_spaces_handler.cc
+index 955baf1f10eef..e1cde34237b6e 100644
+--- a/chrome/browser/ui/webui/settings/stedding_spaces_handler.cc
++++ b/chrome/browser/ui/webui/settings/stedding_spaces_handler.cc
+@@ -9,19 +9,26 @@
+ #include <utility>
+ 
+ #include "base/functional/bind.h"
++#include "base/i18n/time_formatting.h"
++#include "base/path_service.h"
+ #include "base/strings/string_util.h"
+ #include "base/strings/stringprintf.h"
+ #include "base/strings/utf_string_conversions.h"
++#include "base/task/thread_pool.h"
+ #include "base/token.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
++#include "chrome/browser/ui/select_file_policy/chrome_select_file_policy.h"
+ #include "chrome/browser/ui/spaces/space.h"
+ #include "chrome/browser/ui/spaces/space_id.h"
+ #include "chrome/browser/ui/spaces/space_router.h"
++#include "chrome/common/chrome_paths.h"
+ #include "components/prefs/pref_service.h"
+ #include "content/public/browser/web_ui.h"
+ #include "third_party/skia/include/core/SkColor.h"
++#include "ui/base/base_window.h"
++#include "ui/shell_dialogs/selected_file_info.h"
+ 
+ namespace {
+ 
+@@ -51,6 +58,26 @@ void SteddingSpacesHandler::RegisterMessages() {
+       "steddingRenameSpace",
+       base::BindRepeating(&SteddingSpacesHandler::HandleRenameSpace,
+                           base::Unretained(this)));
++  web_ui()->RegisterMessageCallback(
++      "steddingListBackups",
++      base::BindRepeating(&SteddingSpacesHandler::HandleListBackups,
++                          base::Unretained(this)));
++  web_ui()->RegisterMessageCallback(
++      "steddingBackUpNow",
++      base::BindRepeating(&SteddingSpacesHandler::HandleBackUpNow,
++                          base::Unretained(this)));
++  web_ui()->RegisterMessageCallback(
++      "steddingRestoreBackup",
++      base::BindRepeating(&SteddingSpacesHandler::HandleRestoreBackup,
++                          base::Unretained(this)));
++  web_ui()->RegisterMessageCallback(
++      "steddingExportSpace",
++      base::BindRepeating(&SteddingSpacesHandler::HandleExportSpace,
++                          base::Unretained(this)));
++  web_ui()->RegisterMessageCallback(
++      "steddingImportSidebarFile",
++      base::BindRepeating(&SteddingSpacesHandler::HandleImportSidebarFile,
++                          base::Unretained(this)));
+   web_ui()->RegisterMessageCallback(
+       "steddingAddRoute",
+       base::BindRepeating(&SteddingSpacesHandler::HandleAddRoute,
+@@ -164,6 +191,158 @@ void SteddingSpacesHandler::HandleRenameSpace(const base::ListValue& args) {
+   model->SetSpaceName(*id, args[1].GetString());
+ }
+ 
++void SteddingSpacesHandler::HandleListBackups(const base::ListValue& args) {
++  CHECK_EQ(1U, args.size());
++  AllowJavascript();
++  base::ThreadPool::PostTaskAndReplyWithResult(
++      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
++      base::BindOnce(
++          &spaces::ListBackups,
++          spaces::BackupDirectory(Profile::FromWebUI(web_ui())->GetPath())),
++      base::BindOnce(&SteddingSpacesHandler::OnBackupsListed,
++                     weak_factory_.GetWeakPtr(), args[0].GetString()));
++}
++
++void SteddingSpacesHandler::OnBackupsListed(
++    const std::string& callback_id,
++    std::vector<spaces::BackupFile> files) {
++  if (!IsJavascriptAllowed()) {
++    return;
++  }
++  base::ListValue list;
++  for (const spaces::BackupFile& file : files) {
++    base::DictValue entry;
++    entry.Set("path", file.path.AsUTF8Unsafe());
++    entry.Set("label", base::TimeFormatShortDateAndTime(file.time));
++    list.Append(std::move(entry));
++  }
++  ResolveJavascriptCallback(base::Value(callback_id), list);
++}
++
++void SteddingSpacesHandler::HandleBackUpNow(const base::ListValue& args) {
++  AllowJavascript();
++  BrowserWindowInterface* const browser =
++      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
++          web_ui()->GetWebContents());
++  Profile* const profile = Profile::FromWebUI(web_ui());
++  if (!browser || !profile) {
++    return;
++  }
++  base::ThreadPool::PostTask(
++      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
++      base::BindOnce(&spaces::WriteBackup,
++                     spaces::BackupDirectory(profile->GetPath()),
++                     spaces::PlanToJson(spaces::SnapshotSidebar(browser)),
++                     base::Time::Now()));
++}
++
++void SteddingSpacesHandler::HandleRestoreBackup(const base::ListValue& args) {
++  CHECK_EQ(2U, args.size());
++  AllowJavascript();
++  BrowserWindowInterface* const browser =
++      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
++          web_ui()->GetWebContents());
++  spaces::RestoreBackupAsync(
++      browser, base::FilePath::FromUTF8Unsafe(args[1].GetString()),
++      base::BindOnce(&SteddingSpacesHandler::OnRestoreDone,
++                     weak_factory_.GetWeakPtr(), args[0].GetString()));
++}
++
++void SteddingSpacesHandler::OnRestoreDone(
++    const std::string& callback_id,
++    std::optional<spaces::ArcImportResult> result) {
++  if (!IsJavascriptAllowed()) {
++    return;
++  }
++  PushSpaces();
++  ResolveJavascriptCallback(
++      base::Value(callback_id),
++      base::Value(result ? spaces::DescribeArcImportResult(*result)
++                         : u"Nothing was restored."));
++}
++
++void SteddingSpacesHandler::HandleExportSpace(const base::ListValue& args) {
++  CHECK_EQ(2U, args.size());
++  AllowJavascript();
++  BrowserWindowInterface* const browser =
++      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
++          web_ui()->GetWebContents());
++  const std::optional<spaces::SpaceId> id = spaces::SpaceId::FromOptionalToken(
++      base::Token::FromString(args[1].GetString()));
++  spaces::SpaceModel* const model =
++      browser ? spaces::SpaceModel::From(browser) : nullptr;
++  if (!model || !id || !model->GetSpace(*id)) {
++    ResolveJavascriptCallback(base::Value(args[0].GetString()),
++                              base::Value(std::string()));
++    return;
++  }
++  base::FilePath downloads;
++  base::PathService::Get(chrome::DIR_DEFAULT_DOWNLOADS, &downloads);
++  spaces::ExportPlanAsync(
++      spaces::SnapshotSpace(browser, *id), downloads,
++      "Stedding Space " + base::UTF16ToUTF8(model->DisplayName(*id)),
++      base::BindOnce(&SteddingSpacesHandler::OnExportDone,
++                     weak_factory_.GetWeakPtr(), args[0].GetString()));
++}
++
++void SteddingSpacesHandler::OnExportDone(const std::string& callback_id,
++                                         base::FilePath path) {
++  if (IsJavascriptAllowed()) {
++    ResolveJavascriptCallback(base::Value(callback_id),
++                              base::Value(path.AsUTF8Unsafe()));
++  }
++}
++
++void SteddingSpacesHandler::HandleImportSidebarFile(
++    const base::ListValue& args) {
++  AllowJavascript();
++  if (select_file_dialog_) {
++    return;
++  }
++  select_file_dialog_ = ui::SelectFileDialog::Create(
++      this,
++      std::make_unique<ChromeSelectFilePolicy>(web_ui()->GetWebContents()));
++  ui::SelectFileDialog::FileTypeInfo file_type_info;
++  file_type_info.extensions.resize(1);
++  file_type_info.extensions[0].push_back(FILE_PATH_LITERAL("json"));
++  BrowserWindowInterface* const browser =
++      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
++          web_ui()->GetWebContents());
++  select_file_dialog_->SelectFile(
++      ui::SelectFileDialog::SELECT_OPEN_FILE, std::u16string(),
++      base::FilePath(), &file_type_info, 0, base::FilePath::StringType(),
++      browser ? browser->GetWindow()->GetNativeWindow() : gfx::NativeWindow(),
++      nullptr);
++}
++
++void SteddingSpacesHandler::FileSelected(const ui::SelectedFileInfo& file,
++                                         int index) {
++  select_file_dialog_ = nullptr;
++  BrowserWindowInterface* const browser =
++      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
++          web_ui()->GetWebContents());
++  spaces::RestoreBackupAsync(
++      browser, file.path(),
++      base::BindOnce(&SteddingSpacesHandler::OnSidebarFileImported,
++                     weak_factory_.GetWeakPtr()));
++}
++
++void SteddingSpacesHandler::FileSelectionCanceled() {
++  select_file_dialog_ = nullptr;
++}
++
++void SteddingSpacesHandler::OnSidebarFileImported(
++    std::optional<spaces::ArcImportResult> result) {
++  if (!IsJavascriptAllowed()) {
++    return;
++  }
++  PushSpaces();
++  FireWebUIListener(
++      "stedding-sidebar-imported",
++      base::Value(result ? spaces::DescribeArcImportResult(*result)
++                         : u"That file is not a sidebar."));
++}
++
+ void SteddingSpacesHandler::HandleAddRoute(const base::ListValue& args) {
+   CHECK_EQ(2U, args.size());
+   AllowJavascript();
+diff --git a/chrome/browser/ui/webui/settings/stedding_spaces_handler.h b/chrome/browser/ui/webui/settings/stedding_spaces_handler.h
+index 4ec3bb74e3ac6..eb49da81b5938 100644
+--- a/chrome/browser/ui/webui/settings/stedding_spaces_handler.h
++++ b/chrome/browser/ui/webui/settings/stedding_spaces_handler.h
+@@ -5,18 +5,23 @@
+ #ifndef CHROME_BROWSER_UI_WEBUI_SETTINGS_STEDDING_SPACES_HANDLER_H_
+ #define CHROME_BROWSER_UI_WEBUI_SETTINGS_STEDDING_SPACES_HANDLER_H_
+ 
++#include "base/files/file_path.h"
++#include "base/memory/scoped_refptr.h"
+ #include "base/memory/weak_ptr.h"
+ #include "base/scoped_observation.h"
+ #include "base/values.h"
+ #include "chrome/browser/ui/spaces/arc_sidebar_importer.h"
++#include "chrome/browser/ui/spaces/sidebar_backup.h"
+ #include "chrome/browser/ui/spaces/space_model.h"
+ #include "chrome/browser/ui/webui/settings/settings_page_ui_handler.h"
++#include "ui/shell_dialogs/select_file_dialog.h"
+ 
+ // Space management for chrome://settings/stedding: lists the Spaces of the
+ // window the settings tab is in, renames and deletes them, and pushes a fresh
+ // list whenever the sidebar changes one (docs/features/settings.md T9).
+ class SteddingSpacesHandler : public settings::SettingsPageUIHandler,
+-                              public spaces::SpaceModel::Observer {
++                              public spaces::SpaceModel::Observer,
++                              public ui::SelectFileDialog::Listener {
+  public:
+   SteddingSpacesHandler();
+   SteddingSpacesHandler(const SteddingSpacesHandler&) = delete;
+@@ -47,6 +52,25 @@ class SteddingSpacesHandler : public settings::SettingsPageUIHandler,
+   void HandleRenameSpace(const base::ListValue& args);
+   void HandleDeleteSpace(const base::ListValue& args);
+   // routing D5: steddingAddRoute(spaceId, site) and steddingRemoveRoute(index).
++  // import I19, I20: steddingListBackups(callback) -> [{path, label}],
++  // steddingBackUpNow(), steddingRestoreBackup(callback, path) -> line,
++  // steddingExportSpace(callback, spaceId) -> path, steddingImportSidebarFile()
++  // (a file dialog; the result is pushed as "stedding-sidebar-imported").
++  void HandleListBackups(const base::ListValue& args);
++  void OnBackupsListed(const std::string& callback_id,
++                       std::vector<spaces::BackupFile> files);
++  void HandleBackUpNow(const base::ListValue& args);
++  void HandleRestoreBackup(const base::ListValue& args);
++  void OnRestoreDone(const std::string& callback_id,
++                     std::optional<spaces::ArcImportResult> result);
++  void HandleExportSpace(const base::ListValue& args);
++  void OnExportDone(const std::string& callback_id, base::FilePath path);
++  void HandleImportSidebarFile(const base::ListValue& args);
++  // ui::SelectFileDialog::Listener:
++  void FileSelected(const ui::SelectedFileInfo& file, int index) override;
++  void FileSelectionCanceled() override;
++  void OnSidebarFileImported(std::optional<spaces::ArcImportResult> result);
++
+   void HandleAddRoute(const base::ListValue& args);
+   void HandleRemoveRoute(const base::ListValue& args);
+   // import I4: steddingGetArcImport(callback) -> the summary line, or "" when
+@@ -61,6 +85,7 @@ class SteddingSpacesHandler : public settings::SettingsPageUIHandler,
+ 
+   base::ScopedObservation<spaces::SpaceModel, spaces::SpaceModel::Observer>
+       observation_{this};
++  scoped_refptr<ui::SelectFileDialog> select_file_dialog_;
+   base::WeakPtrFactory<SteddingSpacesHandler> weak_factory_{this};
+ };
+ 

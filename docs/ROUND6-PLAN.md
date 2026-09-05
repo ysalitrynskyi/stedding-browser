@@ -360,6 +360,18 @@ said otherwise. Each is also in the item's spec.
   two dropdowns under the width slider and three bar actions (Y1–Y5). Patch 0031.
   Not taken: a density case in the window probe file (the captures carry the
   measure for now).
+- **Part S, bookmarks to pins (R6-28).** `NodesFromBookmarks` and the importer's
+  new `ImportNodesAsPins`; the conversion after an import that brought bookmarks
+  (the welcome flow names its window through `WelcomeHost`), the bar and the star
+  hidden by `stedding.bookmarks.converted`, the welcome line, the bar action
+  (I13–I16). Patch 0032. Not taken: an offer on start for a profile with
+  bookmarks (the action is the answer, I16).
+- **Part T, sidebar backups (R6-29).** `SnapshotSidebar`, `PlanToJson` in Arc's
+  shape, the hourly scheduler per window with PRODUCT §1's retention, restore as
+  a merge through the importer, export of a Space to Downloads and import of a
+  file through a dialog, in settings and the bar (I17–I20). Patch 0033. Not
+  taken: a tab's user-given name across a restore (it comes back as the title),
+  and one snapshot per profile rather than per window (R6-31).
 - **Not in this pass.** R6-19's other J rows (J1, J3, J5, J6 keep their rows for
   the splits pass), and the menus' Move to Folder ▸ with existing folders.
 
@@ -927,8 +939,8 @@ From the critic: #11 (owner).
 | R6-25 | The address row hides with the sidebar; ⇧⌘D shows it on its own | idea "The bar goes with the sidebar" (judges 7, build×2, maybe×1); mod "Hide Toolbar" (judges 6, maybe×2, build×1), merged: ⇧⌘D, the localhost exception | M (T8 first; T10 and T13 are the second half) | stedding.toolbar.hide_with_sidebar | ⌘S; ⇧⌘D | built (0029), T13 open |
 | R6-26 | Tracker-free defaults as one Privacy block | idea "Tracker-free defaults as one settings block" (judges 7.67, build×3); mod "No Top Sites" (judges 5.67, build×1, maybe×2): the kSearchSuggestEnabled default flip merged as Q7 | M (Q4 is the M-sized piece; the rest is default flips) | Privacy block (Chromium prefs + stedding.privacy.gpc) | none | built (0030) |
 | R6-27 | Sidebar density presets with one text-size step | idea "Sidebar density presets with one text-size step" (judges 6, maybe×3); mods Customize Font Size, Tab Text Size, Lean's compact rows, merged | M | stedding.sidebar.density; stedding.sidebar.text_size | none | built (0031) |
-| R6-28 | Imported bookmarks become pinned tabs and folders | critic #3 (PRODUCT §1 "No bookmarks" [1.0]); the Bookmark Toolbar Tweaks, Lean and Cleaner Bookmark Menu leftovers | M | import step wording (TBD) | none | planned |
-| R6-29 | Sidebar backups, export and restore | critic #7 (PRODUCT §1 "Sidebar backups" [1.0]; EVIDENCE.md #2 "restore that never loses a tab", #5 sync 475 upvotes) | M | "Restore sidebar…" and "Export Space…" in chrome://settings/stedding | none; ⌘T actions | planned |
+| R6-28 | Imported bookmarks become pinned tabs and folders | critic #3 (PRODUCT §1 "No bookmarks" [1.0]); the Bookmark Toolbar Tweaks, Lean and Cleaner Bookmark Menu leftovers | M | import step wording (TBD) | none | built (0032) |
+| R6-29 | Sidebar backups, export and restore | critic #7 (PRODUCT §1 "Sidebar backups" [1.0]; EVIDENCE.md #2 "restore that never loses a tab", #5 sync 475 upvotes) | M | "Restore sidebar…" and "Export Space…" in chrome://settings/stedding | none; ⌘T actions | built (0033) |
 
 #### R6-22 · Import from Arc (StorableSidebar.json): Spaces, pins, folders, favorites — plan item 11
 

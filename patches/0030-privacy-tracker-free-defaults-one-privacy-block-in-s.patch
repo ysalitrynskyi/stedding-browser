@@ -1,0 +1,702 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Sat, 5 Sep 2026 13:46:41 -0400
+Subject: privacy: tracker-free defaults, one Privacy block in settings
+
+The defaults docs/PRIVACY.md promises become registered preference
+defaults: third-party cookies blocked in normal windows, HTTPS-First
+balanced mode on, no web service asked about navigation errors, quiet
+notification and location prompts, search suggestions off. Global Privacy
+Control gets a local-state preference (on) that turns Chromium's own
+GlobalPrivacyControlForce feature on where chrome://flags become switches,
+so Sec-GPC: 1 and navigator.globalPrivacyControl follow. chrome://settings/
+stedding gains a Privacy block, one row per preference, the protective side
+on (docs/features/privacy.md Q1-Q8, ADR 0017).
+
+Why: docs/ROUND6-PLAN.md wave 3, R6-26; PRIVACY.md's to-do table.
+Removable when: Chromium ships these defaults, or a build flag sets them.
+---
+ .../api/settings_private/prefs_util.cc        |  7 ++
+ chrome/browser/metrics/BUILD.gn               |  1 +
+ .../metrics/chrome_feature_list_creator.cc    |  5 ++
+ .../net/profile_network_context_service.cc    |  4 +-
+ .../quiet_notification_permission_ui_state.cc |  6 +-
+ chrome/browser/prefs/browser_prefs.cc         |  2 +
+ chrome/browser/profiles/profile.cc            | 28 ++++---
+ .../stedding_page/stedding_page.html.ts       | 70 +++++++++++++++++
+ chrome/browser/ui/browser_ui_prefs.cc         |  7 +-
+ chrome/browser/ui/stedding/BUILD.gn           | 19 +++++
+ .../browser/ui/stedding/privacy_defaults.cc   | 47 +++++++++++
+ chrome/browser/ui/stedding/privacy_defaults.h | 36 +++++++++
+ .../ui/stedding/privacy_defaults_unittest.cc  | 77 +++++++++++++++++++
+ chrome/browser/ui/stedding/stedding_prefs.cc  |  4 +
+ chrome/browser/ui/stedding/stedding_prefs.h   |  7 ++
+ .../browser/ui/webui/settings/settings_ui.cc  | 47 +++++++++++
+ .../core/browser/cookie_settings.cc           |  5 +-
+ 17 files changed, 353 insertions(+), 19 deletions(-)
+ create mode 100644 chrome/browser/ui/stedding/privacy_defaults.cc
+ create mode 100644 chrome/browser/ui/stedding/privacy_defaults.h
+ create mode 100644 chrome/browser/ui/stedding/privacy_defaults_unittest.cc
+
+diff --git a/chrome/browser/extensions/api/settings_private/prefs_util.cc b/chrome/browser/extensions/api/settings_private/prefs_util.cc
+index d679685c4c344..73648ab9b46fa 100644
+--- a/chrome/browser/extensions/api/settings_private/prefs_util.cc
++++ b/chrome/browser/extensions/api/settings_private/prefs_util.cc
+@@ -313,6 +313,13 @@ const PrefsUtil::TypedPrefMap& PrefsUtil::GetAllowlistedKeys() {
+       settings_api::PrefType::kNumber;
+   (*s_allowlist)[stedding::prefs::kToolbarHideWithSidebar] =
+       settings_api::PrefType::kBoolean;
++  // privacy Q4, Q5: the rows Chromium's own pages do not carry.
++  (*s_allowlist)[stedding::prefs::kGlobalPrivacyControl] =
++      settings_api::PrefType::kBoolean;
++  (*s_allowlist)[::prefs::kEnableQuietGeolocationPermissionUi] =
++      settings_api::PrefType::kBoolean;
++  (*s_allowlist)[::prefs::kHttpsFirstBalancedMode] =
++      settings_api::PrefType::kBoolean;
+   (*s_allowlist)[stedding::prefs::kPeekEnabled] =
+       settings_api::PrefType::kBoolean;
+   (*s_allowlist)[stedding::prefs::kExternalDefaultSpace] =
+diff --git a/chrome/browser/metrics/BUILD.gn b/chrome/browser/metrics/BUILD.gn
+index 3cc0659b4f4e4..49c76f39d91ad 100644
+--- a/chrome/browser/metrics/BUILD.gn
++++ b/chrome/browser/metrics/BUILD.gn
+@@ -268,6 +268,7 @@ source_set("impl") {
+   ]
+ 
+   deps = [
++    "//chrome/browser/ui/stedding:privacy_defaults",
+     "//build/config/compiler:compiler_buildflags",
+     "//chrome/browser:browser_process_platform_part",
+     "//chrome/browser:chrome_browser_main",
+diff --git a/chrome/browser/metrics/chrome_feature_list_creator.cc b/chrome/browser/metrics/chrome_feature_list_creator.cc
+index 90e572fe4efe1..b88671a70febb 100644
+--- a/chrome/browser/metrics/chrome_feature_list_creator.cc
++++ b/chrome/browser/metrics/chrome_feature_list_creator.cc
+@@ -22,6 +22,7 @@
+ #include "chrome/browser/metrics/chrome_metrics_services_manager_client.h"
+ #include "chrome/browser/prefs/browser_prefs.h"
+ #include "chrome/browser/prefs/chrome_pref_service_factory.h"
++#include "chrome/browser/ui/stedding/privacy_defaults.h"
+ #include "chrome/common/chrome_paths.h"
+ #include "chrome/common/chrome_switches.h"
+ #include "chrome/installer/util/initial_preferences.h"
+@@ -201,6 +202,10 @@ void ChromeFeatureListCreator::ConvertFlagsToSwitches() {
+   about_flags::ConvertFlagsToSwitches(&flags_storage,
+                                       base::CommandLine::ForCurrentProcess(),
+                                       flags_ui::kAddSentinels);
++  // Stedding privacy Q4: Global Privacy Control, from local state to the
++  // feature every process reads.
++  stedding::ApplyGlobalPrivacyControl(local_state_.get(),
++                                      base::CommandLine::ForCurrentProcess());
+ }
+ 
+ void ChromeFeatureListCreator::CreateNetworkTimeTracker() {
+diff --git a/chrome/browser/net/profile_network_context_service.cc b/chrome/browser/net/profile_network_context_service.cc
+index c9ae7f58abdc9..eef6e34bddce9 100644
+--- a/chrome/browser/net/profile_network_context_service.cc
++++ b/chrome/browser/net/profile_network_context_service.cc
+@@ -648,8 +648,10 @@ void ProfileNetworkContextService::ConfigureNetworkContextParams(
+ // static
+ void ProfileNetworkContextService::RegisterProfilePrefs(
+     user_prefs::PrefRegistrySyncable* registry) {
++  // Stedding (docs/features/privacy.md Q3): no web service is asked about
++  // a navigation error; Chromium asks Google's.
+   registry->RegisterBooleanPref(embedder_support::kAlternateErrorPagesEnabled,
+-                                true);
++                                false);
+   registry->RegisterBooleanPref(prefs::kQuicAllowed, true);
+   registry->RegisterBooleanPref(prefs::kGloballyScopeHTTPAuthCacheEnabled,
+                                 false);
+diff --git a/chrome/browser/permissions/quiet_notification_permission_ui_state.cc b/chrome/browser/permissions/quiet_notification_permission_ui_state.cc
+index 105ec6f8aff76..d609adbf7a55d 100644
+--- a/chrome/browser/permissions/quiet_notification_permission_ui_state.cc
++++ b/chrome/browser/permissions/quiet_notification_permission_ui_state.cc
+@@ -14,10 +14,12 @@
+ void QuietNotificationPermissionUiState::RegisterProfilePrefs(
+     user_prefs::PrefRegistrySyncable* registry) {
+   // TODO(crbug.com/40097905): Consider making this syncable.
++  // Stedding (docs/features/privacy.md Q5): quiet prompts by default, a
++  // small icon in the address row instead of a popup.
+   registry->RegisterBooleanPref(prefs::kEnableQuietNotificationPermissionUi,
+-                                /*default_value=*/false);
++                                /*default_value=*/true);
+   registry->RegisterBooleanPref(prefs::kEnableQuietGeolocationPermissionUi,
+-                                /*default_value=*/false);
++                                /*default_value=*/true);
+   registry->RegisterBooleanPref(
+       prefs::kHadThreeConsecutiveNotificationPermissionDenies,
+       /*default_value=*/false);
+diff --git a/chrome/browser/prefs/browser_prefs.cc b/chrome/browser/prefs/browser_prefs.cc
+index b0923f5e9cd91..919677058e794 100644
+--- a/chrome/browser/prefs/browser_prefs.cc
++++ b/chrome/browser/prefs/browser_prefs.cc
+@@ -92,6 +92,7 @@
+ #include "chrome/browser/ui/performance_controls/performance_controls_metrics.h"
+ #include "chrome/browser/ui/prefs/prefs_tab_helper.h"
+ #include "chrome/browser/ui/safety_hub/safety_hub_prefs.h"
++#include "chrome/browser/ui/stedding/stedding_prefs.h"
+ #include "chrome/browser/ui/tabs/organizer/organizer_prefs.h"
+ #include "chrome/browser/ui/tabs/tab_strip_prefs.h"
+ #include "chrome/browser/ui/toolbar/chrome_labs/chrome_labs_prefs.h"
+@@ -1438,6 +1439,7 @@ void RegisterLocalState(PrefRegistrySimple* registry) {
+   browser_shutdown::RegisterPrefs(registry);
+   BrowserProcessImpl::RegisterPrefs(registry);
+   ChromeContentBrowserClient::RegisterLocalStatePrefs(registry);
++  stedding::prefs::RegisterLocalStatePrefs(registry);
+ #if BUILDFLAG(CHROME_FOR_TESTING)
+   chrome_for_testing::RegisterPrefs(registry);
+ #endif
+diff --git a/chrome/browser/profiles/profile.cc b/chrome/browser/profiles/profile.cc
+index d995fdb4b9dcb..dcd573ca1cc73 100644
+--- a/chrome/browser/profiles/profile.cc
++++ b/chrome/browser/profiles/profile.cc
+@@ -278,8 +278,9 @@ Profile::~Profile() {
+ 
+ // static
+ Profile* Profile::FromBrowserContext(content::BrowserContext* browser_context) {
+-  if (!browser_context)
++  if (!browser_context) {
+     return nullptr;
++  }
+ 
+   // For code running in a chrome/ environment, it is safe to cast to Profile*
+   // because Profile is the only implementation of BrowserContext used. In
+@@ -336,15 +337,14 @@ const char Profile::kProfileKey[] = "__PROFILE__";
+ 
+ // static
+ void Profile::RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
++  // Stedding (docs/features/privacy.md Q7, PRIVACY.md): what is typed stays
++  // local until Enter; suggestions are opt-in.
+   registry->RegisterBooleanPref(
+-      prefs::kSearchSuggestEnabled,
+-      true,
++      prefs::kSearchSuggestEnabled, false,
+       user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
+ #if BUILDFLAG(IS_ANDROID)
+-  registry->RegisterStringPref(
+-      prefs::kContextualSearchEnabled,
+-      std::string(),
+-      user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
++  registry->RegisterStringPref(prefs::kContextualSearchEnabled, std::string(),
++                               user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
+   registry->RegisterBooleanPref(
+       prefs::kContextualSearchWasFullyPrivacyEnabled, false,
+       user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
+@@ -489,10 +489,11 @@ bool Profile::ShouldPersistSessionCookies() const {
+ 
+ void Profile::MaybeSendDestroyedNotification() {
+   TRACE_EVENT("shutdown", "Profile::MaybeSendDestroyedNotification",
+-               ChromeTrackEvent::kChromeBrowserContext, this);
++              ChromeTrackEvent::kChromeBrowserContext, this);
+ 
+-  if (sent_destroyed_notification_)
++  if (sent_destroyed_notification_) {
+     return;
++  }
+   sent_destroyed_notification_ = true;
+ 
+   NotifyWillBeDestroyed();
+@@ -522,8 +523,9 @@ scoped_refptr<PrefStore> Profile::CreateExtensionPrefStore(
+ 
+ bool ProfileCompare::operator()(Profile* a, Profile* b) const {
+   DCHECK(a && b);
+-  if (a->IsSameOrParent(b))
++  if (a->IsSameOrParent(b)) {
+     return false;
++  }
+   return a->GetOriginalProfile() < b->GetOriginalProfile();
+ }
+ 
+@@ -541,8 +543,9 @@ void Profile::Wipe() {
+ void Profile::NotifyOffTheRecordProfileCreated(Profile* off_the_record) {
+   DCHECK_EQ(off_the_record->GetOriginalProfile(), this);
+   DCHECK(off_the_record->IsOffTheRecord());
+-  for (auto& observer : observers_)
++  for (auto& observer : observers_) {
+     observer.OnOffTheRecordProfileCreated(off_the_record);
++  }
+ }
+ 
+ void Profile::NotifyProfileInitializationComplete() {
+@@ -613,8 +616,9 @@ bool Profile::IsOffTheRecord() {
+ }
+ 
+ variations::VariationsClient* Profile::GetVariationsClient() {
+-  if (!chrome_variations_client_)
++  if (!chrome_variations_client_) {
+     chrome_variations_client_ = std::make_unique<ChromeVariationsClient>(this);
++  }
+   return chrome_variations_client_.get();
+ }
+ 
+diff --git a/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts b/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
+index 927ae43153875..fd7a78d98c843 100644
+--- a/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
++++ b/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
+@@ -138,6 +138,76 @@ export function getHtml(this: SettingsSteddingPageElement) {
+         ]}">
+     </settings-dropdown-menu>
+   </div>
++  <div class="hr cr-row" id="privacyHeader">
++    <div class="flex">
++      <div class="label">$i18n{steddingPrivacyTitle}</div>
++      <div class="secondary">$i18n{steddingPrivacyIntro}</div>
++    </div>
++  </div>
++  <div class="settings-box continuation">
++    <div class="start" id="cookiesLabel">
++      <div class="label">$i18n{steddingCookiesLabel}</div>
++      <div class="secondary">$i18n{steddingCookiesSubLabel}</div>
++    </div>
++    <settings-dropdown-menu id="cookieControlsMode"
++        pref-key="profile.cookie_controls_mode"
++        label="$i18n{steddingCookiesLabel}"
++        .menuOptions="${[
++          {value: 1, name: '$i18n{steddingCookiesBlock}'},
++          {value: 2, name: '$i18n{steddingCookiesPrivateOnly}'},
++          {value: 0, name: '$i18n{steddingCookiesAllow}'},
++        ]}">
++    </settings-dropdown-menu>
++  </div>
++  <settings-toggle-button
++      id="httpsFirst"
++      class="continuation"
++      pref-key="https_first_balanced_mode_enabled"
++      label="$i18n{steddingHttpsFirstLabel}"
++      sub-label="$i18n{steddingHttpsFirstSubLabel}">
++  </settings-toggle-button>
++  <settings-toggle-button
++      id="ownErrorPages"
++      class="continuation"
++      pref-key="alternate_error_pages.enabled"
++      inverted
++      label="$i18n{steddingErrorPagesLabel}"
++      sub-label="$i18n{steddingErrorPagesSubLabel}">
++  </settings-toggle-button>
++  <settings-toggle-button
++      id="globalPrivacyControl"
++      class="continuation"
++      pref-key="stedding.privacy.gpc"
++      label="$i18n{steddingGpcLabel}"
++      sub-label="$i18n{steddingGpcSubLabel}">
++  </settings-toggle-button>
++  <settings-toggle-button
++      id="quietNotifications"
++      class="continuation"
++      pref-key="profile.content_settings.enable_quiet_permission_ui.notifications"
++      label="$i18n{steddingQuietNotificationsLabel}"
++      sub-label="$i18n{steddingQuietNotificationsSubLabel}">
++  </settings-toggle-button>
++  <settings-toggle-button
++      id="quietLocation"
++      class="continuation"
++      pref-key="profile.content_settings.enable_quiet_permission_ui.geolocation"
++      label="$i18n{steddingQuietLocationLabel}"
++      sub-label="$i18n{steddingQuietLocationSubLabel}">
++  </settings-toggle-button>
++  <div class="settings-box continuation">
++    <div class="start">
++      <div class="label">$i18n{steddingSandboxLabel}</div>
++      <div class="secondary">$i18n{steddingSandboxSubLabel}</div>
++    </div>
++  </div>
++  <settings-toggle-button
++      id="searchSuggest"
++      class="continuation"
++      pref-key="search.suggest_enabled"
++      label="$i18n{steddingSuggestLabel}"
++      sub-label="$i18n{steddingSuggestSubLabel}">
++  </settings-toggle-button>
+   <div class="hr cr-row" id="spacesHeader">
+     <div class="flex">
+       <div class="label">$i18n{steddingSpacesTitle}</div>
+diff --git a/chrome/browser/ui/browser_ui_prefs.cc b/chrome/browser/ui/browser_ui_prefs.cc
+index 3ccdd3a660077..5b6deb8a7feea 100644
+--- a/chrome/browser/ui/browser_ui_prefs.cc
++++ b/chrome/browser/ui/browser_ui_prefs.cc
+@@ -4,8 +4,6 @@
+ 
+ #include "chrome/browser/ui/browser_ui_prefs.h"
+ 
+-#include "chrome/browser/ui/stedding/stedding_prefs.h"
+-
+ #include <memory>
+ #include <string>
+ 
+@@ -13,6 +11,7 @@
+ #include "build/branding_buildflags.h"
+ #include "build/build_config.h"
+ #include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/ui/stedding/stedding_prefs.h"
+ #include "chrome/browser/ui/ui_features.h"
+ #include "chrome/browser/upgrade_detector/upgrade_detector.h"
+ #include "chrome/common/buildflags.h"
+@@ -227,8 +226,10 @@ void RegisterBrowserUserPrefs(user_prefs::PrefRegistrySyncable* registry) {
+   registry->RegisterBooleanPref(
+       prefs::kHttpsOnlyModeEnabled, false,
+       user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
++  // Stedding (docs/features/privacy.md Q2): HTTPS-First balanced mode is
++  // on; Chromium registers it off.
+   registry->RegisterBooleanPref(
+-      prefs::kHttpsFirstBalancedMode, false,
++      prefs::kHttpsFirstBalancedMode, true,
+       user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
+   registry->RegisterBooleanPref(prefs::kHttpsFirstModeBundleToastQueued, false);
+   registry->RegisterBooleanPref(
+diff --git a/chrome/browser/ui/stedding/BUILD.gn b/chrome/browser/ui/stedding/BUILD.gn
+index 7cfb17a64417e..d00859d4c206a 100644
+--- a/chrome/browser/ui/stedding/BUILD.gn
++++ b/chrome/browser/ui/stedding/BUILD.gn
+@@ -156,6 +156,19 @@ source_set("address_row") {
+   ]
+ }
+ 
++# docs/features/privacy.md Q4: the local-state preference that turns on
++# Chromium's Global Privacy Control feature at startup.
++source_set("privacy_defaults") {
++  public = [ "privacy_defaults.h" ]
++  sources = [ "privacy_defaults.cc" ]
++  deps = [
++    ":prefs",
++    "//base",
++    "//components/prefs",
++    "//content/public/common",
++  ]
++}
++
+ source_set("menu_rules") {
+   public = [ "menu_rules.h" ]
+   sources = [ "menu_rules.cc" ]
+@@ -187,6 +200,7 @@ source_set("unit_tests") {
+     "menu_rules_unittest.cc",
+     "motion_unittest.cc",
+     "pin_lifecycle_unittest.cc",
++    "privacy_defaults_unittest.cc",
+     "stedding_prefs_unittest.cc",
+     "stedding_version_unittest.cc",
+     "tab_names_unittest.cc",
+@@ -201,6 +215,7 @@ source_set("unit_tests") {
+     ":motion",
+     ":pin_lifecycle",
+     ":prefs",
++    ":privacy_defaults",
+     ":tab_names",
+     ":tab_numbers",
+     ":version",
+@@ -215,6 +230,10 @@ source_set("unit_tests") {
+     "//ui/base/clipboard",
+     "//ui/base/clipboard:clipboard_test_support",
+     "//chrome/browser/ui:stedding_ui_metrics",
++    "//components/content_settings/core/browser",
++    "//components/content_settings/core/common",
++    "//components/embedder_support",
++    "//components/privacy_sandbox:privacy_sandbox_prefs",
+     "//components/sync_preferences:test_support",
+     "//testing/gtest",
+     "//ui/gfx/animation",
+diff --git a/chrome/browser/ui/stedding/privacy_defaults.cc b/chrome/browser/ui/stedding/privacy_defaults.cc
+new file mode 100644
+index 0000000000000..4443aee6e3471
+--- /dev/null
++++ b/chrome/browser/ui/stedding/privacy_defaults.cc
+@@ -0,0 +1,47 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/stedding/privacy_defaults.h"
++
++#include <vector>
++
++#include "base/base_switches.h"
++#include "base/command_line.h"
++#include "base/strings/string_split.h"
++#include "base/strings/string_util.h"
++#include "chrome/browser/ui/stedding/stedding_prefs.h"
++#include "components/prefs/pref_service.h"
++
++namespace stedding {
++
++std::string EnableFeaturesWithGlobalPrivacyControl(std::string_view existing,
++                                                   bool on) {
++  std::vector<std::string> features = base::SplitString(
++      existing, ",", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
++  std::erase_if(features, [](const std::string& feature) {
++    return feature == kGlobalPrivacyControlFeature ||
++           base::StartsWith(feature,
++                            std::string(kGlobalPrivacyControlFeature) + ":");
++  });
++  if (on) {
++    features.push_back(kGlobalPrivacyControlFeature);
++  }
++  return base::JoinString(features, ",");
++}
++
++void ApplyGlobalPrivacyControl(const PrefService* local_state,
++                               base::CommandLine* command_line) {
++  if (!local_state || !command_line) {
++    return;
++  }
++  const bool on = local_state->GetBoolean(prefs::kGlobalPrivacyControl);
++  const std::string merged = EnableFeaturesWithGlobalPrivacyControl(
++      command_line->GetSwitchValueASCII(switches::kEnableFeatures), on);
++  command_line->RemoveSwitch(switches::kEnableFeatures);
++  if (!merged.empty()) {
++    command_line->AppendSwitchASCII(switches::kEnableFeatures, merged);
++  }
++}
++
++}  // namespace stedding
+diff --git a/chrome/browser/ui/stedding/privacy_defaults.h b/chrome/browser/ui/stedding/privacy_defaults.h
+new file mode 100644
+index 0000000000000..20f2403d13c15
+--- /dev/null
++++ b/chrome/browser/ui/stedding/privacy_defaults.h
+@@ -0,0 +1,36 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_STEDDING_PRIVACY_DEFAULTS_H_
++#define CHROME_BROWSER_UI_STEDDING_PRIVACY_DEFAULTS_H_
++
++#include <string>
++#include <string_view>
++
++namespace base {
++class CommandLine;
++}
++class PrefService;
++
++namespace stedding {
++
++// docs/features/privacy.md Q4: Chromium sends Sec-GPC: 1 and answers
++// navigator.globalPrivacyControl behind the feature GlobalPrivacyControlForce,
++// which every process reads from its command line at startup. The local-state
++// preference stedding.privacy.gpc becomes that feature here, where Chromium
++// turns chrome://flags into switches.
++inline constexpr char kGlobalPrivacyControlFeature[] =
++    "GlobalPrivacyControlForce";
++
++// --enable-features with the GPC feature added (or not); the existing list
++// is kept.
++std::string EnableFeaturesWithGlobalPrivacyControl(std::string_view existing,
++                                                   bool on);
++
++void ApplyGlobalPrivacyControl(const PrefService* local_state,
++                               base::CommandLine* command_line);
++
++}  // namespace stedding
++
++#endif  // CHROME_BROWSER_UI_STEDDING_PRIVACY_DEFAULTS_H_
+diff --git a/chrome/browser/ui/stedding/privacy_defaults_unittest.cc b/chrome/browser/ui/stedding/privacy_defaults_unittest.cc
+new file mode 100644
+index 0000000000000..2b084efb8f902
+--- /dev/null
++++ b/chrome/browser/ui/stedding/privacy_defaults_unittest.cc
+@@ -0,0 +1,77 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/stedding/privacy_defaults.h"
++
++#include "base/base_switches.h"
++#include "base/command_line.h"
++#include "chrome/browser/ui/browser.h"
++#include "chrome/browser/ui/stedding/stedding_prefs.h"
++#include "chrome/common/pref_names.h"
++#include "chrome/test/base/browser_with_test_window_test.h"
++#include "components/content_settings/core/browser/cookie_settings.h"
++#include "components/content_settings/core/common/pref_names.h"
++#include "components/embedder_support/pref_names.h"
++#include "components/prefs/pref_service.h"
++#include "components/prefs/testing_pref_service.h"
++#include "components/privacy_sandbox/privacy_sandbox_prefs.h"
++#include "testing/gtest/include/gtest/gtest.h"
++
++namespace stedding {
++namespace {
++
++using PrivacyDefaultsWindowTest = BrowserWithTestWindowTest;
++
++// Q1, Q2, Q3, Q5, Q6, Q7: a fresh profile has the protective defaults.
++TEST_F(PrivacyDefaultsWindowTest, EveryDefaultIsTheProtectiveOne) {
++  const PrefService* const prefs = profile()->GetPrefs();
++  EXPECT_EQ(
++      static_cast<int>(content_settings::CookieControlsMode::kBlockThirdParty),
++      prefs->GetInteger(::prefs::kCookieControlsMode))
++      << "Q1";
++  EXPECT_TRUE(prefs->GetBoolean(::prefs::kHttpsFirstBalancedMode)) << "Q2";
++  EXPECT_FALSE(prefs->GetBoolean(embedder_support::kAlternateErrorPagesEnabled))
++      << "Q3";
++  EXPECT_TRUE(prefs->GetBoolean(::prefs::kEnableQuietNotificationPermissionUi))
++      << "Q5";
++  EXPECT_TRUE(prefs->GetBoolean(::prefs::kEnableQuietGeolocationPermissionUi))
++      << "Q5";
++  EXPECT_FALSE(prefs->GetBoolean(::prefs::kPrivacySandboxM1TopicsEnabled))
++      << "Q6";
++  EXPECT_FALSE(prefs->GetBoolean(::prefs::kPrivacySandboxM1FledgeEnabled))
++      << "Q6";
++  EXPECT_FALSE(
++      prefs->GetBoolean(::prefs::kPrivacySandboxM1AdMeasurementEnabled))
++      << "Q6";
++  EXPECT_FALSE(prefs->GetBoolean(::prefs::kSearchSuggestEnabled)) << "Q7";
++}
++
++// Q4: the local-state preference becomes the feature, beside whatever
++// --enable-features already holds.
++TEST(PrivacyDefaultsTest, GpcSwitchFollowsTheLocalState) {
++  EXPECT_EQ("GlobalPrivacyControlForce",
++            EnableFeaturesWithGlobalPrivacyControl("", true));
++  EXPECT_EQ("A,B,GlobalPrivacyControlForce",
++            EnableFeaturesWithGlobalPrivacyControl("A,B", true));
++  EXPECT_EQ("A,B", EnableFeaturesWithGlobalPrivacyControl(
++                       "A,GlobalPrivacyControlForce,B", false));
++  EXPECT_EQ("", EnableFeaturesWithGlobalPrivacyControl("", false));
++
++  TestingPrefServiceSimple local_state;
++  prefs::RegisterLocalStatePrefs(local_state.registry());
++  EXPECT_TRUE(local_state.GetBoolean(prefs::kGlobalPrivacyControl))
++      << "on by default (PRIVACY.md)";
++  base::CommandLine command_line(base::CommandLine::NO_PROGRAM);
++  command_line.AppendSwitchASCII(switches::kEnableFeatures, "Other");
++  ApplyGlobalPrivacyControl(&local_state, &command_line);
++  EXPECT_EQ("Other,GlobalPrivacyControlForce",
++            command_line.GetSwitchValueASCII(switches::kEnableFeatures));
++  local_state.SetBoolean(prefs::kGlobalPrivacyControl, false);
++  ApplyGlobalPrivacyControl(&local_state, &command_line);
++  EXPECT_EQ("Other",
++            command_line.GetSwitchValueASCII(switches::kEnableFeatures));
++}
++
++}  // namespace
++}  // namespace stedding
+diff --git a/chrome/browser/ui/stedding/stedding_prefs.cc b/chrome/browser/ui/stedding/stedding_prefs.cc
+index 6d8936641a924..9c5e691d70ada 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs.cc
++++ b/chrome/browser/ui/stedding/stedding_prefs.cc
+@@ -5,6 +5,7 @@
+ #include "chrome/browser/ui/stedding/stedding_prefs.h"
+ 
+ #include "components/pref_registry/pref_registry_syncable.h"
++#include "components/prefs/pref_registry_simple.h"
+ 
+ namespace stedding::prefs {
+ 
+@@ -29,4 +30,7 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
+   registry->RegisterStringPref(kExternalDefaultSpace, std::string());
+ }
+ 
++void RegisterLocalStatePrefs(PrefRegistrySimple* registry) {
++  registry->RegisterBooleanPref(kGlobalPrivacyControl, true);
++}
+ }  // namespace stedding::prefs
+diff --git a/chrome/browser/ui/stedding/stedding_prefs.h b/chrome/browser/ui/stedding/stedding_prefs.h
+index e9c8ae5759b98..73a9a32b78c28 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs.h
++++ b/chrome/browser/ui/stedding/stedding_prefs.h
+@@ -9,6 +9,8 @@ namespace user_prefs {
+ class PrefRegistrySyncable;
+ }
+ 
++class PrefRegistrySimple;
++
+ namespace stedding::prefs {
+ 
+ // Every Stedding preference has a row in the chrome://settings "Stedding"
+@@ -31,6 +33,9 @@ inline constexpr char kArchiveKeepDays[] = "stedding.archive.keep_days";
+ // toolbar T8/T12: the address row hides when the sidebar collapses.
+ inline constexpr char kToolbarHideWithSidebar[] =
+     "stedding.toolbar.hide_with_sidebar";
++// privacy Q4: Global Privacy Control, in local state because it becomes a
++// process-wide feature at startup (Sec-GPC: 1, navigator.globalPrivacyControl).
++inline constexpr char kGlobalPrivacyControl[] = "stedding.privacy.gpc";
+ 
+ // True once the first-run welcome flow was finished or skipped
+ // (docs/features/welcome.md).
+@@ -72,6 +77,8 @@ inline constexpr char kExternalDefaultSpace[] =
+     "stedding.spaces.external_default";
+ 
+ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
++// The browser-wide ones (privacy Q4).
++void RegisterLocalStatePrefs(PrefRegistrySimple* registry);
+ 
+ }  // namespace stedding::prefs
+ 
+diff --git a/chrome/browser/ui/webui/settings/settings_ui.cc b/chrome/browser/ui/webui/settings/settings_ui.cc
+index a1c657f4ef6f7..8cc53e65d6265 100644
+--- a/chrome/browser/ui/webui/settings/settings_ui.cc
++++ b/chrome/browser/ui/webui/settings/settings_ui.cc
+@@ -692,6 +692,53 @@ SettingsUI::SettingsUI(content::WebUI* web_ui)
+   html_source->AddString("steddingSpaceNamePlaceholder", "Space name");
+   html_source->AddString("steddingDeleteSpace", "Delete Space");
+   html_source->AddString("steddingImportArcLabel", "Import from Arc");
++  // privacy Q8: one row per preference, the protective side on.
++  html_source->AddString("steddingPrivacyTitle", "Privacy");
++  html_source->AddString(
++      "steddingPrivacyIntro",
++      "Tracker-free by default. Each row is one preference; Chromium's own "
++      "pages show the same values.");
++  html_source->AddString("steddingCookiesLabel", "Third-party cookies");
++  html_source->AddString(
++      "steddingCookiesSubLabel",
++      "Blocked in normal windows. When a site breaks, the eye icon in the "
++      "address row allows them for that site.");
++  html_source->AddString("steddingCookiesBlock", "Block");
++  html_source->AddString("steddingCookiesPrivateOnly",
++                         "Block only in private windows");
++  html_source->AddString("steddingCookiesAllow", "Allow");
++  html_source->AddString("steddingHttpsFirstLabel", "Try HTTPS first");
++  html_source->AddString(
++      "steddingHttpsFirstSubLabel",
++      "Upgrades http:// to https:// where the site supports it, and warns "
++      "before an insecure page.");
++  html_source->AddString("steddingErrorPagesLabel",
++                         "Show Stedding\u2019s own error pages");
++  html_source->AddString(
++      "steddingErrorPagesSubLabel",
++      "Never asks a web service what to show when a page fails to load.");
++  html_source->AddString("steddingGpcLabel", "Send Global Privacy Control");
++  html_source->AddString(
++      "steddingGpcSubLabel",
++      "Sec-GPC: 1 on every request, and navigator.globalPrivacyControl for "
++      "pages. Takes effect after a restart.");
++  html_source->AddString("steddingQuietNotificationsLabel",
++                         "Quiet notification prompts");
++  html_source->AddString("steddingQuietNotificationsSubLabel",
++                         "A small bell in the address row instead of a popup.");
++  html_source->AddString("steddingQuietLocationLabel",
++                         "Quiet location prompts");
++  html_source->AddString("steddingQuietLocationSubLabel",
++                         "The same for location requests.");
++  html_source->AddString("steddingSandboxLabel",
++                         "Ad topics, Protected Audience and Attribution");
++  html_source->AddString("steddingSandboxSubLabel",
++                         "Off. There is no Ad privacy page to turn them on.");
++  html_source->AddString(
++      "steddingSuggestLabel",
++      "Send what you type to the search engine for suggestions");
++  html_source->AddString("steddingSuggestSubLabel",
++                         "Off keeps every keystroke local until Enter.");
+   html_source->AddString("steddingHideAddressRowLabel",
+                          "Hide the address row with the sidebar");
+   html_source->AddString(
+diff --git a/components/content_settings/core/browser/cookie_settings.cc b/components/content_settings/core/browser/cookie_settings.cc
+index 183e84960da3f..0b04ef72edb65 100644
+--- a/components/content_settings/core/browser/cookie_settings.cc
++++ b/components/content_settings/core/browser/cookie_settings.cc
+@@ -76,9 +76,12 @@ ContentSettingsForOneType CookieSettings::GetCookieSettings() const {
+ 
+ void CookieSettings::RegisterProfilePrefs(
+     user_prefs::PrefRegistrySyncable* registry) {
++  // Stedding (docs/features/privacy.md Q1, ADR 0017): third-party cookies
++  // are blocked in normal windows too; Chromium blocks them in Incognito
++  // only. The eye icon in the address row allows them per site.
+   registry->RegisterIntegerPref(
+       prefs::kCookieControlsMode,
+-      static_cast<int>(CookieControlsMode::kIncognitoOnly),
++      static_cast<int>(CookieControlsMode::kBlockThirdParty),
+       user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
+ }
+ 

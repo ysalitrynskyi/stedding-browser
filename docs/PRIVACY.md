@@ -206,7 +206,7 @@ inert without Google branding and API keys. `enable_updater` is literally
 
 | Commitment | Costs |
 |---|---|
-| Search suggestions off until the user opts in | `search.suggest_enabled` defaults to **true**; flip the default |
+| Search suggestions off until the user opts in | done: `search.suggest_enabled` defaults to false (`docs/features/privacy.md` Q7, patch 0030) |
 | No Google New Tab Page network | Done: the new tab page is always Chromium's local third-party page, whatever the default engine; a provider's own remote new-tab URL is never used (patch 0003) |
 | Default search engine chosen by the user | Chromium's shuffled choice screen shows at first run in every country (patch 0003); DuckDuckGo is the prepopulated default behind it, which keeps the new tab page local |
 | Global Privacy Control on | currently off — `IsGlobalPrivacyControlEnabled()` is gated behind a Force/Test feature flag, and the pref path is an unfinished upstream TODO |

@@ -131,8 +131,9 @@ Built, with tests or measured captures:
   Google's rows, Import, Screenshot and Spaces in the app menu, a menu per
   row kind and for the folder header, Move to Space; a chip drag reorders
   the Spaces; a split's panes take a Space, a pin and a sleep together.
-- **Round 6, wave 4** (patch 0034 so far): private windows wear a
-  different coat (`docs/features/private.md`); ADR 0016 (the SpaceRegistry)
+- **Round 6, wave 4** (patches 0034–0035 so far): private windows wear a
+  different coat (`docs/features/private.md`); the little window for links
+  from other apps (`docs/features/little.md`); ADR 0016 (the SpaceRegistry)
   and the specs for the little window and one sidebar for every window
   are written (`docs/features/little.md`, `docs/features/windows.md`).
 - **Round 6, wave 3** (patches 0026–0033, complete): Import from Arc — Spaces,
@@ -212,5 +213,6 @@ with R6-22 (Import from Arc) as 0026, R6-23 (routing) as 0027 and R6-24 (the
 archived view) as 0028, R6-25 (the address row) as 0029, R6-26 (the
 Privacy block) as 0030, R6-27 (sidebar density) as 0031, R6-28 (bookmarks to
 pins) as 0032 and R6-29 (sidebar backups) as 0033: wave 3 is complete. Wave 4
-opened with R6-32 (the private coat) as 0034 and ADR 0016; R6-30 and R6-31
-follow under the operator's overnight mandate.
+opened with R6-32 (the private coat) as 0034 and ADR 0016, then R6-30 (the
+little window) as 0035; R6-31 (the registry) follows under the operator's
+overnight mandate.

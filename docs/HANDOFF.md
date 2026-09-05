@@ -182,6 +182,28 @@ perform; a param that recreates the state IS the test surface.
     its rows must recompute its bounds on every rebuild path; a `GetPreferredSize`
     probe cannot see an early `return`, only the live shot can.
 
+16. **Stedding's own WebUI CSS and TypeScript go through Chromium's linters at build
+    time.** stylelint wants a blank line before every rule and short hex colours
+    (`#fff`, not `#ffffff`); the Lit template linter wants event handlers named
+    `on<Context><Event>_` (`onRouteAddChange_`, not `onRouteAdd_`). A lint failure
+    stops the build before any compile step, so read the first `✖` line of the log.
+17. **A fixup into an earlier patch can conflict with a later patch's hunk in the
+    same include block.** `git rebase --autosquash` then stops twice: once applying
+    the fixup, once re-applying the later patch. Both conflicts were include lists;
+    the resolution is the union of both sides, deduplicated, then `git add` and
+    `GIT_EDITOR=true git rebase --continue`, and only then `git stash pop` the
+    branding files. Check `git status` shows no non-branding changes at the end.
+18. **Small things that cost a build each:** the shell here is zsh, which does not
+    word-split an unquoted `$var` (pipe file lists through `xargs`); `tooling/dev`
+    and `tooling/check-repo` are relative to the repo root, so a subshell that `cd`s
+    into the checkout must call them by absolute path; a bar action gated on an
+    asynchronous check (a file's existence) has to be primed at window creation,
+    not at the first actions-mode bar, or every first look at it comes up empty.
+19. **The vertical tab strip's anonymous Spaces take their glyph and name from
+    their index.** A reorder of two unnamed Spaces is invisible in a capture except
+    through the active highlight and the title row; give one an icon through its
+    chip menu before capturing a drag.
+
 ## Open items
 
 `BACKLOG.md` is the list; do not keep one here. First up: the operator

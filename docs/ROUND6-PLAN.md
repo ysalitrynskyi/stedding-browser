@@ -222,6 +222,47 @@ said otherwise. Each is also in the item's spec.
   (`MotionTest`) and the call sites are reviewed; a frame-level proof needs a faster
   capture path.
 
+#### Wave 2 — landing notes (2026-09-05, in progress)
+
+- **Order of landing.** Parts A–E of the wave went into the checkout together on
+  2026-09-05 after wave 1's commit: R6-13 R10 (⌘1–9 skip hidden rows), R6-14 M5–M6
+  (Close Others / Clear Below stay inside the Space; the tab-group chords are gone),
+  R6-15 R4–R6, R8 (the slept look, Sleep Tab / Sleep Others, a Space sleeps 15 minutes
+  after the user leaves it, the dropdown), R6-21 T14 (download progress on the sidebar
+  button), R6-20 R20–R22 (verbs act on the selection, plural labels), R6-16 H1–H9 (the
+  home URL, ⌘W sleeps a pin, the drifted dot, favicon reset, the menu rows, peek reads
+  the stored site), R6-17 R14–R17 (rename in place: `stedding::TabName` on the
+  WebContents, preferred by `TabUIHelper::GetTitle()`, written as session extra data
+  and re-emitted on rebuild), R6-14 M1, M4 (the short menu is a separate
+  `TabMenuModel::BuildStedding`, so a rebase cannot leak a hidden row into it).
+- **Parts F and G, same night.** R6-13 R11–R13, R19: a `ui::EventMonitor` on the
+  window watches the ⌘ key (modifier-only presses never reach a view); 250 ms later
+  every visible row shows its number in the close slot (cards and the rail: a corner
+  badge, the pure rule `NumberBadgePlacementFor`), the Space chips show ⌃N in place of
+  their glyph, an 80 ms fade under the motion gate, any chord or the key-up hides
+  them; `stedding::NumberedTabs` is the one list ⌘N and the badges share. R6-18: at
+  overflow (`SwitcherOverflows`, the same metrics the row uses) the inactive chips are
+  6 DIP dots in their Space colour until the pointer rests on the row; Move Left /
+  Move Right on the Space menu reorder through `SpaceModel::MoveSpace`, persisted
+  with the Spaces; the chip drag (B27's pointer path) is a later pass.
+- **Live checks, 2026-09-05 (05:15–05:35).** The short menu with every disabled row
+  greyed for the row it opened on (M1); rename in place with the field over the title
+  (R14); ⌘-click selection with plural labels (R20–R21); the row numbers, the card's
+  corner number and ⌃N on the chips while ⌘ is held, gone on release (R11, R19); a
+  slept row at 55 % (R4); the drifted pin's dot and the favicon reset (H4–H5); twelve
+  Spaces as dots that grow back under the pointer (B24–B25); the four new settings
+  rows (R8, R12, M4, H9). Four things the pass taught: a right-click activates the row
+  it opens on, so Sleep Tab now takes the active row after activating the nearest
+  visible neighbour (R5 reworded); the switcher only hears hover on its children
+  with `SetNotifyEnterExitOnChild`; an off-site link on a pin peeks (P1) rather than
+  drifting it, so the drift check uses a same-site link; and the machine's input
+  source reached the harness's typing (HANDOFF trap 13). The sidebar's own
+  background menu (Chromium's: Bookmark All Tabs…, Unpin Tab Search, Turn off Auto
+  Expanding Tabs) is untouched — a row for R6-14 M3's pass.
+- **Not in this pass.** R6-14 M2, M3, M7 (page and app menus; the five row-kind
+  menus), R6-15 R7 (folder dim), R6-16 H10–H11, R6-11 (actions mode), R6-12 (⌃⇥
+  strip), R6-19's J rows, B27's drag, T14's download capture. Each keeps its row.
+
 #### R6-01 · Shortcut reference block in chrome://settings/stedding
 
 - Source: critic #6 (QUALITY.md "UX completeness" 1, ROADMAP.md M6 scope).

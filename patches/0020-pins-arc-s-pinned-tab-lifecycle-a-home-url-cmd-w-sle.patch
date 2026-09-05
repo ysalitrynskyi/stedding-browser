@@ -1,0 +1,416 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Sat, 5 Sep 2026 06:16:23 -0400
+Subject: pins: Arc's pinned-tab lifecycle -- a home URL, Cmd-W sleeps, the
+ favicon resets
+
+Both pin tiers record a home URL at pin time and write it to the session
+(docs/features/pins.md H1, H2). Cmd-W on a pinned tab puts it to sleep
+instead of closing it, under a setting (H3, H9). A pin that navigated away
+shows a dot on its favicon; a click on the favicon (Option-click on an
+essentials card) loads home again, and the menu offers Reset to Pinned Page
+and Make This the Pinned Page (H4-H6). Peek reads the stored home's site, so
+a drifted pin stops peeking the wrong site (H7).
+
+Why: docs/ROUND6-PLAN.md wave 2 (R6-16): the pinned-tab model Arc users rely
+on -- a pin is a place, not a page.
+Removable when: Chromium's pinned tabs remember a home and sleep on close.
+---
+ .../ui/spaces/tab_space_restore_data.cc       |  11 +-
+ .../ui/spaces/tab_space_restore_data.h        |   6 +-
+ chrome/browser/ui/stedding/pin_lifecycle.cc   | 155 ++++++++++++++++++
+ chrome/browser/ui/stedding/pin_lifecycle.h    |  54 ++++++
+ .../ui/stedding/pin_lifecycle_unittest.cc     |  26 +++
+ chrome/browser/ui/views/peek/BUILD.gn         |   1 +
+ .../ui/views/peek/peek_navigation_throttle.cc |  21 ++-
+ 7 files changed, 261 insertions(+), 13 deletions(-)
+ create mode 100644 chrome/browser/ui/stedding/pin_lifecycle.cc
+ create mode 100644 chrome/browser/ui/stedding/pin_lifecycle.h
+ create mode 100644 chrome/browser/ui/stedding/pin_lifecycle_unittest.cc
+
+diff --git a/chrome/browser/ui/spaces/tab_space_restore_data.cc b/chrome/browser/ui/spaces/tab_space_restore_data.cc
+index f1d1510648379..605535e63e6bb 100644
+--- a/chrome/browser/ui/spaces/tab_space_restore_data.cc
++++ b/chrome/browser/ui/spaces/tab_space_restore_data.cc
+@@ -13,10 +13,12 @@ namespace spaces {
+ 
+ TabSpaceRestoreData::TabSpaceRestoreData(content::WebContents* contents,
+                                          std::string space_id,
+-                                         bool space_pinned)
++                                         bool space_pinned,
++                                         std::string home)
+     : content::WebContentsUserData<TabSpaceRestoreData>(*contents),
+       space_id_(std::move(space_id)),
+-      space_pinned_(space_pinned) {}
++      space_pinned_(space_pinned),
++      home_(std::move(home)) {}
+ 
+ TabSpaceRestoreData::~TabSpaceRestoreData() = default;
+ 
+@@ -33,9 +35,10 @@ void RestoreSpaceFromExtraData(
+     return;
+   }
+   const auto pin = extra_data.find(kSessionTabSpacePinKey);
++  const auto home = extra_data.find(kSessionTabHomeKey);
+   TabSpaceRestoreData::CreateForWebContents(
+-      web_contents, it->second,
+-      pin != extra_data.end() && pin->second == "1");
++      web_contents, it->second, pin != extra_data.end() && pin->second == "1",
++      home != extra_data.end() ? home->second : std::string());
+ }
+ 
+ FolderRestorePath::FolderRestorePath(content::WebContents* contents,
+diff --git a/chrome/browser/ui/spaces/tab_space_restore_data.h b/chrome/browser/ui/spaces/tab_space_restore_data.h
+index edb1ca43d7215..3306acf790ddd 100644
+--- a/chrome/browser/ui/spaces/tab_space_restore_data.h
++++ b/chrome/browser/ui/spaces/tab_space_restore_data.h
+@@ -31,16 +31,20 @@ class TabSpaceRestoreData
+ 
+   const std::string& space_id() const { return space_id_; }
+   bool space_pinned() const { return space_pinned_; }
++  // The pinned tab's home URL spec, empty when none was recorded (pins H2).
++  const std::string& home() const { return home_; }
+ 
+  private:
+   friend class content::WebContentsUserData<TabSpaceRestoreData>;
+ 
+   TabSpaceRestoreData(content::WebContents* contents,
+                       std::string space_id,
+-                      bool space_pinned);
++                      bool space_pinned,
++                      std::string home = std::string());
+ 
+   const std::string space_id_;
+   const bool space_pinned_;
++  const std::string home_;
+ 
+   WEB_CONTENTS_USER_DATA_KEY_DECL();
+ };
+diff --git a/chrome/browser/ui/stedding/pin_lifecycle.cc b/chrome/browser/ui/stedding/pin_lifecycle.cc
+new file mode 100644
+index 0000000000000..6d7f5a5d9eccd
+--- /dev/null
++++ b/chrome/browser/ui/stedding/pin_lifecycle.cc
+@@ -0,0 +1,155 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/stedding/pin_lifecycle.h"
++
++#include <vector>
++
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/resource_coordinator/lifecycle_unit_state.mojom.h"
++#include "chrome/browser/resource_coordinator/tab_lifecycle_unit_external.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/spaces/space_model.h"
++#include "chrome/browser/ui/stedding/stedding_prefs.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "chrome/browser/ui/tabs/tab_strip_model_delegate.h"
++#include "chrome/browser/ui/tabs/tab_strip_user_gesture_details.h"
++#include "chrome/common/webui_url_constants.h"
++#include "components/prefs/pref_service.h"
++#include "components/tabs/public/tab_interface.h"
++#include "content/public/browser/navigation_controller.h"
++#include "content/public/browser/web_contents.h"
++#include "url/origin.h"
++
++namespace stedding {
++
++namespace {
++
++bool IsPinnedAnywhere(BrowserWindowInterface* browser,
++                      const tabs::TabInterface* tab) {
++  if (!tab) {
++    return false;
++  }
++  if (tab->IsPinned()) {
++    return true;
++  }
++  spaces::SpaceModel* const model = spaces::SpaceModel::From(browser);
++  return model && model->IsSpacePinned(tab);
++}
++
++std::vector<tabs::TabInterface*> Selection(TabStripModel* tabs) {
++  std::vector<tabs::TabInterface*> out;
++  for (int i = 0; i < tabs->count(); ++i) {
++    if (tabs->IsTabSelected(i)) {
++      out.push_back(tabs->GetTabAtIndex(i));
++    }
++  }
++  if (out.empty() && tabs->GetActiveTab()) {
++    out.push_back(tabs->GetActiveTab());
++  }
++  return out;
++}
++
++bool IsAsleep(const tabs::TabInterface* tab) {
++  content::WebContents* const contents = tab->GetContents();
++  return contents && contents->WasDiscarded();
++}
++
++}  // namespace
++
++bool HasDriftedFromHome(const GURL& home, const GURL& current) {
++  if (!home.is_valid() || !current.is_valid()) {
++    return false;
++  }
++  return !url::Origin::Create(home).IsSameOriginWith(current) ||
++         home.path() != current.path();
++}
++
++CloseAction CloseActionFor(BrowserWindowInterface* browser,
++                           const PrefService* prefs) {
++  if (!browser || (prefs && !prefs->GetBoolean(prefs::kPinsCloseSleeps))) {
++    return CloseAction::kClose;
++  }
++  TabStripModel* const tabs = browser->GetTabStripModel();
++  if (!tabs) {
++    return CloseAction::kClose;
++  }
++  bool all_asleep = true;
++  for (tabs::TabInterface* tab : Selection(tabs)) {
++    if (!IsPinnedAnywhere(browser, tab)) {
++      return CloseAction::kClose;
++    }
++    all_asleep &= IsAsleep(tab);
++  }
++  return all_asleep ? CloseAction::kNoOp : CloseAction::kSleep;
++}
++
++bool SleepInsteadOfClose(BrowserWindowInterface* browser) {
++  Profile* const profile = browser ? browser->GetProfile() : nullptr;
++  const CloseAction action =
++      CloseActionFor(browser, profile ? profile->GetPrefs() : nullptr);
++  if (action == CloseAction::kClose) {
++    return false;
++  }
++  if (action == CloseAction::kNoOp) {
++    return true;
++  }
++  TabStripModel* const tabs = browser->GetTabStripModel();
++  const std::vector<tabs::TabInterface*> doomed = Selection(tabs);
++  // The active pin cannot sleep while it is on screen: move to the next
++  // visible row of the Space first, or open a new tab there (H11).
++  tabs::TabInterface* const active = tabs->GetActiveTab();
++  bool active_doomed = false;
++  for (tabs::TabInterface* tab : doomed) {
++    active_doomed |= tab == active;
++  }
++  if (active_doomed) {
++    tabs->SelectNextTab(TabStripUserGestureDetails(
++        TabStripUserGestureDetails::GestureType::kOther));
++    tabs::TabInterface* const now = tabs->GetActiveTab();
++    bool landed_on_doomed = now == active;
++    for (tabs::TabInterface* tab : doomed) {
++      landed_on_doomed |= tab == now;
++    }
++    if (landed_on_doomed) {
++      tabs->delegate()->AddTabAt(GURL(chrome::kChromeUINewTabURL), -1, true);
++    }
++  }
++  for (tabs::TabInterface* tab : doomed) {
++    if (IsAsleep(tab)) {
++      continue;
++    }
++    resource_coordinator::TabLifecycleUnitExternal* const unit =
++        resource_coordinator::TabLifecycleUnitExternal::FromWebContents(
++            tab->GetContents());
++    if (unit) {
++      unit->DiscardTab(mojom::LifecycleUnitDiscardReason::EXTERNAL);
++    }
++  }
++  return true;
++}
++
++void ResetToHome(BrowserWindowInterface* browser, tabs::TabInterface* tab) {
++  spaces::SpaceModel* const model = spaces::SpaceModel::From(browser);
++  const std::optional<GURL> home = model ? model->HomeUrl(tab) : std::nullopt;
++  content::WebContents* const contents = tab ? tab->GetContents() : nullptr;
++  if (!home || !contents) {
++    return;
++  }
++  contents->GetController().LoadURL(*home, content::Referrer(),
++                                    ui::PAGE_TRANSITION_AUTO_BOOKMARK,
++                                    std::string());
++}
++
++GURL PinnedSiteFor(BrowserWindowInterface* browser, tabs::TabInterface* tab) {
++  spaces::SpaceModel* const model = spaces::SpaceModel::From(browser);
++  if (const std::optional<GURL> home =
++          model ? model->HomeUrl(tab) : std::nullopt) {
++    return *home;
++  }
++  content::WebContents* const contents = tab ? tab->GetContents() : nullptr;
++  return contents ? contents->GetLastCommittedURL() : GURL();
++}
++
++}  // namespace stedding
+diff --git a/chrome/browser/ui/stedding/pin_lifecycle.h b/chrome/browser/ui/stedding/pin_lifecycle.h
+new file mode 100644
+index 0000000000000..ff9bf6b18b294
+--- /dev/null
++++ b/chrome/browser/ui/stedding/pin_lifecycle.h
+@@ -0,0 +1,54 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_STEDDING_PIN_LIFECYCLE_H_
++#define CHROME_BROWSER_UI_STEDDING_PIN_LIFECYCLE_H_
++
++#include <optional>
++
++#include "url/gurl.h"
++
++class BrowserWindowInterface;
++class PrefService;
++
++namespace tabs {
++class TabInterface;
++}
++
++namespace stedding {
++
++// Arc's pinned-tab lifecycle (docs/features/pins.md).
++
++// H4: a pin has drifted when its origin or path differs from home; the query
++// and the fragment are the page's own business.
++bool HasDriftedFromHome(const GURL& home, const GURL& current);
++
++// What Cmd-W does with the selection (H3, H9, H11).
++enum class CloseAction {
++  // Close, as Chromium would: something selected is not pinned, or the
++  // setting is off.
++  kClose,
++  // Every selected tab is pinned (either tier) and awake: sleep them.
++  kSleep,
++  // Every selected tab is pinned and already asleep: nothing.
++  kNoOp,
++};
++CloseAction CloseActionFor(BrowserWindowInterface* browser,
++                           const PrefService* prefs);
++
++// Runs CloseActionFor: returns true when Cmd-W was taken care of here (a
++// sleep or a no-op), false when Chromium should close as usual. Sleeping the
++// active pin first activates the next visible row of its Space, or opens a
++// new tab there when the Space holds nothing else (H11).
++bool SleepInsteadOfClose(BrowserWindowInterface* browser);
++
++// H5, H6: the pin loads its home page again.
++void ResetToHome(BrowserWindowInterface* browser, tabs::TabInterface* tab);
++
++// H7: the site the peek compares against: the pin's home, else the page.
++GURL PinnedSiteFor(BrowserWindowInterface* browser, tabs::TabInterface* tab);
++
++}  // namespace stedding
++
++#endif  // CHROME_BROWSER_UI_STEDDING_PIN_LIFECYCLE_H_
+diff --git a/chrome/browser/ui/stedding/pin_lifecycle_unittest.cc b/chrome/browser/ui/stedding/pin_lifecycle_unittest.cc
+new file mode 100644
+index 0000000000000..d8f1a0b823d52
+--- /dev/null
++++ b/chrome/browser/ui/stedding/pin_lifecycle_unittest.cc
+@@ -0,0 +1,26 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/stedding/pin_lifecycle.h"
++
++#include "testing/gtest/include/gtest/gtest.h"
++#include "url/gurl.h"
++
++namespace stedding {
++namespace {
++
++// pins H4: a different origin or path is a drift; the query and the fragment
++// are not.
++TEST(PinLifecycleTest, DriftIsOriginOrPath) {
++  const GURL home("https://mail.test/inbox?folder=1#top");
++  EXPECT_FALSE(HasDriftedFromHome(home, GURL("https://mail.test/inbox")));
++  EXPECT_FALSE(HasDriftedFromHome(home, GURL("https://mail.test/inbox?x=2#a")));
++  EXPECT_TRUE(HasDriftedFromHome(home, GURL("https://mail.test/settings")));
++  EXPECT_TRUE(HasDriftedFromHome(home, GURL("https://other.test/inbox")));
++  EXPECT_TRUE(HasDriftedFromHome(home, GURL("http://mail.test/inbox")));
++  EXPECT_FALSE(HasDriftedFromHome(GURL(), GURL("https://mail.test/")));
++}
++
++}  // namespace
++}  // namespace stedding
+diff --git a/chrome/browser/ui/views/peek/BUILD.gn b/chrome/browser/ui/views/peek/BUILD.gn
+index 4705c222f3d29..8af697283d23c 100644
+--- a/chrome/browser/ui/views/peek/BUILD.gn
++++ b/chrome/browser/ui/views/peek/BUILD.gn
+@@ -25,6 +25,7 @@ source_set("peek") {
+     "//chrome/browser/ui/spaces",
+     "//chrome/browser/ui/stedding:prefs",
+     "//chrome/browser/ui/stedding:copy_link",
++    "//chrome/browser/ui/stedding:pin_lifecycle",
+     "//chrome/browser/ui/tabs:tab_strip",
+     "//components/prefs",
+     "//components/tabs:public",
+diff --git a/chrome/browser/ui/views/peek/peek_navigation_throttle.cc b/chrome/browser/ui/views/peek/peek_navigation_throttle.cc
+index 8b8357683994a..e5984e0251eb5 100644
+--- a/chrome/browser/ui/views/peek/peek_navigation_throttle.cc
++++ b/chrome/browser/ui/views/peek/peek_navigation_throttle.cc
+@@ -10,12 +10,13 @@
+ #include "base/memory/weak_ptr.h"
+ #include "base/no_destructor.h"
+ #include "base/task/single_thread_task_runner.h"
+-#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/spaces/space_model.h"
++#include "chrome/browser/ui/stedding/pin_lifecycle.h"
+ #include "chrome/browser/ui/stedding/stedding_prefs.h"
+-#include "components/prefs/pref_service.h"
+ #include "chrome/browser/ui/views/peek/peek_view.h"
++#include "components/prefs/pref_service.h"
+ #include "components/tabs/public/tab_interface.h"
+ // Out of order on purpose: keeps this hunk clear of the settings patch.
+ #include "chrome/browser/ui/navigator/browser_navigator_params.h"
+@@ -65,8 +66,7 @@ bool ShouldPeek(const PeekSignals& signals, const GURL& from, const GURL& to) {
+     return false;
+   }
+   return !net::registry_controlled_domains::SameDomainOrHost(
+-      from, to,
+-      net::registry_controlled_domains::INCLUDE_PRIVATE_REGISTRIES);
++      from, to, net::registry_controlled_domains::INCLUDE_PRIVATE_REGISTRIES);
+ }
+ 
+ bool MaybePeekInsteadOfNewTab(NavigateParams* params) {
+@@ -102,8 +102,11 @@ bool MaybePeekInsteadOfNewTab(NavigateParams* params) {
+       Profile::FromBrowserContext(params->source_contents->GetBrowserContext())
+           ->GetPrefs()
+           ->GetBoolean(stedding::prefs::kPeekEnabled);
+-  if (!ShouldPeek(signals, params->source_contents->GetLastCommittedURL(),
+-                  params->url)) {
++  // The pin's home site, not wherever it drifted to (pins H7).
++  if (!ShouldPeek(
++          signals,
++          stedding::PinnedSiteFor(tab->GetBrowserWindowInterface(), tab),
++          params->url)) {
+     return false;
+   }
+   if (OpenerOverride()) {
+@@ -169,14 +172,16 @@ PeekNavigationThrottle::WillStartRequest() {
+       Profile::FromBrowserContext(handle->GetWebContents()->GetBrowserContext())
+           ->GetPrefs()
+           ->GetBoolean(stedding::prefs::kPeekEnabled);
+-  const GURL& from = handle->GetWebContents()->GetLastCommittedURL();
++  const GURL from =
++      stedding::PinnedSiteFor(tab->GetBrowserWindowInterface(), tab);
+   if (!ShouldPeek(signals, from, handle->GetURL())) {
+     return PROCEED;
+   }
+   // Not from inside the throttle check: opening a view while the navigation
+   // is being torn down is asking for re-entrancy.
+   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+-      FROM_HERE, base::BindOnce(&OpenPeek, tab->GetWeakPtr(), handle->GetURL()));
++      FROM_HERE,
++      base::BindOnce(&OpenPeek, tab->GetWeakPtr(), handle->GetURL()));
+   return CANCEL_AND_IGNORE;
+ }
+ 

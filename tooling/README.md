@@ -24,7 +24,7 @@ its configuration from `chromium-version` — never from a value typed twice.
 | `sync-chromium` | Materialises the Chromium tree at the pin, outside this repository. |
 | `build-chromium` | `gn gen` + `autoninja` for a named configuration. |
 | `apply-branding` | Copies `../branding/` assets over the checkout. Not a patch. |
-| `apply-patches` | Replays the patch series onto the pin as commits on `stedding-work`. |
+| `apply-patches` | Replays the patch series onto the pin as commits on `stedding-work`. `--check` answers whether it would apply without touching anything, needs only git (no depot_tools, no Mac, no build), and reports which patches would need a three-way merge. The `series` workflow runs it. |
 | `update-patches` | Turns those commits back into `../patches/`. |
 | `repair-checkout` | Rewrites git cache paths after a checkout is moved. |
 | `update-pin` | Moves the Chromium pin to the newest stable and checks the series still applies. |

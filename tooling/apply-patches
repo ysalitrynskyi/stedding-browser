@@ -18,8 +18,6 @@
 # shellcheck source=./lib.sh
 . "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
-add_depot_tools_to_path
-
 CHECK_ONLY=0
 FORCE=0
 for arg in "$@"; do
@@ -30,6 +28,11 @@ for arg in "$@"; do
     *)         die "unknown argument: $arg" ;;
   esac
 done
+
+# --check reads a tree and writes a temporary index; that is plain git, and demanding
+# depot_tools for it kept the one check that needs no Mac off every machine without a
+# Chromium build -- CI included.
+[ "$CHECK_ONLY" -eq 1 ] || add_depot_tools_to_path
 
 PATCH_DIR="$STEDDING_ROOT/patches"
 WORK_BRANCH="stedding-work"
@@ -72,18 +75,37 @@ if [ "$CHECK_ONLY" -eq 1 ]; then
   GIT_INDEX_FILE="$tmp_index" git read-tree "refs/tags/$CHROMIUM_TAG^{tree}" \
     || die "cannot read the tree for $CHROMIUM_TAG"
 
+  # Two verdicts, because the real apply is `git am --3way` and a strict apply asks a
+  # stricter question than the one that matters. Against 153.0.8010.27 a strict apply
+  # called 21 of 38 patches broken -- upstream had added a `dictation` dependency, so
+  # one deps line moved under patch 0017 and every later patch cascaded off it -- while
+  # the three-way apply took all 38. Reporting only the strict result would have talked
+  # us out of a rebase that was clean, which is the opposite of what the security
+  # deadline in docs/QUALITY.md needs.
   failed=0
+  merged=0
   for p in "${PATCHES[@]}"; do
     if GIT_INDEX_FILE="$tmp_index" git apply --cached "$p" 2>/dev/null; then
-      printf '  ok   %s\n' "$(basename "$p")"
+      printf '  ok    %s\n' "$(basename "$p")"
+    elif GIT_INDEX_FILE="$tmp_index" git apply --cached --3way "$p" 2>/dev/null; then
+      printf '  merge %s\n' "$(basename "$p")"
+      merged=$(( merged + 1 ))
     else
-      printf '  FAIL %s\n' "$(basename "$p")"
+      printf '  FAIL  %s\n' "$(basename "$p")"
       failed=$(( failed + 1 ))
       # Keep going: reporting every broken patch beats reporting the first one.
     fi
   done
-  [ "$failed" -eq 0 ] || die "$failed patch(es) do not apply cleanly onto $CHROMIUM_TAG"
-  log "series applies cleanly"
+  [ "$failed" -eq 0 ] || die "$failed patch(es) conflict with $CHROMIUM_TAG even under a
+     three-way merge. Those need a human: apply the series up to the one before, fix it
+     as a commit, then tooling/update-patches."
+  if [ "$merged" -gt 0 ]; then
+    log "series applies onto $CHROMIUM_TAG; $merged patch(es) needed a three-way merge"
+    log "that is what tooling/apply-patches itself does, so the rebase is clean -- the"
+    log "merged hunks are simply the ones to read first once it builds"
+  else
+    log "series applies cleanly"
+  fi
   exit 0
 fi
 

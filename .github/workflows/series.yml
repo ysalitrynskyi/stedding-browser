@@ -1,0 +1,103 @@
+# Does the patch series still apply to the pinned Chromium?
+#
+# This is the one thing about the product a hosted runner can genuinely answer. It
+# cannot build Chromium (see "CI reality" in docs/ARCHITECTURE.md, and BACKLOG S-49),
+# but `tooling/apply-patches --check` needs no build, no depot_tools and no Mac: it
+# reads the pinned tree into a temporary index and applies the series into it. On a
+# runner that is a 1.4 GB fetch and about twenty seconds of applying.
+#
+# Why it earns its keep: until now the series was only ever proven against real
+# upstream source on the operator's Mac, so a patch that had quietly stopped applying
+# would be found at the next rebase rather than at the commit that broke it. The
+# security timetable in docs/QUALITY.md depends on a rebase being boring, and a rebase
+# is only boring when the series is known to apply the day before it is attempted.
+#
+# The Chromium objects are cached under the pin, so this downloads once per pin and is
+# nearly free afterwards -- and the cache misses exactly when the pin moves, which is
+# the moment the answer matters most.
+
+name: series
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'patches/**'
+      - 'tooling/chromium-version'
+      - 'tooling/apply-patches'
+      - '.github/workflows/series.yml'
+  pull_request:
+    paths:
+      - 'patches/**'
+      - 'tooling/chromium-version'
+      - 'tooling/apply-patches'
+      - '.github/workflows/series.yml'
+  schedule:
+    # Weekly. Nothing here changes on its own -- the pin is a file in the repo -- so
+    # this is a backstop against a cache or an upstream tag going away, not a poll.
+    - cron: '41 5 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: series-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  applies:
+    name: the series applies to the pin
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Read the pin
+        id: pin
+        run: |
+          set -euo pipefail
+          . tooling/chromium-version
+          echo "tag=$CHROMIUM_TAG" >> "$GITHUB_OUTPUT"
+          echo "commit=$CHROMIUM_COMMIT" >> "$GITHUB_OUTPUT"
+
+      - name: Cache the pinned Chromium objects
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: chromium-src/.git
+          key: chromium-${{ steps.pin.outputs.tag }}
+
+      - name: Fetch the pinned Chromium tree
+        if: steps.cache.outputs.cache-hit != 'true'
+        env:
+          TAG: ${{ steps.pin.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p chromium-src
+          cd chromium-src
+          git init -q
+          git config core.autocrlf false
+          git remote add origin https://chromium.googlesource.com/chromium/src.git
+          # One commit, with blobs, and no working tree: apply --cached reads objects,
+          # not files, so materialising 400k paths would be wasted minutes.
+          git -c protocol.version=2 fetch --depth 1 --no-tags origin \
+            "refs/tags/$TAG:refs/tags/$TAG"
+
+      - name: The recorded commit is the tag upstream publishes
+        env:
+          TAG: ${{ steps.pin.outputs.tag }}
+          COMMIT: ${{ steps.pin.outputs.commit }}
+        run: |
+          set -euo pipefail
+          got="$(git -C chromium-src rev-parse "refs/tags/$TAG^{commit}")"
+          if [ "$got" != "$COMMIT" ]; then
+            echo "tooling/chromium-version records $COMMIT for $TAG"
+            echo "upstream says $got"
+            exit 1
+          fi
+          echo "$TAG is $got, as recorded"
+
+      - name: The series applies
+        env:
+          CHROMIUM_SRC: ${{ github.workspace }}/chromium-src
+        run: tooling/apply-patches --check

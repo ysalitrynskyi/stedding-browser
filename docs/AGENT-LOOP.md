@@ -41,7 +41,9 @@ research  →  spec  →  failing test  →  implement  →  build  →  test  �
    captures the reference window state and checks every probe in the spec (edges,
    corners, what must and must not be there). Add a probe for anything you change;
    record new expected colours with `tooling/assert-capture <png> <spec> --record`
-   only from a capture you have looked at. Measure pixels; do not eyeball. **Drive it, if it is
+   only from a capture you have looked at. Measure pixels; do not eyeball. For any state a
+   feature param or switch can recreate, `tooling/capture-state` photographs it without
+   input (safe while someone is at the machine). **Drive it, if it is
    interactive.** `tooling/drive <profile> <steps>` clicks, drags, types and captures
    in the real window, and quits properly so restart checks are real. A spec row that
    says "live" names its steps file.

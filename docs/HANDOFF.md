@@ -39,12 +39,21 @@ tooling/dev status                    # the numbers for any doc you touch
 `tooling/verify-build --app .../Stedding.app` checks rendering, codecs (H.264
 decodes real frames), and navigation.
 
+The capture step has two tools. `tooling/capture-state --out <prefix> --features
+'SteddingArcStyleWindow:...' [switches] [URLs]` launches a fresh profile in the state
+the params describe, photographs every window the process owns by window id (a
+dialog is `<prefix>-2.png`), quits through the AppleEvent and reports an abort: no
+synthetic input, no focus change, safe while someone is at the machine, and the way
+round 7 was verified. `tooling/drive <profile> <steps>` clicks, drags and types; it
+is the only way to reach a context menu or a typed URL, and it waits for an empty
+chair (trap 22). Measure the PNG (PIL, a luma scan) rather than eyeballing it.
+
 ## Dev parameters (all on `SteddingArcStyleWindow`, tunable without rebuilds)
 
 `contents_corner_radius`, `vertical_tab_height`, `vertical_tab_corner_radius`,
 `vertical_tab_pinned_height`, `location_bar_height`, `location_bar_width`,
 `toolbar_vertical_margin`, `toolbar_button_height`, `toolbar_button_inset`,
-`toolbar_button_icon_size`, `tab_favicon_size` — metrics.
+`toolbar_button_icon_size`, `tab_favicon_size`, `card_gutter` — metrics.
 `extra_spaces/N` — start with N extra Spaces. `pin_tabs/N` — pin first N tabs
 (the essentials row). `space_pin_tabs/N` — pin the first N tabs in their Space,
 their URL as home; `drift_tabs/N` — then send the first N of those to the next
@@ -53,7 +62,11 @@ one (exercises the whole folder pipeline). `open_command_bar/true` — open ⌘T
 overlay at startup. `drag_tabs_to_spaces` — on by default.
 
 All exist because pinning/folders/⌘T are UI gestures a headless harness cannot
-perform; a param that recreates the state IS the test surface.
+perform; a param that recreates the state IS the test surface. Two switches do the
+same for windows: `--stedding-welcome[=<step>]` forces the welcome flow (on a named
+step: `search`, `import`, `appearance`, `default`, `keys`), and `tooling/capture-state
+--seed collapsed` writes the collapsed-rail preference (`vertical_tabs.collapsed_state`)
+into the fresh profile.
 
 ## Traps this project already paid for (do not rediscover)
 
@@ -218,9 +231,10 @@ perform; a param that recreates the state IS the test surface.
     functions. In the live checks, chrome://settings' search box finds a row
     but does not scroll to it: click the page body and press space instead;
     `tooling/drive-window.py` writes its `shot` files into the current
-    directory, so `cd` to the scratch directory first; the feature params
-    `folder_tabs` and `pin_tabs` do not exist, a folder comes from the ⌘T
-    action "Move Tab to New Folder" and a Space pin from "Pin to This Space".
+    directory, so `cd` to the scratch directory first. (This trap once said the
+    feature params `folder_tabs` and `pin_tabs` do not exist; they do, and are
+    the way to seed a folder or an essential for a capture. A Space pin comes
+    from `space_pin_tabs/N`, or the ⌘T action "Pin to This Space".)
 21. **Wave 4's lessons.** `content::WebContents::Create` makes a plain
     WebContents; `WebContentsTester::For` on it is a wrong cast that only
     sometimes faults (patch 0027's restored-tab test did, once the layout
@@ -255,14 +269,41 @@ perform; a param that recreates the state IS the test surface.
     with a no-op apply once the edits are in, and write guards on lines
     clang-format will not touch.
 
+22. **`tooling/capture-state` is the harness that needs no hands.** It launches
+    the app on a fresh profile, captures every window the process owns by id and
+    quits through the AppleEvent, so a state can be photographed while someone is
+    at the machine -- what `tooling/drive` must never do (trap 3). The state comes
+    from feature params, not from input: `space_pin_tabs/N`, `drift_tabs/N`,
+    `folder_tabs/N`, `pin_tabs/N`, `extra_spaces/N`, `open_command_bar/true`,
+    `--stedding-welcome=<step>`, `--seed collapsed`.
+23. **A window capture carries the window's shadow.** An absolute y read off one
+    is not a window coordinate; compare two things inside the same capture --
+    the toggle's centre against the traffic lights' centre (sidebar Y7), never
+    either against zero. The exclusion macOS reports for the lights is a box with
+    a margin around them, not the glyphs themselves: the glyphs are 12 DIP circles
+    at the box's top inset, so half the box's height sits a button 3 DIP low.
+24. **Chromium's own suites are not in the Stedding filters, and two of its tab
+    tests had been red since patch 0002.** `tooling/dev test <feature>` runs our
+    filters; nothing ran `TabTest.*`, which reads the favicon column's width and
+    the discard ring -- both of which this fork changes on purpose. Before a
+    release, run the suites around what the series touches (`TabTest.*`,
+    `TabStripModelTest.*`, `LocationBarViewTest.*`), not only ours.
+
 ## Open items
 
-`BACKLOG.md` is the list; do not keep one here. First up: the operator
-retests (`S-9`, `S-10`) on the DMG in `dist/`, which `tooling/package-dmg
-release` cuts from the current series.
+`BACKLOG.md` is the list; do not keep one here. First up: the operator's look
+at beta 4 (`docs/ARC-ROUND2.md` gets a round 8 table when it comes), `S-48`
+(the Arc data import run once on a real Arc profile) and `S-17` (signing, when
+Apple answers).
 
 ## Release channel
 
 Pre-releases on GitHub Releases, unsigned, with the Gatekeeper right-click
-instructions in the notes and the sha256 beside the DMG.
-`tooling/package-dmg release` builds `dist/Stedding-<ver>-arm64.dmg`.
+instructions in the notes and the sha256 beside the DMG. The order, all from the
+repo root with a clean tree: bump `VERSION`, `tooling/dev build release chrome`
+(the About line is a build flag), `tooling/verify-build --app
+.../out/release/Stedding.app`, empty `dist/`, `tooling/package-dmg release`
+(`dist/Stedding-<ver>-arm64.dmg` and its `.sha256`), paste the checksum into
+`docs/release-notes/v<ver>.md`, commit, `tooling/publish-release --check`, then
+`tooling/publish-release`, then `git push --tags`. Beta 4 went out this way on
+2026-09-05.

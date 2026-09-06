@@ -1,6 +1,6 @@
 # Round 6 — Zen mods and beyond: the plan
 
-Date: 2026-09-04. Status: hand-off; nothing here is implemented. Backlog row: `S-44`.
+Date: 2026-09-04. Status: **complete** (2026-09-05): every wave landed as patches 0016–0036; the landing note under each part says what changed on the way. Backlog row: `S-44` (done).
 
 This is the plan for round 6 of Stedding: the round that mines the 77 community mods
 of Zen Browser (https://zen-browser.app/mods/, fetched 2026-09-04) for the needs they

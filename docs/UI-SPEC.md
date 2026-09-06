@@ -78,7 +78,7 @@ Thin — noticeably thinner than Chromium's. Back, forward and reload at the lef
 The URL is **centred** and shows the bare host with a small link glyph.
 Extension and plugin icons are in the **top right**, on the same row.
 
-No omnibox chrome: no pill background, no border.
+No omnibox chrome: no background, no border. The field is 560 DIP wide on the row's centre and shrinks when the toolbar is tight; the address is centred in it one point smaller than Chromium's, with the page actions at its right edge (round 7).
 
 ## Command bar
 
@@ -121,13 +121,14 @@ close" is not a check — the comparison image goes in the pull request.
 
 ![The Stedding window today](images/ui-current.png)
 
-With four Spaces and a pinned essential (`--features
-'SteddingArcStyleWindow:extra_spaces/3/pin_tabs/1'`):
+With four Spaces, two essentials and a Space-pinned tab (`--features
+'SteddingArcStyleWindow:extra_spaces/3/pin_tabs/2/space_pin_tabs/1'`):
 
-![Three Spaces](images/ui-spaces.png)
+![Four Spaces](images/ui-spaces.png)
 
-Captured with `tooling/capture-ui` at 1400x880. Numbers below are measured from
-that image, not estimated.
+Captured with `tooling/capture-state` at 1400x880 — the harness that needs
+neither the keyboard nor the pointer (`docs/HANDOFF.md`, trap 22). Numbers below
+are measured from that image, not estimated.
 
 ## Tuning these numbers costs nothing
 

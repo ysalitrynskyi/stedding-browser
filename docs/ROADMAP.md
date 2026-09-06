@@ -13,6 +13,12 @@ below always means: a fresh macOS user account can install the artifact and run 
 without developer tools, without terminal commands, and without reading build docs
 (Windows/Linux equivalents apply from M8/M9 on).
 
+**Where this stands (2026-09-05):** M0–M6 are built and shipped unsigned as
+`v0.2.0-beta.4` — the ladder was climbed out of order, chasing operator feedback on real
+builds (`docs/ARC-ROUND2.md`), and each feature's own spec under `docs/features/` is the
+record of what passes. M7 waits on Apple's organisation enrolment (`BACKLOG.md` S-17);
+M8 and M9 have not started.
+
 ---
 
 ## M0 — Reproduce a vanilla Chromium build (macOS arm64)

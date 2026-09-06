@@ -127,7 +127,7 @@ With four Spaces, two essentials and a Space-pinned tab (`--features
 ![Four Spaces](images/ui-spaces.png)
 
 Captured with `tooling/capture-state` at 1400x880 — the harness that needs
-neither the keyboard nor the pointer (`docs/HANDOFF.md`, trap 22). Numbers below
+neither the keyboard nor the pointer (`docs/HANDOFF.md`, trap 29). Numbers below
 are measured from that image, not estimated.
 
 ## Tuning these numbers costs nothing

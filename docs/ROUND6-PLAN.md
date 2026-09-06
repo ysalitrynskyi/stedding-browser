@@ -48,7 +48,7 @@ For the next agent picking this up cold:
 6. **Budgets.** Nothing runs unattended past 15 minutes; `tooling/dev build` and `test`
    print progress every minute and stop themselves; a longer job is asked for and passed
    `--budget <minutes>`. Never edit the checkout while a build runs. After a failed fold,
-   `git stash list` (HANDOFF trap 8).
+   `git stash list` (HANDOFF trap 13).
 7. **Every new surface** is captured in dark and light with a probe (QUALITY; critic #30)
    and names a VoiceOver role and a keyboard-only path in its spec before it is `built`
    (QUALITY accessibility gate; critic #31).
@@ -83,7 +83,7 @@ reason follows the decision.
 
 **D10 — Extension actions, the media button and page info when the row is hidden (item 18).** They live in the command bar's actions mode; ⌘E cycles extension actions as PRODUCT §12 says; page info opens from the URL text in the bar. Reason: critic #20. T8 removes the row those controls sit in; Arc parks extensions in its sidebar; with D2 the bar is where the URL text is, so page info follows it.
 
-**D11 — Not implementing now.** This document is the hand-off. Implementation follows `docs/AGENT-LOOP.md` per item (spec row → failing test → build → capture → patch), one new patch per wave-1/2 item family with numbering continuing from 0016, and fixups only into the round-6 patches. Reason: `docs/HANDOFF.md` trap 8 (the 2026-09-04 fold: an autosquash into an old patch conflicted, the abort left the branding stash unpopped and every later build made `Chromium.app`) and the round-5 fold itself (commit `d307cc6`, `git log --grep='round 5'`): fixups into the old patches conflicted with later patches touching the same lines, so that round became one new patch; a round-6 patch has no such history.
+**D11 — Not implementing now.** This document is the hand-off. Implementation follows `docs/AGENT-LOOP.md` per item (spec row → failing test → build → capture → patch), one new patch per wave-1/2 item family with numbering continuing from 0016, and fixups only into the round-6 patches. Reason: `docs/HANDOFF.md` trap 13 (the 2026-09-04 fold: an autosquash into an old patch conflicted, the abort left the branding stash unpopped and every later build made `Chromium.app`) and the round-5 fold itself (commit `d307cc6`, `git log --grep='round 5'`): fixups into the old patches conflicted with later patches touching the same lines, so that round became one new patch; a round-6 patch has no such history.
 
 ## Waves
 
@@ -138,7 +138,7 @@ said otherwise. Each is also in the item's spec.
   (`BrowserNativeWidgetMac::ValidateUserInterfaceItem`, B28). `spaces::SpaceCommandState`
   keeps Space N enabled only while N Spaces exist (B23) through a callback into the
   command updater. Strings for the menu bar needed real ids: `chrome/app/stedding_strings.grdp`
-  is the one part for every Stedding string (HANDOFF trap 9).
+  is the one part for every Stedding string (HANDOFF trap 14).
 - **R6-03.** The rules are pure functions (`stedding_tab_row_rules.cc`), tested as
   `TabRowRulesTest.*`; the layout asks them. The close slot is reserved on every expanded
   row, not only the active one, so no row's title ever re-elides on hover. The badge is the
@@ -215,7 +215,7 @@ said otherwise. Each is also in the item's spec.
   existed (spaces B31: a chosen colour tints a lone Space too, `Space::color_chosen`,
   persisted); and ⌥⌘N from the harness never reached the window, which was not key on
   the two-URL runs (grey traffic lights) — the Tab menu path opened the split, so the
-  harness, not the chord, is suspect (HANDOFF trap 10).
+  harness, not the chord, is suspect (HANDOFF trap 15).
 - **Motion O2 stays partial.** Two shots 80 ms apart after ⌘S or ⇧⌘2 were identical in
   every mode: neither the strip collapse nor the toast shows an intermediate frame at
   the harness's sampling, so the capture cannot tell the gate. The gate is unit-tested
@@ -256,7 +256,7 @@ said otherwise. Each is also in the item's spec.
   visible neighbour (R5 reworded); the switcher only hears hover on its children
   with `SetNotifyEnterExitOnChild`; an off-site link on a pin peeks (P1) rather than
   drifting it, so the drift check uses a same-site link; and the machine's input
-  source reached the harness's typing (HANDOFF trap 13). The sidebar's own
+  source reached the harness's typing (HANDOFF trap 18). The sidebar's own
   background menu (Chromium's: Bookmark All Tabs…, Unpin Tab Search, Turn off Auto
   Expanding Tabs) is untouched — a row for R6-14 M3's pass.
 - **Part H, R6-11 (actions mode), the same morning.** The bar gains a second mode:
@@ -275,7 +275,7 @@ said otherwise. Each is also in the item's spec.
   accessor), "Rename tab" from the bar (the row's view is the strip's), the
   address-row click of K12, and extension actions (K11 covers later commands).
   The live check found two things the unit tests could not: the field must claim
-  ⇥/⇧⇥ from the Mac focus manager (HANDOFF trap 15) and the panel must resize on
+  ⇥/⇧⇥ from the Mac focus manager (HANDOFF trap 20) and the panel must resize on
   every rebuild path; both fixed, ⌘T-then-⇥ shows seven rows with a scroll
   indicator, ⌘L shows the URL selected. Patch 0022; 18 bar and shortcut tests.
 - **Part I, R6-12 (⌃⇥), the same morning.** `SpaceModel` keeps an activation

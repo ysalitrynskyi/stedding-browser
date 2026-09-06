@@ -35,7 +35,7 @@ suggestions; typing a URL opens it, anything else searches with the default engi
   while `CommandBarViewTest.TabFiltersToActions`, which calls the controller
   directly, stayed green. The bar's field claims ⇥ and ⇧⇥ in
   `SkipDefaultKeyEventProcessing` (the omnibox does the same); the test asserts
-  the claim (`docs/HANDOFF.md` trap 15).
+  the claim (`docs/HANDOFF.md` trap 20).
 - The panel takes the height of its rows on every rebuild, up to the 320 DIP clip:
   a mode switch from a two-tab list to a hundred commands used to keep the
   open-time height and show two rows. `CommandBarViewTest.PanelGrowsWithTheRows`.

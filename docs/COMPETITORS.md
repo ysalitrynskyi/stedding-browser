@@ -171,11 +171,12 @@ copyleft conditions). No other project on this list offers all three.
 
 ## Why users would not pick us today
 
-Honesty section. As of 2026-08-30:
+Honesty section. As of 2026-09-05:
 
-- **We don't exist as a product yet.** There is build tooling and no installable
-  browser (see ROADMAP.md — M0). Every browser
-  above ships today; Zen and Brave ship polished products today.
+- **We ship an unsigned beta, on one platform.** macOS on Apple silicon only, and the
+  image is unsigned until M7, so installing it means a right-click bypass past
+  Gatekeeper and no automatic updates. Every browser above ships a signed, updating
+  build on more platforms than we do; Zen and Brave ship polished products today.
 - **No track record.** Keeping a Chromium fork current with security updates is a
   treadmill that has broken larger teams. Until we demonstrate months of on-time
   stable rebases, trusting us with your daily browsing is a leap.

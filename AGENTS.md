@@ -160,10 +160,11 @@ Built, with tests or measured captures:
   crash; the keychain item under Stedding's own name (import I24); Arc's history
   and passwords in one click from the welcome flow (import I6, I21–I23, welcome
   W8). Two of Chromium's own suites had been red since patch 0002 because nothing
-  ran them: they now assert what this fork does (`docs/HANDOFF.md`, trap 24).
+  ran them: they now assert what this fork does (`docs/HANDOFF.md`, trap 31).
 
 Read `docs/HANDOFF.md` before touching anything — it carries the working loop,
-every dev parameter, and the traps already paid for. `docs/ARC-ROUND2.md` is
+every dev parameter, and the traps already paid for, numbered contiguously and cited
+by number across the docs (`tooling/check-repo traps` keeps both true). `docs/ARC-ROUND2.md` is
 the operator-feedback ledger; `docs/UI-SPEC.md` the measured Arc match.
 
 Released: `v0.2.0-beta.4` (2026-09-05, published from this repo with
@@ -219,15 +220,20 @@ evening (patches 0037–0038 and fixups into 0001, 0002).
 
 **Whoever picks this up next**: read `docs/HANDOFF.md` first — the loop, the dev
 parameters and the traps, now including `tooling/capture-state` (a capture that
-needs neither the keyboard nor the pointer, trap 22) and the rule that a release
+needs neither the keyboard nor the pointer, trap 29) and the rule that a release
 sweep runs Chromium's own suites around what the series touches, not only the
-Stedding filters (trap 24). What to build next is the operator's look at beta 4;
+Stedding filters (trap 31). What to build next is the operator's look at beta 4;
 `docs/ARC-ROUND2.md` is where each round's findings are recorded, one table per
-round, and the fix for each. Until then the open rows are `S-17` (signing,
-waiting on Apple's organisation enrolment, then `tooling/sign-release` and a
-signed re-release), `S-45` (Google's new tab page when Google is chosen), `S-47`
-(an input-free settings probe) and `S-48` (the Arc data import run once against a
-real Arc profile). Every feature spec names its own `gap` rows.
+round, and the fix for each. Until then the open rows are `S-52` (take
+153.0.8010.27: the pin was Mac stable when it was taken and the line has moved
+since), `S-51` (a legacy profile still reads the Chromium-named keychain item and
+nothing rewrites it), `S-49` (a builder that can actually build — until it exists
+CI checks repository hygiene and nothing verifies the product), `S-45` (Google's
+new tab page when Google is chosen), `S-47` (an input-free settings probe), `S-48`
+(the Arc data import run once against a real Arc profile), `S-50` (the idle-network
+audit as a recorded run) and `S-17` (signing, waiting on Apple's organisation
+enrolment, then `tooling/sign-release` and a signed re-release). Every feature spec
+names its own `gap` rows.
 
 How to work here is `docs/HANDOFF.md`: the loop, the dev parameters that recreate
 any state for a capture, and the traps. Two rules that cost the most when broken:

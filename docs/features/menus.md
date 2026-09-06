@@ -35,7 +35,7 @@ Chromium's set back.
   folder leaves the tree on its own.
 - Screenshot and Spaces are submenus with ids in the `IDC_STEDDING_` range
   declared on `AppMenuModel`, not in `chrome_command_ids.h`, to spare the rebuild
-  a new id costs (HANDOFF trap 14); the rows are literals until the UI is
+  a new id costs (HANDOFF trap 19); the rows are literals until the UI is
   localised.
 - The sidebar's own background menu (Chromium's system menu on the strip) keeps
   New Tab, Reopen Closed Tab, Name Window, Collapse and Task Manager under the

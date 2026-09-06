@@ -138,7 +138,7 @@ Six things from real use, and a crash found while capturing them. Each is fixed,
 tested and captured without a hand on the machine: `tooling/capture-ui` with feature
 params for the state, and an AppleEvent quit (the operator was at the keyboard, and a
 synthetic key that missed the browser once landed in their chat — `docs/HANDOFF.md`,
-trap 22).
+trap 27).
 
 | # | Found | Fix |
 |---|---|---|

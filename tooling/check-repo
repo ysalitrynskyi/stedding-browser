@@ -7,8 +7,10 @@ into something a machine can fail on:
   links    every relative markdown link resolves to a file that exists
   adrs     ADRs are numbered, unique, contiguous, and structurally complete
   paths    no absolute machine paths or personal data in tracked files
+  ignored  nothing tracked that .gitignore says should not be
   patches  the patch series is contiguous, numbered, and each patch has a header
   version  the Chromium pin is well formed and referenced from exactly one place
+  traps    HANDOFF's traps are numbered contiguously and every citation resolves
   truth    docs carry no known-stale phrases, feature specs are well formed, and
            every backlog id cited anywhere exists in BACKLOG.md
 
@@ -124,7 +126,12 @@ def check_adrs() -> None:
 FORBIDDEN = [
     (re.compile(r"/Users/(?!<)[a-z][a-z0-9_.-]*/"), "absolute macOS home path"),
     (re.compile(r"/home/(?!<)[a-z][a-z0-9_.-]*/"), "absolute Linux home path"),
-    (re.compile(r"C:\\\\Users\\\\[A-Za-z]"), "absolute Windows home path"),
+    # Over-escaped once: r"C:\\\\Users\\\\" is the regex C:\\Users\\, which matches a
+    # DOUBLED backslash and so never fired on an actual path. Verified against
+    # C:\Users\<name> and against a JSON-escaped C:\\Users\\<name>, which also
+    # occurs. The placeholder form is what a document is allowed to write, and it is
+    # why this comment does not trip its own check.
+    (re.compile(r"[Cc]:\\{1,2}[Uu]sers\\{1,2}[A-Za-z]"), "absolute Windows home path"),
     (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"), "private key"),
     (re.compile(r"\bgh[pousr]_[A-Za-z0-9]{16,}"), "GitHub token"),
     (re.compile(r"\bAKIA[0-9A-Z]{16}\b"), "AWS access key id"),
@@ -147,6 +154,33 @@ def check_paths() -> None:
             for pattern, label in FORBIDDEN:
                 if pattern.search(line):
                     fail(f"{rel}:{line_no}", f"{label} in a public repository")
+
+
+# ------------------------------------------------------------------------- ignored
+
+def check_ignored() -> None:
+    """A file added before its ignore rule stays tracked forever, because .gitignore
+    only governs untracked files. Two .pyc files lived in the history that way. If a
+    path matches .gitignore, it does not belong in the repository."""
+    paths = [p.relative_to(ROOT).as_posix() for p in tracked_files()]
+    if not paths:
+        return
+    # --no-index because check-ignore skips paths that are in the index by default,
+    # and paths in the index are the only ones this check is about. NUL-separated
+    # both ways: line mode hands back CR-terminated paths on Windows and quotes
+    # any path with a space in it.
+    result = subprocess.run(
+        ["git", "-C", str(ROOT), "check-ignore", "--stdin", "-z", "--no-index"],
+        input="\0".join(paths).encode(),
+        capture_output=True,
+    )
+    # check-ignore exits 0 when something matched, 1 when nothing did, >1 on error.
+    if result.returncode > 1:
+        fail("git check-ignore", result.stderr.strip() or "failed")
+        return
+    for path in result.stdout.decode(errors="replace").split("\0"):
+        if path:
+            fail(path, "is tracked but .gitignore says it should not be")
 
 
 # ------------------------------------------------------------------------- patches
@@ -261,6 +295,16 @@ STALE_PHRASES = [
     ("patches/README.md", "Empty so far"),
     ("docs/HANDOFF.md", "tests currently green"),
     ("AGENTS.md", "tests green in"),
+    # Written while M0 was true and left standing through five published pre-releases.
+    # A security policy that says nothing is shipped tells a reporter the wrong scope,
+    # and a contributor guide that says there is no browser yet turns people away from
+    # the most useful thing they can do, which is run the beta and say what is wrong.
+    ("SECURITY.md", "there are no shipped binaries yet"),
+    ("SECURITY.md", "No versions have been released"),
+    ("CONTRIBUTING.md", "milestone M0"),
+    ("CONTRIBUTING.md", "no installable browser yet"),
+    ("docs/COMPETITORS.md", "We don't exist as a product yet"),
+    ("docs/ROADMAP.md", "Outstanding: the network audit"),
 ]
 
 # A behaviour row is | <letter><n> | text | test | state |. The letter is the spec's
@@ -312,7 +356,53 @@ def check_truth() -> None:
         text = path.read_text(encoding="utf-8", errors="replace")
         for m in BACKLOG_ID.finditer(text):
             if m.group(1) not in known:
-                fail(str(path.relative_to(ROOT)), f"cites S-{m.group(1)}, which is not in BACKLOG.md")
+                # as_posix: the rest of this file reports posix paths, and a Windows run
+                # was printing docs\features\x.md next to docs/features/y.md.
+                fail(path.relative_to(ROOT).as_posix(),
+                     f"cites S-{m.group(1)}, which is not in BACKLOG.md")
+
+
+# --------------------------------------------------------------------------- traps
+
+TRAP_ITEM = re.compile(r"^(\d+)\. \*\*")
+TRAP_CITATION = re.compile(r"\btrap (\d+)\b", re.I)
+
+
+def check_traps() -> None:
+    """docs/HANDOFF.md numbers its traps and the rest of the repo cites them by number.
+    The list had been written as three markdown lists in a row, so 5-9, 22 and 23 each
+    named two different traps and "trap 22" meant three things depending on who wrote
+    it. Numbers used as identifiers have to be unique and resolvable."""
+    handoff = ROOT / "docs" / "HANDOFF.md"
+    if not handoff.is_file():
+        return
+    lines = handoff.read_text(encoding="utf-8").splitlines()
+    try:
+        start = next(i for i, l in enumerate(lines) if l.startswith("## Traps this project"))
+        end = next(i for i, l in enumerate(lines) if i > start and l.startswith("## "))
+    except StopIteration:
+        fail("docs/HANDOFF.md", "no traps section to check")
+        return
+
+    numbers = [int(m.group(1)) for l in lines[start:end] if (m := TRAP_ITEM.match(l))]
+    if not numbers:
+        fail("docs/HANDOFF.md", "the traps section lists no numbered traps")
+        return
+    if numbers != list(range(1, len(numbers) + 1)):
+        fail("docs/HANDOFF.md",
+             f"traps must be numbered contiguously from 1; got {numbers}")
+    known = set(numbers)
+
+    for path in tracked_files():
+        if path.suffix != ".md":
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        rel = path.relative_to(ROOT).as_posix()
+        for line_no, line in enumerate(text.splitlines(), 1):
+            for m in TRAP_CITATION.finditer(line):
+                if int(m.group(1)) not in known:
+                    fail(f"{rel}:{line_no}",
+                         f"cites trap {m.group(1)}, which docs/HANDOFF.md does not have")
 
 
 CHECKS = {
@@ -320,8 +410,10 @@ CHECKS = {
     "links": check_links,
     "adrs": check_adrs,
     "paths": check_paths,
+    "ignored": check_ignored,
     "patches": check_patches,
     "version": check_version,
+    "traps": check_traps,
     "truth": check_truth,
 }
 

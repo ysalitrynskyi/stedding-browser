@@ -561,8 +561,11 @@ default runner disk. Pretending otherwise produces a CI that is always red or al
 skipped.
 
 Plan: **self-hosted or cloud macOS builders** (own Apple-silicon hardware, or a Mac
-cloud provider) for real builds — provider and topology are an open decision, ADR
-before M1. Until then, hosted CI still earns its keep with what it *can* do:
+cloud provider) for real builds — provider and topology are an open decision. It was
+written here as "ADR before M1"; M1 is long past and the ADR does not exist, so it is
+tracked as `BACKLOG.md` `S-49` rather than left as a deadline that has already gone by.
+It costs money, which makes it the owner's call. Until it lands, nothing automated
+verifies the product, and hosted CI earns its keep with what it *can* do:
 
 - Lint and test the tooling scripts (shellcheck, dry runs against fixtures).
 - Docs checks: markdown lint, internal link validation, ADR format.

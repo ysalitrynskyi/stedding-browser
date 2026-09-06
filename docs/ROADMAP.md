@@ -48,10 +48,13 @@ Acceptance criteria:
 
 ## M1 — Branded minimal build, installable .dmg
 
-> **In progress.** Branding is applied and the build produces `Stedding.app` with
-> our icon and bundle identifier `dev.stedding.Stedding`; `tooling/package-dmg`
-> makes an installable image. Outstanding: the network audit, the performance
-> baselines from an `official` build, and the codec decision in ADR 0008.
+> **Done.** The build produces `Stedding.app` with our icon and bundle identifier
+> `dev.stedding.Stedding`, `tooling/package-dmg` makes an installable image, the codec
+> decision is ADR 0008 (accepted, `BACKLOG.md` S-18) and the performance baselines are
+> in `docs/perf/README.md` (`S-13`, `S-31`, `S-37`). The one criterion below still
+> answered by inspection rather than a capture is the idle-network audit: what a fresh
+> profile contacts is written up in `docs/PRIVACY.md`, and turning that list into a
+> recorded run is `S-50`.
 
 **Goal:** the same browser, but ours: name, icons, defaults, and zero telemetry —
 delivered as a .dmg a user can install.

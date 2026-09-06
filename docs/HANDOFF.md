@@ -46,7 +46,7 @@ dialog is `<prefix>-2.png`), quits through the AppleEvent and reports an abort: 
 synthetic input, no focus change, safe while someone is at the machine, and the way
 round 7 was verified. `tooling/drive <profile> <steps>` clicks, drags and types; it
 is the only way to reach a context menu or a typed URL, and it waits for an empty
-chair (trap 22). Measure the PNG (PIL, a luma scan) rather than eyeballing it.
+chair (trap 27). Measure the PNG (PIL, a luma scan) rather than eyeballing it.
 
 ## Dev parameters (all on `SteddingArcStyleWindow`, tunable without rebuilds)
 
@@ -73,9 +73,11 @@ into the fresh profile.
 1. **siso stats sources once, near build start.** Edit during a build and your
    change silently misses the binary; `build-chromium` now warns when the tree
    moved mid-build. Never edit the checkout while a build runs.
+
 2. **Screenshots cannot see teardown or input.** The folder close-crash (UAF)
    was invisible to every capture and found by a unit-test fixture. Anything
    that owns a tab needs a test, not a screenshot.
+
 3. **Synthetic input**: `CGEventPostToPid` reaches the app for HOVER without
    focus; CLICKS and DRAGS need the window key (activate the process via
    System Events first, then post HID-tap mouse events; a tab drag needs a few
@@ -85,6 +87,7 @@ into the fresh profile.
    its header lists the traps (a created key event inherits the last chord's
    modifiers, so clear them; a Cmd+Q keystroke does not quit, the AppleEvent
    does).
+
 4. **SIGTERM does not reliably flush Chromium session files** from a raw binary
    launch — live restore tests via kill are meaningless; `tooling/drive` quits
    through an AppleEvent, which does flush. And the session log is **rebuilt
@@ -92,16 +95,20 @@ into the fresh profile.
    keeps in session extra data must be re-emitted through
    `stedding_session_rebuild.h` *and* written once the window is tracked, or
    it survives exactly one restart.
+
 5. **macOS bash is 3.2** (no mapfile); `tooling/check-shell` runs a pinned
    shellcheck because versions disagree about real findings.
+
 6. **Chromium API drift in this tree**: `base::Value::Dict/List` are
    `base::DictValue/ListValue`; `TokenId` parses via `base::Token::FromString`
    + `FromRawToken`; `BubbleDialogDelegateView`/`WidgetDelegateView` cannot be
    subclassed outside Views (private ctor + friend list); `views::Separator`
    paints its whole bounds; FlexLayout stretches children that don't declare
    sizes (BoxLayout honours alignment).
+
 7. **Tracked prefs** (`pinned_tabs`) cannot be seeded externally — that is
    anti-tampering working; add a dev param on our own code instead.
+
 8. **Colour mixers hand out single colours** — the dark gradient is painted
    once on BrowserView with sidebar/top-container/mat made *invisible, not
    removed* (a nulled background crashes: the layout dereferences it).
@@ -114,51 +121,52 @@ into the fresh profile.
    are asked for and passed as `--budget <minutes>`. Hand-written waits follow
    the same rule (`docs/AGENT-LOOP.md`).
 
-- **Trap 5 — synthetic mouse events inherit modifiers too.** After a `key f+ctrl+cmd`
-  the harness's next plain click carried Ctrl, which macOS reads as a right-click:
-  context menus opened where a click was meant. `tooling/drive-window.py` clears the
-  flags on every mouse event now; if a "click" ever opens a menu, check this first.
+10. **Synthetic mouse events inherit modifiers too.** After a `key f+ctrl+cmd`
+    the harness's next plain click carried Ctrl, which macOS reads as a right-click:
+    context menus opened where a click was meant. `tooling/drive-window.py` clears the
+    flags on every mouse event now; if a "click" ever opens a menu, check this first.
 
-6. **A floating window from another app can sit over the capture harness's
-   click targets** (2026-09-03: Arc's mini player parked at the screen's
-   top-left corner swallowed every click on the sidebar's first rows, so a
-   pinned tab looked as if it had no context menu). Window captures never
-   show it. Before blaming a view, list what is on screen there:
-   `python3 -c 'import Quartz; ...CGWindowListCopyWindowInfo(...)'` or a
-   full-screen `screencapture -x`, and move our window with
-   `--window-position` on a fresh profile (a restored session keeps its old
-   bounds).
+11. **A floating window from another app can sit over the capture harness's
+    click targets** (2026-09-03: Arc's mini player parked at the screen's
+    top-left corner swallowed every click on the sidebar's first rows, so a
+    pinned tab looked as if it had no context menu). Window captures never
+    show it. Before blaming a view, list what is on screen there:
+    `python3 -c 'import Quartz; ...CGWindowListCopyWindowInfo(...)'` or a
+    full-screen `screencapture -x`, and move our window with
+    `--window-position` on a fresh profile (a restored session keeps its old
+    bounds).
 
-7. **`tooling/drive`'s `shot` photographs the browser window's rectangle, not
-   every window Stedding owns.** Menus, bubbles and sheets are in it; the
-   welcome dialog (a separate child window) is not, so a check of it needs a
-   full-screen `screencapture -x` while the run is parked on a `wait`, or a
-   `CGWindowListCopyWindowInfo` listing to prove the window exists and where.
+12. **`tooling/drive`'s `shot` photographs the browser window's rectangle, not
+    every window Stedding owns.** Menus, bubbles and sheets are in it; the
+    welcome dialog (a separate child window) is not, so a check of it needs a
+    full-screen `screencapture -x` while the run is parked on a `wait`, or a
+    `CGWindowListCopyWindowInfo` listing to prove the window exists and where.
 
-8. **A fold that stashes the branding and then fails leaves the stash
-   unpopped** (2026-09-04: an autosquash rebase conflicted, `git rebase
-   --abort` restored the tree, but `git stash list` still held the branding).
-   The next `tooling/dev build` then produces `Chromium.app`, and
-   `tooling/drive` keeps launching the stale `Stedding.app`, so every "fix"
-   looks ineffective. After any failed fold run `git stash list`; scripts that
-   stash must pop in an EXIT trap; `ls out/release/*.app` says which product
-   the last build made.
+13. **A fold that stashes the branding and then fails leaves the stash
+    unpopped** (2026-09-04: an autosquash rebase conflicted, `git rebase
+    --abort` restored the tree, but `git stash list` still held the branding).
+    The next `tooling/dev build` then produces `Chromium.app`, and
+    `tooling/drive` keeps launching the stale `Stedding.app`, so every "fix"
+    looks ineffective. After any failed fold run `git stash list`; scripts that
+    stash must pop in an EXIT trap; `ls out/release/*.app` says which product
+    the last build made.
 
-9. **A new `.grdp` part must also be listed in `chrome/app/generated_resources.grd.gritdeps`**
-   (2026-09-04: `stedding_strings.grdp`, the one file for every string this fork
-   adds, failed the first build at `generated_resources_check_gritdeps` with a
-   "gritdeps mismatch" diff; the manifest is sorted, add the line where the
-   diff says). Stedding strings that reach a macOS menu or a toast need real
-   `IDS_` ids; the settings page and the command bar still use literals.
+14. **A new `.grdp` part must also be listed in `chrome/app/generated_resources.grd.gritdeps`**
+    (2026-09-04: `stedding_strings.grdp`, the one file for every string this fork
+    adds, failed the first build at `generated_resources_check_gritdeps` with a
+    "gritdeps mismatch" diff; the manifest is sorted, add the line where the
+    diff says). Stedding strings that reach a macOS menu or a toast need real
+    `IDS_` ids; the settings page and the command bar still use literals.
 
-10. **A drive's keys go nowhere when the window is not key.** Two runs that
+15. **A drive's keys go nowhere when the window is not key.** Two runs that
     opened two URLs (`https://example.com/ https://example.org/`) came up with grey
     traffic lights; `activate` twice did not help, and ⌥⌘N never reached the window.
     Read the traffic lights in the shot before blaming a chord. The fallback that
     works for anything with a menu row is System Events from the foreground shell
     while the drive parks: `click menu item "Add Tab to New Split View" of menu 1 of
     menu bar item "Tab" of menu bar 1` (2026-09-05).
-11. **`tooling/dev build` refuses under 60 GB free, and drives eat the margin.**
+
+16. **`tooling/dev build` refuses under 60 GB free, and drives eat the margin.**
     Every `tooling/drive` profile keeps 100–500 MB of cache; a batch of ten leaves
     the volume 3 GB lighter and the next build exits at once with "need 60 GB free".
     Delete the scratch profiles after each batch (`rm -rf <scratchpad>/p-*`), then
@@ -169,25 +177,26 @@ into the fresh profile.
     For an incremental chunk `STEDDING_MIN_FREE_GB=40 tooling/dev build …` lowers the
     floor (20 is the least it accepts); the 60 stays the default for full builds.
 
-12. **Patch files are tracked, so ADR 0007's version scan reads them.** A unit test
+17. **Patch files are tracked, so ADR 0007's version scan reads them.** A unit test
     that spelled the pinned Chromium version (`stedding_version_unittest.cc`) passed
     `tooling/check-repo` while its patch was still untracked and failed the moment
     the patch was committed. Tests of version formatting use a made-up version
     (`150.0.1234.5`); only `tooling/chromium-version` carries the pin (2026-09-05).
 
-13. **The machine's input source leaks into the harness.** A `type` step that used
+18. **The machine's input source leaks into the harness.** A `type` step that used
     virtual key codes alone typed Cyrillic into the address bar once a non-Latin
     input source was active (2026-09-05, 05:21: `chrome://settings/stedding` became a
     DuckDuckGo search). `tooling/drive-window.py` now puts the character on every
     typed event as well as the code; if a capture shows the wrong script, that is
     the first thing to check.
 
-14. **A new `IDC_` id rebuilds most of the browser.** Adding one line to
+19. **A new `IDC_` id rebuilds most of the browser.** Adding one line to
     `chrome/app/chrome_command_ids.h` (2026-09-05, `IDC_STEDDING_COMMAND_PALETTE`) put
     about 2,800 steps on the unit_tests build at roughly 0.5–0.8 steps a second: four
     15-minute chunks. Batch new ids with other header-wide changes, and start such a
     build first thing in a session rather than last.
-15. **On the Mac the focus manager sees a key before the focused view does.** A
+
+20. **On the Mac the focus manager sees a key before the focused view does.** A
     Textfield that wants ⇥ (the command bar's mode switch, 2026-09-05) never gets it:
     `FocusManager::OnKeyEvent` runs tab traversal first, focus lands on the toolbar
     and the bar closes on the focus change -- while the unit test, which calls the
@@ -197,28 +206,32 @@ into the fresh profile.
     its rows must recompute its bounds on every rebuild path; a `GetPreferredSize`
     probe cannot see an early `return`, only the live shot can.
 
-16. **Stedding's own WebUI CSS and TypeScript go through Chromium's linters at build
+21. **Stedding's own WebUI CSS and TypeScript go through Chromium's linters at build
     time.** stylelint wants a blank line before every rule and short hex colours
     (`#fff`, not `#ffffff`); the Lit template linter wants event handlers named
     `on<Context><Event>_` (`onRouteAddChange_`, not `onRouteAdd_`). A lint failure
     stops the build before any compile step, so read the first `✖` line of the log.
-17. **A fixup into an earlier patch can conflict with a later patch's hunk in the
+
+22. **A fixup into an earlier patch can conflict with a later patch's hunk in the
     same include block.** `git rebase --autosquash` then stops twice: once applying
     the fixup, once re-applying the later patch. Both conflicts were include lists;
     the resolution is the union of both sides, deduplicated, then `git add` and
     `GIT_EDITOR=true git rebase --continue`, and only then `git stash pop` the
     branding files. Check `git status` shows no non-branding changes at the end.
-18. **Small things that cost a build each:** the shell here is zsh, which does not
+
+23. **Small things that cost a build each:** the shell here is zsh, which does not
     word-split an unquoted `$var` (pipe file lists through `xargs`); `tooling/dev`
     and `tooling/check-repo` are relative to the repo root, so a subshell that `cd`s
     into the checkout must call them by absolute path; a bar action gated on an
     asynchronous check (a file's existence) has to be primed at window creation,
     not at the first actions-mode bar, or every first look at it comes up empty.
-19. **The vertical tab strip's anonymous Spaces take their glyph and name from
+
+24. **The vertical tab strip's anonymous Spaces take their glyph and name from
     their index.** A reorder of two unnamed Spaces is invisible in a capture except
     through the active highlight and the title row; give one an icon through its
     chip menu before capturing a drag.
-20. **Small things that cost a build each, round 6 wave 3:** a `views::View`
+
+25. **Small things that cost a build each, round 6 wave 3:** a `views::View`
     subclass, even one in an anonymous namespace, needs `METADATA_HEADER` and
     `BEGIN_METADATA`/`END_METADATA` or `AddChildView` fails a static assert;
     `views::LabelButton::label()` is protected, so a row whose font must change
@@ -235,7 +248,8 @@ into the fresh profile.
     feature params `folder_tabs` and `pin_tabs` do not exist; they do, and are
     the way to seed a folder or an essential for a capture. A Space pin comes
     from `space_pin_tabs/N`, or the ⌘T action "Pin to This Space".)
-21. **Wave 4's lessons.** `content::WebContents::Create` makes a plain
+
+26. **Wave 4's lessons.** `content::WebContents::Create` makes a plain
     WebContents; `WebContentsTester::For` on it is a wrong cast that only
     sometimes faults (patch 0027's restored-tab test did, once the layout
     shifted): a test that drives navigation makes its contents with
@@ -249,13 +263,14 @@ into the fresh profile.
     `extra_spaces` feature param adds a Space to every new window, and with
     the registry that Space is shared: make the second Space through the
     sidebar's "+" when capturing a second window.
-22. **Never drive the machine while the operator is at it — and an app launched
+
+27. **Never drive the machine while the operator is at it — and an app launched
     under lldb is never key for the harness.** A `drive-window.py` run against a
     browser started by `lldb --batch` could not activate it; every synthetic key
     went to the frontmost app, which was the operator's chat (2026-09-05). The
     input-free path covers almost everything: `tooling/capture-ui` (a window
     capture by id, no focus change) with feature params for the state
-    (`folder_tabs/N` does exist, whatever trap 20 says; `pin_tabs/N`,
+    (`folder_tabs/N` does exist, whatever trap 25 says; `pin_tabs/N`,
     `extra_spaces/N`, `space_pin_tabs/N`, `drift_tabs/N`; the collapsed rail is
     a profile preference, `vertical_tabs.collapsed_state`, seeded into a fresh
     profile's `Default/Preferences`), and `osascript -e 'tell application "…/Stedding.app" to
@@ -263,26 +278,29 @@ into the fresh profile.
     reproduced under `lldb --batch -o run -k "bt 40"` with a symbolised stack
     (the release build keeps its symbol table; `symbol_level=0` drops only the
     line tables). Drives wait for an empty chair.
-23. **An apply script's anchors die at the first clang-format.** The pipeline
+
+28. **An apply script's anchors die at the first clang-format.** The pipeline
     formats after applying, so a re-run fails on any anchor or guard that
     clang-format rewrapped, and stops before the build. Re-run the pipeline
     with a no-op apply once the edits are in, and write guards on lines
     clang-format will not touch.
 
-22. **`tooling/capture-state` is the harness that needs no hands.** It launches
+29. **`tooling/capture-state` is the harness that needs no hands.** It launches
     the app on a fresh profile, captures every window the process owns by id and
     quits through the AppleEvent, so a state can be photographed while someone is
     at the machine -- what `tooling/drive` must never do (trap 3). The state comes
     from feature params, not from input: `space_pin_tabs/N`, `drift_tabs/N`,
     `folder_tabs/N`, `pin_tabs/N`, `extra_spaces/N`, `open_command_bar/true`,
     `--stedding-welcome=<step>`, `--seed collapsed`.
-23. **A window capture carries the window's shadow.** An absolute y read off one
+
+30. **A window capture carries the window's shadow.** An absolute y read off one
     is not a window coordinate; compare two things inside the same capture --
     the toggle's centre against the traffic lights' centre (sidebar Y7), never
     either against zero. The exclusion macOS reports for the lights is a box with
     a margin around them, not the glyphs themselves: the glyphs are 12 DIP circles
     at the box's top inset, so half the box's height sits a button 3 DIP low.
-24. **Chromium's own suites are not in the Stedding filters, and two of its tab
+
+31. **Chromium's own suites are not in the Stedding filters, and two of its tab
     tests had been red since patch 0002.** `tooling/dev test <feature>` runs our
     filters; nothing ran `TabTest.*`, which reads the favicon column's width and
     the discard ring -- both of which this fork changes on purpose. Before a
@@ -303,7 +321,20 @@ instructions in the notes and the sha256 beside the DMG. The order, all from the
 repo root with a clean tree: bump `VERSION`, `tooling/dev build release chrome`
 (the About line is a build flag), `tooling/verify-build --app
 .../out/release/Stedding.app`, empty `dist/`, `tooling/package-dmg release`
-(`dist/Stedding-<ver>-arm64.dmg` and its `.sha256`), paste the checksum into
-`docs/release-notes/v<ver>.md`, commit, `tooling/publish-release --check`, then
-`tooling/publish-release`, then `git push --tags`. Beta 4 went out this way on
-2026-09-05.
+(`dist/Stedding-<VERSION>-arm64.dmg` and its `.sha256`), paste the checksum into
+`docs/release-notes/v<ver>.md`, commit, **push**, `tooling/publish-release --check`,
+then `tooling/publish-release`. Beta 4 went out this way on 2026-09-05.
+
+The push moved ahead of the publish on purpose. `gh release create` cuts the tag on
+the remote, so publishing from an unpushed commit tagged whatever the remote's default
+branch happened to be; `publish-release` now pins the tag to this commit with
+`--target` and refuses to run until the commit is on the remote, which is why the push
+comes first and `git push --tags` afterwards is no longer part of the dance.
+
+"Empty `dist/`" is still worth doing, but it is no longer the thing standing between a
+release and the wrong image. `package-dmg` names the image for the product version
+rather than Chromium's — two Stedding releases on one pin used to produce one filename
+— and warns about anything else left in `dist/`; `publish-release` takes the image
+named for this VERSION, accepts a lone unnamed one, refuses to choose between two, and
+recomputes the sha256 against both the file beside it and the number in the release
+notes.

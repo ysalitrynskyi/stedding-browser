@@ -35,6 +35,7 @@ its configuration from `chromium-version` — never from a value typed twice.
 | `brand/generate.py` | Regenerates the whole brand system from one geometry file. |
 | `check-repo` | Repository hygiene: shell portability, links, ADRs, patch series, the pin, traps, nothing tracked that is ignored, no machine paths. |
 | `check-shell` | shellcheck at the pinned version over every script here, plus `bash -n`. CI calls this exact script. |
+| `check-geometry` | Re-measures the card's gutters and corner radius in `docs/images/*.png` against `probes/geometry.json`. Needs Pillow; runs anywhere, so CI can check this much of the product's appearance without a build. `--report` prints the measurements. |
 | `verify-build` | Runs a built browser and checks it renders, does WebGL, and decodes video. |
 | `measure/` | Performance harness and the fixed ten-site list for the QUALITY.md budgets. |
 | `args/` | `gn` argument files, one per build configuration, with the reasoning per flag. |

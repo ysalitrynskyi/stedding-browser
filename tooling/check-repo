@@ -11,6 +11,7 @@ into something a machine can fail on:
   patches  the patch series is contiguous, numbered, and each patch has a header
   version  the Chromium pin is well formed and referenced from exactly one place
   traps    HANDOFF's traps are numbered contiguously and every citation resolves
+  tests    every test a 'built' behaviour row names exists in the patch series
   truth    docs carry no known-stale phrases, feature specs are well formed, and
            every backlog id cited anywhere exists in BACKLOG.md
 
@@ -405,6 +406,86 @@ def check_traps() -> None:
                          f"cites trap {m.group(1)}, which docs/HANDOFF.md does not have")
 
 
+# --------------------------------------------------------------------------- tests
+
+# TEST(Suite, Name) and the wrapped TEST_F(Suite,\n    Name) form clang-format
+# produces once the line is too long. Both are added lines in the patch series, which
+# is the only place this repository holds code.
+TEST_MACRO = r"(?:TEST|TEST_F|TEST_P|IN_PROC_BROWSER_TEST_F|IN_PROC_BROWSER_TEST_P)"
+TEST_ONE_LINE = re.compile(r"^\+" + TEST_MACRO + r"\(\s*([A-Za-z_]\w*)\s*,\s*([A-Za-z_]\w*)\s*\)")
+TEST_OPEN = re.compile(r"^\+" + TEST_MACRO + r"\(\s*([A-Za-z_]\w*)\s*,\s*$")
+TEST_CONT = re.compile(r"^\+\s*([A-Za-z_]\w*)\s*\)")
+# gtest's own filter syntax, which is what these citations are meant to be pasted into.
+TEST_REF = re.compile(r"\b([A-Z][A-Za-z0-9_]*(?:Test|Tests))\.([A-Za-z_]\w*\*?|\*)")
+
+
+def tests_in_series() -> dict[str, set[str]]:
+    suites: dict[str, set[str]] = {}
+    for patch in sorted((ROOT / "patches").glob("*.patch")):
+        pending = None
+        for raw in patch.read_text(encoding="utf-8", errors="replace").splitlines():
+            m = TEST_ONE_LINE.match(raw)
+            if m:
+                suites.setdefault(m.group(1), set()).add(m.group(2))
+                pending = None
+                continue
+            m = TEST_OPEN.match(raw)
+            if m:
+                pending = m.group(1)
+                continue
+            if pending:
+                cont = TEST_CONT.match(raw)
+                if cont:
+                    suites.setdefault(pending, set()).add(cont.group(1))
+                pending = None
+    return suites
+
+
+def check_tests() -> None:
+    """A 'built' row must name a test that exists.
+
+    AGENTS.md: a behaviour is shipped when its test in docs/features/<feature>.md is
+    green. A row that names a test which is not in the series reads as shipped and
+    cannot be run: pasting the name into --gtest_filter matches nothing and says so
+    quietly, with exit status 0. Twelve rows had drifted this way -- four naming the
+    right test under the wrong suite after it moved, the rest naming a test that was
+    renamed or never written.
+
+    Only 'built' is checked. A 'planned' row names the test that will prove it, which
+    is the point of the state, and check_truth already requires it to name one.
+    """
+    specs = sorted((ROOT / "docs" / "features").glob("*.md"))
+    if not specs:
+        return
+    suites = tests_in_series()
+    if not suites:
+        fail("patches", "no tests found in the series; the spec check cannot mean anything")
+        return
+
+    for spec in specs:
+        rel = spec.relative_to(ROOT).as_posix()
+        for line_no, line in enumerate(spec.read_text(encoding="utf-8").splitlines(), 1):
+            m = BEHAVIOUR_ROW.match(line)
+            if not m or m.group(4) != "built":
+                continue
+            bid, _, test_column, _ = m.groups()
+            for suite, name in sorted(set(TEST_REF.findall(test_column))):
+                known = suites.get(suite, set())
+                if name.endswith("*"):
+                    prefix = name[:-1]
+                    if any(n.startswith(prefix) for n in known):
+                        continue
+                else:
+                    if name in known:
+                        continue
+                bare = name.rstrip("*")
+                elsewhere = sorted(s for s, names in suites.items() if bare in names)
+                hint = f"; it is {elsewhere[0]}.{bare}" if elsewhere else ""
+                fail(f"{rel}:{line_no}",
+                     f"{bid} is 'built' and names {suite}.{name}, "
+                     f"which the series does not define{hint}")
+
+
 CHECKS = {
     "shell": check_shell,
     "links": check_links,
@@ -415,6 +496,7 @@ CHECKS = {
     "version": check_version,
     "traps": check_traps,
     "truth": check_truth,
+    "tests": check_tests,
 }
 
 

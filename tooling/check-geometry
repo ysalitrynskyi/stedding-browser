@@ -1,0 +1,219 @@
+#!/usr/bin/env python3
+"""Measure the window geometry in the captures the documentation shows.
+
+docs/UI-SPEC.md says its numbers are "measured from that image, not estimated", and
+tooling/assert-capture's own header says "measure pixels, don't eyeball". Nothing was
+checking that, because every other check of the product needs a Mac and a built
+browser. This one needs neither: the captures are committed, so the geometry claims
+can be re-measured wherever CI runs, and a capture that is refreshed after a layout
+change stops matching the moment the numbers move.
+
+What it measures, and why these and not others: the card's four gutters and its corner
+radius are the "one change that accounts for most of looks like Arc" (docs/UI-SPEC.md),
+they are stated as exact constants rather than ratios, and they are visible in a
+capture without knowing anything about the page inside it.
+
+The gutters are found as bands of window ground rather than by probing one pixel: a
+solid run of the mat colour across the width of the card is the gutter, whatever the
+page happens to be showing. The radius is fitted across the whole arc -- reading the
+inset at the topmost scanline and calling it the radius is wrong, and gives 8.7 for a
+12 px corner.
+
+    tooling/check-geometry                 check every capture named in the spec
+    tooling/check-geometry --report        print the measurements and check nothing
+
+The expectations live in tooling/probes/geometry.json beside the other probe specs.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import sys
+from pathlib import Path
+
+try:
+    from PIL import Image
+except ImportError:  # pragma: no cover
+    print("check-geometry needs Pillow: python3 -m pip install pillow", file=sys.stderr)
+    sys.exit(2)
+
+ROOT = Path(__file__).resolve().parent.parent
+SPEC = ROOT / "tooling" / "probes" / "geometry.json"
+
+
+def luma(pixel) -> float:
+    return 0.2126 * pixel[0] + 0.7152 * pixel[1] + 0.0722 * pixel[2]
+
+
+class Capture:
+    def __init__(self, path: Path, mat_max_luma: float):
+        self.path = path
+        image = Image.open(path).convert("RGB")
+        self.w, self.h = image.size
+        self.px = image.load()
+        self.mat_max = mat_max_luma
+
+    def is_mat(self, x: int, y: int) -> bool:
+        return luma(self.px[x, y]) <= self.mat_max
+
+    def row_is_mat(self, y: int, x0: int, x1: int) -> bool:
+        return all(self.is_mat(x, y) for x in range(x0, x1, 4))
+
+    def column_is_mat(self, x: int, y0: int, y1: int) -> bool:
+        return all(self.is_mat(x, y) for y in range(y0, y1, 4))
+
+    def top_gutter(self, x0: int, x1: int) -> int:
+        y = 0
+        while y < self.h and self.row_is_mat(y, x0, x1):
+            y += 1
+        return y
+
+    def bottom_gutter(self, x0: int, x1: int) -> int:
+        n = 0
+        while n < self.h and self.row_is_mat(self.h - 1 - n, x0, x1):
+            n += 1
+        return n
+
+    def right_gutter(self, y0: int, y1: int) -> int:
+        n = 0
+        while n < self.w and self.column_is_mat(self.w - 1 - n, y0, y1):
+            n += 1
+        return n
+
+    def card_left(self, search_from: int, search_to: int, y0: int, y1: int) -> int | None:
+        """First column that is not window ground: the card's left edge. Left of it the
+        sidebar is the same ground, so this is a scan rightwards, not an edge find."""
+        for x in range(search_from, search_to):
+            if not self.column_is_mat(x, y0, y1):
+                return x
+        return None
+
+    def edge_x(self, y: int, x0: int, x1: int, mid: float) -> float | None:
+        """Sub-pixel x where the luma crosses `mid`, going right from x0."""
+        prev = luma(self.px[x0, y])
+        for x in range(x0 + 1, x1):
+            cur = luma(self.px[x, y])
+            if prev < mid <= cur:
+                return x - 1 + ((mid - prev) / (cur - prev) if cur != prev else 0)
+            prev = cur
+        return None
+
+    def edge_y(self, x: int, y0: int, y1: int, mid: float) -> float | None:
+        prev = luma(self.px[x, y0])
+        for y in range(y0 + 1, y1):
+            cur = luma(self.px[x, y])
+            if prev < mid <= cur:
+                return y - 1 + ((mid - prev) / (cur - prev) if cur != prev else 0)
+            prev = cur
+        return None
+
+    def corner_radius(self, probe_x: int) -> tuple[float, float] | None:
+        """Fit the top-left corner's arc. Returns (radius, rms) or None."""
+        mat = luma(self.px[self.w // 4, self.h // 2]) if False else self.mat_max
+        card = luma(self.px[probe_x, 20])
+        mid = (mat + card) / 2
+        top = self.edge_y(probe_x, 0, 40, mid)
+        left = self.edge_x(400, 340, 430, mid)
+        if top is None or left is None:
+            return None
+        samples = []
+        for y in range(int(math.floor(top)) + 1, int(top) + 18):
+            x = self.edge_x(y, 340, 430, mid)
+            if x is not None:
+                samples.append((y - top, x - left))
+        if len(samples) < 8:
+            return None
+        best, best_err = None, None
+        r = 2.0
+        while r <= 24.0:
+            err, n = 0.0, 0
+            for dy, inset in samples:
+                if dy > r:
+                    continue
+                predicted = r - math.sqrt(max(0.0, r * r - (r - dy) ** 2))
+                err += (predicted - inset) ** 2
+                n += 1
+            if n >= 5:
+                err /= n
+                if best_err is None or err < best_err:
+                    best, best_err = r, err
+            r += 0.05
+        if best is None:
+            return None
+        return best, math.sqrt(best_err)
+
+
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="tooling/check-geometry",
+        description="Re-measure the documented window geometry in the committed captures.",
+    )
+    parser.add_argument("--report", action="store_true",
+                        help="print what was measured and check nothing")
+    args = parser.parse_args(argv[1:])
+
+    spec = json.loads(SPEC.read_text(encoding="utf-8"))
+    band = spec["card_band"]
+    failures = 0
+    checked = 0
+
+    for entry in spec["captures"]:
+        path = ROOT / entry["file"]
+        if not path.is_file():
+            print(f"  FAIL {entry['file']}: missing", file=sys.stderr)
+            failures += 1
+            continue
+        cap = Capture(path, spec["mat_max_luma"])
+        if (cap.w, cap.h) != tuple(entry["size"]):
+            print(f"  FAIL {entry['file']}: {cap.w}x{cap.h}, expected "
+                  f"{entry['size'][0]}x{entry['size'][1]}", file=sys.stderr)
+            failures += 1
+            continue
+
+        found: dict[str, float | None] = {}
+        if "top_gutter" in entry["expect"]:
+            found["top_gutter"] = cap.top_gutter(band["x0"], band["x1"])
+        if "bottom_gutter" in entry["expect"]:
+            found["bottom_gutter"] = cap.bottom_gutter(band["x0"], band["x1"])
+        if "right_gutter" in entry["expect"]:
+            found["right_gutter"] = cap.right_gutter(band["y0"], band["y1"])
+        if "card_left" in entry["expect"]:
+            found["card_left"] = cap.card_left(spec["card_left_search"][0],
+                                               spec["card_left_search"][1],
+                                               band["y0"], band["y1"])
+        if "corner_radius" in entry["expect"]:
+            fit = cap.corner_radius(spec["corner_probe_x"])
+            found["corner_radius"] = None if fit is None else round(fit[0], 2)
+            found["corner_radius_rms"] = None if fit is None else round(fit[1], 3)
+
+        for key, want in entry["expect"].items():
+            got = found.get(key)
+            checked += 1
+            tol = spec["tolerance"].get(key, 0)
+            ok = got is not None and abs(got - want) <= tol
+            if args.report or not ok:
+                where = "  ok  " if ok else "  FAIL"
+                extra = ""
+                if key == "corner_radius" and found.get("corner_radius_rms") is not None:
+                    extra = f"  (rms {found['corner_radius_rms']} px)"
+                print(f"{where} {entry['file']:<26} {key:<14} "
+                      f"{'none' if got is None else got:>7} "
+                      f"expected {want}{'' if not tol else ' +-' + str(tol)}{extra}",
+                      file=sys.stderr if not ok else sys.stdout)
+            if not ok:
+                failures += 1
+
+    if args.report:
+        return 0
+    if failures:
+        print(f"\n{failures} of {checked} geometry checks failed", file=sys.stderr)
+        return min(failures, 125)
+    print(f"all {checked} geometry checks passed "
+          f"across {len(spec['captures'])} captures")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

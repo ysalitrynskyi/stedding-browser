@@ -149,18 +149,25 @@ Built, with tests or measured captures:
   presets and a text size (`docs/features/sidebar.md`); imported bookmarks
   become pins, and sidebar backups, export and restore in the importer's
   format (`docs/features/import.md` I13–I20).
-- **Round 7** (2026-09-05, `docs/ARC-ROUND2.md`; patches 0037 and 0038): the row is the page's colour exactly,
-  square under it, the star and the address cluster centred (toolbar T15–T18);
-  the collapsed rail centred with its toggle clear of the traffic lights
-  (sidebar Y6–Y7); Arc's folder and drifted-pin rows (folders F12, pins H12);
-  the folder quit crash; Arc's history and passwords in one click from the
-  welcome flow (import I6, I21–I23, welcome W8).
+- **Round 7** (2026-09-05, `docs/ARC-ROUND2.md`; patches 0037 and 0038, with a
+  second pass the same evening on the operator's replies): the row is the page's
+  colour exactly, square under it, the address centred on the row in a field with
+  no chrome around it, 560 DIP where the row has the room and shrinking when it
+  does not (toolbar T15–T18); the collapsed rail centred and the sidebar's toggle
+  on the traffic lights' own centre (sidebar Y6–Y7); Arc's folder row — macOS's
+  own folder symbol, the header, the New Tab row and the Space title on the tab
+  rows' column — and the drifted-pin row (folders F12, pins H12); the folder quit
+  crash; the keychain item under Stedding's own name (import I24); Arc's history
+  and passwords in one click from the welcome flow (import I6, I21–I23, welcome
+  W8). Two of Chromium's own suites had been red since patch 0002 because nothing
+  ran them: they now assert what this fork does (`docs/HANDOFF.md`, trap 24).
 
 Read `docs/HANDOFF.md` before touching anything — it carries the working loop,
 every dev parameter, and the traps already paid for. `docs/ARC-ROUND2.md` is
 the operator-feedback ledger; `docs/UI-SPEC.md` the measured Arc match.
 
-Outstanding: `BACKLOG.md`. Unsigned (M7). First vanilla perf comparison is in
+Released: `v0.2.0-beta.4` (2026-09-05), unsigned (M7 waits on Apple).
+Outstanding: `BACKLOG.md`. First vanilla perf comparison is in
 `docs/perf/README.md`: on the deterministic page list every QUALITY budget is
 met (cold +2.3%, warm −2.0%, memory +0.0% over vanilla).
 
@@ -202,27 +209,18 @@ met (cold +2.3%, warm −2.0%, memory +0.0% over vanilla).
 
 ## Current priorities (keep this list short and fresh)
 
-The order is `BACKLOG.md`. `v0.2.0-beta.3` (unsigned) carries round 5 of the
-Arc parity work, screenshots, the welcome flow, the fixes from the visual
-audit of every surface and from the first look at beta 2 (`docs/ARC-ROUND2.md`);
-the operator retests it against Arc. `S-17` signing waits on Apple's organisation enrolment (then
-`tooling/sign-release` and a signed re-release), `S-18` on a licensing
-decision. Of the small gaps found while verifying round 5, `S-40`, `S-42`
-and `S-43` (capture toast, welcome swatches, About version) closed with wave
-1; `S-41` (download progress on the sidebar button) is wave 2's. `S-44` is
-the body of work under way: `docs/ROUND6-PLAN.md`, the reviewed plan from the Zen mods and
-beyond (four waves, decisions recorded): wave 1 landed 2026-09-05 (patches
-0016–0018) and most of wave 2 the same night (patches 0019–0022, the command
-bar's actions mode included), every row verified live or by unit test, notes
-in the plan, the ⌃⇥ switcher (R6-12) as 0023, the menus (R6-14) as 0024
-and the last rows (B27, J4, T14) as 0025: wave 2 is complete. Wave 3 opened
-with R6-22 (Import from Arc) as 0026, R6-23 (routing) as 0027 and R6-24 (the
-archived view) as 0028, R6-25 (the address row) as 0029, R6-26 (the
-Privacy block) as 0030, R6-27 (sidebar density) as 0031, R6-28 (bookmarks to
-pins) as 0032 and R6-29 (sidebar backups) as 0033: wave 3 is complete. Wave 4
-opened with R6-32 (the private coat) as 0034 and ADR 0016, then R6-30 (the
-little window) as 0035 and R6-31 (the registry) as 0036: round 6 is complete
-apart from the rows each spec marks as gaps. Round 7 (`S-46`, 2026-09-05) took
-the operator's six from beta 3 and the folder quit crash as patch 0037, and Arc's
-history and passwords as patch 0038; the next round waits on the operator's
-look at beta 4.
+The order is `BACKLOG.md`. `v0.2.0-beta.4` (unsigned, 2026-09-05) carries rounds 5,
+6 and 7: the Arc parity work, the Zen-mods plan in full (`docs/ROUND6-PLAN.md`,
+patches 0016–0036), the operator's six from beta 3 and the Arc one-click import
+(patches 0037–0038). What comes next is decided by the operator's look at beta 4
+(`docs/ARC-ROUND2.md` records each round); until then the open rows are `S-17`
+(signing, waiting on Apple's organisation enrolment, then `tooling/sign-release`
+and a signed re-release), `S-45` (Google's new tab page when Google is chosen),
+`S-47` (an input-free settings probe) and `S-48` (the Arc data import run once
+against a real Arc profile). Every feature spec names its own `gap` rows.
+
+How to work here is `docs/HANDOFF.md`: the loop, the dev parameters that recreate
+any state for a capture, and the traps. Two rules that cost the most when broken:
+never edit the checkout while a build runs, and never inject input while someone
+is at the machine (`tooling/capture-state` needs neither the keyboard nor the
+pointer).

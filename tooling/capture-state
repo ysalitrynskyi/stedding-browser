@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+# Capture a browser state without a hand on the machine.
+#
+# Usage:
+#   tooling/capture-state --out <prefix> [--seed collapsed] [--settle <seconds>]
+#                         [--features <list>] [chromium args and URLs...]
+#
+# Launches the built app on a fresh profile (a seeded preference if asked),
+# waits for the first paint, captures every window the process owns by window
+# id (tooling/capture-windows: <prefix>.png, and <prefix>-2.png for a dialog
+# such as the welcome flow), quits through the AppleEvent so session files
+# flush and the quit path runs, and reports any abort from the browser's log
+# (<prefix>.log). No synthetic input and no focus change, so it is safe while
+# someone is using the machine -- the case tooling/drive cannot cover
+# (docs/HANDOFF.md, trap 22).
+#
+# The state comes from feature params on SteddingArcStyleWindow and switches:
+#   --features 'SteddingArcStyleWindow:extra_spaces/2/pin_tabs/1/folder_tabs/3'
+#   --features 'SteddingArcStyleWindow:space_pin_tabs/1/drift_tabs/1'  (a drifted pin)
+#   --features 'SteddingArcStyleWindow:open_command_bar/true'
+#   --stedding-welcome=import          the welcome flow, opened on its import step
+#   --seed collapsed                   the collapsed rail (a profile preference)
+# The list of params is in docs/HANDOFF.md.
+
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=./lib.sh
+. "$(cd "$(dirname "$0")" && pwd)/lib.sh"
+
+main() {
+  local out="" seed="" settle=18 features="" size="1400,880"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --out)      out="$2"; shift 2 ;;
+      --seed)     seed="$2"; shift 2 ;;
+      --settle)   settle="$2"; shift 2 ;;
+      --features) features="$2"; shift 2 ;;
+      --size)     size="$2"; shift 2 ;;
+      -h|--help)  sed -n '2,24p' "$0"; exit 0 ;;
+      *)          break ;;
+    esac
+  done
+  [ -n "$out" ] || die "--out <prefix> is required"
+
+  local app
+  app="$(find_app_bundle "$CHROMIUM_SRC/out/release" || true)"
+  [ -n "$app" ] && [ -d "$app" ] || die "no app bundle in out/release -- tooling/dev build"
+  local bin
+  bin="$app/Contents/MacOS/$(basename "$app" .app)"
+
+  local profile
+  profile="$(mktemp -d "${TMPDIR:-/tmp}/stedding-state.XXXXXX")"
+  mkdir -p "$profile/Default"
+  case "$seed" in
+    "") ;;
+    collapsed) printf '{"vertical_tabs":{"collapsed_state":true}}' > "$profile/Default/Preferences" ;;
+    *) die "unknown seed: $seed (known: collapsed)" ;;
+  esac
+
+  local log_file="$out.log"
+  set -- --user-data-dir="$profile" --no-first-run --no-default-browser-check \
+         --window-size="$size" --window-position=0,0 --enable-logging=stderr "$@"
+  [ -n "$features" ] && set -- --enable-features="$features" "$@"
+
+  log "launching $(basename "$app") for $out"
+  "$bin" "$@" >/dev/null 2>"$log_file" &
+  local pid=$!
+  # No signal to wait on from outside the process: a plain wait for the paint.
+  sleep "$settle"
+
+  python3 "$STEDDING_ROOT/tooling/capture-windows" "$(basename "$app" .app)" "$out" \
+    || warn "capture failed (is the screen locked? window capture returns nothing behind the lock)"
+
+  osascript -e "tell application \"$app\" to quit" 2>/dev/null || true
+  local _
+  for _ in $(seq 1 40); do
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 0.5
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    warn "browser did not quit in 20 s; killing (session files may be stale)"
+    kill -9 "$pid" 2>/dev/null || true
+  fi
+  if grep -i -m3 "bad_variant\|received signal\|check failed\|fatal" "$log_file"; then
+    warn "the browser aborted; see $log_file"
+  fi
+  rm -rf "$profile"
+  log "done: $out"
+}
+
+main "$@"

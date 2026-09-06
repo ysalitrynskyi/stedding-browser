@@ -23,13 +23,14 @@ useful right now.
   opening a PR; CI runs both. Note that macOS ships bash 3.2, so the scripts must
   work there.
 
-## What comes later
+## Browser code
 
-**Browser code contributions become meaningful once M0 lands** — that is, once the
-vanilla Chromium build is verified and the patch series has somewhere to sit. The
-patch workflow (`tooling/apply-patches`, `tooling/update-patches`) is already built
-and documented in [tooling/README.md](tooling/README.md); it simply has an empty
-series so far. The first patches arrive with branding at M1.
+The patch series is real and per feature (`patches/README.md`, 38 patches on Chromium
+153 as of beta 4). A change follows `docs/AGENT-LOOP.md`: a row in the feature's spec
+under `docs/features/`, a failing unit test, the code in the checkout, a fixup into the
+feature's patch (or a new patch for a new feature) with `Why:` and `Removable when:`
+footers, `tooling/dev patch`, and a capture for anything visual. `docs/HANDOFF.md`
+carries the dev parameters and the traps already paid for.
 
 ## Ground rules
 

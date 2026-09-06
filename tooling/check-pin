@@ -1,0 +1,338 @@
+#!/usr/bin/env python3
+"""Say whether the Chromium pin is still the right one to be sitting on.
+
+`docs/QUALITY.md` commits to shipping a rebased release within 7 days of a fix for an
+in-the-wild exploit and 14 days otherwise. That deadline is only meetable if falling
+behind is noticed the same day, so this runs daily in CI
+(`.github/workflows/upstream.yml`) and identically on a developer machine:
+
+    tooling/check-pin                       # the report
+    tooling/check-pin --body-file body.md   # also write the issue body CI files
+
+Three states, because "the pin is not the string upstream returned" is not one question
+but three, and answering it as one is how this check stayed red for four days running
+while saying something untrue (it read M153 -> M152 as a "milestone bump available"):
+
+  current  nothing newer than the pin exists on a stable channel.
+  behind   a newer stable release exists: either a point release on our own milestone,
+           which is what a security fix looks like, or a whole new stable milestone.
+           This is the state docs/QUALITY.md sets a deadline for.
+  ahead    the platform we ship is on an OLDER milestone than the pin. Chromium pulls a
+           staged rollout sometimes: in August 2026 an M153 build shipped to Mac stable
+           and Mac stable then went back to the previous milestone's line. Our users are
+           on a line macOS stable has left, which needs a human, but it is not "behind"
+           and must not be reported as one.
+
+Chromium's stable channel is per platform, and the milestone we ship can go on taking
+security fixes on a platform we do not ship -- that is exactly the rollback case above
+-- so every desktop platform is consulted, not only the one we build for.
+
+Exit status: 0 when the check ran (read the state for the answer), 2 when it could not
+reach upstream or could not parse what came back. An unanswered question is a red
+build, not a green one.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+
+# The desktop platforms chromiumdash knows by these names. We ship macOS today
+# (docs/decisions/0006-platform-order-macos-first.md); the others are consulted because
+# a security fix on our milestone reaches them at the same time, and a macOS rollout
+# that gets pulled must not hide it.
+PLATFORMS = ("Mac", "Windows", "Linux")
+SHIPPING_PLATFORM = "Mac"
+DASH = "https://chromiumdash.appspot.com/fetch_releases?channel=Stable&platform={}&num=20"
+
+
+def read_pin() -> str:
+    values = {}
+    pin = ROOT / "tooling" / "chromium-version"
+    for line in pin.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            key, value = line.split("=", 1)
+            values[key.strip()] = value.strip()
+    return values.get("CHROMIUM_TAG", "")
+
+
+def version_key(version: str) -> tuple[int, ...]:
+    """A Chromium version as four integers, so 8010.9 sorts below 8010.27."""
+    parts = version.split(".")
+    if len(parts) != 4 or not all(part.isdigit() for part in parts):
+        raise ValueError(f"not a Chromium version: {version!r}")
+    return tuple(int(part) for part in parts)
+
+
+def fetch(platform: str) -> list[str]:
+    """Stable releases for one platform, newest first BY DATE, as chromiumdash orders
+    them. The order matters: a pulled rollout means the highest version number on a
+    platform is not the one it is serving, which is the whole rollback case."""
+    request = urllib.request.Request(
+        DASH.format(platform), headers={"User-Agent": "stedding-check-pin"}
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        payload = json.load(response)
+    versions = []
+    for release in payload:
+        version = release.get("version", "")
+        try:
+            version_key(version)
+        except ValueError:
+            continue
+        versions.append(version)
+    return versions
+
+
+def serving(versions: list[str]) -> str | None:
+    """What this platform's stable channel is on TODAY -- the most recent by date,
+    which after a pulled rollout is lower than the highest number it ever shipped."""
+    return versions[0] if versions else None
+
+
+def newest(versions: list[str]) -> str | None:
+    return max(versions, key=version_key) if versions else None
+
+
+def verdict(pinned_key, stable):
+    """(state, latest, reasons) from the pin and what stable holds on each platform."""
+    everywhere = [v for versions in stable.values() for v in versions]
+    shipping_now = serving(stable.get(SHIPPING_PLATFORM, []))
+    # The newest release on the milestone we are pinned to. A point release on a live
+    # milestone is a security fix, and it is the case docs/QUALITY.md sets a deadline
+    # for -- so it is looked for across every platform, not only the one we ship. When
+    # a macOS rollout is pulled, our line keeps taking fixes where it is still served.
+    same_line = newest([v for v in everywhere if version_key(v)[0] == pinned_key[0]])
+    overall = newest(everywhere)
+    pinned = ".".join(str(part) for part in pinned_key)
+
+    reasons: list[str] = []
+    if same_line and version_key(same_line) > pinned_key:
+        platforms = sorted(p for p, vs in stable.items() if same_line in vs)
+        reasons.append(
+            f"a point release on our own milestone: {pinned} -> {same_line} "
+            f"({', '.join(platforms)}). A point release on a live milestone is a "
+            "security fix; this is the case docs/QUALITY.md sets a deadline for."
+        )
+    if overall and version_key(overall)[0] > pinned_key[0]:
+        reasons.append(
+            f"a newer stable milestone: M{pinned_key[0]} -> M{version_key(overall)[0]} "
+            f"({overall})."
+        )
+
+    # True whether or not something newer exists on our line, and worth saying either
+    # way: it decides whether the next pin follows M153 or goes back to the line macOS
+    # returned to.
+    rolled_back = (
+        shipping_now is not None and version_key(shipping_now)[0] < pinned_key[0]
+    )
+    if rolled_back:
+        reasons.append(
+            f"{SHIPPING_PLATFORM} stable is serving {shipping_now}, an older milestone "
+            f"than the pin. The rollout our pin came from was pulled, so people running "
+            f"our builds are on a milestone {SHIPPING_PLATFORM} stable has left."
+        )
+
+    if same_line and version_key(same_line) > pinned_key:
+        return "behind", same_line, reasons
+    if overall and version_key(overall)[0] > pinned_key[0]:
+        return "behind", overall, reasons
+    if rolled_back:
+        return "ahead", shipping_now, reasons
+    return "current", (overall or pinned), reasons
+
+
+def issue_body(pinned, stable, reasons) -> str:
+    body = [
+        f"Our pin: `{pinned}` (`tooling/chromium-version`)",
+        "",
+        "Stable channel, per platform. *Serving* is what the channel is on today;",
+        "*highest* is the largest version it has ever shipped, which is bigger when a",
+        "rollout was pulled.",
+        "",
+        "| Platform | Serving | Highest |",
+        "|---|---|---|",
+    ]
+    for platform in PLATFORMS:
+        versions = stable.get(platform, [])
+        body.append(
+            f"| {platform} | `{serving(versions) or 'unknown'}` "
+            f"| `{newest(versions) or 'unknown'}` |"
+        )
+    body += ["", "Why this is open:", ""]
+    body += [f"- {reason}" for reason in reasons]
+    body += [
+        "",
+        "To take a newer pin:",
+        "",
+        "```bash",
+        "tooling/update-pin --apply",
+        "```",
+        "",
+        "That moves the pin, syncs, and reports whether the patch series still applies.",
+        "If a patch conflicts on a routine point release, the patch is in the wrong",
+        "layer -- see docs/ARCHITECTURE.md.",
+        "",
+        "The security timetable is in docs/QUALITY.md: 7 days for fixes to in-the-wild",
+        "exploits, 14 days otherwise.",
+        "",
+        "Reproduce this locally with `tooling/check-pin`.",
+    ]
+    return "\n".join(body) + "\n"
+
+
+# Deliberately on a milestone Chromium will not reach for years. ADR 0007 puts the pin
+# in one place, and a fixture written with today's pin stops meaning what it says the
+# day the pin moves: the "behind" case would quietly become the "current" case.
+SELF_TESTS = [
+    (
+        "current",
+        "900.0.1000.20",
+        {
+            "Mac": ["900.0.1000.20", "900.0.1000.10"],
+            "Windows": ["900.0.1000.20"],
+            "Linux": ["900.0.1000.20"],
+        },
+    ),
+    (
+        # A security fix on our own line, served on a platform we do not ship, while the
+        # platform we do ship has rolled back below us. Both are true at once.
+        "behind",
+        "900.0.1000.10",
+        {
+            "Mac": ["899.0.900.5", "900.0.1000.10"],
+            "Windows": ["900.0.1000.20"],
+            "Linux": ["899.0.900.4"],
+        },
+    ),
+    (
+        "behind",
+        "900.0.1000.20",
+        {
+            "Mac": ["901.0.1100.4"],
+            "Windows": ["901.0.1100.4"],
+            "Linux": ["901.0.1100.4"],
+        },
+    ),
+    (
+        # The rollback with nothing newer on our line: not behind. The string comparison
+        # this replaced called it a milestone bump from M900 to M899, a downgrade.
+        "ahead",
+        "900.0.1000.10",
+        {
+            "Mac": ["899.0.900.5", "900.0.1000.10"],
+            "Windows": ["899.0.900.5"],
+            "Linux": ["899.0.900.4"],
+        },
+    ),
+]
+
+
+def self_test() -> int:
+    """Exercise the verdict on fixtures, offline. The three states are the whole point
+    of this script and the reason it replaced a string comparison, so they are checked
+    where CI can run them without reaching the network."""
+    failures = 0
+    for expected, pinned, stable in SELF_TESTS:
+        state, latest, reasons = verdict(version_key(pinned), stable)
+        if state != expected:
+            print(f"  FAIL {pinned}: expected {expected}, got {state}", file=sys.stderr)
+            failures += 1
+            continue
+        if state != "current" and not reasons:
+            print(f"  FAIL {pinned}: {state} with no reason given", file=sys.stderr)
+            failures += 1
+            continue
+        print(f"  ok   {pinned} -> {state} ({latest})")
+    # The rollback must be reported even when a point release also exists, because it
+    # decides which line the next pin follows.
+    _, _, both = verdict(version_key(SELF_TESTS[1][1]), SELF_TESTS[1][2])
+    if not any("rolled back" in r or "older milestone" in r for r in both):
+        print("  FAIL rollback is not mentioned alongside a point release", file=sys.stderr)
+        failures += 1
+    else:
+        print("  ok   a rollback is reported alongside a point release")
+    if failures:
+        print(f"{failures} self-test failure(s)", file=sys.stderr)
+        return 1
+    print("check-pin self-tests passed")
+    return 0
+
+
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="tooling/check-pin", description="Is the Chromium pin still current?"
+    )
+    parser.add_argument("--body-file", help="write the tracking issue body here")
+    parser.add_argument(
+        "--self-test",
+        action="store_true",
+        help="check the verdict against fixtures, offline; touches no network",
+    )
+    args = parser.parse_args(argv[1:])
+
+    if args.self_test:
+        return self_test()
+
+    pinned = read_pin()
+    try:
+        pinned_key = version_key(pinned)
+    except ValueError as error:
+        print(f"cannot read the pin: {error}", file=sys.stderr)
+        return 2
+
+    stable: dict[str, list[str]] = {}
+    for platform in PLATFORMS:
+        try:
+            stable[platform] = fetch(platform)
+        except (urllib.error.URLError, ValueError, TimeoutError, json.JSONDecodeError) as error:
+            print(f"could not reach chromiumdash for {platform}: {error}", file=sys.stderr)
+            return 2
+    if not any(stable.values()):
+        print("chromiumdash returned no stable releases at all", file=sys.stderr)
+        return 2
+
+    state, latest, reasons = verdict(pinned_key, stable)
+
+    report = [f"pin:     {pinned}", "         serving          highest"]
+    for platform in PLATFORMS:
+        versions = stable.get(platform, [])
+        report.append(
+            f"{platform.lower():<8} {serving(versions) or 'unknown':<16} "
+            f"{newest(versions) or 'unknown'}"
+        )
+    report.append(f"state:   {state}")
+    report += [f"  - {reason}" for reason in reasons]
+    print("\n".join(report), file=sys.stderr)
+
+    if state == "behind":
+        title = f"Chromium stable is at {latest}; we are pinned to {pinned}"
+    elif state == "ahead":
+        title = f"{SHIPPING_PLATFORM} stable rolled back to {latest}; we are pinned to {pinned}"
+    else:
+        title = f"Chromium pin {pinned} is current"
+
+    if args.body_file:
+        Path(args.body_file).write_text(issue_body(pinned, stable, reasons), encoding="utf-8")
+
+    github_output = os.environ.get("GITHUB_OUTPUT")
+    if github_output:
+        with open(github_output, "a", encoding="utf-8") as handle:
+            handle.write(f"state={state}\n")
+            handle.write(f"pinned={pinned}\n")
+            handle.write(f"latest={latest}\n")
+            handle.write(f"title={title}\n")
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

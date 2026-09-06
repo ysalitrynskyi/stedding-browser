@@ -151,6 +151,13 @@ Applies from M7 (first auto-updating release) onward.
   fixes and within **14 days** otherwise. The gate is checked per upstream release;
   misses are recorded publicly in the release notes with reasons. This is the standing
   cost of running a fork — the patch series and build pipeline are designed around it.
+- **The clock is started by a machine, not by remembering.** `tooling/check-pin` asks
+  daily whether the pin is still current and the `upstream` workflow opens one tracking
+  issue while it is not (`.github/workflows/upstream.yml`). It reads stable on every
+  desktop platform, because a point release on the milestone we ship reaches the others
+  at the same time and a pulled macOS rollout would otherwise hide it. A deadline whose
+  alarm can fail silently is not a deadline: the first version of that check spent four
+  days red without ever filing the issue.
 - **No bundled analytics or tracking SDKs.** Zero third-party analytics, crash
   reporting to third parties, advertising, or attribution SDKs in the product.
   Verifiable by dependency audit and by the network capture gate below.

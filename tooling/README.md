@@ -28,11 +28,13 @@ its configuration from `chromium-version` — never from a value typed twice.
 | `update-patches` | Turns those commits back into `../patches/`. |
 | `repair-checkout` | Rewrites git cache paths after a checkout is moved. |
 | `update-pin` | Moves the Chromium pin to the newest stable and checks the series still applies. |
+| `check-pin` | Is the pin current? Reports `current`, `behind` or `ahead` against stable on every desktop platform; `--self-test` runs the verdict on offline fixtures. The `upstream` workflow calls it. |
 | `sign-release` | Sign and notarise a built app with Chromium's signing pipeline; `--check` lists what is missing (identity, notary profile, packaging dir) |
 | `publish-release` | GitHub pre-release from `dist/`: tag `v<VERSION>`, notes from `docs/release-notes/<tag>.md`; `--check` first |
 | `package-dmg` | Packages a built app into an installable `.dmg`. |
 | `brand/generate.py` | Regenerates the whole brand system from one geometry file. |
-| `check-repo` | Repository hygiene: shell portability, links, ADRs, patch series, the pin, no machine paths. |
+| `check-repo` | Repository hygiene: shell portability, links, ADRs, patch series, the pin, traps, nothing tracked that is ignored, no machine paths. |
+| `check-shell` | shellcheck at the pinned version over every script here, plus `bash -n`. CI calls this exact script. |
 | `verify-build` | Runs a built browser and checks it renders, does WebGL, and decodes video. |
 | `measure/` | Performance harness and the fixed ten-site list for the QUALITY.md budgets. |
 | `args/` | `gn` argument files, one per build configuration, with the reasoning per flag. |

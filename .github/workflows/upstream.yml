@@ -1,13 +1,20 @@
-# Watch Chromium stable and say, every day, whether we are behind.
+# Watch Chromium stable and say, every day, whether the pin is still the right one.
 #
-# A fork that drifts from upstream ships known vulnerabilities. docs/QUALITY.md
-# commits to shipping a rebased release within 7 days of an in-the-wild exploit
-# fix and 14 days otherwise. That deadline is only meetable if falling behind is
-# noticed the same day rather than the next time somebody happens to look.
+# A fork that drifts from upstream ships known vulnerabilities. docs/QUALITY.md commits
+# to shipping a rebased release within 7 days of an in-the-wild exploit fix and 14 days
+# otherwise. That deadline is only meetable if falling behind is noticed the same day
+# rather than the next time somebody happens to look.
 #
-# This cannot build Chromium — see the "CI reality" section of
-# docs/ARCHITECTURE.md — so it does the part it genuinely can: compare the pin
-# against the live stable channel and fail loudly when they diverge.
+# This cannot build Chromium — see the "CI reality" section of docs/ARCHITECTURE.md —
+# so it does the part it genuinely can: ask `tooling/check-pin` where the pin stands and
+# open one tracking issue while the answer is not "current".
+#
+# The comparison lives in tooling/check-pin, not in this file, for two reasons. A check
+# that only exists in a workflow cannot be reproduced on a developer machine, and the
+# version arithmetic is not a string comparison: Chromium's stable channel is per
+# platform and a pulled rollout can move a platform backwards. When this logic was
+# `[ "$PIN" = "$latest" ]` it spent four days red announcing a "MILESTONE bump" from
+# M153 to M152, which is a downgrade.
 
 name: upstream
 
@@ -27,71 +34,74 @@ jobs:
     name: is the pin current
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - name: Compare the pin against Chromium stable
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Ask where the pin stands
         id: check
-        run: |
-          set -euo pipefail
-          . tooling/chromium-version
-          latest=$(curl -sS --max-time 30 \
-            'https://chromiumdash.appspot.com/fetch_releases?channel=Stable&platform=Mac&num=1' \
-            | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d[0]["version"] if d else "")')
-          [ -n "$latest" ] || { echo "could not reach chromiumdash"; exit 1; }
+        # Writes state/pinned/latest/title to $GITHUB_OUTPUT, and the issue body to a
+        # file, so the steps below carry no version logic of their own. Exit 2 means the
+        # question could not be answered, which is a red build, not a green one.
+        run: tooling/check-pin --body-file "$RUNNER_TEMP/upstream-issue.md"
 
-          echo "pinned=$CHROMIUM_TAG" >> "$GITHUB_OUTPUT"
-          echo "latest=$latest"       >> "$GITHUB_OUTPUT"
-
-          if [ "$CHROMIUM_TAG" = "$latest" ]; then
-            echo "current: $CHROMIUM_TAG"
-            echo "behind=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          echo "behind=true" >> "$GITHUB_OUTPUT"
-          if [ "${CHROMIUM_TAG%%.*}" != "${latest%%.*}" ]; then
-            echo "MILESTONE bump available: M${CHROMIUM_TAG%%.*} -> M${latest%%.*}"
-          else
-            echo "point release available: $CHROMIUM_TAG -> $latest"
-          fi
-
-      - name: Open or update a tracking issue
-        if: steps.check.outputs.behind == 'true'
+      - name: Make sure the label exists
+        # `gh issue create --label upstream` fails outright when the label is missing —
+        # "could not add label: 'upstream' not found" — and that is exactly how this
+        # workflow ran for four days without ever filing the issue it exists to file.
+        # Creating it here also means a fork gets the label without anyone setting it up.
+        if: steps.check.outputs.state != 'current'
         env:
           GH_TOKEN: ${{ github.token }}
-          PINNED: ${{ steps.check.outputs.pinned }}
-          LATEST: ${{ steps.check.outputs.latest }}
         run: |
           set -euo pipefail
-          title="Chromium stable is at $LATEST; we are pinned to $PINNED"
-          # One open issue at a time. A new issue per day would be noise, and
-          # noise is how a security deadline gets missed.
-          existing=$(gh issue list --state open --label upstream --json number,title \
-                     --jq '.[] | select(.title | startswith("Chromium stable is at")) | .number' | head -1)
-          body=$(printf '%s\n' \
-            "Upstream stable: \`$LATEST\`" \
-            "Our pin: \`$PINNED\` (\`tooling/chromium-version\`)" \
-            "" \
-            "To take it:" \
-            "" \
-            '```bash' \
-            "tooling/update-pin --apply" \
-            '```' \
-            "" \
-            "That moves the pin, syncs, and reports whether the patch series still" \
-            "applies. If a patch conflicts on a routine point release, the patch is" \
-            "in the wrong layer — see docs/ARCHITECTURE.md." \
-            "" \
-            "Security timetable is in docs/QUALITY.md: 7 days for fixes to" \
-            "in-the-wild exploits, 14 days otherwise.")
+          gh label create upstream \
+            --description "The Chromium pin is not current" \
+            --color BFD4F2 \
+            || echo "label already exists"
+
+      - name: Open or update the tracking issue
+        if: steps.check.outputs.state != 'current'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE: ${{ steps.check.outputs.title }}
+        run: |
+          set -euo pipefail
+          body="$RUNNER_TEMP/upstream-issue.md"
+          # One open issue at a time. A new issue per day would be noise, and noise is
+          # how a security deadline gets missed. Matched by label rather than by title
+          # prefix, because the title now changes with the state.
+          existing=$(gh issue list --state open --label upstream \
+                     --json number --jq '.[0].number // empty')
           if [ -n "$existing" ]; then
-            gh issue edit "$existing" --title "$title" --body "$body"
+            gh issue edit "$existing" --title "$TITLE" --body-file "$body"
+            echo "updated issue #$existing"
           else
-            gh issue create --title "$title" --body "$body" --label upstream
+            gh issue create --title "$TITLE" --body-file "$body" --label upstream
           fi
 
-      - name: Fail so the badge goes red while we are behind
-        if: steps.check.outputs.behind == 'true'
+      - name: Close the tracking issue once the pin is current again
+        if: steps.check.outputs.state == 'current'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          echo "pinned ${{ steps.check.outputs.pinned }}, upstream ${{ steps.check.outputs.latest }}"
+          set -euo pipefail
+          existing=$(gh issue list --state open --label upstream \
+                     --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue close "$existing" \
+              --comment "The pin is current again (\`tooling/check-pin\`)."
+            echo "closed issue #$existing"
+          else
+            echo "nothing open"
+          fi
+
+      - name: Fail so the badge goes red while the pin is not current
+        if: steps.check.outputs.state != 'current'
+        run: |
+          echo "state: ${{ steps.check.outputs.state }}"
+          echo "pin:   ${{ steps.check.outputs.pinned }}"
+          echo "found: ${{ steps.check.outputs.latest }}"
           exit 1

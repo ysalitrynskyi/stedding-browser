@@ -5,11 +5,25 @@
 #   tooling/publish-release --check      # what would be published; touches nothing
 #   tooling/publish-release              # create the release (asks gh; needs `repo`)
 #
-# The tag is v<VERSION> (the VERSION file at the repository root). Per ADR 0014 the
-# tag is what the browser's updater compares against, so its shape is checked here:
+# The tag is v<VERSION> (the VERSION file at the repository root). Per ADR 0014 the tag
+# is what the browser's updater compares against, so its shape is checked here:
 # v<major>.<minor>.<patch>[-beta.<n>]. Notes come from docs/release-notes/<tag>.md,
 # written by hand in the register docs/BRAND.md asks for; nothing is generated from
 # commits. The DMG and its .sha256 are the only assets.
+#
+# Three things this refuses to guess at, each of which has a way of publishing something
+# that is not what was built:
+#
+#   * WHICH IMAGE. dist/ is not emptied by anything, and every image in it is a valid
+#     DMG with a valid checksum beside it. The image for this release is the one named
+#     for this VERSION; if it is not there, one unambiguous image will do, and two will
+#     not.
+#   * WHETHER THE CHECKSUM MATCHES. The .sha256 beside the image is what the release
+#     notes tell people to verify against. It is recomputed here.
+#   * WHICH COMMIT. `gh release create` tags the remote, so a release cut from a branch
+#     that is not pushed carries a tag pointing at code the build never saw. The tag is
+#     pinned to this commit with --target, and this commit has to be on the remote.
+
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=./lib.sh
 . "$(cd "$(dirname "$0")" && pwd)/lib.sh"
@@ -19,7 +33,7 @@ main() {
     while [ $# -gt 0 ]; do
       case "$1" in
         --check)   CHECK=1; shift ;;
-        -h|--help) sed -n '2,13p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,26p' "$0"; exit 0 ;;
         *)         die "unknown argument: $1" ;;
       esac
     done
@@ -29,35 +43,111 @@ main() {
     printf '%s' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-beta\.[0-9]+)?$' \
       || die "tag '$tag' does not match v<major>.<minor>.<patch>[-beta.<n>] (ADR 0014)"
     notes="$STEDDING_ROOT/docs/release-notes/$tag.md"
-    dmg="$(find "$STEDDING_ROOT/dist" -maxdepth 1 -name '*.dmg' 2>/dev/null | sort | head -1 || true)"
+    arch="$(uname -m)"
     missing=0
     report() { printf '  %-16s %s\n' "$1" "$2" >&2; }
 
-    if gh auth status 2>/dev/null | grep -q "Logged in to github.com account ysalitrynskyi"; then
-      report "gh" "logged in as ysalitrynskyi"
+    # The repository comes from the remote, not from a name typed into this script. A
+    # hardcoded owner makes the script personal operational data in a public repo, and
+    # it silently publishes to somebody else's project from a fork.
+    repo="$(git -C "$STEDDING_ROOT" remote get-url origin 2>/dev/null \
+            | sed -E 's#^git@github\.com:#https://github.com/#; s#\.git$##' \
+            | sed -E 's#^https://github\.com/##')"
+    if printf '%s' "$repo" | grep -Eq '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'; then
+      report "repo" "$repo"
     else
-      report "gh" "MISSING: gh auth login as ysalitrynskyi"; missing=1
+      report "repo" "MISSING: cannot read owner/name from origin"; missing=1
     fi
-    if [ -n "$dmg" ] && [ -f "$dmg.sha256" ]; then
-      report "dmg" "$dmg ($(du -sh "$dmg" | cut -f1))"
+
+    # gh's own answer to "can this account write here", rather than a username this
+    # script was told to expect.
+    if ! gh auth status >/dev/null 2>&1; then
+      report "gh" "MISSING: gh auth login"; missing=1
+    elif [ -n "$repo" ]; then
+      permission="$(gh repo view "$repo" --json viewerPermission \
+                    --jq .viewerPermission 2>/dev/null || echo unknown)"
+      case "$permission" in
+        ADMIN|MAINTAIN|WRITE) report "gh" "authenticated, $permission on $repo" ;;
+        *) report "gh" "MISSING: this account has $permission on $repo"; missing=1 ;;
+      esac
+    fi
+
+    # The image for THIS release, by name. Falling back to a lone image keeps a
+    # hand-built one publishable; two images is a question only a human can answer.
+    dmg=""
+    # `find` over a dist/ that does not exist yet, and `grep -c` over no lines, both
+    # exit non-zero; under `set -e` that ends the report before it prints the reason.
+    exact="$(find "$STEDDING_ROOT/dist" -maxdepth 1 -name "*-$version-$arch.dmg" 2>/dev/null | sort || true)"
+    if [ "$(printf '%s\n' "$exact" | grep -c . || true)" -eq 1 ]; then
+      dmg="$exact"
     else
-      report "dmg" "MISSING: tooling/package-dmg release"; missing=1
+      all="$(find "$STEDDING_ROOT/dist" -maxdepth 1 -name '*.dmg' 2>/dev/null | sort || true)"
+      count="$(printf '%s\n' "$all" | grep -c . || true)"
+      if [ "$count" -eq 1 ]; then
+        dmg="$all"
+      elif [ "$count" -gt 1 ]; then
+        report "dmg" "MISSING: no *-$version-$arch.dmg, and $count images to choose from:"
+        printf '%s\n' "$all" | while IFS= read -r other; do
+          [ -n "$other" ] && printf '                   %s\n' "$(basename "$other")" >&2
+        done
+        report "" "empty dist/ and run tooling/package-dmg release"
+        missing=1
+      fi
     fi
+
+    if [ -z "$dmg" ]; then
+      [ "$missing" -eq 1 ] || { report "dmg" "MISSING: tooling/package-dmg release"; missing=1; }
+    elif [ ! -f "$dmg.sha256" ]; then
+      report "dmg" "MISSING: no checksum beside $(basename "$dmg")"; missing=1
+    else
+      # The checksum in the file is what the release notes tell people to verify
+      # against. If it was written for a different image, this is where it shows.
+      recorded="$(cut -d' ' -f1 < "$dmg.sha256")"
+      actual="$(shasum -a 256 "$dmg" | cut -d' ' -f1)"
+      if [ "$recorded" = "$actual" ]; then
+        report "dmg" "$(basename "$dmg") ($(du -sh "$dmg" | cut -f1)), checksum verified"
+      else
+        report "dmg" "MISSING: $(basename "$dmg").sha256 says $recorded, the image is $actual"
+        missing=1
+      fi
+    fi
+
     if [ -f "$notes" ]; then
-      report "notes" "$notes"
+      # The notes quote the checksum; a stale one sends people to verify against a
+      # number that is not the image they downloaded.
+      if [ -n "$dmg" ] && [ -f "$dmg.sha256" ] \
+         && ! grep -q "$(cut -d' ' -f1 < "$dmg.sha256")" "$notes"; then
+        report "notes" "MISSING: $tag.md does not carry this image's sha256"; missing=1
+      else
+        report "notes" "docs/release-notes/$tag.md"
+      fi
     else
       report "notes" "MISSING: $notes"; missing=1
     fi
-    if gh release view "$tag" >/dev/null 2>&1; then
+
+    if gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
       report "tag" "$tag ALREADY RELEASED"; missing=1
     else
       report "tag" "$tag (new)"
     fi
+
     if [ -z "$(git -C "$STEDDING_ROOT" status --short)" ]; then
-      report "repo" "clean"
+      report "tree" "clean"
     else
-      report "repo" "DIRTY: commit first"; missing=1
+      report "tree" "DIRTY: commit first"; missing=1
     fi
+
+    # gh cuts the tag on the remote. A commit that is not there yet cannot be tagged,
+    # and the release would carry whatever the remote's default branch is at instead.
+    head="$(git -C "$STEDDING_ROOT" rev-parse HEAD)"
+    git -C "$STEDDING_ROOT" fetch --quiet origin 2>/dev/null || true
+    if git -C "$STEDDING_ROOT" branch -r --contains "$head" 2>/dev/null | grep -q .; then
+      report "commit" "$(git -C "$STEDDING_ROOT" rev-parse --short HEAD) is on the remote"
+    else
+      report "commit" "MISSING: $(git -C "$STEDDING_ROOT" rev-parse --short HEAD) is not pushed"
+      missing=1
+    fi
+
     if [ "$CHECK" -eq 1 ]; then
       if [ "$missing" -eq 0 ]; then log "ready to publish $tag"; else warn "not ready"; fi
       exit "$missing"
@@ -66,14 +156,19 @@ main() {
 
     title="Stedding $(printf '%s' "$version" | sed 's/-beta\./ beta /')"
     log "publishing $tag: $title"
+    log "from $(git -C "$STEDDING_ROOT" rev-parse --short HEAD) with $(basename "$dmg")"
     gh release create "$tag" \
-      --repo ysalitrynskyi/stedding-browser \
+      --repo "$repo" \
+      --target "$head" \
       --prerelease \
       --title "$title" \
       --notes-file "$notes" \
       "$dmg" "$dmg.sha256" || die "gh release create failed"
-    git -C "$STEDDING_ROOT" tag -f "$tag" >/dev/null
-    log "published: $(gh release view "$tag" --json url -q .url)"
+    # Take the tag gh made rather than making a second one locally: they are the same
+    # commit by --target, and fetching says so instead of assuming it.
+    git -C "$STEDDING_ROOT" fetch --quiet origin "refs/tags/$tag:refs/tags/$tag" \
+      || warn "could not fetch the tag gh created; git fetch --tags when convenient"
+    log "published: $(gh release view "$tag" --repo "$repo" --json url -q .url)"
 }
 
 main "$@"

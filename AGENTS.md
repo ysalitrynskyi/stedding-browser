@@ -166,7 +166,9 @@ Read `docs/HANDOFF.md` before touching anything — it carries the working loop,
 every dev parameter, and the traps already paid for. `docs/ARC-ROUND2.md` is
 the operator-feedback ledger; `docs/UI-SPEC.md` the measured Arc match.
 
-Released: `v0.2.0-beta.4` (2026-09-05), unsigned (M7 waits on Apple).
+Released: `v0.2.0-beta.4` (2026-09-05, published from this repo with
+`tooling/publish-release`), unsigned (M7 waits on Apple). It carries rounds 5,
+6 and 7, the round-7 second pass included.
 Outstanding: `BACKLOG.md`. First vanilla perf comparison is in
 `docs/perf/README.md`: on the deterministic page list every QUALITY budget is
 met (cold +2.3%, warm −2.0%, memory +0.0% over vanilla).
@@ -209,15 +211,23 @@ met (cold +2.3%, warm −2.0%, memory +0.0% over vanilla).
 
 ## Current priorities (keep this list short and fresh)
 
-The order is `BACKLOG.md`. `v0.2.0-beta.4` (unsigned, 2026-09-05) carries rounds 5,
-6 and 7: the Arc parity work, the Zen-mods plan in full (`docs/ROUND6-PLAN.md`,
-patches 0016–0036), the operator's six from beta 3 and the Arc one-click import
-(patches 0037–0038). What comes next is decided by the operator's look at beta 4
-(`docs/ARC-ROUND2.md` records each round); until then the open rows are `S-17`
-(signing, waiting on Apple's organisation enrolment, then `tooling/sign-release`
-and a signed re-release), `S-45` (Google's new tab page when Google is chosen),
-`S-47` (an input-free settings probe) and `S-48` (the Arc data import run once
-against a real Arc profile). Every feature spec names its own `gap` rows.
+The order is `BACKLOG.md`. `v0.2.0-beta.4` is out (unsigned, 2026-09-05): rounds
+5, 6 and 7 — the Arc parity work, the Zen-mods plan in full
+(`docs/ROUND6-PLAN.md`, patches 0016–0036), the operator's six from beta 3, the
+Arc one-click import, and the second pass on the operator's replies the same
+evening (patches 0037–0038 and fixups into 0001, 0002).
+
+**Whoever picks this up next**: read `docs/HANDOFF.md` first — the loop, the dev
+parameters and the traps, now including `tooling/capture-state` (a capture that
+needs neither the keyboard nor the pointer, trap 22) and the rule that a release
+sweep runs Chromium's own suites around what the series touches, not only the
+Stedding filters (trap 24). What to build next is the operator's look at beta 4;
+`docs/ARC-ROUND2.md` is where each round's findings are recorded, one table per
+round, and the fix for each. Until then the open rows are `S-17` (signing,
+waiting on Apple's organisation enrolment, then `tooling/sign-release` and a
+signed re-release), `S-45` (Google's new tab page when Google is chosen), `S-47`
+(an input-free settings probe) and `S-48` (the Arc data import run once against a
+real Arc profile). Every feature spec names its own `gap` rows.
 
 How to work here is `docs/HANDOFF.md`: the loop, the dev parameters that recreate
 any state for a capture, and the traps. Two rules that cost the most when broken:

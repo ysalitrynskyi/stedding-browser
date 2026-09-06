@@ -48,6 +48,33 @@ round 7 was verified. `tooling/drive <profile> <steps>` clicks, drags and types;
 is the only way to reach a context menu or a typed URL, and it waits for an empty
 chair (trap 27). Measure the PNG (PIL, a luma scan) rather than eyeballing it.
 
+## What can be checked without a Mac
+
+Most of this project needs the Mac. Three things do not, and they are worth knowing
+about before assuming a check has to wait for a build:
+
+- **The series applies.** `tooling/apply-patches --check` reads the pinned tree into a
+  temporary index and applies the series into it. Plain git: no depot_tools, no build,
+  no macOS. Getting the tree is a `git init` plus one blobless-free depth-1 fetch of
+  the tag (about 1.4 GB, two minutes); no working tree is needed, because
+  `git apply --cached` reads objects rather than files. The `series` workflow does
+  exactly this on every change to `patches/` or the pin, cached under the pin.
+- **The window's geometry.** `tooling/check-geometry` re-measures the card's gutters
+  and corner radius in `docs/images/*.png` against `tooling/probes/geometry.json`. It
+  needs Pillow and the committed captures, so it runs wherever CI runs. Two traps in
+  measuring this way: read a gutter as a band of window ground across the whole card
+  rather than as one probed pixel, or the page's own content answers instead; and fit
+  a corner radius across the whole arc, because the inset of the edge one scanline
+  below the top is `r - sqrt(2r)`, which reads 8.7 for a 12 px corner and looks like a
+  real discrepancy.
+- **shellcheck at the pinned version.** The Windows build of the pinned release runs
+  under Git Bash through a one-line shim on PATH, so `tooling/check-shell` gives the
+  same answer CI gives.
+
+What still cannot: the build, Chromium's own suites, anything driving a window, and
+signing. The patch series touches nine Objective-C++ files against AppKit and needs
+full Xcode, so no amount of disk changes it. That is `S-49`.
+
 ## Dev parameters (all on `SteddingArcStyleWindow`, tunable without rebuilds)
 
 `contents_corner_radius`, `vertical_tab_height`, `vertical_tab_corner_radius`,

@@ -173,7 +173,9 @@ Built, with tests or measured captures:
   pass the same day on the operator's reply: the rail's rows take the column
   (44 DIP squares), the address row stays under Windows' caption buttons, and
   a profile killed while collapsed no longer crashes on every launch, and the
-  bar runs under Windows' caption buttons with their glyphs in its colour.
+  bar runs under Windows' caption buttons with their glyphs in its colour, the
+  buttons centred on the row; Chrome's registry key for extensions is no
+  longer read (privacy Q9).
 
 Read `docs/HANDOFF.md` before touching anything — it carries the working loop,
 every dev parameter, and the traps already paid for, numbered contiguously and cited

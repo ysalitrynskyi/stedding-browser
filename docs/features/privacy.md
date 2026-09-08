@@ -23,6 +23,7 @@ prompts) keeps working; only Global Privacy Control needs a preference of its ow
 | Q6 | Topics, Protected Audience and Attribution stay off: their preferences already default to false in Chromium; the Ad privacy page is hidden from chrome://settings and its link row from the Privacy page. | `PrivacyDefaultsWindowTest.EveryDefaultIsTheProtectiveOne`; this Chromium has no Ad privacy settings page to hide | built |
 | Q7 | Search suggestions are off by default: `search.suggest_enabled` defaults to false (Chromium: true); the row reads "Send what you type to the search engine for suggestions". | `PrivacyDefaultsWindowTest.EveryDefaultIsTheProtectiveOne` | built |
 | Q8 | Each of Q1–Q7 is one row in the Privacy block, bound to exactly one preference, with the protective side on. | settings capture `w3_privacy_block` | built |
+| Q9 | On Windows, Chrome's registry key for third-party-registered extensions (`Software\Google\Chrome\Extensions`, machine and user) is not read: Chromium reads Google Chrome's own key whatever the build's branding and installs what installers put there from Google's update server, with an "Action required" chip on the app menu until the user accepts. A vendor that registered for Chrome did not register for Stedding. Policy-forced extensions and the user's own installs are unaffected. Found on the operator's PC (Adobe Acrobat's extension), 2026-09-08. | none; live: the chip gone on a fresh profile with the key populated (Windows, 2026-09-08) | partial · no unit test yet (S-49) |
 
 ## Notes
 

@@ -367,6 +367,13 @@ into the fresh profile.
     `Chrome_WidgetWin_1` window to render is the largest one of the process:
     bubbles and toasts have the same class, and a console launched with
     redirected output is what `MainWindowHandle` returns.
+37. **A views layout that a capture cannot explain is answered by a dump, not
+    a theory.** Three readings of the toolbar's flex rules did not predict the
+    field landing on the back button; one `VLOG` of every child's bounds after
+    `Layout` did in a minute (the layout had dropped the centring spacers and
+    the clamp read their empty bounds). Chromium's own `--enable-ui-devtools`
+    listens but its `DOM.getDocument` never answered this build. Add the dump,
+    rebuild the one file, read the log, remove it before the patch is cut.
 
 ## Open items
 

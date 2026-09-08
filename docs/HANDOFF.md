@@ -374,6 +374,13 @@ into the fresh profile.
     the clamp read their empty bounds). Chromium's own `--enable-ui-devtools`
     listens but its `DOM.getDocument` never answered this build. Add the dump,
     rebuild the one file, read the log, remove it before the patch is cut.
+38. **On Windows, Chromium reads Google Chrome's registry key for extensions
+    whatever the branding** (`Software\Google\Chrome\Extensions`, machine
+    and user, `ExternalRegistryLoader`), and installs what it finds from
+    Google's update server. On a PC with Chrome and Adobe Acrobat that is an
+    "Action required" chip on a fresh profile's first launch. Stedding does
+    not create that provider (privacy Q9); any other Chrome-keyed lookup a
+    port meets deserves the same question.
 
 ## Open items
 

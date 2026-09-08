@@ -334,6 +334,23 @@ into the fresh profile.
     release, run the suites around what the series touches (`TabTest.*`,
     `TabStripModelTest.*`, `LocationBarViewTest.*`), not only ours.
 
+32. **Windows' caption buttons are on the right, and the frame reports them as
+    the trailing exclusion.** The layout skipped every exclusion with a vertical
+    strip because macOS's lights sit over the sidebar's column; Windows' buttons
+    sit over the row's. Read both exclusions, never assume one side (round 8).
+33. **Collapse state and drawn width are two different things.** Expanded on
+    hover the state stays collapsed while the strip is at its open width. Anything
+    styled for the rail -- centring, icon-only rows, the stacked switcher, the
+    opaque ground -- keys on the width being laid out, or it dresses the hover
+    overlay as a rail (round 8, three fixes in a row got this wrong first).
+34. **A Windows build from the Claude desktop app inherits an MSIX-redirected
+    %LOCALAPPDATA%** some 60 characters longer than the real one, and vpython's
+    venv then blows past MAX_PATH; point `VPYTHON_ROOT` at a short directory. And a
+    driver that clicks
+    must verify the browser is the foreground window first (`GetForegroundWindow`,
+    after the Alt-key tap Windows requires): `SetForegroundWindow` is allowed to
+    fail, and one launch put the clicks into the operator's own app.
+
 ## Open items
 
 `BACKLOG.md` is the list; do not keep one here. First up: the operator's look

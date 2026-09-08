@@ -162,6 +162,15 @@ Built, with tests or measured captures:
   W8). Two of Chromium's own suites had been red since patch 0002 because nothing
   ran them: they now assert what this fork does (`docs/HANDOFF.md`, trap 31).
 
+- **Round 8** (2026-09-08, `docs/ARC-ROUND2.md`; patch 0039): the series built
+  and ran on Windows for the first time -- nine `FilePath` portability fixes, then
+  the operator's look at it: the address row clear of Windows' caption buttons
+  (and the buttons never covered), the focused bar and the dropdown in the
+  page's colour, the row's colour surviving a reload, the rail centred and a
+  size up with the switcher stacked, and the hover overlay opaque. Verified on
+  captures the tooling took itself; the card measures the mac's geometry to the
+  pixel. Not a port (M8): branding and the macOS chrome are `is_mac`.
+
 Read `docs/HANDOFF.md` before touching anything — it carries the working loop,
 every dev parameter, and the traps already paid for, numbered contiguously and cited
 by number across the docs (`tooling/check-repo traps` keeps both true). `docs/ARC-ROUND2.md` is

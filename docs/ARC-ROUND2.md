@@ -132,6 +132,29 @@ Three things from the operator's first look at beta 2, each fixed and captured:
 | "Not changing colour like Arc": only pages with a `theme-color` coloured the row; chrome://settings, Wikipedia and most sites left it on the ground. | The page's own background is the fallback (`WebContents::GetBackgroundColor`), the way Safari tints its bar; the scheme-match rule stays (toolbar T3/T4). |
 | "Spaces very weirdly centred at the bottom": the chips were spread evenly across the row. | Chips sit together in the middle with a fixed gap, "+" at the right, downloads at the left (spaces B11). |
 
+## Round 8 — the first Windows build (2026-09-08)
+
+The series built for Windows for the first time -- M8 in `docs/ROADMAP.md` had not
+started -- on the operator's PC, with Visual Studio 2026 Build Tools and Windows SDK
+10.0.28000 installed for it. Nine portability errors first, all one cause; then the
+operator's look at the running window: five things, and two more found while
+capturing them. Every fix was verified on captures the tooling took itself
+(a `SendInput` driver with a foreground check, after a
+launch where the browser stayed behind and the clicks landed in the operator's own
+app), at 1400x880 with a device scale factor of 1 so the mac probes run on them
+unchanged: 20 of `tooling/probes/window.json`'s 23 pass, the three others being state
+or platform, and the card's edges, gutters and 12.00 DIP corner are the mac's to the
+pixel. Patch 0039.
+
+| # | Found | Fix |
+|---|---|---|
+| — | `base::FilePath::Append("Default")` and seven more did not compile: `FilePath` is `std::wstring` on Windows. | `FILE_PATH_LITERAL`, `FromUTF8Unsafe`, `AppendASCII`, `AsUTF8Unsafe` in the Arc importers, the sidebar backups and the screenshot file name. Nothing changes on the Mac (windows N1). |
+| 1 | The window's own buttons are on the right on Windows, and the address row ran under them. | The row stops short of the frame's trailing exclusion, the card's exposed top-right corner rounds, and with the row hidden the empty top container keeps the caption strip's height -- from the rail the window could not be closed at all (toolbar T19, windows N2). |
+| 2 | Clicking the address bar turned it dark. | Focused, the location bar borrows the results dropdown's background, which the page-bar supplier never set. The dropdown follows the page too, in the bar's contrast colour (toolbar T20). |
+| 3 | Reloading a white page turned the row dark and left it so. | A new Page starts with no colour and the WebContents announces a background only when it differs from the last one it sent, so white reloading to white is never announced. The controller keeps its colour while the page loads and re-reads the Page at first paint and at load end (toolbar T21). |
+| 4 | Collapsed, the icons were small and sat left in the column, and the Space switcher ran out of the rail and drew its "+" over the page. | The toggle, the New Tab and Archived rows centre in the rail a size up, the Archived row as its icon alone; the switcher stacks its chips in a column and the downloads button stacks above it -- all keyed on the width being drawn, not the collapse state, after a first cut centred the toggle in the hover overlay (sidebar Y8, Y9). The collapsed tab's own pill stays 25 DIP wide: `S-53`. |
+| 5 | Hovering the rail expanded it, and the page showed through every row. | The strip's background, invisible so the window's gradient shows through (trap 8), is visible exactly while the strip is collapsed by state and drawn wider than the rail (sidebar Y10). |
+
 ## Round 7 — the operator's look at beta 3 (2026-09-05)
 
 Six things from real use, and a crash found while capturing them. Each is fixed,

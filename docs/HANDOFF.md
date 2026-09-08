@@ -345,11 +345,28 @@ into the fresh profile.
     overlay as a rail (round 8, three fixes in a row got this wrong first).
 34. **A Windows build from the Claude desktop app inherits an MSIX-redirected
     %LOCALAPPDATA%** some 60 characters longer than the real one, and vpython's
-    venv then blows past MAX_PATH; point `VPYTHON_ROOT` at a short directory. And a
-    driver that clicks
-    must verify the browser is the foreground window first (`GetForegroundWindow`,
-    after the Alt-key tap Windows requires): `SetForegroundWindow` is allowed to
-    fail, and one launch put the clicks into the operator's own app.
+    venv then blows past MAX_PATH; point `VPYTHON_ROOT` at a short directory. And
+    a driver that clicks must verify the browser is the foreground window first
+    (`GetForegroundWindow`, after the Alt-key tap Windows requires):
+    `SetForegroundWindow` is allowed to fail, and one launch put the clicks into
+    the operator's own app. Trap 36 is the way that needs neither.
+35. **A bubble before the window is shown cannot anchor to a tracked element.**
+    The element tracker knows a view only once its widget is visible, so a
+    startup bubble -- the crashed-session "Restore pages?" one -- that falls
+    back to `kFallbackPopupAnchorElementId` because its button is not drawn
+    (the address row hidden, toolbar T8) finds nothing, and Chromium's CHECK
+    kills the launch: a profile killed while the sidebar was collapsed never
+    opened again (round 8, second pass). Anything that hides a toolbar button
+    must give such bubbles a drawn view to anchor to (toolbar T23).
+36. **On Windows a capture needs neither focus nor input.** `PrintWindow` with
+    `PW_RENDERFULLCONTENT` renders a window behind others, provided the launch
+    disables occlusion tracking (`--disable-features=CalculateNativeWinOcclusion`)
+    so Chromium keeps drawing a covered window; a click goes to the window's own
+    queue as `WM_LBUTTONDOWN`/`WM_LBUTTONUP` in client coordinates, never through
+    `SendInput`, so nothing reaches whatever the operator is doing. The
+    `Chrome_WidgetWin_1` window to render is the largest one of the process:
+    bubbles and toasts have the same class, and a console launched with
+    redirected output is what `MainWindowHandle` returns.
 
 ## Open items
 

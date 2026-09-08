@@ -169,7 +169,10 @@ Built, with tests or measured captures:
   page's colour, the row's colour surviving a reload, the rail centred and a
   size up with the switcher stacked, and the hover overlay opaque. Verified on
   captures the tooling took itself; the card measures the mac's geometry to the
-  pixel. Not a port (M8): branding and the macOS chrome are `is_mac`.
+  pixel. Not a port (M8): branding and the macOS chrome are `is_mac`. A second
+  pass the same day on the operator's reply: the rail's rows take the column
+  (44 DIP squares), the address row stays under Windows' caption buttons, and
+  a profile killed while collapsed no longer crashes on every launch.
 
 Read `docs/HANDOFF.md` before touching anything — it carries the working loop,
 every dev parameter, and the traps already paid for, numbered contiguously and cited

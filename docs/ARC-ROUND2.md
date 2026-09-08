@@ -144,7 +144,11 @@ launch where the browser stayed behind and the clicks landed in the operator's o
 app), at 1400x880 with a device scale factor of 1 so the mac probes run on them
 unchanged: 20 of `tooling/probes/window.json`'s 23 pass, the three others being state
 or platform, and the card's edges, gutters and 12.00 DIP corner are the mac's to the
-pixel. Patch 0039.
+pixel. Patch 0039. The operator's reply the same afternoon -- the rail's pill
+still narrow, no address bar in the rail -- and a startup crash found on the way
+are rows 6 to 8, in the same patch; those captures were taken with no focus and
+no input at all (`PrintWindow`, HANDOFF trap 36), with the operator at the
+machine.
 
 | # | Found | Fix |
 |---|---|---|
@@ -154,6 +158,9 @@ pixel. Patch 0039.
 | 3 | Reloading a white page turned the row dark and left it so. | A new Page starts with no colour and the WebContents announces a background only when it differs from the last one it sent, so white reloading to white is never announced. The controller keeps its colour while the page loads and re-reads the Page at first paint and at load end (toolbar T21). |
 | 4 | Collapsed, the icons were small and sat left in the column, and the Space switcher ran out of the rail and drew its "+" over the page. | The toggle, the New Tab and Archived rows centre in the rail a size up, the Archived row as its icon alone; the switcher stacks its chips in a column and the downloads button stacks above it -- all keyed on the width being drawn, not the collapse state, after a first cut centred the toggle in the hover overlay (sidebar Y8, Y9). The collapsed tab's own pill stays 25 DIP wide: `S-53`. |
 | 5 | Hovering the rail expanded it, and the page showed through every row. | The strip's background, invisible so the window's gradient shows through (trap 8), is visible exactly while the strip is collapsed by state and drawn wider than the rail (sidebar Y10). |
+| 6 | The rail's tab pill was still 26 DIP wide in the 62 DIP column, the "+" above it clipped to 10 DIP, the toggle 3.5 DIP right of the rows' centre. | The width a rail row gets is decided in the unpinned container's layout, not the strip's, which is why the first cut changed nothing. Every container's side padding is 3 DIP in the rail, keyed on the width being laid out, and `TabView::CollapsedWidth` says the same 44, so a rail row is a 44 DIP square around a 22 DIP favicon, centred in the rail plus the gutter; the "+ New Tab" row is its plus alone at that width, unclipped; the button containers sit on the same column, so the toggle centres with the rows (sidebar Y8; S-53 closed). |
+| 7 | In the rail there was no address bar at all: the row hidden with the sidebar (T8) left an empty 35 DIP band under the caption buttons. | The rule keeps the row while the frame's own buttons sit over its column -- Windows' caption buttons, the trailing exclusion -- since the strip exists whatever the sidebar does; the toggle still wins (toolbar T22, `AddressRowRulesTest.KeptUnderTheCaptionButtons`). macOS is unchanged. |
+| 8 | A profile killed while the sidebar was collapsed never opened again: `Check failed: element` in `AppMenuButton::GetAnchor` on every launch. | The crashed-session "Restore pages?" bubble anchors to the app menu button before the window is shown; with the row hidden the button is not drawn, and the fallback anchor is a tracked element the tracker does not know until the widget is visible. The button anchors such a bubble to the top container instead (toolbar T23, HANDOFF trap 35). Found on the round's own test profile, which the driver had killed; a Mac in the rail is the same path. |
 
 ## Round 7 — the operator's look at beta 3 (2026-09-05)
 

@@ -172,7 +172,8 @@ Built, with tests or measured captures:
   pixel. Not a port (M8): branding and the macOS chrome are `is_mac`. A second
   pass the same day on the operator's reply: the rail's rows take the column
   (44 DIP squares), the address row stays under Windows' caption buttons, and
-  a profile killed while collapsed no longer crashes on every launch.
+  a profile killed while collapsed no longer crashes on every launch, and the
+  bar runs under Windows' caption buttons with their glyphs in its colour.
 
 Read `docs/HANDOFF.md` before touching anything — it carries the working loop,
 every dev parameter, and the traps already paid for, numbered contiguously and cited

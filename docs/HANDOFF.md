@@ -366,7 +366,10 @@ into the fresh profile.
     `SendInput`, so nothing reaches whatever the operator is doing. The
     `Chrome_WidgetWin_1` window to render is the largest one of the process:
     bubbles and toasts have the same class, and a console launched with
-    redirected output is what `MainWindowHandle` returns.
+    redirected output is what `MainWindowHandle` returns. `tooling/win/capture.ps1`
+    is that driver. One more thing it taught: a `--force-device-scale-factor=2`
+    window on a 1728 px display is 864 DIP wide, so the toolbar's forward button
+    folds into the "»" overflow there -- Chromium's narrow-window rule, not a bug.
 37. **A views layout that a capture cannot explain is answered by a dump, not
     a theory.** Three readings of the toolbar's flex rules did not predict the
     field landing on the back button; one `VLOG` of every child's bounds after
@@ -384,10 +387,13 @@ into the fresh profile.
 
 ## Open items
 
-`BACKLOG.md` is the list; do not keep one here. First up: the operator's look
-at beta 4 (`docs/ARC-ROUND2.md` gets a round 8 table when it comes), `S-48`
-(the Arc data import run once on a real Arc profile) and `S-17` (signing, when
-Apple answers).
+`BACKLOG.md` is the list; do not keep one here. First up, on the Mac: publish
+`v0.2.0-beta.5` (prepared on 2026-09-09 -- `VERSION`, the notes, the docs -- by
+the steps under *Release channel*; the notes' checksum line reads `TBD` until the
+image exists). Then the operator's look at beta 5 (`docs/ARC-ROUND2.md` gets a
+round 9 table when it comes), `S-56` (the Windows port proper), `S-48` (the Arc
+data import run once on a real Arc profile) and `S-17` (signing, when Apple
+answers).
 
 ## Release channel
 
@@ -398,7 +404,10 @@ repo root with a clean tree: bump `VERSION`, `tooling/dev build release chrome`
 .../out/release/Stedding.app`, empty `dist/`, `tooling/package-dmg release`
 (`dist/Stedding-<VERSION>-arm64.dmg` and its `.sha256`), paste the checksum into
 `docs/release-notes/v<ver>.md`, commit, **push**, `tooling/publish-release --check`,
-then `tooling/publish-release`. Beta 4 went out this way on 2026-09-05.
+then `tooling/publish-release`. Beta 4 went out this way on 2026-09-05. Beta 5 was
+prepared on the Windows PC on 2026-09-09 -- `VERSION`, the notes with a `TBD`
+checksum, the docs -- because only the Mac builds the image; the Mac picks up at
+`tooling/dev build release chrome`.
 
 The push moved ahead of the publish on purpose. `gh release create` cuts the tag on
 the remote, so publishing from an unpushed commit tagged whatever the remote's default

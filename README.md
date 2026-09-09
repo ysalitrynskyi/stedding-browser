@@ -27,8 +27,15 @@ using the web without surveillance or vendor control. See `docs/NAMING.md`.
 
 **Beta 4 is out** — `v0.2.0-beta.4` on
 [Releases](https://github.com/ysalitrynskyi/stedding-browser/releases), macOS
-(Apple silicon), Chromium 153 stable, a 38-patch series (`patches/`). It is a beta: the
-feature set below works and is tested, and the operator uses it against Arc daily.
+(Apple silicon), Chromium 153 stable, Stedding's patch series (`patches/`, 39 patches
+on this commit). It is a beta: the feature set below works and is tested, and the
+operator uses it against Arc daily. Beta 5 is prepared on this commit
+(`docs/release-notes/v0.2.0-beta.5.md`) and is published from the Mac.
+
+**Windows**: the series builds and runs on Windows x64 since 2026-09-08 — the
+Stedding window, Spaces, folders, the command bar, the address row under the window's
+own buttons (`docs/features/windows.md`, `docs/images/win-wide.png`). Not a release:
+branding, the Windows keyboard map and an installer are M8 (`BACKLOG.md` S-56).
 
 Builds are **unsigned until M7** (Apple's organisation enrolment is pending): open the
 DMG, drag Stedding to Applications, then **right-click → Open** once. The release
@@ -97,7 +104,8 @@ moves ahead of our pin.
 ## Not there yet
 
 - Signing and notarisation, and the in-app updater that needs them (M7, `S-17`).
-- Windows and Linux (M8, M9).
+- Windows as a release (M8, `S-56`: it builds and runs; no branding, keyboard map or
+  installer yet) and Linux (M9).
 - The gaps each feature spec names as `gap`, and the rows in `BACKLOG.md`.
 
 ## Principles

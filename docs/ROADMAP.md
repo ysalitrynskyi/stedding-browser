@@ -13,11 +13,14 @@ below always means: a fresh macOS user account can install the artifact and run 
 without developer tools, without terminal commands, and without reading build docs
 (Windows/Linux equivalents apply from M8/M9 on).
 
-**Where this stands (2026-09-05):** M0–M6 are built and shipped unsigned as
+**Where this stands (2026-09-09):** M0–M6 are built and shipped unsigned as
 `v0.2.0-beta.4` — the ladder was climbed out of order, chasing operator feedback on real
 builds (`docs/ARC-ROUND2.md`), and each feature's own spec under `docs/features/` is the
-record of what passes. M7 waits on Apple's organisation enrolment (`BACKLOG.md` S-17);
-M8 and M9 have not started.
+record of what passes; `v0.2.0-beta.5` is prepared and waits on the Mac's image. M7
+waits on Apple's organisation enrolment (`BACKLOG.md` S-17). M8 started on 2026-09-08
+with the first Windows build (patch 0039, `docs/features/windows.md` N1–N2): the
+series compiles and runs there, without branding, the Windows keyboard map or an
+installer (`BACKLOG.md` S-56). M9 has not started.
 
 ---
 
@@ -258,6 +261,13 @@ Acceptance criteria:
 ## M8 — Windows port
 
 **Goal:** feature parity on Windows x64 with a native-quality installer and updates.
+
+**Where this stands (2026-09-09):** the series builds and runs on Windows (round 8,
+patch 0039): the Stedding window with its sidebar, Spaces, folders, the command bar,
+archive and routing, the address row under the window's own caption buttons and
+measured to the Mac's geometry. Not done: branding (the build is still "Chromium"
+to Windows: name, icon, install directory, registry keys), the keyboard map and the
+menus (`is_mac` today), an installer, signing, updates, CI. `BACKLOG.md` S-56.
 
 Scope:
 

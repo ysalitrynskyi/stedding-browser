@@ -164,18 +164,18 @@ Built, with tests or measured captures:
 
 - **Round 8** (2026-09-08, `docs/ARC-ROUND2.md`; patch 0039): the series built
   and ran on Windows for the first time -- nine `FilePath` portability fixes, then
-  the operator's look at it: the address row clear of Windows' caption buttons
-  (and the buttons never covered), the focused bar and the dropdown in the
-  page's colour, the row's colour surviving a reload, the rail centred and a
-  size up with the switcher stacked, and the hover overlay opaque. Verified on
-  captures the tooling took itself; the card measures the mac's geometry to the
-  pixel. Not a port (M8): branding and the macOS chrome are `is_mac`. A second
-  pass the same day on the operator's reply: the rail's rows take the column
-  (44 DIP squares), the address row stays under Windows' caption buttons, and
-  a profile killed while collapsed no longer crashes on every launch, and the
-  bar runs under Windows' caption buttons with their glyphs in its colour, the
-  buttons centred on the row; Chrome's registry key for extensions is no
-  longer read (privacy Q9).
+  the operator's look at it, in four passes the same day. The address row under
+  Windows' caption buttons with their glyphs in its colour and the buttons on the
+  row's centre line; the focused bar and the dropdown in the page's colour; the
+  row's colour surviving a reload; the rail's rows 44 DIP squares, centred, the
+  switcher stacked, the hover overlay opaque. Three of them reach the Mac: a
+  profile killed while collapsed crashed on every launch (the crashed-session
+  bubble, toolbar T23), the address field could sit over the back button in a
+  narrow window (toolbar T18), and the rail itself. Chrome's registry key for
+  extensions is no longer read (privacy Q9). Verified on captures the tooling
+  took itself with no focus and no input (`tooling/win/capture.ps1`, trap 36);
+  the card measures the mac's geometry to the pixel. Not a port (M8, `S-56`):
+  branding and the macOS chrome are `is_mac`.
 
 Read `docs/HANDOFF.md` before touching anything — it carries the working loop,
 every dev parameter, and the traps already paid for, numbered contiguously and cited
@@ -184,7 +184,10 @@ the operator-feedback ledger; `docs/UI-SPEC.md` the measured Arc match.
 
 Released: `v0.2.0-beta.4` (2026-09-05, published from this repo with
 `tooling/publish-release`), unsigned (M7 waits on Apple). It carries rounds 5,
-6 and 7, the round-7 second pass included.
+6 and 7, the round-7 second pass included. Prepared: `v0.2.0-beta.5` (`VERSION`,
+`docs/release-notes/v0.2.0-beta.5.md`, 2026-09-09) with round 8; the DMG, its
+checksum in the notes and the publish are the Mac's (`docs/HANDOFF.md`, *Release
+channel*), since only the Mac builds the macOS image.
 Outstanding: `BACKLOG.md`. First vanilla perf comparison is in
 `docs/perf/README.md`: on the deterministic page list every QUALITY budget is
 met (cold +2.3%, warm −2.0%, memory +0.0% over vanilla).
@@ -231,7 +234,9 @@ The order is `BACKLOG.md`. `v0.2.0-beta.4` is out (unsigned, 2026-09-05): rounds
 5, 6 and 7 — the Arc parity work, the Zen-mods plan in full
 (`docs/ROUND6-PLAN.md`, patches 0016–0036), the operator's six from beta 3, the
 Arc one-click import, and the second pass on the operator's replies the same
-evening (patches 0037–0038 and fixups into 0001, 0002).
+evening (patches 0037–0038 and fixups into 0001, 0002). `v0.2.0-beta.5` is
+prepared with round 8 (patch 0039) and waits on the Mac for its DMG: first thing
+on the Mac, the release channel's steps in `docs/HANDOFF.md`.
 
 **Whoever picks this up next**: read `docs/HANDOFF.md` first — the loop, the dev
 parameters and the traps, now including `tooling/capture-state` (a capture that
@@ -245,7 +250,8 @@ since), `S-51` (a legacy profile still reads the Chromium-named keychain item an
 nothing rewrites it), `S-49` (a builder that can actually build — until it exists
 CI checks repository hygiene and nothing verifies the product), `S-45` (Google's
 new tab page when Google is chosen), `S-47` (an input-free settings probe), `S-48`
-(the Arc data import run once against a real Arc profile), `S-50` (the idle-network
+(the Arc data import run once against a real Arc profile), `S-56` (M8: the Windows
+port proper, on the first Windows build of round 8), `S-50` (the idle-network
 audit as a recorded run) and `S-17` (signing, waiting on Apple's organisation
 enrolment, then `tooling/sign-release` and a signed re-release). Every feature spec
 names its own `gap` rows.

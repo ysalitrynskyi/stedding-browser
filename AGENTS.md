@@ -176,6 +176,16 @@ Built, with tests or measured captures:
   took itself with no focus and no input (`tooling/win/capture.ps1`, trap 36);
   the card measures the mac's geometry to the pixel. Not a port (M8, `S-56`):
   branding and the macOS chrome are `is_mac`.
+- **M8, first slice** (2026-09-09; patches 0040–0041, ADR 0018): the collapsed
+  rail expands on hover after a pause the user sets, 2 s by default, a click in
+  the rail restarting it (sidebar Y11, settings T11); Windows knows the build as
+  Stedding -- the name, the icon, `%LOCALAPPDATA%\Stedding`, its own registry
+  keys, COM classes and sandbox prefix, so it lives beside a Chromium install
+  (windows N3–N4); `tooling/apply-branding` runs under Git for Windows and the
+  product-name rewrite reaches every locale; `tooling/win/build.ps1`,
+  `package-installer.ps1` and a `publish-release` that joins a release across
+  platforms make Chromium's `mini_installer` the Windows image. Still `is_mac`:
+  the keyboard map and the menus; unsigned; no updates (`S-56`).
 
 Read `docs/HANDOFF.md` before touching anything — it carries the working loop,
 every dev parameter, and the traps already paid for, numbered contiguously and cited
@@ -251,7 +261,8 @@ nothing rewrites it), `S-49` (a builder that can actually build — until it exi
 CI checks repository hygiene and nothing verifies the product), `S-45` (Google's
 new tab page when Google is chosen), `S-47` (an input-free settings probe), `S-48`
 (the Arc data import run once against a real Arc profile), `S-56` (M8: the Windows
-port proper, on the first Windows build of round 8), `S-50` (the idle-network
+port's remainder after the first slice -- the keyboard map and the menus, signing,
+updates, CI), `S-50` (the idle-network
 audit as a recorded run) and `S-17` (signing, waiting on Apple's organisation
 enrolment, then `tooling/sign-release` and a signed re-release). Every feature spec
 names its own `gap` rows.

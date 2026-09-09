@@ -1,23 +1,27 @@
 #!/usr/bin/env bash
-# Publish the DMG in dist/ as a GitHub pre-release.
+# Publish the image in dist/ as a GitHub pre-release, or add this platform's image
+# to the release the other platform already made.
 #
 # Usage:
 #   tooling/publish-release --check      # what would be published; touches nothing
-#   tooling/publish-release              # create the release (asks gh; needs `repo`)
+#   tooling/publish-release              # create the release, or upload into it
 #
 # The tag is v<VERSION> (the VERSION file at the repository root). Per ADR 0014 the tag
 # is what the browser's updater compares against, so its shape is checked here:
 # v<major>.<minor>.<patch>[-beta.<n>]. Notes come from docs/release-notes/<tag>.md,
 # written by hand in the register docs/BRAND.md asks for; nothing is generated from
-# commits. The DMG and its .sha256 are the only assets.
+# commits. The assets are one image per platform and its .sha256: the DMG from the
+# Mac (tooling/package-dmg), the installer from Windows (tooling/win/package-installer.ps1,
+# ADR 0018). Whichever platform publishes first creates the release; the other uploads
+# its image into it and refreshes the notes, so the release body carries both checksums.
 #
 # Three things this refuses to guess at, each of which has a way of publishing something
 # that is not what was built:
 #
 #   * WHICH IMAGE. dist/ is not emptied by anything, and every image in it is a valid
-#     DMG with a valid checksum beside it. The image for this release is the one named
-#     for this VERSION; if it is not there, one unambiguous image will do, and two will
-#     not.
+#     one with a valid checksum beside it. The image for this release is the one named
+#     for this VERSION and platform; if it is not there, one unambiguous image will do,
+#     and two will not.
 #   * WHETHER THE CHECKSUM MATCHES. The .sha256 beside the image is what the release
 #     notes tell people to verify against. It is recomputed here.
 #   * WHICH COMMIT. `gh release create` tags the remote, so a release cut from a branch
@@ -28,12 +32,20 @@
 # shellcheck source=./lib.sh
 . "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
+sha256_of() {
+    if command -v shasum >/dev/null 2>&1; then
+      shasum -a 256 "$1" | cut -d' ' -f1
+    else
+      sha256sum "$1" | cut -d' ' -f1
+    fi
+}
+
 main() {
     CHECK=0
     while [ $# -gt 0 ]; do
       case "$1" in
         --check)   CHECK=1; shift ;;
-        -h|--help) sed -n '2,26p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
         *)         die "unknown argument: $1" ;;
       esac
     done
@@ -43,9 +55,18 @@ main() {
     printf '%s' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-beta\.[0-9]+)?$' \
       || die "tag '$tag' does not match v<major>.<minor>.<patch>[-beta.<n>] (ADR 0014)"
     notes="$STEDDING_ROOT/docs/release-notes/$tag.md"
-    arch="$(uname -m)"
     missing=0
     report() { printf '  %-16s %s\n' "$1" "$2" >&2; }
+
+    # One image per platform, named for the version and the platform by the packaging
+    # script of that platform.
+    case "$(uname -s)" in
+      Darwin)
+        ext=dmg; suffix="$(uname -m)"; packager="tooling/package-dmg release" ;;
+      MINGW*|MSYS*)
+        ext=exe; suffix="win-x64"; packager="tooling/win/package-installer.ps1" ;;
+      *) die "this script publishes from macOS or Windows (got $(uname -s))" ;;
+    esac
 
     # The repository comes from the remote, not from a name typed into this script. A
     # hardcoded owner makes the script personal operational data in a public repo, and
@@ -74,40 +95,40 @@ main() {
 
     # The image for THIS release, by name. Falling back to a lone image keeps a
     # hand-built one publishable; two images is a question only a human can answer.
-    dmg=""
+    asset=""
     # `find` over a dist/ that does not exist yet, and `grep -c` over no lines, both
     # exit non-zero; under `set -e` that ends the report before it prints the reason.
-    exact="$(find "$STEDDING_ROOT/dist" -maxdepth 1 -name "*-$version-$arch.dmg" 2>/dev/null | sort || true)"
+    exact="$(find "$STEDDING_ROOT/dist" -maxdepth 1 -name "*-$version-$suffix.$ext" 2>/dev/null | sort || true)"
     if [ "$(printf '%s\n' "$exact" | grep -c . || true)" -eq 1 ]; then
-      dmg="$exact"
+      asset="$exact"
     else
-      all="$(find "$STEDDING_ROOT/dist" -maxdepth 1 -name '*.dmg' 2>/dev/null | sort || true)"
+      all="$(find "$STEDDING_ROOT/dist" -maxdepth 1 -name "*.$ext" 2>/dev/null | sort || true)"
       count="$(printf '%s\n' "$all" | grep -c . || true)"
       if [ "$count" -eq 1 ]; then
-        dmg="$all"
+        asset="$all"
       elif [ "$count" -gt 1 ]; then
-        report "dmg" "MISSING: no *-$version-$arch.dmg, and $count images to choose from:"
+        report "$ext" "MISSING: no *-$version-$suffix.$ext, and $count images to choose from:"
         printf '%s\n' "$all" | while IFS= read -r other; do
           [ -n "$other" ] && printf '                   %s\n' "$(basename "$other")" >&2
         done
-        report "" "empty dist/ and run tooling/package-dmg release"
+        report "" "empty dist/ and run $packager"
         missing=1
       fi
     fi
 
-    if [ -z "$dmg" ]; then
-      [ "$missing" -eq 1 ] || { report "dmg" "MISSING: tooling/package-dmg release"; missing=1; }
-    elif [ ! -f "$dmg.sha256" ]; then
-      report "dmg" "MISSING: no checksum beside $(basename "$dmg")"; missing=1
+    if [ -z "$asset" ]; then
+      [ "$missing" -eq 1 ] || { report "$ext" "MISSING: $packager"; missing=1; }
+    elif [ ! -f "$asset.sha256" ]; then
+      report "$ext" "MISSING: no checksum beside $(basename "$asset")"; missing=1
     else
       # The checksum in the file is what the release notes tell people to verify
       # against. If it was written for a different image, this is where it shows.
-      recorded="$(cut -d' ' -f1 < "$dmg.sha256")"
-      actual="$(shasum -a 256 "$dmg" | cut -d' ' -f1)"
+      recorded="$(cut -d' ' -f1 < "$asset.sha256")"
+      actual="$(sha256_of "$asset")"
       if [ "$recorded" = "$actual" ]; then
-        report "dmg" "$(basename "$dmg") ($(du -sh "$dmg" | cut -f1)), checksum verified"
+        report "$ext" "$(basename "$asset") ($(du -sh "$asset" | cut -f1)), checksum verified"
       else
-        report "dmg" "MISSING: $(basename "$dmg").sha256 says $recorded, the image is $actual"
+        report "$ext" "MISSING: $(basename "$asset").sha256 says $recorded, the image is $actual"
         missing=1
       fi
     fi
@@ -115,8 +136,8 @@ main() {
     if [ -f "$notes" ]; then
       # The notes quote the checksum; a stale one sends people to verify against a
       # number that is not the image they downloaded.
-      if [ -n "$dmg" ] && [ -f "$dmg.sha256" ] \
-         && ! grep -q "$(cut -d' ' -f1 < "$dmg.sha256")" "$notes"; then
+      if [ -n "$asset" ] && [ -f "$asset.sha256" ] \
+         && ! grep -q "$(cut -d' ' -f1 < "$asset.sha256")" "$notes"; then
         report "notes" "MISSING: $tag.md does not carry this image's sha256"; missing=1
       else
         report "notes" "docs/release-notes/$tag.md"
@@ -125,8 +146,17 @@ main() {
       report "notes" "MISSING: $notes"; missing=1
     fi
 
+    # A release the other platform made is joined, not refused: this image goes up
+    # beside theirs and the body takes the notes as they now are, both checksums in.
+    mode=create
     if gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
-      report "tag" "$tag ALREADY RELEASED"; missing=1
+      uploaded="$(gh release view "$tag" --repo "$repo" --json assets --jq '.assets[].name' 2>/dev/null || true)"
+      if [ -n "$asset" ] && printf '%s\n' "$uploaded" | grep -qx "$(basename "$asset")"; then
+        report "tag" "$tag ALREADY RELEASED with $(basename "$asset")"; missing=1
+      else
+        mode=upload
+        report "tag" "$tag exists; this image would be added to it"
+      fi
     else
       report "tag" "$tag (new)"
     fi
@@ -149,21 +179,30 @@ main() {
     fi
 
     if [ "$CHECK" -eq 1 ]; then
-      if [ "$missing" -eq 0 ]; then log "ready to publish $tag"; else warn "not ready"; fi
+      if [ "$missing" -eq 0 ]; then log "ready to $mode $tag"; else warn "not ready"; fi
       exit "$missing"
     fi
     [ "$missing" -eq 0 ] || die "not ready; run with --check for the list"
 
     title="Stedding $(printf '%s' "$version" | sed 's/-beta\./ beta /')"
+    if [ "$mode" = upload ]; then
+      log "adding $(basename "$asset") to $tag"
+      gh release upload "$tag" --repo "$repo" "$asset" "$asset.sha256" \
+        || die "gh release upload failed"
+      gh release edit "$tag" --repo "$repo" --notes-file "$notes" \
+        || die "gh release edit failed"
+      log "added: $(gh release view "$tag" --repo "$repo" --json url -q .url)"
+      return
+    fi
     log "publishing $tag: $title"
-    log "from $(git -C "$STEDDING_ROOT" rev-parse --short HEAD) with $(basename "$dmg")"
+    log "from $(git -C "$STEDDING_ROOT" rev-parse --short HEAD) with $(basename "$asset")"
     gh release create "$tag" \
       --repo "$repo" \
       --target "$head" \
       --prerelease \
       --title "$title" \
       --notes-file "$notes" \
-      "$dmg" "$dmg.sha256" || die "gh release create failed"
+      "$asset" "$asset.sha256" || die "gh release create failed"
     # Take the tag gh made rather than making a second one locally: they are the same
     # commit by --target, and fetching says so instead of assuming it.
     git -C "$STEDDING_ROOT" fetch --quiet origin "refs/tags/$tag:refs/tags/$tag" \

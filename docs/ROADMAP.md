@@ -18,9 +18,10 @@ without developer tools, without terminal commands, and without reading build do
 builds (`docs/ARC-ROUND2.md`), and each feature's own spec under `docs/features/` is the
 record of what passes; `v0.2.0-beta.5` is prepared and waits on the Mac's image. M7
 waits on Apple's organisation enrolment (`BACKLOG.md` S-17). M8 started on 2026-09-08
-with the first Windows build (patch 0039, `docs/features/windows.md` N1–N2): the
-series compiles and runs there, without branding, the Windows keyboard map or an
-installer (`BACKLOG.md` S-56). M9 has not started.
+with the first Windows build (patch 0039, `docs/features/windows.md` N1–N2), and its
+first slice landed on 2026-09-09: Windows knows the build as Stedding (N3–N4) and
+the installer's tooling exists (ADR 0018); the Windows keyboard map and menus, signing
+and updates are still open (`BACKLOG.md` S-56). M9 has not started.
 
 ---
 
@@ -265,9 +266,12 @@ Acceptance criteria:
 **Where this stands (2026-09-09):** the series builds and runs on Windows (round 8,
 patch 0039): the Stedding window with its sidebar, Spaces, folders, the command bar,
 archive and routing, the address row under the window's own caption buttons and
-measured to the Mac's geometry. Not done: branding (the build is still "Chromium"
-to Windows: name, icon, install directory, registry keys), the keyboard map and the
-menus (`is_mac` today), an installer, signing, updates, CI. `BACKLOG.md` S-56.
+measured to the Mac's geometry. Since 2026-09-09: branding -- the name, the icon,
+`%LOCALAPPDATA%\Stedding`, Stedding's own registry keys, COM classes and sandbox
+prefix (N3–N4) -- and the installer's tooling, Chromium's `mini_installer` from the
+`win-release` configuration (ADR 0018). Not done: the keyboard map and the menus
+(`is_mac` today), signing and SmartScreen, updates, CI, the quality gates.
+`BACKLOG.md` S-56.
 
 Scope:
 

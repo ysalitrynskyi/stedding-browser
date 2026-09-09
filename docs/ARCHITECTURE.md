@@ -464,7 +464,9 @@ lands at M1.
 |---|---|---|
 | Product name, company, bundle id, copyright | `chrome/app/theme/chromium/BRANDING` | asset replacement |
 | macOS app icon | `chrome/app/theme/chromium/mac/` — `app.icns`, `AppIcon.icon`, `Assets.car`, `Assets.xcassets` | asset replacement |
-| Product name in UI strings | `IDS_PRODUCT_NAME` in `chrome/app/chromium_strings.grd` | asset replacement |
+| Product name in UI strings | `IDS_PRODUCT_NAME` in `chrome/app/chromium_strings.grd`, its siblings, and every locale's `.xtb` | asset rewrite (`tooling/brand/product_name.py`) |
+| Windows app, document and PDF icons; the tiles | `chrome/app/theme/chromium/win/` | asset replacement |
+| Windows install mode: paths, app id, ProgIDs, GUIDs, sandbox prefix | `chrome/install_static/chromium_install_modes.h` | patch 0041 (ADR 0018) |
 | Version | `chrome/VERSION` | set by the pin; never edited by hand |
 | About page | `chrome://settings/help` (macOS has no separate About panel) | grd/png replacement |
 | User agent | — | **leave alone** |

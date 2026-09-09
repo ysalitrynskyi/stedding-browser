@@ -384,6 +384,34 @@ into the fresh profile.
     "Action required" chip on a fresh profile's first launch. Stedding does
     not create that provider (privacy Q9); any other Chrome-keyed lookup a
     port meets deserves the same question.
+39. **A WebUI message with no handler kills the browser.** `chrome.send` to a
+    name nobody registered is a `NOTREACHED` in the browser process, not a
+    console error in the page. A handler behind `is_mac` in BUILD.gn and
+    `#if BUILDFLAG(IS_MAC)` in `settings_ui.cc`, asked for by a page that ships
+    everywhere, made chrome://settings/stedding a crash on Windows (windows
+    N5). Every platform-gated handler needs a `loadTimeData` boolean the page
+    checks before it sends.
+
+## The Windows build
+
+Git for Windows for the bash tooling, PowerShell for the rest, Visual Studio's own
+toolchain (`DEPOT_TOOLS_WIN_TOOLCHAIN=0`) and depot_tools on PATH. Three environment
+variables name the machine's paths, so none is in the repo: `STEDDING_CHROMIUM_SRC`
+(the checkout's `src`), `STEDDING_DEPOT_TOOLS` if it is not on PATH, and
+`STEDDING_VPYTHON_ROOT`, a short directory for vpython's venv (trap 34). Then:
+
+1. `tooling/apply-branding` from Git for Windows: the BRANDING file, the logos, the
+   Windows icons and the product-name rewrite over every locale's tables. Before
+   `gn gen`, as on the Mac.
+2. `tooling\win\build.ps1` -- `win-release` (`tooling/args/win-release.gn`), the
+   args file copied into the output directory with `stedding_version` appended, then
+   `chrome` and `mini_installer`. A component build for iteration is the same
+   script with an args file of its own; the build is refused while a browser from
+   that output directory runs (the link fails with "permission denied" otherwise).
+3. `tooling\win\capture.ps1` for captures that need neither focus nor input (trap
+   36); `tooling\win\package-installer.ps1` for the release image in `dist/`;
+   `tooling/publish-release` from Git for Windows to publish it beside the Mac's DMG
+   (ADR 0018).
 
 ## Open items
 

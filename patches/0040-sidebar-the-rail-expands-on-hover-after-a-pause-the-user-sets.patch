@@ -1,0 +1,199 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Wed, 9 Sep 2026 12:00:00 -0400
+Subject: sidebar: the rail expands on hover after a pause the user sets
+
+The collapsed rail expanded the moment the pointer arrived: Chromium's
+350 ms, and its velocity heuristic that opens sooner still when the pointer
+heads into the strip, so a tab in the rail could not be clicked without the
+sidebar opening on top of the click (operator, 2026-09-09).
+
+- A profile preference, stedding.sidebar.hover_delay_ms, 2000 by default:
+  the pause before the rail expands. VerticalTabStripRegionView starts its
+  expand timer with it under the Arc window and leaves the velocity
+  heuristic aside; a click in the rail restarts the wait, so a tab can be
+  chosen and the pointer moved on. Zero keeps Chromium's own timing.
+- One row in chrome://settings/stedding: "Open the collapsed sidebar on
+  hover" -- after 0.35 seconds (Chromium's timing), 1, 2 or 5 seconds
+  (settings T11).
+
+Why: docs/features/sidebar.md Y11.
+Removable when: upstream's expand-on-hover delay becomes a preference of its
+own with a click that restarts it.
+---
+diff --git a/chrome/browser/extensions/api/settings_private/prefs_util.cc b/chrome/browser/extensions/api/settings_private/prefs_util.cc
+index 714c3a03bf..aa4147eeb8 100644
+--- a/chrome/browser/extensions/api/settings_private/prefs_util.cc
++++ b/chrome/browser/extensions/api/settings_private/prefs_util.cc
+@@ -322,6 +322,8 @@ const PrefsUtil::TypedPrefMap& PrefsUtil::GetAllowlistedKeys() {
+       settings_api::PrefType::kNumber;
+   (*s_allowlist)[stedding::prefs::kSidebarTextSize] =
+       settings_api::PrefType::kNumber;
++  (*s_allowlist)[stedding::prefs::kSidebarHoverDelayMs] =
++      settings_api::PrefType::kNumber;
+   (*s_allowlist)[::prefs::kEnableQuietGeolocationPermissionUi] =
+       settings_api::PrefType::kBoolean;
+   (*s_allowlist)[::prefs::kHttpsFirstBalancedMode] =
+diff --git a/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts b/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
+index 37d03e09fa..578c41fddb 100644
+--- a/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
++++ b/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
+@@ -177,6 +177,22 @@ export function getHtml(this: SettingsSteddingPageElement) {
+         ]}">
+     </settings-dropdown-menu>
+   </div>
++  <div class="hr settings-box">
++    <div class="start" id="hoverDelayLabel">
++      <div class="label">$i18n{steddingHoverDelayLabel}</div>
++      <div class="secondary">$i18n{steddingHoverDelaySubLabel}</div>
++    </div>
++    <settings-dropdown-menu id="hoverDelayMs"
++        pref-key="stedding.sidebar.hover_delay_ms"
++        label="$i18n{steddingHoverDelayLabel}"
++        .menuOptions="${[
++          {value: 0, name: '$i18n{steddingHoverDelayChromium}'},
++          {value: 1000, name: '$i18n{steddingHoverDelay1s}'},
++          {value: 2000, name: '$i18n{steddingHoverDelay2s}'},
++          {value: 5000, name: '$i18n{steddingHoverDelay5s}'},
++        ]}">
++    </settings-dropdown-menu>
++  </div>
+   <div class="hr cr-row" id="privacyHeader">
+     <div class="flex">
+       <div class="label">$i18n{steddingPrivacyTitle}</div>
+diff --git a/chrome/browser/ui/stedding/stedding_prefs.cc b/chrome/browser/ui/stedding/stedding_prefs.cc
+index eb6442238c..c215947c3c 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs.cc
++++ b/chrome/browser/ui/stedding/stedding_prefs.cc
+@@ -25,6 +25,7 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
+   registry->RegisterBooleanPref(kUiAnimate, true);
+   registry->RegisterBooleanPref(kPinsCloseSleeps, true);
+   registry->RegisterIntegerPref(kSpaceSleepMinutes, 15);
++  registry->RegisterIntegerPref(kSidebarHoverDelayMs, 2000);
+   registry->RegisterBooleanPref(kMenusShort, true);
+   registry->RegisterBooleanPref(kHoldCmdNumbers, true);
+   registry->RegisterBooleanPref(kCtrlTabMru, true);
+diff --git a/chrome/browser/ui/stedding/stedding_prefs.h b/chrome/browser/ui/stedding/stedding_prefs.h
+index 5955ed5a45..7cc52c5e2a 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs.h
++++ b/chrome/browser/ui/stedding/stedding_prefs.h
+@@ -75,6 +75,10 @@ inline constexpr char kMenusShort[] = "stedding.menus.short";
+ 
+ // Row numbers 1-9 appear while Cmd is held (docs/features/tabs.md R11, R12).
+ inline constexpr char kHoldCmdNumbers[] = "stedding.sidebar.hold_cmd_numbers";
++// sidebar Y11: milliseconds the pointer rests on the collapsed rail before it
++// expands; a click in the rail starts the wait again. Zero keeps Chromium's
++// own timing (350 ms, sooner with its velocity heuristic).
++inline constexpr char kSidebarHoverDelayMs[] = "stedding.sidebar.hover_delay_ms";
+ // switcher X1, X5: Ctrl-Tab walks the active Space's most recent tabs; off,
+ // it walks the sidebar in order.
+ inline constexpr char kCtrlTabMru[] = "stedding.tabs.ctrl_tab_mru";
+diff --git a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+index 5f2409d287..b70aa7e547 100644
+--- a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
++++ b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+@@ -1015,8 +1015,14 @@ void VerticalTabStripRegionView::ClickEventHandler::OnMouseEvent(
+   if (event->type() == ui::EventType::kMousePressed &&
+       region_view_->state_controller_->IsExpandOnHoverEnabled() &&
+       !region_view_->is_expanded_on_hover()) {
++    // Stedding (sidebar Y11): a click in the rail starts the user's pause
++    // again, so a tab can be chosen without the sidebar opening on top of
++    // the choice.
++    const base::TimeDelta stedding_delay = region_view_->SteddingHoverDelay();
+     region_view_->RestartExpandOnHoverTimer(
+-        tabs::kVerticalTabsExpandOnHoverClickDelay.Get());
++        stedding_delay.is_zero()
++            ? tabs::kVerticalTabsExpandOnHoverClickDelay.Get()
++            : stedding_delay);
+   }
+ }
+ 
+@@ -1356,7 +1362,23 @@ void VerticalTabStripRegionView::UpdateExpandOnHoverState(
+         hover_card_controller()->GetHoverCardHideLock();
+   }
+ 
+-  if (tabs::kVerticalTabsExpandOnHoverUseVelocityHeuristic.Get()) {
++  // Stedding (sidebar Y11): the rail expands after a pause the user sets,
++  // 2 s by default, so its rows can be clicked and its tabs switched
++  // without the sidebar opening. Chromium's 350 ms, and the velocity
++  // heuristic that opens sooner still, made every visit to the rail an
++  // opening (operator, 2026-09-09). A click in the rail starts the wait
++  // again (ClickEventHandler). Zero keeps Chromium's timing below.
++  const base::TimeDelta stedding_delay = SteddingHoverDelay();
++  if (!stedding_delay.is_zero()) {
++    if (!expand_on_hover_timer_.IsRunning()) {
++      expand_on_hover_timer_.Start(
++          FROM_HERE, stedding_delay,
++          base::BindOnce(&VerticalTabStripRegionView::AnimateExpandOnHover,
++                         base::Unretained(this),
++                         /*expand=*/true));
++      AddPreTargetHandler(&click_handler_);
++    }
++  } else if (tabs::kVerticalTabsExpandOnHoverUseVelocityHeuristic.Get()) {
+     CalculateMouseVelocityForExpandOnHover();
+   } else if (expand_on_hover_timer_.IsRunning()) {
+     // If the timer is already running then we are already waiting to
+@@ -1460,7 +1482,8 @@ void VerticalTabStripRegionView::ResetExpandOnHoverTimers() {
+   if (expand_on_hover_timer_.IsRunning()) {
+     expand_on_hover_timer_.Stop();
+ 
+-    if (tabs::IsExpandOnHoverClickDelayEnabled()) {
++    if (tabs::IsExpandOnHoverClickDelayEnabled() ||
++        !SteddingHoverDelay().is_zero()) {
+       RemovePreTargetHandler(&click_handler_);
+     }
+   }
+@@ -1473,6 +1496,16 @@ void VerticalTabStripRegionView::ResetExpandOnHoverTimers() {
+   }
+ }
+ 
++base::TimeDelta VerticalTabStripRegionView::SteddingHoverDelay() const {
++  if (!base::FeatureList::IsEnabled(stedding::kArcStyleWindow) ||
++      !browser_view() || !browser_view()->browser()) {
++    return base::TimeDelta();
++  }
++  return base::Milliseconds(
++      std::max(0, browser_view()->browser()->GetProfile()->GetPrefs()->GetInteger(
++                      stedding::prefs::kSidebarHoverDelayMs)));
++}
++
+ void VerticalTabStripRegionView::ApplyRailForm(bool rail) {
+   const bool arc_style =
+       base::FeatureList::IsEnabled(stedding::kArcStyleWindow);
+diff --git a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
+index 7c9a3a3102..e3b5384fa8 100644
+--- a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
++++ b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
+@@ -273,6 +273,9 @@ class VerticalTabStripRegionView final
+   // Applied on the collapse state and again by the expand-on-hover animation,
+   // which widens the strip without changing the state (sidebar Y6).
+   void ApplyRailForm(bool rail);
++  // sidebar Y11: the pause before the rail expands on hover, from the
++  // profile; zero means Chromium's own timing.
++  base::TimeDelta SteddingHoverDelay() const;
+   // The gutter's worth of interior margin the collapsed strip carries
+   // (sidebar Y6), for the button containers' margins in ApplyRailForm.
+   int rail_left_ = 0;
+diff --git a/chrome/browser/ui/webui/settings/settings_ui.cc b/chrome/browser/ui/webui/settings/settings_ui.cc
+index 9232c262cb..e35c3664c0 100644
+--- a/chrome/browser/ui/webui/settings/settings_ui.cc
++++ b/chrome/browser/ui/webui/settings/settings_ui.cc
+@@ -793,6 +793,18 @@ SettingsUI::SettingsUI(content::WebUI* web_ui)
+       "The Archived page and the command bar show tabs closed within this "
+       "time; the sidebar's Archived row opens the page.");
+   html_source->AddString("steddingArchiveKeep7d", "7 days");
++  // sidebar Y11.
++  html_source->AddString("steddingHoverDelayLabel",
++                         "Open the collapsed sidebar on hover");
++  html_source->AddString(
++      "steddingHoverDelaySubLabel",
++      "How long the pointer rests on the rail before it opens; a click in "
++      "the rail starts the wait again");
++  html_source->AddString("steddingHoverDelayChromium",
++                         "After 0.35 seconds (Chromium's timing)");
++  html_source->AddString("steddingHoverDelay1s", "After 1 second");
++  html_source->AddString("steddingHoverDelay2s", "After 2 seconds");
++  html_source->AddString("steddingHoverDelay5s", "After 5 seconds");
+   html_source->AddString("steddingArchiveKeep30d", "30 days");
+   html_source->AddString("steddingArchiveKeep90d", "90 days");
+   html_source->AddString("steddingExternalDefaultLabel",

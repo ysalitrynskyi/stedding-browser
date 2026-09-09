@@ -14,6 +14,16 @@ Branding section of [docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md).
 | `product_logo/scaled_100/*`, `scaled_200/*` | `chrome/app/theme/default_{100,200}_percent/chromium/product_logo_{16,32,name_22,name_22_white}.png` (the scaled logos WebUI serves as `chrome://theme/current-channel-logo`: settings header, About page, profile picker) |
 | `vector_icons/chrome_product.icon` | `components/omnibox/browser/vector_icons/chrome_product.icon` (the chrome:// page chip, the app menu) |
 | `webui_images/chrome_logo_dark.svg` | `ui/webui/resources/images/chrome_logo_dark.svg` (the white product logo WebUI pages show: settings header, history, downloads) |
+| `win/app.ico`, `win/doc.ico`, `win/pdf.ico` | `chrome/app/theme/chromium/win/chromium.ico`, `chromium_doc.ico`, `chromium_pdf.ico` (the application, HTML document and PDF document icons Windows draws: taskbar, Explorer, Start menu, Alt-Tab) |
+| `win/Logo.png`, `win/SmallLogo.png` | `chrome/app/theme/chromium/win/tiles/` (the Start-screen tiles) |
+
+The product name itself is not an asset: `tooling/brand/product_name.py`, run by
+`apply-branding`, rewrites "Chromium" to "Stedding" in the branded string tables
+(`chrome/app/chromium_strings.grd` and its siblings) and in every locale's
+translations of them, leaving ChromiumOS and ChromiumUpdater alone, and the
+linked project name in the About page's license line: "Stedding is made
+possible by the Chromium open source project" is true as written (the
+earlier one-liner renamed both, and beta 4's About page says so).
 
 Upstream's branding switch is boolean — `chromium/` or `google_chrome/` — and grit
 includes hardcode `chromium/`, so there is no third directory to add. Our files
@@ -37,13 +47,14 @@ That is why the explanations live in this README rather than in the file itself.
 
 ## Generated, not authored
 
-Everything except `BRANDING` is produced by:
+Everything except `BRANDING` and `win/` is produced by:
 
 ```bash
 python3 tooling/brand/generate.py
 ```
 
-from the single geometry definition in `tooling/brand/mark.py`. Do not hand-edit
+from the single geometry definition in `tooling/brand/mark.py`; `win/` by
+`python3 tooling/brand/win_icons.py` from that run's 256 px logo. Do not hand-edit
 the SVGs, PNGs, `app.icns` or `Assets.car` — change the mark and re-run. Hand-
 edited derivatives drift apart from each other; generated ones cannot.
 

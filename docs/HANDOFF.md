@@ -331,8 +331,20 @@ into the fresh profile.
     tests had been red since patch 0002.** `tooling/dev test <feature>` runs our
     filters; nothing ran `TabTest.*`, which reads the favicon column's width and
     the discard ring -- both of which this fork changes on purpose. Before a
-    release, run the suites around what the series touches (`TabTest.*`,
-    `TabStripModelTest.*`, `LocationBarViewTest.*`), not only ours.
+    release, run the suites around what the series touches, not only ours.
+    Since 2026-09-10 that set is one command, `tooling/dev test upstream`
+    (`TabTest`, `TabStripModelTest`, `LocationBarViewTest`,
+    `VerticalTabStripStateControllerTest`, `BrowserViewTest`, the accelerator,
+    command, toolbar, menu, theme and search suites), and `tooling/dev test all`
+    is the release sweep. The Mac pass on beta 6 found eight red cases there,
+    none a product bug: five read Chromium's horizontal tab, its icons and its
+    group colours under the 2026 refresh that patch 0042 turns on in code
+    (unit tests never see the field-trial config, so upstream's tests had never
+    run that way), two read the find bar under the location bar where Stedding
+    hangs it from the card since round 6, and one dereferenced the horizontal
+    strip an Arc window does not have -- a crash, which prints no FAILED line and
+    which `tooling/dev test` used to swallow: it reports crashes and timeouts now
+    (`docs/ARC-ROUND2.md`, *The Mac pass*).
 
 32. **Windows' caption buttons are on the right, and the frame reports them as
     the trailing exclusion.** The layout skipped every exclusion with a vertical
@@ -435,6 +447,40 @@ into the fresh profile.
     The flex is the open form's alone now, the row's height is its children's,
     and the switcher reports a height that counts its dots as dots (sidebar Y13).
 
+44. **The checkout can vanish, and a re-sync is an hour of the Mac's time.** On
+    2026-09-09 `/Users/Shared/chromium` was gone -- the volume was 88% full and the
+    tree is the biggest thing on it -- and the Mac's part of beta 6 began with no
+    checkout, no `out/`, no `unit_tests`. `tooling/sync-chromium` rebuilt it in 43
+    minutes from 109 GB free (the git-cache bundle 7 min, the tag fetch 19 min,
+    `gclient sync` and the hooks 17 min): src 43 GB, the cache 26 GB, 53 GB together
+    on disk since the two share objects, 48 GB free after. `tooling/apply-patches`
+    replayed the series; the caches the disk runbook allows (`~/work/AGENTS.md`)
+    were worth about 20 GB and nothing else on the machine is an agent's to delete.
+    Three rules from it. `STEDDING_SYNC_MIN_FREE_GB` lowers the sync's 150 GB floor
+    for a run that has done the arithmetic (65 for the checkout, 9.3 for a release
+    build, about 10 for `unit_tests`, 20 of headroom), never under 100. The deps
+    are cloned with alternates into `.git-cache`, so the cache is part of the
+    checkout, not a download to delete (`tooling/repair-checkout`). And a patch
+    exported from one platform is built on the other before the release that
+    carries it: of the seven written on Windows (0039-0045) one did not compile on
+    the Mac -- `kColorCaptionButtonOnToolbar` is declared for Windows alone in
+    `chrome_color_id.h` -- and `AppendASCII` on a Space's name would DCHECK on a
+    debug Mac; both fixed as fixups into 0039 that day. The seven patch files had
+    also been written by hand on Windows (CRLF headers, no diffstat, untruncated
+    names); `tooling/update-patches` is the one exporter, and `tooling/check-repo
+    eol` refuses a CR byte in any tracked text file since. And a build that turns
+    Chromium's field-trial testing config off (privacy Q10) changes what nobody
+    measured: every inactive sidebar row and essentials card took the Material
+    fill the config had been hiding, and the first multi-tab capture on the Mac
+    was the first to show it (tabs R23). Before trusting a look that only ever
+    existed under the config, run the previous release with
+    `--disable-field-trial-config` beside the new build and diff the captures.
+    One more cost: a fixup into an early patch makes the rebase re-check-out
+    every later patch's files, and siso rebuilds their objects even though the
+    content is the same (a fixup into 0017 cost a 20-minute `unit_tests`
+    rebuild for two test files). Fold into the latest patch that can own the
+    change, and fold before the sweep, not between sweeps.
+
 ## The Windows build
 
 Git for Windows for the bash tooling, PowerShell for the rest, Visual Studio's own
@@ -463,15 +509,12 @@ variables name the machine's paths, so none is in the repo: `STEDDING_CHROMIUM_S
 
 ## Open items
 
-`BACKLOG.md` is the list; do not keep one here. First up, on the Mac: add the DMG
-to `v0.2.0-beta.6` (published from Windows on 2026-09-10 with round 9; beta 5 was
-the Windows preview alone and stays so, its notes say which release macOS users
-take; the steps under *Release channel*; the notes' macOS checksum line reads
-`TBD` until the image exists, and `publish-release` uploads into the existing
-release). Then the operator's next look (`docs/ARC-ROUND2.md` gets a round 10
-table when it comes), `S-56` (the Windows port proper: little windows, signing,
-updates, CI), `S-48` (the Arc data import run once on a real Arc profile) and
-`S-17` (signing, when Apple answers).
+`BACKLOG.md` is the list; do not keep one here. Beta 6 is out on both platforms
+(2026-09-10). Next: `S-58` (the Mac's disk, an owner's decision before the next
+build), the operator's look at beta 6 (`docs/ARC-ROUND2.md` gets a round 10 table
+when it comes), `S-17` (the Developer ID certificate and the notary profile, then
+a signed re-release), `S-56` (the Windows port proper: little windows, signing,
+updates, CI) and `S-48` (the Arc data import run once on a real Arc profile).
 
 ## Release channel
 
@@ -489,9 +532,13 @@ notes, commit, push, `tooling/publish-release` from Git for Windows -- whichever
 platform publishes first creates the release, the other uploads into it and the
 notes are refreshed (ADR 0018). Beta 5's Windows preview went first, on
 2026-09-09, and beta 6 followed from Windows on 2026-09-10 with round 9; the Mac
-picks up at `tooling/dev build release chrome` and its `publish-release` adds the
-DMG to beta 6 (beta 5 stays Windows-only), the notes' macOS checksum line reading
-`TBD` until then.
+added the DMG to beta 6 the same day (beta 5 stays Windows-only) -- after a
+re-sync of the checkout, a sweep of every Stedding filter and the upstream suites
+of trap 31, and the captures the README shows -- and `publish-release` uploaded
+into the existing release and refreshed the notes with the checksum. With a
+Developer ID in the keychain (`S-17`), `tooling/sign-release release` goes between
+`verify-build` and `package-dmg`, which then takes `--app
+dist/signed/stable/Stedding.app`, and the notes lose the right-click paragraph.
 
 The push moved ahead of the publish on purpose. `gh release create` cuts the tag on
 the remote, so publishing from an unpushed commit tagged whatever the remote's default

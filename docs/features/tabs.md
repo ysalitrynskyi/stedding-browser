@@ -1,6 +1,6 @@
 # Feature: Tab rows
 
-Status: **R1–R3, R18 planned** (round 6, `docs/ROUND6-PLAN.md` R6-03); **R4–R8, R10–R17, R19–R22 built, R22 partial** (wave 2: R6-13, R6-15, R6-17, R6-20).
+Status: **R1–R3, R18 planned** (round 6, `docs/ROUND6-PLAN.md` R6-03); **R4–R8, R10–R17, R19–R23 built, R22 partial** (wave 2: R6-13, R6-15, R6-17, R6-20).
 Owner docs: `docs/UI-SPEC.md`. Patch: TBD.
 
 The rows of the sidebar follow Arc: the close glyph appears only while the pointer is
@@ -36,6 +36,7 @@ On Windows every chord below is the Mac's with ⌘ read as Ctrl and ⌥⌘ as Ct
 | R20 | ⌘-click adds a row to the selection and ⇧-click extends it (Chromium's selection model); a selected row keeps the round-5 selected tint; a selection never spans Spaces because hidden rows cannot be selected. | existing Chromium selection tests; capture | built |
 | R21 | With more than one row selected, every verb acts on the selection: close, pin and unpin (both tiers), Move to Space, Move to Folder, Sleep, Mute, archive, Copy Link (form TBD, R6-04). Rename is the exception and acts on the clicked row. Menu labels take the plural ("Close 3 Tabs", "Move 3 Tabs to ▸"). | `SpaceWindowTest.CmdDPinsTheSelection`; the plural labels come from the ICU strings the short menu uses; capture of the menu on a selection | built |
 | R22 | Chords act on the selection the same way (⌘W, ⌘D, ⌥⇧⌘←/→); a ⌘T action from the bar acts on the selection when the bar was opened with one. | `SpaceWindowTest.CmdDPinsTheSelection`; `CommandBarViewTest.ActionAppliesToTheSelection` (R6-11) | partial · the chords act on the selection (`SpaceWindowTest.CmdDPinsTheSelection`); the command-bar half lands with R6-11 |
+| R23 | An inactive row has no fill of its own, in either colour mode and whatever Chromium's tab-strip mixers hand out: the ground shows through, the essentials card included; the active row, a hovered row and a selected row keep their tints of the row's text colour (`stedding_color_mixer.cc`, patch 0042). Chromium's Material mixer gives inactive rows `kColorSysHeader`, and its field-trial testing config had been hiding that in every beta up to 4 -- beta 4's own app draws the fill when run with `--disable-field-trial-config` -- so the first build with the config off (privacy Q10) filled every row and card on the Mac, found on the first multi-tab capture there (2026-09-10). | `SteddingColorMixerTest.InactiveRowsHaveNoFill`; live: the beta 4 / beta 6 pair `ab-old` / `ab-new` (2026-09-10) | built |
 
 ## Running the tests
 

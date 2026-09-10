@@ -184,8 +184,12 @@ Built, with tests or measured captures:
   (windows N3–N4); `tooling/apply-branding` runs under Git for Windows and the
   product-name rewrite reaches every locale; `tooling/win/build.ps1`,
   `package-installer.ps1` and a `publish-release` that joins a release across
-  platforms make Chromium's `mini_installer` the Windows image. Still `is_mac`:
-  the keyboard map and the menus; unsigned; no updates (`S-56`).
+  platforms make Chromium's `mini_installer` the Windows image, built, installed
+  and uninstalled on the build machine (windows N6) and published with beta 5 as
+  a preview. Chromium's field-trial testing config is off in every build from
+  now on and the 2026 refresh it carried is on by decision (privacy Q10, patch
+  0042). Still `is_mac`: the keyboard map and the menus; unsigned; no updates
+  (`S-56`).
 
 Read `docs/HANDOFF.md` before touching anything — it carries the working loop,
 every dev parameter, and the traps already paid for, numbered contiguously and cited
@@ -195,9 +199,10 @@ the operator-feedback ledger; `docs/UI-SPEC.md` the measured Arc match.
 Released: `v0.2.0-beta.4` (2026-09-05, published from this repo with
 `tooling/publish-release`), unsigned (M7 waits on Apple). It carries rounds 5,
 6 and 7, the round-7 second pass included. Prepared: `v0.2.0-beta.5` (`VERSION`,
-`docs/release-notes/v0.2.0-beta.5.md`, 2026-09-09) with round 8; the DMG, its
-checksum in the notes and the publish are the Mac's (`docs/HANDOFF.md`, *Release
-channel*), since only the Mac builds the macOS image.
+`docs/release-notes/v0.2.0-beta.5.md`, 2026-09-09) with round 8 and M8's first
+slice, published on 2026-09-09 with the Windows preview installer as its first
+image; the DMG and its checksum in the notes are the Mac's to add
+(`docs/HANDOFF.md`, *Release channel*), since only the Mac builds the macOS image.
 Outstanding: `BACKLOG.md`. First vanilla perf comparison is in
 `docs/perf/README.md`: on the deterministic page list every QUALITY budget is
 met (cold +2.3%, warm −2.0%, memory +0.0% over vanilla).
@@ -245,8 +250,9 @@ The order is `BACKLOG.md`. `v0.2.0-beta.4` is out (unsigned, 2026-09-05): rounds
 (`docs/ROUND6-PLAN.md`, patches 0016–0036), the operator's six from beta 3, the
 Arc one-click import, and the second pass on the operator's replies the same
 evening (patches 0037–0038 and fixups into 0001, 0002). `v0.2.0-beta.5` is
-prepared with round 8 (patch 0039) and waits on the Mac for its DMG: first thing
-on the Mac, the release channel's steps in `docs/HANDOFF.md`.
+out with round 8 and M8's first slice, the Windows preview installer its first
+image; the DMG joins from the Mac: first thing there, the release channel's steps
+in `docs/HANDOFF.md`.
 
 **Whoever picks this up next**: read `docs/HANDOFF.md` first — the loop, the dev
 parameters and the traps, now including `tooling/capture-state` (a capture that

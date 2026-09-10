@@ -391,6 +391,22 @@ into the fresh profile.
     everywhere, made chrome://settings/stedding a crash on Windows (windows
     N5). Every platform-gated handler needs a `loadTimeData` boolean the page
     checks before it sends.
+40. **Processes started from the Claude desktop app see a virtualised AppData
+    and HKCU.** The app is an MSIX package: an installer run from its tools
+    installs into `%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Local`, the
+    registry entries land in the package hive, and the installed exe then fails
+    with a side-by-side error because the Windows loader probes the real path.
+    Tests of an installer, or of anything under AppData, run through a
+    scheduled task as the user (`schtasks /Create ... /Run`) with a log in a
+    real path; the captures come from outside the sandbox as usual (trap 36).
+41. **A non-official build runs Chromium's field-trial testing config** unless
+    `disable_fieldtrial_testing_config = true`, and so does an official one:
+    `testing/variations/fieldtrial_testing_config.json` switches on hundreds of
+    experiments, differently per platform. It is off in every configuration
+    under `tooling/args/` (privacy Q10); a build made with hand-written args
+    elsewhere is running Google's experiment set until it says so too. And the
+    look moves with it: the 2026 desktop refresh was one of those experiments,
+    so patch 0042 keeps its seven features on by default.
 
 ## The Windows build
 
@@ -415,10 +431,10 @@ variables name the machine's paths, so none is in the repo: `STEDDING_CHROMIUM_S
 
 ## Open items
 
-`BACKLOG.md` is the list; do not keep one here. First up, on the Mac: publish
-`v0.2.0-beta.5` (prepared on 2026-09-09 -- `VERSION`, the notes, the docs -- by
-the steps under *Release channel*; the notes' checksum line reads `TBD` until the
-image exists). Then the operator's look at beta 5 (`docs/ARC-ROUND2.md` gets a
+`BACKLOG.md` is the list; do not keep one here. First up, on the Mac: add the DMG
+to `v0.2.0-beta.5` (published from Windows on 2026-09-09 with the Windows preview;
+the steps under *Release channel*; the notes' macOS checksum line reads `TBD` until
+the image exists, and `publish-release` uploads into the existing release). Then the operator's look at beta 5 (`docs/ARC-ROUND2.md` gets a
 round 9 table when it comes), `S-56` (the Windows port proper), `S-48` (the Arc
 data import run once on a real Arc profile) and `S-17` (signing, when Apple
 answers).
@@ -432,10 +448,15 @@ repo root with a clean tree: bump `VERSION`, `tooling/dev build release chrome`
 .../out/release/Stedding.app`, empty `dist/`, `tooling/package-dmg release`
 (`dist/Stedding-<VERSION>-arm64.dmg` and its `.sha256`), paste the checksum into
 `docs/release-notes/v<ver>.md`, commit, **push**, `tooling/publish-release --check`,
-then `tooling/publish-release`. Beta 4 went out this way on 2026-09-05. Beta 5 was
-prepared on the Windows PC on 2026-09-09 -- `VERSION`, the notes with a `TBD`
-checksum, the docs -- because only the Mac builds the image; the Mac picks up at
-`tooling/dev build release chrome`.
+then `tooling/publish-release`. Beta 4 went out this way on 2026-09-05. The Windows
+image joins the same release from the Windows PC: `tooling\win\build.ps1`,
+`tooling\win\package-installer.ps1`, the checksum pasted under *Windows* in the
+notes, commit, push, `tooling/publish-release` from Git for Windows -- whichever
+platform publishes first creates the release, the other uploads into it and the
+notes are refreshed (ADR 0018). Beta 5's Windows preview went first, on
+2026-09-09; the Mac picks up at `tooling/dev build release chrome` and its
+`publish-release` adds the DMG, the notes' macOS checksum line reading `TBD`
+until then.
 
 The push moved ahead of the publish on purpose. `gh release create` cuts the tag on
 the remote, so publishing from an unpushed commit tagged whatever the remote's default

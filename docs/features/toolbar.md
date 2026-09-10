@@ -7,6 +7,9 @@ The address row is the top of the page card, not a strip above it: no gap, no ha
 the same gutter as the card on its three free sides (6 DIP, the `card_gutter` parameter; 8 until 2026-09-05, when the top had none), and the page's own colour when the page declares
 one. Arc's window reads the same way.
 
+On Windows every chord below is the Mac's with ⌘ read as Ctrl and ⌥⌘ as Ctrl+Alt
+(Alt+1–9 for the Spaces themselves); the full map is `docs/features/windows.md` N7.
+
 ## Behaviours
 
 | Id | Behaviour | Test | State |

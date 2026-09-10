@@ -271,9 +271,10 @@ measured to the Mac's geometry. Since 2026-09-09: branding -- the name, the icon
 `%LOCALAPPDATA%\Stedding`, Stedding's own registry keys, COM classes and sandbox
 prefix (N3–N4) -- and the installer's tooling, Chromium's `mini_installer` from the
 `win-release` configuration (ADR 0018), built, installed and uninstalled on the build
-machine and published with beta 5 as a preview (N6). Not done: the keyboard map and
-the menus (`is_mac` today), signing and SmartScreen, updates, CI, the quality gates.
-`BACKLOG.md` S-56.
+machine and published with beta 5 as a preview (N6). Since 2026-09-10: Arc's keyboard
+for Windows (N7, patch 0043) with round 9's look at the preview, published as beta
+6. Not done: little windows and links from other applications, signing and
+SmartScreen, updates, CI, the quality gates. `BACKLOG.md` S-56.
 
 Scope:
 

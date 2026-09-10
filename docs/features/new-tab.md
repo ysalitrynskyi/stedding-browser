@@ -12,7 +12,7 @@ command-bar shortcut, not a feed.
 
 | Id | Behaviour | Test | State |
 |---|---|---|---|
-| N1 | A new tab opens the local page, never a search engine's remote new tab page, whichever engine is the default. | `search.cc` hunk (`kUseProviderNewTabPage`); live: `tooling/drive` on a fresh profile with DuckDuckGo shows the local page | built |
+| N1 | A new tab opens the local page, never a search engine's remote new tab page, whichever engine is the default -- Google included: Chromium's first-party page for Google (its logo, the OneGoogleBar, the theme and Web Store promos) was what a Google choice on the welcome flow opened until 2026-09-10 (`S-45`, patch 0044). | `search.cc` hunk (`kUseProviderNewTabPage`, the third-party page for every provider); live: `tooling/drive` on a fresh profile with DuckDuckGo shows the local page; `w10_ntp_google` (Google chosen, Windows, 2026-09-10) | built |
 | N2 | A fresh profile has no Chrome Web Store shortcut; the shortcut row shows only sites the user visited. | live: capture of a fresh profile shows no tile | built |
 | N3 | The page says how to open the command bar, using the platform's own shortcut glyphs (⌘T on macOS, Ctrl+T elsewhere); the "Stedding" settings section can turn the line off. | live: capture; `tooling/probes/ntp.json`; settings T4 | built |
 | N4 | The page's background follows the theme (sand in light, the gradient's ground in dark), with no hard-coded Google colours. | `tooling/probes/ntp.json` | built |

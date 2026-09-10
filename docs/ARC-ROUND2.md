@@ -132,6 +132,29 @@ Three things from the operator's first look at beta 2, each fixed and captured:
 | "Not changing colour like Arc": only pages with a `theme-color` coloured the row; chrome://settings, Wikipedia and most sites left it on the ground. | The page's own background is the fallback (`WebContents::GetBackgroundColor`), the way Safari tints its bar; the scheme-match rule stays (toolbar T3/T4). |
 | "Spaces very weirdly centred at the bottom": the chips were spread evenly across the row. | Chips sit together in the middle with a fixed gap, "+" at the right, downloads at the left (spaces B11). |
 
+## Round 9 — the operator's look at the Windows preview (2026-09-09)
+
+Three minutes of clicking in the installed beta 5 on Windows, and the keyboard map it
+did not have. Six findings from the operator, the rest from the pass that followed the
+same night; every fix verified on captures the tooling took itself with no focus and
+no input (trap 36), the keyboard map by the reference page it feeds and the unit tests
+written for it (not yet run on a Windows runner, `S-49`). Patches 0043 (the keyboard
+map and the shortcut reference on every platform), 0044 (the first start) and 0045
+(the rail). Published as beta 6 from Windows.
+
+| # | Found | Fix |
+|---|---|---|
+| 1 | No Stedding keys on Windows: Chromium's chords stood in (the notes said so). | Arc's Windows keyboard in the views accelerator table (windows N7, patch 0043): Ctrl+S the sidebar, Ctrl+D the pin, Ctrl+Shift+D the address row, Alt+1–9 the Spaces, Ctrl+Alt+←/→ between them and Ctrl+Alt+Shift+←/→ the tab across, Ctrl+Alt+↑/↓ the rows and Ctrl+Alt+Shift+↑/↓ their move, Ctrl+Shift+K Clear, Ctrl+Shift+C the link and Ctrl+Alt+Shift+C as Markdown, Ctrl+Shift+2 / Ctrl+Alt+Shift+2 / Ctrl+Shift+1 the screenshots, Ctrl+Shift+P the palette, Ctrl+Alt+Shift+N a Blank Window; Ctrl held shows the row numbers. Chromium refuses Ctrl+Alt in that table (AltGr), so the Ctrl+Alt rows go in past its check the way its debug map does (trap 42). The shortcut reference reads the platform's table and its block is on chrome://settings/stedding on Windows (shortcuts Z6); the settings sub-labels and the welcome flow say Ctrl where they said ⌘. |
+| 2 | The first window opened on Google's search page, with a "Google API keys are missing. Some functionality of Stedding will be disabled" bar over it. | Google had been chosen on the welcome flow, and for Google alone Chromium's first-party page stood in for the local one (`S-45`, open since 2026-09-05): the local third-party page for every provider now (new-tab N1). The infobar is gone: the keys are for Google's services (welcome W9). Patch 0044. |
+| 3 | Collapsed, the tabs were a little too close to each other. | The rail's rows sit 6 DIP apart, not the open sidebar's 2 (sidebar Y12, patch 0045). |
+| 4 | Hovering a Space in the rail floated its name over the downloads button. | No floating name in the rail; the chip's tooltip names the Space (sidebar Y14). |
+| 5 | Adding Spaces while collapsed pushed the "+" past the window's bottom; open and collapse again and it was fine. | The switcher's stack kept a fixed height that counted every chip full while the inactive ones were dots, and the row it sits in kept a height set by hand at construction and at each collapse. The stack measures itself, dots and all, and the row takes its height from its layout, with the switcher's flex (the open row's width) off in the rail -- left on, a BoxLayout hands the row everything under the Archived row (sidebar Y13, trap 43). |
+| 6 | Collapsed, the Space's icon at the top had "…" after it. | The title row is its glyph alone in the rail, centred and a size up; the name comes back with the open sidebar (sidebar Y13). |
+| 7 | Choosing a theme "as the browser suggests" changed nothing much, and a popup in it drew white text on a white ground ("You can find older colors in the Chrome Web Store"). | That was Chromium's Customize Chrome panel behind the "Theme" row of Settings › Appearance, whose colours barely reach a window the Space tints and whose promos point at the Web Store, one as a toast the panel styles itself. The row is hidden (settings T12); the plain toast ground takes the dialog colour in the mixer too. Patch 0044. |
+| 8 | Found in the pass: the reference's ⇧⌘D row said "unbound" on the Mac, where ⇧⌘D shows the address row (toolbar T10). | The row names the address row on both platforms, from the table (shortcuts Z2). |
+| 9 | Found in the pass: Chromium's tab-group chords (Alt+Shift+C/P/X/Z/W) were live on Windows while the group rows are hidden (menus M6). | Linux's alone now, as the Mac's were removed with the rows. |
+| 10 | Found in the pass: the tab menu showed no chord beside Pin to This Space, Copy Link or Copy Link as Markdown -- on the Mac too -- while Close had its Ctrl+W. | The verbs map to the browser commands their keys are bound to (`ContextMenuCommandToBrowserCommand`), which is where the menu reads chords from (menus M1; patch 0043). |
+
 ## Round 8 — the first Windows build (2026-09-08)
 
 The series built for Windows for the first time -- M8 in `docs/ROADMAP.md` had not

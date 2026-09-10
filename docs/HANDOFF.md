@@ -377,6 +377,8 @@ into the fresh profile.
     the clamp read their empty bounds). Chromium's own `--enable-ui-devtools`
     listens but its `DOM.getDocument` never answered this build. Add the dump,
     rebuild the one file, read the log, remove it before the patch is cut.
+    On Windows `tooling\win\uia-dump.ps1` answers the same question with no
+    build at all (round 9).
 38. **On Windows, Chromium reads Google Chrome's registry key for extensions
     whatever the branding** (`Software\Google\Chrome\Extensions`, machine
     and user, `ExternalRegistryLoader`), and installs what it finds from
@@ -407,6 +409,26 @@ into the fresh profile.
     elsewhere is running Google's experiment set until it says so too. And the
     look moves with it: the 2026 desktop refresh was one of those experiments,
     so patch 0042 keeps its seven features on by default.
+42. **Chromium's Windows accelerator list refuses Ctrl+Alt.** A DCHECK in
+    `GetAcceleratorList` fires on any mapping with both, because AltGr sends
+    Ctrl+Alt on many keyboards. Arc for Windows puts its Space and tab traversal
+    on Ctrl+Alt with the arrows all the same, so Stedding's Ctrl+Alt rows (patch
+    0043, windows N7) are inserted after the check, the way Chromium's own debug
+    map is, and keep to keys AltGr does not type a character on. A Ctrl+Alt row
+    in the main table kills a DCHECK build at startup.
+43. **A container whose size is its children's gets it from its layout, not from
+    a number set by hand -- and a BoxLayout with a flexible child reports the
+    space it is offered as its preferred size.** The sidebar's bottom row had a
+    preferred height set at construction and at each collapse; a Space added in
+    the rail rebuilt the switcher inside it and the row kept its old height, so
+    the "+" was laid out past the window's bottom until the sidebar was opened
+    and collapsed again (round 9). Dropping the number was not enough: the row's
+    BoxLayout flexes the switcher to take the open row's width, and in the rail,
+    stacked, that flex made the row ask for everything under the Archived row and
+    sit the stack at its top, 200 DIP above the window's bottom
+    (`tooling\win\uia-dump.ps1` showed the row 425 DIP tall).
+    The flex is the open form's alone now, the row's height is its children's,
+    and the switcher reports a height that counts its dots as dots (sidebar Y13).
 
 ## The Windows build
 
@@ -425,19 +447,26 @@ variables name the machine's paths, so none is in the repo: `STEDDING_CHROMIUM_S
    script with an args file of its own; the build is refused while a browser from
    that output directory runs (the link fails with "permission denied" otherwise).
 3. `tooling\win\capture.ps1` for captures that need neither focus nor input (trap
-   36); `tooling\win\package-installer.ps1` for the release image in `dist/`;
+   36); `tooling\win\cdp.ps1` for what a capture cannot reach -- JavaScript in a
+   page over the DevTools websocket (the welcome flow's buttons pressed by name,
+   a settings page scrolled to its Shortcuts block) and a screenshot of the page;
+   `tooling\win\uia-dump.ps1` for a layout question -- every view of the window
+   with its name and bounds through UI Automation, no build needed (trap 37);
+   `tooling\win\package-installer.ps1` for the release image in `dist/`;
    `tooling/publish-release` from Git for Windows to publish it beside the Mac's DMG
    (ADR 0018).
 
 ## Open items
 
 `BACKLOG.md` is the list; do not keep one here. First up, on the Mac: add the DMG
-to `v0.2.0-beta.5` (published from Windows on 2026-09-09 with the Windows preview;
-the steps under *Release channel*; the notes' macOS checksum line reads `TBD` until
-the image exists, and `publish-release` uploads into the existing release). Then the operator's look at beta 5 (`docs/ARC-ROUND2.md` gets a
-round 9 table when it comes), `S-56` (the Windows port proper), `S-48` (the Arc
-data import run once on a real Arc profile) and `S-17` (signing, when Apple
-answers).
+to `v0.2.0-beta.6` (published from Windows on 2026-09-10 with round 9; beta 5 was
+the Windows preview alone and stays so, its notes say which release macOS users
+take; the steps under *Release channel*; the notes' macOS checksum line reads
+`TBD` until the image exists, and `publish-release` uploads into the existing
+release). Then the operator's next look (`docs/ARC-ROUND2.md` gets a round 10
+table when it comes), `S-56` (the Windows port proper: little windows, signing,
+updates, CI), `S-48` (the Arc data import run once on a real Arc profile) and
+`S-17` (signing, when Apple answers).
 
 ## Release channel
 
@@ -454,9 +483,10 @@ image joins the same release from the Windows PC: `tooling\win\build.ps1`,
 notes, commit, push, `tooling/publish-release` from Git for Windows -- whichever
 platform publishes first creates the release, the other uploads into it and the
 notes are refreshed (ADR 0018). Beta 5's Windows preview went first, on
-2026-09-09; the Mac picks up at `tooling/dev build release chrome` and its
-`publish-release` adds the DMG, the notes' macOS checksum line reading `TBD`
-until then.
+2026-09-09, and beta 6 followed from Windows on 2026-09-10 with round 9; the Mac
+picks up at `tooling/dev build release chrome` and its `publish-release` adds the
+DMG to beta 6 (beta 5 stays Windows-only), the notes' macOS checksum line reading
+`TBD` until then.
 
 The push moved ahead of the publish on purpose. `gh release create` cuts the tag on
 the remote, so publishing from an unpushed commit tagged whatever the remote's default

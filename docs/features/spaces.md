@@ -16,6 +16,9 @@ in every Space. Only the active Space's tabs are visible; the rest stay in the o
 strip, hidden (ADR 0015). The content pane always shows a tab the user can see in the
 sidebar.
 
+On Windows every chord below is the Mac's with ⌘ read as Ctrl and ⌥⌘ as Ctrl+Alt
+(Alt+1–9 for the Spaces themselves); the full map is `docs/features/windows.md` N7.
+
 ## Behaviours
 
 | Id | Behaviour | Test | State |

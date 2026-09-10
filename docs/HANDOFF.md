@@ -401,6 +401,11 @@ into the fresh profile.
     Tests of an installer, or of anything under AppData, run through a
     scheduled task as the user (`schtasks /Create ... /Run`) with a log in a
     real path; the captures come from outside the sandbox as usual (trap 36).
+    The cycle ends in `setup.exe --uninstall --delete-profile`, so it must refuse
+    to start over an existing install: on 2026-09-10 it ran over the beta 5
+    installed for the operator and took that install and its profile with it.
+    The tasks themselves do not survive: `/SC ONCE` tasks were gone the next
+    day and had to be created again.
 41. **A non-official build runs Chromium's field-trial testing config** unless
     `disable_fieldtrial_testing_config = true`, and so does an official one:
     `testing/variations/fieldtrial_testing_config.json` switches on hundreds of

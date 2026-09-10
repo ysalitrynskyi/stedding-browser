@@ -6,6 +6,9 @@ Owner docs: `docs/PRODUCT.md` ("Command bar"). Patch: `0005`.
 ⌘T opens a bar over the page. It lists open tabs from every Space, then the omnibox's own
 suggestions; typing a URL opens it, anything else searches with the default engine.
 
+On Windows every chord below is the Mac's with ⌘ read as Ctrl and ⌥⌘ as Ctrl+Alt
+(Alt+1–9 for the Spaces themselves); the full map is `docs/features/windows.md` N7.
+
 ## Behaviours
 
 | Id | Behaviour | Test | State |

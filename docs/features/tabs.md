@@ -8,6 +8,9 @@ on the row or its close button has keyboard focus (Arc's active row carries none
 side-by-side capture of Arc confirmed on 2026-09-04), the title never re-elides when the
 glyph appears, and an essentials card that plays audio keeps its favicon.
 
+On Windows every chord below is the Mac's with ⌘ read as Ctrl and ⌥⌘ as Ctrl+Alt
+(Alt+1–9 for the Spaces themselves); the full map is `docs/features/windows.md` N7.
+
 ## Behaviours
 
 | Id | Behaviour | Test | State |

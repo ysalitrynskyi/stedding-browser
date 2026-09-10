@@ -7,6 +7,9 @@ Owner docs: `docs/PRODUCT.md` §1. Patch: 0023.
 previous tab, a hold shows a strip of the five most recent over the content.
 ⌥⌘↑/↓ traverse rows, ⌥⇧⌘↑/↓ move the active row.
 
+On Windows every chord below is the Mac's with ⌘ read as Ctrl and ⌥⌘ as Ctrl+Alt
+(Alt+1–9 for the Spaces themselves); the full map is `docs/features/windows.md` N7.
+
 ## Behaviours
 
 | Id | Behaviour | Test | State |

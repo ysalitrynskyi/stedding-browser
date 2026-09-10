@@ -9,6 +9,9 @@ page (it is the page the user is looking at). The Markdown title is the page tit
 the host when the title is empty. Until the selection rule (R6-20, wave 2) lands, both
 act on the active tab only.
 
+On Windows every chord below is the Mac's with ⌘ read as Ctrl and ⌥⌘ as Ctrl+Alt
+(Alt+1–9 for the Spaces themselves); the full map is `docs/features/windows.md` N7.
+
 ## Behaviours
 
 | Id | Behaviour | Test | State |

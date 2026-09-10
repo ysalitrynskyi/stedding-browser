@@ -1,0 +1,523 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Thu, 10 Sep 2026 01:50:00 -0400
+Subject: sidebar: the rail's rows breathe, the title row is its glyph, the switcher's stack measures itself
+
+The collapsed rail on the Windows preview, three minutes in (round 9,
+docs/ARC-ROUND2.md):
+
+- The 44 DIP rows sat 2 DIP apart and read as one strip. 6 DIP in the
+  rail, in the unpinned container's and the folder's layouts, keyed on
+  the width being laid out like the rest of the rail form (sidebar Y12).
+- The Space title row showed its glyph and the name elided to "...",
+  left in the column. The glyph alone now, centred and a size up; the
+  strip keeps the glyph and the name apart, so the open sidebar gets
+  both back (Y13).
+- The switcher's stack kept a fixed height that counted every chip full
+  while the inactive ones were 6 DIP dots, and the row it sits in kept a
+  height set by hand at construction and at each collapse, so a Space
+  added in the rail pushed the "+" past the window's bottom until the
+  sidebar was opened and collapsed again. The stack goes by the count --
+  full chips to four Spaces, dots past that, and the pointer does not
+  grow the dots -- measures itself in ApplyOverflow, and the row takes
+  its height from its layout, with the switcher's flex (the open row's
+  width) off in the rail: a BoxLayout with a flexible child reports the
+  space it is offered as its preferred size, and left on it handed the
+  row everything under the Archived row (Y13, docs/HANDOFF.md trap 43).
+- The floating Space name, placed above the chip, covered the downloads
+  button in the rail. None there; the chip's tooltip names the Space
+  (Y14).
+
+Why: docs/features/sidebar.md Y12-Y14.
+Removable when: the rail gets a layout of its own instead of the open
+sidebar's views in a narrower form.
+---
+diff --git a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+index e3523c7dee..887b525bf3 100644
+--- a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
++++ b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+@@ -272,8 +272,10 @@ VerticalTabStripRegionView::VerticalTabStripRegionView(
+         bottom_row->AddChildView(std::make_unique<spaces::SpaceSwitcherView>(
+             *space_model, *browser_view->browser()));
+     row_layout->SetFlexForView(space_switcher_, 1);
+-    bottom_row->SetPreferredSize(
+-        gfx::Size(0, space_switcher_->GetPreferredSize().height()));
++    // The row's height is its layout's: the switcher's own preferred size
++    // and the downloads button's, which the rail stacks. A fixed height
++    // set here went stale the moment a Space was added in the rail
++    // (sidebar Y13).
+     bottom_row->SetProperty(
+         views::kFlexBehaviorKey,
+         views::FlexSpecification(views::MinimumFlexSizeRule::kPreferred,
+@@ -1518,6 +1520,7 @@ base::TimeDelta VerticalTabStripRegionView::SteddingHoverDelay() const {
+ void VerticalTabStripRegionView::ApplyRailForm(bool rail) {
+   const bool arc_style =
+       base::FeatureList::IsEnabled(stedding::kArcStyleWindow);
++  rail_form_ = arc_style && rail;
+   // The button containers sit on the rows' column: the rail's padding
+   // from the strip's edges in the rail, the open sidebar's 12 DIP
+   // otherwise, past the gutter's worth of interior margin the collapsed
+@@ -1567,18 +1570,24 @@ void VerticalTabStripRegionView::ApplyRailForm(bool rail) {
+     bottom_row_layout_->SetOrientation(
+         rail ? views::BoxLayout::Orientation::kVertical
+              : views::BoxLayout::Orientation::kHorizontal);
++    // The switcher takes the open row's width; it must not take the rail's
++    // height. A BoxLayout with a flexible child reports the space it is
++    // offered as its preferred size, so with the flex on in the rail the
++    // row swallowed everything under the Archived row and the stack sat at
++    // its top (HANDOFF trap 43).
++    if (space_switcher_) {
++      bottom_row_layout_->SetFlexForView(space_switcher_, rail ? 0 : 1);
++    }
+   }
+   if (downloads_button_) {
+     downloads_button_->SetProperty(
+         views::kMarginsKey,
+         rail ? gfx::Insets::TLBR(0, 0, 8, 0) : gfx::Insets::TLBR(0, 10, 0, 0));
+   }
+-  if (bottom_row_ && space_switcher_) {
+-    int height = space_switcher_->GetPreferredSize().height();
+-    if (rail && downloads_button_) {
+-      height += downloads_button_->GetPreferredSize().height() + 8;
+-    }
+-    bottom_row_->SetPreferredSize(gfx::Size(0, height));
++  // The row's height follows its children (sidebar Y13); the orientation
++  // and the margins above changed what they add up to.
++  if (bottom_row_) {
++    bottom_row_->InvalidateLayout();
+   }
+ }
+ 
+@@ -1699,14 +1708,16 @@ void VerticalTabStripRegionView::UpdateSpaceTitle() {
+       browser_view()->browser()->GetProfile()->IsOffTheRecord()) {
+     strip->SetSpaceTitleIcon(ui::ImageModel::FromVectorIcon(
+         kIncognitoIcon, kColorTabForegroundInactiveFrameActive, 16));
+-    strip->SetSpaceTitle(u"Private", views::Button::PressedCallback());
++    strip->SetSpaceTitle(std::u16string(), u"Private",
++                         views::Button::PressedCallback());
+     return;
+   }
+   if (!model || !strip) {
+     return;
+   }
+   const spaces::Space* const active = model->active_space();
+-  std::u16string title;
++  std::u16string glyph;
++  std::u16string name;
+   // One unnamed Space is an ordinary window; the title appears with two.
+   if (active && model->size() > 1) {
+     size_t index = 0;
+@@ -1716,11 +1727,11 @@ void VerticalTabStripRegionView::UpdateSpaceTitle() {
+       }
+       ++index;
+     }
+-    title = spaces::SpaceSwitcherView::GlyphFor(*active, index) + u"   " +
+-            model->DisplayName(active->id());
++    glyph = spaces::SpaceSwitcherView::GlyphFor(*active, index);
++    name = model->DisplayName(active->id());
+   }
+   strip->SetSpaceTitle(
+-      title,
++      glyph, name,
+       base::BindRepeating(
+           [](VerticalTabStripRegionView* self, const ui::Event& event) {
+             spaces::SpaceModel* const model =
+@@ -1747,7 +1758,10 @@ void VerticalTabStripRegionView::OnSpaceChipHovered(
+   if (!space_hover_pill_) {
+     return;
+   }
+-  if (name.empty()) {
++  // sidebar Y14: no floating name in the rail. Above a stacked chip is the
++  // downloads button, which the pill covered; the chip's tooltip names
++  // the Space there.
++  if (name.empty() || rail_form_) {
+     space_hover_pill_->SetVisible(false);
+     return;
+   }
+diff --git a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
+index e3b5384fa8..5456ea0614 100644
+--- a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
++++ b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
+@@ -279,6 +279,9 @@ class VerticalTabStripRegionView final
+   // The gutter's worth of interior margin the collapsed strip carries
+   // (sidebar Y6), for the button containers' margins in ApplyRailForm.
+   int rail_left_ = 0;
++  // Whether the rows are in their rail form right now (ApplyRailForm):
++  // the floating Space name stays away in the rail (sidebar Y14).
++  bool rail_form_ = false;
+   // archive A7: the row above the switcher that opens the archived view.
+   raw_ptr<views::LabelButton> archived_row_ = nullptr;
+   // Stedding (tabs R11-R13): row numbers while Cmd is held. Modifier-only
+diff --git a/chrome/browser/ui/views/spaces/space_switcher_rules.cc b/chrome/browser/ui/views/spaces/space_switcher_rules.cc
+index eb11e98b8b..85036d7f5f 100644
+--- a/chrome/browser/ui/views/spaces/space_switcher_rules.cc
++++ b/chrome/browser/ui/views/spaces/space_switcher_rules.cc
+@@ -20,6 +20,18 @@ int SwitcherChipWidth(bool overflow, bool active, bool row_hovered) {
+   return overflow && !active && !row_hovered ? kSwitcherDot : kSwitcherChip;
+ }
+ 
++bool SwitcherStackOverflows(size_t chip_count) {
++  return chip_count > kSwitcherStackFullChips;
++}
++
++int SwitcherStackHeight(const std::vector<int>& chip_widths) {
++  int height = kSwitcherStackPad;
++  for (int width : chip_widths) {
++    height += width + kSwitcherChipGap;
++  }
++  return height + kSwitcherChip + kSwitcherChipGap;
++}
++
+ size_t SwitcherDropIndex(const std::vector<int>& chip_centres, int x) {
+   size_t nearest = 0;
+   for (size_t i = 1; i < chip_centres.size(); ++i) {
+diff --git a/chrome/browser/ui/views/spaces/space_switcher_rules.h b/chrome/browser/ui/views/spaces/space_switcher_rules.h
+index 2c8ab8b333..a38f85b765 100644
+--- a/chrome/browser/ui/views/spaces/space_switcher_rules.h
++++ b/chrome/browser/ui/views/spaces/space_switcher_rules.h
+@@ -27,6 +27,18 @@ bool SwitcherOverflows(int row_width, size_t chip_count);
+ // otherwise.
+ int SwitcherChipWidth(bool overflow, bool active, bool row_hovered);
+ 
++// sidebar Y13: stacked in the rail, one chip wide, the rule is the count,
++// not a width -- full chips while the stack is short, dots past
++// kSwitcherStackFullChips Spaces, the "+" always full -- and the stack is
++// as tall as what it holds, dots and all, so the "+" never lands past the
++// window's bottom (operator, 2026-09-09).
++inline constexpr size_t kSwitcherStackFullChips = 4;
++inline constexpr int kSwitcherStackPad = 8;
++bool SwitcherStackOverflows(size_t chip_count);
++// The stack's height for chips of `chip_widths` (kSwitcherChip or
++// kSwitcherDot each) and the "+", every one with the gap around it.
++int SwitcherStackHeight(const std::vector<int>& chip_widths);
++
+ // spaces B27: where a dragged chip lands -- the index of the chip whose
+ // centre is nearest `x`, both in the row's coordinates. A drop over the
+ // chip's own place is no move.
+diff --git a/chrome/browser/ui/views/spaces/space_switcher_rules_unittest.cc b/chrome/browser/ui/views/spaces/space_switcher_rules_unittest.cc
+index cd628e150a..30fa52e691 100644
+--- a/chrome/browser/ui/views/spaces/space_switcher_rules_unittest.cc
++++ b/chrome/browser/ui/views/spaces/space_switcher_rules_unittest.cc
+@@ -36,5 +36,23 @@ TEST(SwitcherRulesTest, OverflowShrinksInactiveChips) {
+   EXPECT_EQ(kSwitcherChip, SwitcherChipWidth(true, false, true));
+ }
+ 
++// sidebar Y13: the rail's stack goes by the count, and measures itself.
++TEST(SwitcherRulesTest, StackOverflowsByCountAndMeasuresItself) {
++  EXPECT_FALSE(SwitcherStackOverflows(1));
++  EXPECT_FALSE(SwitcherStackOverflows(kSwitcherStackFullChips));
++  EXPECT_TRUE(SwitcherStackOverflows(kSwitcherStackFullChips + 1));
++  // Three full chips and the plus: four rows of chip and gap, and the pad.
++  EXPECT_EQ(4 * (kSwitcherChip + kSwitcherChipGap) + kSwitcherStackPad,
++            SwitcherStackHeight({kSwitcherChip, kSwitcherChip, kSwitcherChip}));
++  // The active chip full, six dots and the plus.
++  EXPECT_EQ(2 * (kSwitcherChip + kSwitcherChipGap) +
++                6 * (kSwitcherDot + kSwitcherChipGap) + kSwitcherStackPad,
++            SwitcherStackHeight({kSwitcherChip, kSwitcherDot, kSwitcherDot,
++                                 kSwitcherDot, kSwitcherDot, kSwitcherDot,
++                                 kSwitcherDot}));
++  EXPECT_EQ(kSwitcherChip + kSwitcherChipGap + kSwitcherStackPad,
++            SwitcherStackHeight({}));
++}
++
+ }  // namespace
+ }  // namespace spaces
+diff --git a/chrome/browser/ui/views/spaces/space_switcher_view.cc b/chrome/browser/ui/views/spaces/space_switcher_view.cc
+index 8e64d4835c..8607f2c89a 100644
+--- a/chrome/browser/ui/views/spaces/space_switcher_view.cc
++++ b/chrome/browser/ui/views/spaces/space_switcher_view.cc
+@@ -8,6 +8,7 @@
+ #include <memory>
+ #include <string>
+ #include <utility>
++#include <vector>
+ 
+ #include "base/functional/bind.h"
+ #include "base/strings/strcat.h"
+@@ -326,14 +327,14 @@ void SpaceSwitcherView::Rebuild() {
+     add->SetProperty(views::kMarginsKey, chip_margin);
+   }
+   icon_row_->AddChildView(std::move(add));
+-  // The rail's stack is as tall as its chips; the open row is one chip tall.
+-  const int rows = static_cast<int>(spaces.size()) + 1;
+-  // The open row takes its width from the sidebar's flex; stacked in the
+-  // rail it sits in a vertical BoxLayout, which sizes the cross axis from the
+-  // preferred size, and a width of 0 left the chips nothing to paint in.
+-  SetPreferredSize(gfx::Size(
+-      collapsed_ ? kIconSize : 0,
+-      collapsed_ ? rows * (kIconSize + kChipGap) + 8 : kRowHeight));
++  // The open row is one chip tall and takes its width from the sidebar's
++  // flex; the rail's stack measures itself in ApplyOverflow, dots and all
++  // (sidebar Y13). Stacked, the view sits in a vertical BoxLayout, which
++  // sizes the cross axis from the preferred size, and a width of 0 left the
++  // chips nothing to paint in.
++  if (!collapsed_) {
++    SetPreferredSize(gfx::Size(0, kRowHeight));
++  }
+   ApplyOverflow();
+ }
+ 
+@@ -341,16 +342,26 @@ void SpaceSwitcherView::ApplyOverflow() {
+   if (!icon_row_) {
+     return;
+   }
+-  const bool overflow = SwitcherOverflows(width(), chips_.size());
++  // In the row the rule is the width; stacked in the rail, one chip wide,
++  // it is the count (sidebar Y13).
++  const bool overflow = collapsed_
++                            ? SwitcherStackOverflows(chips_.size())
++                            : SwitcherOverflows(width(), chips_.size());
+   const auto& spaces = model_->spaces();
++  std::vector<int> widths;
+   for (size_t i = 0; i < chips_.size() && i < spaces.size(); ++i) {
+     auto* const chip = views::AsViewClass<views::LabelButton>(chips_[i].first);
+     if (!chip) {
+       continue;
+     }
+     const bool active = chips_[i].second == model_->active_id();
+-    const bool dot =
+-        SwitcherChipWidth(overflow, active, row_hovered_) == kSwitcherDot;
++    // Stacked, the pointer does not grow the dots: the stack would change
++    // height under it and the chip it rests on would move away. The chips'
++    // tooltips name the Spaces there (sidebar Y13, Y14).
++    const int chip_width =
++        SwitcherChipWidth(overflow, active, row_hovered_ && !collapsed_);
++    widths.push_back(chip_width);
++    const bool dot = chip_width == kSwitcherDot;
+     chip->SetPreferredSize(dot ? gfx::Size(kSwitcherDot, kSwitcherDot)
+                                : gfx::Size(kIconSize, kIconSize));
+     chip->SetText(dot ? std::u16string() : GlyphFor(*spaces[i], i));
+@@ -358,6 +369,14 @@ void SpaceSwitcherView::ApplyOverflow() {
+                                   spaces[i]->color(), kSwitcherDot / 2)
+                             : nullptr);
+   }
++  if (collapsed_) {
++    // As tall as the stack it holds, so the "+" is never laid out past the
++    // window's bottom: a fixed height counted every chip full while the
++    // dots were 6 DIP, and a Space added in the rail never reached the row
++    // this view sits in, which kept its old height (operator,
++    // 2026-09-09). The parent hears about it through PreferredSizeChanged.
++    SetPreferredSize(gfx::Size(kIconSize, SwitcherStackHeight(widths)));
++  }
+   icon_row_->InvalidateLayout();
+ }
+ 
+diff --git a/chrome/browser/ui/views/tabs/common/tab_group_view_layout.cc b/chrome/browser/ui/views/tabs/common/tab_group_view_layout.cc
+index 38e3b8b876..7d2de58261 100644
+--- a/chrome/browser/ui/views/tabs/common/tab_group_view_layout.cc
++++ b/chrome/browser/ui/views/tabs/common/tab_group_view_layout.cc
+@@ -28,6 +28,8 @@
+ 
+ namespace {
+ constexpr int kTabVerticalPadding = 2;
++// Stedding (sidebar Y12): the rail's rows sit 6 DIP apart, folders' too.
++constexpr int kRailTabVerticalPadding = 6;
+ constexpr int kGroupLineWidth = 2;
+ constexpr int kGroupLineCollapsedLeadingPadding = 6;
+ constexpr int kGroupHeaderHeight = 26;
+@@ -88,6 +90,8 @@ views::ProposedLayout TabGroupViewLayout::CalculateVerticalLayout(
+       rail ? stedding::kRailRowPadding
+            : GetLayoutConstant(
+                  LayoutConstant::kVerticalTabStripHorizontalPadding);
++  const int vertical_padding =
++      rail ? kRailTabVerticalPadding : kTabVerticalPadding;
+   if (tab_strip_collapse_state !=
+       tabs::VerticalTabStripCollapseState::kExpanded) {
+     group_line_bounds.set_x(rail ? 0 : kGroupLineCollapsedLeadingPadding);
+@@ -106,7 +110,7 @@ views::ProposedLayout TabGroupViewLayout::CalculateVerticalLayout(
+       tab_group_view->group_header_.get(),
+       tab_group_view->group_header_->GetVisible(), header_bounds);
+   height +=
+-      header_bounds.height() + kGroupHeaderVerticalMargin + kTabVerticalPadding;
++      header_bounds.height() + kGroupHeaderVerticalMargin + vertical_padding;
+   width = std::max(width, header_bounds.width());
+ 
+   // If the tab strip is not collapsed then the group line is below and left
+@@ -150,11 +154,11 @@ views::ProposedLayout TabGroupViewLayout::CalculateVerticalLayout(
+       bounds.set_width(size_bounds.width().value() - bounds.x());
+     }
+     layouts.child_layouts.emplace_back(child, child->GetVisible(), bounds);
+-    height += bounds.height() + kTabVerticalPadding;
++    height += bounds.height() + vertical_padding;
+     width = std::max(width, bounds.width());
+   }
+   // Remove excess padding.
+-  height -= kTabVerticalPadding;
++  height -= vertical_padding;
+ 
+   if (!children.empty()) {
+     group_line_bounds.set_height(height - group_line_bounds.y());
+@@ -167,7 +171,7 @@ views::ProposedLayout TabGroupViewLayout::CalculateVerticalLayout(
+   // Add extra padding below the group if not collapsed.
+   const bool is_group_collapsed = tab_group_view->IsCollapsed();
+   if (!is_group_collapsed) {
+-    height += kTabVerticalPadding;
++    height += vertical_padding;
+   }
+ 
+   // If the group is focused and we are handling a drag, we need to account for
+diff --git a/chrome/browser/ui/views/tabs/common/tab_strip_view.cc b/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
+index 25fb9768ad..aae374e4d7 100644
+--- a/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
++++ b/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
+@@ -11,6 +11,7 @@
+ #include "base/memory/raw_ptr.h"
+ #include "base/metrics/histogram_macros.h"
+ #include "base/scoped_multi_source_observation.h"
++#include "base/strings/strcat.h"
+ #include "chrome/browser/ui/browser_element_identifiers.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/color/chrome_color_id.h"
+@@ -299,14 +300,41 @@ void TabStripView::SetUpSpaceBoundary(
+                                                   std::move(is_space_pinned));
+ }
+ 
+-void TabStripView::SetSpaceTitle(const std::u16string& title,
++void TabStripView::SetSpaceTitle(const std::u16string& glyph,
++                                 const std::u16string& name,
+                                  views::Button::PressedCallback pressed) {
+   if (!space_title_row_) {
+     return;
+   }
+-  space_title_row_->SetText(title);
++  space_title_glyph_ = glyph;
++  space_title_name_ = name;
+   space_title_row_->SetCallback(std::move(pressed));
+-  space_title_row_->SetVisible(!title.empty());
++  space_title_row_->SetVisible(!glyph.empty() || !name.empty());
++  ApplySpaceTitleForm();
++}
++
++void TabStripView::ApplySpaceTitleForm() {
++  if (!space_title_row_) {
++    return;
++  }
++  // The rail shows the glyph alone, centred on the favicon column and a
++  // size up like the rail's favicons; the open sidebar the glyph and the
++  // name on the tab rows' column. The name, elided to "…" beside the
++  // glyph, sat left in the rail until 2026-09-09 (sidebar Y13).
++  std::u16string text = space_title_glyph_;
++  if (!rail_form_ && !space_title_name_.empty()) {
++    text = text.empty() ? space_title_name_
++                        : base::StrCat({space_title_glyph_, u"   ",
++                                        space_title_name_});
++  }
++  auto* const row = static_cast<SidebarRowButton*>(space_title_row_.get());
++  row->SetText(text);
++  row->label()->SetFontList(
++      stedding::SidebarFont().DeriveWithSizeDelta(rail_form_ ? 5 : 0));
++  row->SetHorizontalAlignment(rail_form_ ? gfx::ALIGN_CENTER
++                                         : gfx::ALIGN_LEFT);
++  row->SetBorder(
++      views::CreateEmptyBorder(gfx::Insets::VH(0, rail_form_ ? 0 : 8)));
+   InvalidateLayout();
+ }
+ 
+@@ -555,8 +583,12 @@ void TabStripView::SetCollapsedState(bool is_collapsed) {
+ }
+ 
+ void TabStripView::SetRailForm(bool rail) {
+-  if (!new_tab_row_ ||
+-      !base::FeatureList::IsEnabled(stedding::kArcStyleWindow)) {
++  if (!base::FeatureList::IsEnabled(stedding::kArcStyleWindow)) {
++    return;
++  }
++  rail_form_ = rail;
++  ApplySpaceTitleForm();
++  if (!new_tab_row_) {
+     return;
+   }
+   // The "+ New Tab" row is its plus alone in the rail, centred in the row
+@@ -878,9 +910,8 @@ void TabStripView::OnThemeChanged() {
+   // size and the preset's row height (both rows are SidebarRowButtons, which
+   // let their label be reached). A density change arrives as a theme change.
+   if (space_title_row_) {
+-    static_cast<SidebarRowButton*>(space_title_row_.get())
+-        ->label()
+-        ->SetFontList(stedding::SidebarFont());
++    // The font is the form's (ApplySpaceTitleForm).
++    ApplySpaceTitleForm();
+     space_title_row_->SetPreferredSize(gfx::Size(
+         0, std::min(kSpaceTitleRowHeight,
+                     GetLayoutConstant(LayoutConstant::kVerticalTabHeight))));
+diff --git a/chrome/browser/ui/views/tabs/common/tab_strip_view.h b/chrome/browser/ui/views/tabs/common/tab_strip_view.h
+index c39974a1c5..c56bb9103d 100644
+--- a/chrome/browser/ui/views/tabs/common/tab_strip_view.h
++++ b/chrome/browser/ui/views/tabs/common/tab_strip_view.h
+@@ -55,9 +55,11 @@ class TabStripView final : public views::View, public views::WidgetObserver {
+   void SetUpSpaceBoundary(
+       base::RepeatingCallback<bool(const views::View*)> is_space_pinned);
+ 
+-  // Stedding: the Space title row above the pinned tabs; an empty title
+-  // hides it. `pressed` opens the Space's menu.
+-  void SetSpaceTitle(const std::u16string& title,
++  // Stedding: the Space title row above the pinned tabs -- the Space's
++  // glyph and its name, the glyph alone in the rail (sidebar Y13); both
++  // empty hides it. `pressed` opens the Space's menu.
++  void SetSpaceTitle(const std::u16string& glyph,
++                     const std::u16string& name,
+                      views::Button::PressedCallback pressed);
+   // private V2: an icon before the title (the incognito glyph).
+   void SetSpaceTitleIcon(const ui::ImageModel& icon);
+@@ -165,6 +167,11 @@ class TabStripView final : public views::View, public views::WidgetObserver {
+   raw_ptr<ClearTabsSeparator> clear_line_ = nullptr;
+   raw_ptr<views::LabelButton> new_tab_row_ = nullptr;
+   raw_ptr<views::LabelButton> space_title_row_ = nullptr;
++  // The title row's parts and the form it is drawn in (SetRailForm).
++  std::u16string space_title_glyph_;
++  std::u16string space_title_name_;
++  bool rail_form_ = false;
++  void ApplySpaceTitleForm();
+   raw_ptr<views::ScrollView> unpinned_tabs_scroll_view_ = nullptr;
+   raw_ptr<UnpinnedTabContainerView> unpinned_tabs_container_view_ = nullptr;
+   bool is_collapsed_ = false;
+diff --git a/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view_layout.cc b/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view_layout.cc
+index de3586cba7..5e0323b9f2 100644
+--- a/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view_layout.cc
++++ b/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view_layout.cc
+@@ -27,6 +27,9 @@
+ 
+ namespace {
+ constexpr int kTabVerticalPadding = 2;
++// Stedding (sidebar Y12): in the rail the rows sit 6 DIP apart. At the open
++// sidebar's 2 the 44 DIP squares read as one strip (operator, 2026-09-09).
++constexpr int kRailTabVerticalPadding = 6;
+ }  // namespace
+ 
+ UnpinnedTabContainerViewLayout::UnpinnedTabContainerViewLayout(
+@@ -186,6 +189,8 @@ views::ProposedLayout UnpinnedTabContainerViewLayout::CalculateVerticalLayout(
+       rail ? stedding::kRailRowPadding
+            : GetLayoutConstant(
+                  LayoutConstant::kVerticalTabStripHorizontalPadding);
++  const int vertical_padding =
++      rail ? kRailTabVerticalPadding : kTabVerticalPadding;
+ 
+   // Stedding: the boundary between the Space-pinned run and the rest goes
+   // after the last child the predicate accepts (or at the top when there is
+@@ -245,7 +250,7 @@ views::ProposedLayout UnpinnedTabContainerViewLayout::CalculateVerticalLayout(
+         gfx::Rect(horizontal_padding, height, boundary_width,
+                   new_tab_row->GetVisible() ? row_height : 0));
+     if (new_tab_row->GetVisible()) {
+-      height += row_height + kTabVerticalPadding;
++      height += row_height + vertical_padding;
+       width = std::max(width, boundary_width + horizontal_padding);
+     }
+   };
+@@ -296,7 +301,7 @@ views::ProposedLayout UnpinnedTabContainerViewLayout::CalculateVerticalLayout(
+                        horizontal_padding);
+     }
+     layouts.child_layouts.emplace_back(child, true, bounds);
+-    height += bounds.height() + kTabVerticalPadding;
++    height += bounds.height() + vertical_padding;
+     width = std::max(width, bounds.width() + bounds.x());
+   }
+ 
+@@ -305,7 +310,7 @@ views::ProposedLayout UnpinnedTabContainerViewLayout::CalculateVerticalLayout(
+   place_boundary();
+ 
+   if (height > 0) {
+-    height -= kTabVerticalPadding;
++    height -= vertical_padding;
+   }
+ 
+   if (tab_container_view->IsHandlingDrag()) {

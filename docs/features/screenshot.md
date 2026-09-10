@@ -10,6 +10,9 @@ which is why the region and full-page captures do not sit on them. The result is
 profile's Downloads folder, named after the site and the time, and the same image on the
 clipboard.
 
+On Windows every chord below is the Mac's with ⌘ read as Ctrl and ⌥⌘ as Ctrl+Alt
+(Alt+1–9 for the Spaces themselves); the full map is `docs/features/windows.md` N7.
+
 ## Behaviours
 
 | Id | Behaviour | Test | State |

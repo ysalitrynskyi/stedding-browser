@@ -188,8 +188,20 @@ Built, with tests or measured captures:
   and uninstalled on the build machine (windows N6) and published with beta 5 as
   a preview. Chromium's field-trial testing config is off in every build from
   now on and the 2026 refresh it carried is on by decision (privacy Q10, patch
-  0042). Still `is_mac`: the keyboard map and the menus; unsigned; no updates
-  (`S-56`).
+  0042). Still to come: little windows and links from other applications;
+  unsigned; no updates (`S-56`).
+
+- **Round 9** (2026-09-09, `docs/ARC-ROUND2.md`; patches 0043–0045): the
+  operator's first three minutes in the Windows preview. Arc's keyboard for
+  Windows -- ⌘ read as Ctrl, ⌥⌘ as Ctrl+Alt, Alt+1–9 for the Spaces (windows
+  N7) -- with the shortcut reference reading the platform's own table on every
+  platform (shortcuts Z6) and the settings and welcome strings in the
+  platform's words; the local new tab page for Google too (`S-45` closed), no
+  API-keys infobar (welcome W9), no Chromium theme picker (settings T12); the
+  rail's rows 6 DIP apart, the Space title its glyph alone, the switcher's
+  stack measuring itself so a Space added in the rail keeps the "+" on
+  screen, no floating name over the downloads button (sidebar Y12–Y14).
+  Published as beta 6 from Windows.
 
 Read `docs/HANDOFF.md` before touching anything — it carries the working loop,
 every dev parameter, and the traps already paid for, numbered contiguously and cited
@@ -198,11 +210,13 @@ the operator-feedback ledger; `docs/UI-SPEC.md` the measured Arc match.
 
 Released: `v0.2.0-beta.4` (2026-09-05, published from this repo with
 `tooling/publish-release`), unsigned (M7 waits on Apple). It carries rounds 5,
-6 and 7, the round-7 second pass included. Prepared: `v0.2.0-beta.5` (`VERSION`,
-`docs/release-notes/v0.2.0-beta.5.md`, 2026-09-09) with round 8 and M8's first
-slice, published on 2026-09-09 with the Windows preview installer as its first
-image; the DMG and its checksum in the notes are the Mac's to add
-(`docs/HANDOFF.md`, *Release channel*), since only the Mac builds the macOS image.
+6 and 7, the round-7 second pass included. Published from Windows: `v0.2.0-beta.5`
+(2026-09-09, round 8 and M8's first slice, the Windows preview installer alone)
+and `v0.2.0-beta.6` (`docs/release-notes/v0.2.0-beta.6.md`, 2026-09-10, round 9:
+the Windows keyboard map, the first start, the rail); the DMG and its checksum in
+the notes are the Mac's to add to beta 6 (`docs/HANDOFF.md`, *Release channel*),
+since only the Mac builds the macOS image, and beta 5 stays a Windows-only
+preview.
 Outstanding: `BACKLOG.md`. First vanilla perf comparison is in
 `docs/perf/README.md`: on the deterministic page list every QUALITY budget is
 met (cold +2.3%, warm −2.0%, memory +0.0% over vanilla).
@@ -250,9 +264,9 @@ The order is `BACKLOG.md`. `v0.2.0-beta.4` is out (unsigned, 2026-09-05): rounds
 (`docs/ROUND6-PLAN.md`, patches 0016–0036), the operator's six from beta 3, the
 Arc one-click import, and the second pass on the operator's replies the same
 evening (patches 0037–0038 and fixups into 0001, 0002). `v0.2.0-beta.5` is
-out with round 8 and M8's first slice, the Windows preview installer its first
-image; the DMG joins from the Mac: first thing there, the release channel's steps
-in `docs/HANDOFF.md`.
+out with round 8 and M8's first slice as the Windows preview alone, and
+`v0.2.0-beta.6` follows it from Windows with round 9; the DMG joins beta 6 from
+the Mac: first thing there, the release channel's steps in `docs/HANDOFF.md`.
 
 **Whoever picks this up next**: read `docs/HANDOFF.md` first — the loop, the dev
 parameters and the traps, now including `tooling/capture-state` (a capture that

@@ -11,7 +11,7 @@ the next Chromium rebase expensive. The series was squashed to one patch per
 feature on 2026-09-01 (`S-11`); keep it that way: a new feature adds one patch, a fix
 amends its feature's, and `tooling/dev status` is where the count lives. The one
 exception: a round of operator feedback that touches many features at once lands as
-one patch (0013 for round 5, 0037 for round 7, 0039 for round 8; 0040 and 0041 are M8's first slice, 0042 the refresh features privacy Q10 keeps on) when its fixups would conflict with
+one patch (0013 for round 5, 0037 for round 7, 0039 for round 8; 0040 and 0041 are M8's first slice, 0042 the refresh features privacy Q10 keeps on; 0043 is the Windows keyboard map, 0044 and 0045 round 9's first start and rail) when its fixups would conflict with
 every later patch that touched the same lines; the next rebase folds them where they
 belong.
 

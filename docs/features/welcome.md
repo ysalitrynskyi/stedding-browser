@@ -1,6 +1,6 @@
 # Feature: Welcome flow
 
-Status: **W1–W8 built** (W7 round 6, `docs/ROUND6-PLAN.md` R6-10, backlog S-42; W8 round 7, `docs/ARC-ROUND2.md`, 2026-09-05).
+Status: **W1–W8 built** (W7 round 6, `docs/ROUND6-PLAN.md` R6-10, backlog S-42; W8 round 7, `docs/ARC-ROUND2.md`, 2026-09-05); **W9 partial** (round 9).
 Owner docs: `docs/PRODUCT.md` (first run, import), `docs/PRIVACY.md` (the chooser).
 Patch: `0015`.
 
@@ -26,6 +26,7 @@ leaves the machine.
 | W3 | Step 2 lists the browsers Chromium's importer finds on this Mac; Import copies bookmarks, history and passwords (each optional) through `ImportDataHandler`. | live: Import from Chrome shows "Imported" | built |
 | W4 | Step 3 sets the colour scheme (system, light, dark) through the theme service, at once. | live | built |
 | W5 | Step 4 shows whether Stedding is the default browser and asks macOS to make it so. | live | built |
-| W6 | Step 5 lists the keys worth knowing (⌘T, ⌘S, ⌃1–9, ⌘D and ⇧⌘K, ⌘O, ⌥⌘N, ⇧⌘C, ⇧⌘2), the Space swipe, and a link that opens the full shortcut reference in chrome://settings/stedding (shortcuts Z4); Finish closes the dialog. (⇧⌘L was listed until 2026-09-04; nothing is bound to it — ⌘S is the collapse key.) | live | built |
+| W6 | Step 5 lists the keys worth knowing (⌘T, ⌘S, ⌃1–9, ⌘D and ⇧⌘K, ⌘O, ⌥⌘N, ⇧⌘C, ⇧⌘2), the Space swipe, and a link that opens the full shortcut reference in chrome://settings/stedding (shortcuts Z4); Finish closes the dialog. (⇧⌘L was listed until 2026-09-04; nothing is bound to it — ⌘S is the collapse key.) On Windows the list is the platform's own chords (Ctrl+T, Ctrl+S, Alt+1–9 and the rest of windows N7). | live; `w10_welcome_keys` (Windows, 2026-09-10) | built |
 | W7 | Step 3 (appearance) shows the five Space swatches the switcher menu offers (`kNewSpaceColors`) and choosing one tints the first Space at once through `SpaceModel::SetSpaceColor`; Skip leaves the default. No colour pad. | live: `tooling/drive <fresh> --stedding-welcome`, choose the third swatch, read the sidebar-ground probe (spaces B11's tint); `SteddingWelcomeHandlerTest.SetSpaceColorTintsTheFirstSpace` | built |
 | W8 | Step 2's Arc block moves everything from Arc in one click — the sidebar, history and passwords, each a checkbox that starts checked (import I21) — and says that the passwords need one macOS keychain prompt. | live: `r7_arc_welcome` | built |
+| W9 | The first window carries no "Google API keys are missing" infobar: the keys are for Google's services, which Stedding does not use, and the bar told every first window that some functionality would be disabled and linked to Google's page about it (the operator's first start on Windows, 2026-09-09; patch 0044). | none; live: `w10_first_window` (a fresh profile's first window, Windows, 2026-09-10) | partial · no unit test yet (S-49) |

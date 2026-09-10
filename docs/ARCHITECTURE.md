@@ -113,7 +113,10 @@ Policy for moving the pin: `decisions/0007-chromium-version-pin.md`.
 - **Disk:** `tooling/sync-chromium` refuses to start below 150 GB free on the volume
   holding `$CHROMIUM_ROOT`, and `tooling/build-chromium` wants 60 GB of its own before
   it starts. Measured: the checkout is 65 GB and a release build adds 9.3 GB — see
-  "Measured results".
+  "Measured results". Both floors can be lowered for a run that has done the
+  arithmetic: `STEDDING_SYNC_MIN_FREE_GB` (never under 100) and `STEDDING_MIN_FREE_GB`
+  (never under 20, for incremental chunks). The checkout was deleted for disk once and
+  re-synced from 109 GB free (`docs/HANDOFF.md`, trap 44).
 - **No `node_modules` in any directory above the checkout.** Chromium's TypeScript
   build resolves modules the way node does — by walking up parent directories — so a
   stray `node_modules` in your home directory leaks its `@types` into the build. The
@@ -131,7 +134,7 @@ letting a build die hours later:
 | Check | Where |
 |---|---|
 | Full Xcode, accepted licence, `git`, `python3`, arm64 macOS | `tooling/bootstrap-depot-tools` |
-| 150 GB free disk, no ancestor `node_modules` | `tooling/sync-chromium` |
+| 150 GB free disk (`STEDDING_SYNC_MIN_FREE_GB` lowers it, never under 100), no ancestor `node_modules` | `tooling/sync-chromium` |
 | Tree is on the pin, no ancestor `node_modules` | `tooling/build-chromium` |
 
 ### Reference hardware
@@ -143,9 +146,9 @@ normative — it is the answer to "compared to what?":
 |---|---|
 | Machine | Apple M1 Max, 10 cores, 64 GB RAM |
 | OS | macOS 26.5.2, arm64 |
-| Xcode | 26.5 (17F42) |
+| Xcode | 26.6 (17F113) |
 | Command Line Tools | 26.6.0.0.1781586589 |
-| depot_tools | `f70835271105ca56d2cd5382a0118152bc2bdeea` (2026-08-27) — observed, **not a pin**: `bootstrap-depot-tools` tracks upstream `main` |
+| depot_tools | `08f3e8c0eb66d6de3a048a757d0ff708dbc8ea34` (2026-09-09) — observed, **not a pin**: `bootstrap-depot-tools` tracks upstream `main` |
 | Chromium | `153.0.8010.12` (M153 stable) |
 
 ### The build, end to end
@@ -241,6 +244,7 @@ Nothing here is an estimate; anything not yet measured says so.
 | | |
 |---|---|
 | git cache bootstrap (first sync only) | ~25 min |
+| Re-sync from nothing (2026-09-10, `docs/HANDOFF.md` trap 44) | **43 min**: the cache bundle 7 min, the tag fetch 19 min, `gclient sync` with hooks 17 min; src 43 GB, cache 26 GB, 53 GB together on disk |
 | `gclient sync` after the cache exists | ~19 min |
 | git cache size | 25 GB |
 | Chromium source incl. dependencies | 55 GB |

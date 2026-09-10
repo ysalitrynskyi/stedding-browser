@@ -155,6 +155,41 @@ map and the shortcut reference on every platform), 0044 (the first start) and 00
 | 9 | Found in the pass: Chromium's tab-group chords (Alt+Shift+C/P/X/Z/W) were live on Windows while the group rows are hidden (menus M6). | Linux's alone now, as the Mac's were removed with the rows. |
 | 10 | Found in the pass: the tab menu showed no chord beside Pin to This Space, Copy Link or Copy Link as Markdown -- on the Mac too -- while Close had its Ctrl+W. | The verbs map to the browser commands their keys are bound to (`ContextMenuCommandToBrowserCommand`), which is where the menu reads chords from (menus M1; patch 0043). |
 
+**The Mac pass, 2026-09-10.** Beta 6 was published from Windows with the source
+built there alone, and the Mac had no checkout that morning (`docs/HANDOFF.md`, trap
+44). Once re-synced, the seven patches written on Windows (0039–0045) were built for
+macOS for the first time. One did not compile: `kColorCaptionButtonOnToolbar`, which
+round 8 hands the page-bar supplier for the caption glyphs (row 9), is declared for
+Windows alone in `chrome_color_id.h`; the row and its test line are guarded. In the
+same patch a Space's name went into the export file name through `AppendASCII`, which
+DCHECKs on anything outside ASCII on a debug build and mangles it on Windows; the name
+is UTF-8 through `FilePath::FromUTF8Unsafe` now. Both are fixups into 0039, exported
+by `tooling/update-patches` on the Mac, which also replaced the seven hand-assembled
+patch files (CRLF headers, no diffstat) with the exporter's own. The first multi-tab
+capture then showed every inactive row and essentials card filled near-black, which
+no beta had shown. Not the Windows patches: beta 4's own app draws the same fill when
+run with `--disable-field-trial-config`, so Chromium's testing config had been hiding
+the Material inactive-row colour in every beta up to 4 and the first build with it
+off (privacy Q10, beta 5) showed it -- on Windows too, unnoticed with one tab. The
+Stedding mixer pins the inactive row transparent, a fixup into 0042 with its test
+(tabs R23). The release sweep then ran Chromium's own suites around what the series
+touches (trap 31), widened to `BrowserViewTest` and the toolbar, menu and search
+suites: eight cases were red, none of them a bug in the product. Three `TabTest`
+cases and `BrowserViewTest.BrowserView` read Chromium's horizontal tab and the
+customize-chrome action under the 2026 refresh, which patch 0042 turns on in code
+where upstream's tests never see it; `TabStripModelTest.CreateGroupSetsVisualData`
+expects the label map's colour order where the refresh uses its own; and the two
+`BrowserViewTest` find-bar cases expect the bar under the location bar where
+Stedding hangs it from the card (page U4, since round 6); and
+`BrowserViewTest.WindowTitleOmitsLowMemoryUsage` dereferenced the horizontal tab
+strip, which an Arc window does not have (ADR 0010) -- a crash the test wrapper had
+been swallowing, since a crash prints no FAILED line; the wrapper reports crashes and
+timeouts now. Each case now asserts what this build does or skips with the reason,
+as fixups into 0039, 0042 and the look patch, and `tooling/dev test upstream` runs
+the whole set so the next release cannot skip it. The macOS image of beta 6
+carries all of it; the Windows installer, built before, does not, and the next
+Windows build picks it up from the series.
+
 ## Round 8 — the first Windows build (2026-09-08)
 
 The series built for Windows for the first time -- M8 in `docs/ROADMAP.md` had not

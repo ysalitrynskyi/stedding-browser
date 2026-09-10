@@ -203,6 +203,18 @@ Built, with tests or measured captures:
   screen, no floating name over the downloads button (sidebar Y12–Y14).
   Published as beta 6 from Windows.
 
+- **The Mac pass on beta 6** (2026-09-10, `docs/ARC-ROUND2.md`, *The Mac pass*):
+  the checkout had been deleted for disk and was re-synced (HANDOFF trap 44); the
+  first macOS build of the Windows-written patches needed a guard on a Windows-only
+  colour id and a UTF-8 export file name (fixups into 0039); the first multi-tab
+  capture showed every inactive sidebar row filled -- Chromium's field-trial
+  testing config had been hiding that in every beta up to 4, and beta 5 was the
+  first build with it off (privacy Q10) -- so the mixer pins inactive rows
+  transparent (tabs R23, fixup into 0042); the release sweep grew
+  `tooling/dev test upstream` and seven of Chromium's own cases now assert what
+  this fork does. The macOS image joined beta 6 that day; the README's captures
+  are from it.
+
 Read `docs/HANDOFF.md` before touching anything — it carries the working loop,
 every dev parameter, and the traps already paid for, numbered contiguously and cited
 by number across the docs (`tooling/check-repo traps` keeps both true). `docs/ARC-ROUND2.md` is
@@ -214,9 +226,12 @@ Released: `v0.2.0-beta.4` (2026-09-05, published from this repo with
 (2026-09-09, round 8 and M8's first slice, the Windows preview installer alone)
 and `v0.2.0-beta.6` (`docs/release-notes/v0.2.0-beta.6.md`, 2026-09-10, round 9:
 the Windows keyboard map, the first start, the rail); the DMG and its checksum in
-the notes are the Mac's to add to beta 6 (`docs/HANDOFF.md`, *Release channel*),
-since only the Mac builds the macOS image, and beta 5 stays a Windows-only
-preview.
+the notes were the Mac's to add to beta 6, and it did on 2026-09-10 -- after
+re-syncing a checkout that had been deleted for disk (`docs/HANDOFF.md`, trap 44),
+with two fixups into patch 0039 that the first macOS build of the Windows-written
+patches turned up (`docs/ARC-ROUND2.md`, *The Mac pass*). Beta 5 stays a
+Windows-only preview. Signing: the Apple developer account exists since 2026-09-10;
+the certificate and the notary profile are the operator's next step (`S-17`).
 Outstanding: `BACKLOG.md`. First vanilla perf comparison is in
 `docs/perf/README.md`: on the deterministic page list every QUALITY budget is
 met (cold +2.3%, warm −2.0%, memory +0.0% over vanilla).
@@ -265,16 +280,20 @@ The order is `BACKLOG.md`. `v0.2.0-beta.4` is out (unsigned, 2026-09-05): rounds
 Arc one-click import, and the second pass on the operator's replies the same
 evening (patches 0037–0038 and fixups into 0001, 0002). `v0.2.0-beta.5` is
 out with round 8 and M8's first slice as the Windows preview alone, and
-`v0.2.0-beta.6` follows it from Windows with round 9; the DMG joins beta 6 from
-the Mac: first thing there, the release channel's steps in `docs/HANDOFF.md`.
+`v0.2.0-beta.6` is out on both platforms: from Windows with round 9 on
+2026-09-10, the macOS image added from the Mac the same day.
 
 **Whoever picks this up next**: read `docs/HANDOFF.md` first — the loop, the dev
 parameters and the traps, now including `tooling/capture-state` (a capture that
-needs neither the keyboard nor the pointer, trap 29) and the rule that a release
+needs neither the keyboard nor the pointer, trap 29), the rule that a release
 sweep runs Chromium's own suites around what the series touches, not only the
-Stedding filters (trap 31). What to build next is the operator's look at beta 4;
-`docs/ARC-ROUND2.md` is where each round's findings are recorded, one table per
-round, and the fix for each. Until then the open rows are `S-52` (take
+Stedding filters (trap 31), and what a vanished checkout costs and how it comes
+back (trap 44). `tooling/dev status` says whether the checkout and `unit_tests`
+exist before anything else is planned. What to build next is the operator's look
+at beta 6; `docs/ARC-ROUND2.md` is where each round's findings are recorded, one
+table per round, and the fix for each. `S-58` (the Mac's disk: an owner's
+decision, since the checkout and a build need 85 GB on a volume that is 88% full)
+comes before the next build. Until then the open rows are `S-52` (take
 153.0.8010.27: the pin was Mac stable when it was taken and the line has moved
 since), `S-51` (a legacy profile still reads the Chromium-named keychain item and
 nothing rewrites it), `S-49` (a builder that can actually build — until it exists
@@ -283,8 +302,9 @@ new tab page when Google is chosen), `S-47` (an input-free settings probe), `S-4
 (the Arc data import run once against a real Arc profile), `S-56` (M8: the Windows
 port's remainder after the first slice -- the keyboard map and the menus, signing,
 updates, CI), `S-50` (the idle-network
-audit as a recorded run) and `S-17` (signing, waiting on Apple's organisation
-enrolment, then `tooling/sign-release` and a signed re-release). Every feature spec
+audit as a recorded run) and `S-17` (signing: the developer account exists, the
+Developer ID certificate and the notary profile are the operator's to make on the
+Mac, then `tooling/sign-release` and a signed re-release). Every feature spec
 names its own `gap` rows.
 
 How to work here is `docs/HANDOFF.md`: the loop, the dev parameters that recreate

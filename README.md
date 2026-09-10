@@ -25,21 +25,24 @@ using the web without surveillance or vendor control. See `docs/NAMING.md`.
 
 ## Status
 
-**Beta 4 is out** — `v0.2.0-beta.4` on
-[Releases](https://github.com/ysalitrynskyi/stedding-browser/releases), macOS
-(Apple silicon), Chromium 153 stable, Stedding's patch series (`patches/`, 39 patches
-on this commit). It is a beta: the feature set below works and is tested, and the
-operator uses it against Arc daily. Beta 5 is prepared on this commit
-(`docs/release-notes/v0.2.0-beta.5.md`) and is published from the Mac.
+**Beta 6 is out** — `v0.2.0-beta.6` on
+[Releases](https://github.com/ysalitrynskyi/stedding-browser/releases): macOS
+(Apple silicon) and a Windows x64 preview, Chromium 153 stable, Stedding's patch
+series (`patches/`, 45 patches on this commit). It is a beta: the feature set below
+works and is tested, and the operator uses it against Arc daily. Beta 5 was the
+Windows preview alone; beta 6 carries everything it had.
 
-**Windows**: the series builds and runs on Windows x64 since 2026-09-08 — the
-Stedding window, Spaces, folders, the command bar, the address row under the window's
-own buttons (`docs/features/windows.md`, `docs/images/win-wide.png`). Not a release:
-branding, the Windows keyboard map and an installer are M8 (`BACKLOG.md` S-56).
+**Windows**: a preview installer since 2026-09-09 — the Stedding window with its
+sidebar, Spaces, folders and command bar, Arc's keyboard for Windows, the name and
+the icon, a per-user install with no administrator prompt (`docs/features/windows.md`,
+`docs/images/win-wide.png`). Still to come there: little windows, signing, updates
+(M8, `BACKLOG.md` S-56).
 
-Builds are **unsigned until M7** (Apple's organisation enrolment is pending): open the
-DMG, drag Stedding to Applications, then **right-click → Open** once. The release
-notes carry the checksum. Windows and Linux come after macOS (`docs/ROADMAP.md`).
+Builds are **unsigned until M7**: the Apple developer account exists since
+2026-09-10, and the Developer ID certificate and the notarisation profile are the next
+step (`S-17`). Until then, open the DMG, drag Stedding to Applications, then
+**right-click → Open** once; on Windows, SmartScreen's **More info → Run anyway**
+once. The release notes carry the checksums. Linux comes after (`docs/ROADMAP.md`).
 
 ## What works today
 
@@ -104,8 +107,8 @@ moves ahead of our pin.
 ## Not there yet
 
 - Signing and notarisation, and the in-app updater that needs them (M7, `S-17`).
-- Windows as a release (M8, `S-56`: it builds and runs; no branding, keyboard map or
-  installer yet) and Linux (M9).
+- Windows beyond a preview (M8, `S-56`: little windows, signing, updates, CI) and
+  Linux (M9).
 - The gaps each feature spec names as `gap`, and the rows in `BACKLOG.md`.
 
 ## Principles

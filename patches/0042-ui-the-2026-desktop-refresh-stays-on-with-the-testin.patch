@@ -1,0 +1,271 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Wed, 9 Sep 2026 22:15:00 -0400
+Subject: ui: the 2026 desktop refresh stays on with the testing config off
+
+Every Stedding build so far ran Chromium's field-trial testing config
+(testing/variations/fieldtrial_testing_config.json): official builds do
+too unless disable_fieldtrial_testing_config is set, and none of ours set
+it (privacy Q10, tooling/args). Its "GlowUp" study switched on the seven
+features of Chromium's 2026 desktop refresh -- MenuSimplification,
+RoundedIcons, TabGroupColorRefresh, TabStripDeclutter, ToolbarGlowUp,
+UpdateTabGroupColors, WebuiRefresh2026 -- and every round of the series
+was built and measured against that look. With the config off the source
+defaults come back: the address chip drew Chromium's old logo where the
+mark had been, the first build without it showed (2026-09-09).
+
+The seven are FEATURE_ENABLED_BY_DEFAULT here, each with the same note,
+so the decision is in the source rather than in a Google experiment file.
+BACKLOG S-57 is the review of each on its merits.
+
+Why: docs/features/privacy.md Q10.
+Removable when: upstream ships the refresh by default, or Stedding decides
+against a feature in S-57.
+---
+ .../browser/ui/color/stedding_color_mixer.cc  |  8 +++++
+ .../ui/color/stedding_color_mixer_unittest.cc | 22 ++++++++++++++
+ .../ui/tabs/tab_strip_model_unittest.cc       | 13 +++++---
+ chrome/browser/ui/ui_features.cc              | 30 +++++++++++++++----
+ chrome/browser/ui/views/tabs/tab_unittest.cc  | 28 +++++++++++++++++
+ components/tab_groups/features.cc             |  6 +++-
+ ui/base/ui_base_features.cc                   |  6 +++-
+ 7 files changed, 102 insertions(+), 11 deletions(-)
+
+diff --git a/chrome/browser/ui/color/stedding_color_mixer.cc b/chrome/browser/ui/color/stedding_color_mixer.cc
+index 642f868d65241..1d47b56b4bc94 100644
+--- a/chrome/browser/ui/color/stedding_color_mixer.cc
++++ b/chrome/browser/ui/color/stedding_color_mixer.cc
+@@ -88,6 +88,14 @@ void AddSteddingColorMixer(ui::ColorProvider* provider,
+     mixer[kColorTabBackgroundActiveFrameInactive] =
+         ui::SetAlpha(kColorTabForegroundActiveFrameActive, 0x24);
+   }
++  // An inactive row has no fill of its own: the ground shows through, the
++  // essentials card included. Chromium's Material mixer gives inactive rows
++  // kColorSysHeader, and its field-trial testing config had been hiding that
++  // in every beta up to 4 -- beta 4's own app draws the fill when run with
++  // --disable-field-trial-config -- so the first build with the config off
++  // (privacy Q10) filled every row (the Mac pass, 2026-09-10).
++  mixer[kColorTabBackgroundInactiveFrameActive] = {SK_ColorTRANSPARENT};
++  mixer[kColorTabBackgroundInactiveFrameInactive] = {SK_ColorTRANSPARENT};
+   mixer[kColorTabBackgroundInactiveHoverFrameActive] =
+       ui::SetAlpha(kColorTabForegroundActiveFrameActive, 0x10);
+   mixer[kColorTabBackgroundInactiveHoverFrameInactive] =
+diff --git a/chrome/browser/ui/color/stedding_color_mixer_unittest.cc b/chrome/browser/ui/color/stedding_color_mixer_unittest.cc
+index aa20595387829..fa15e53f7a682 100644
+--- a/chrome/browser/ui/color/stedding_color_mixer_unittest.cc
++++ b/chrome/browser/ui/color/stedding_color_mixer_unittest.cc
+@@ -5,8 +5,10 @@
+ #include "chrome/browser/ui/color/stedding_color_mixer.h"
+ 
+ #include "base/test/scoped_feature_list.h"
++#include "chrome/browser/ui/color/chrome_color_id.h"
+ #include "chrome/browser/ui/stedding_ui_metrics.h"
+ #include "testing/gtest/include/gtest/gtest.h"
++#include "third_party/skia/include/core/SkColor.h"
+ #include "ui/color/color_id.h"
+ #include "ui/color/color_provider.h"
+ #include "ui/color/color_provider_key.h"
+@@ -35,4 +37,24 @@ TEST(SteddingColorMixerTest, PrivateWindowsAreGraphite) {
+   EXPECT_NE(kSteddingPrivateWindow, tinted.GetColor(ui::kColorFrameActive));
+ }
+ 
++// tabs R23: an inactive row has no fill of its own in either colour mode,
++// whatever Chromium's tab-strip mixers hand out. Chromium's field-trial
++// testing config had been hiding the Material fill in every beta up to 4;
++// the first build with the config off (privacy Q10) filled every row.
++TEST(SteddingColorMixerTest, InactiveRowsHaveNoFill) {
++  base::test::ScopedFeatureList features(stedding::kArcStyleWindow);
++  for (const auto mode : {ui::ColorProviderKey::ColorMode::kDark,
++                          ui::ColorProviderKey::ColorMode::kLight}) {
++    ui::ColorProviderKey key;
++    key.color_mode = mode;
++    ui::ColorProvider provider;
++    AddSteddingColorMixer(&provider, key);
++    provider.GenerateColorMapForTesting();
++    EXPECT_EQ(0u, SkColorGetA(provider.GetColor(
++                      kColorTabBackgroundInactiveFrameActive)));
++    EXPECT_EQ(0u, SkColorGetA(provider.GetColor(
++                      kColorTabBackgroundInactiveFrameInactive)));
++  }
++}
++
+ }  // namespace
+diff --git a/chrome/browser/ui/tabs/tab_strip_model_unittest.cc b/chrome/browser/ui/tabs/tab_strip_model_unittest.cc
+index dd5c7e3e8fc1e..a069252646707 100644
+--- a/chrome/browser/ui/tabs/tab_strip_model_unittest.cc
++++ b/chrome/browser/ui/tabs/tab_strip_model_unittest.cc
+@@ -6628,16 +6628,21 @@ TEST_F(TabStripModelTest, DiscontinuousNewTabIndexTooLow) {
+ }
+ 
+ TEST_F(TabStripModelTest, CreateGroupSetsVisualData) {
+-  tab_groups::ColorLabelMap all_colors = tab_groups::GetTabGroupColorLabelMap();
++  // Stedding (privacy Q10, patch 0042): TabGroupColorRefresh is on by default
++  // here, and new groups take colours in TabGroupModel::GetColorOrdering()'s
++  // order, not the label map's. The ordering is the source of truth for both
++  // defaults.
++  const std::vector<tab_groups::TabGroupColorId> all_colors =
++      TabGroupModel::GetColorOrdering();
+   PrepareTabs(tabstrip(), all_colors.size() + 1);
+ 
+   // Expect groups to cycle through the available color set.
+   int index = 0;
+-  for (const auto& color_pair : all_colors) {
++  for (const auto color : all_colors) {
+     const tab_groups::TabGroupId group = tabstrip()->AddToNewGroup({index});
+     EXPECT_EQ(
+         tabstrip()->group_model()->GetTabGroup(group)->visual_data()->color(),
+-        color_pair.first);
++        color);
+     ++index;
+   }
+ 
+@@ -6645,7 +6650,7 @@ TEST_F(TabStripModelTest, CreateGroupSetsVisualData) {
+   const tab_groups::TabGroupId group = tabstrip()->AddToNewGroup({index});
+   EXPECT_EQ(
+       tabstrip()->group_model()->GetTabGroup(group)->visual_data()->color(),
+-      all_colors.begin()->first);
++      all_colors.front());
+ 
+   tabstrip()->CloseAllTabs();
+ }
+diff --git a/chrome/browser/ui/ui_features.cc b/chrome/browser/ui/ui_features.cc
+index 6b2e98a16cc01..356f21d2763f0 100644
+--- a/chrome/browser/ui/ui_features.cc
++++ b/chrome/browser/ui/ui_features.cc
+@@ -50,8 +50,16 @@ BASE_FEATURE(kImportExportFlags, base::FEATURE_DISABLED_BY_DEFAULT);
+ 
+ BASE_FEATURE(kInfoBarInlineLinks, base::FEATURE_DISABLED_BY_DEFAULT);
+ 
+-BASE_FEATURE(kTabStripDeclutter, base::FEATURE_DISABLED_BY_DEFAULT);
+-BASE_FEATURE(kToolbarGlowUp, base::FEATURE_DISABLED_BY_DEFAULT);
++// Stedding (privacy Q10): on by default. Chromium's field-trial testing config
++// switched this on in every build until 2026-09-09, so the look and the rounds
++// were measured with it; the config is off in every Stedding build now, and the
++// decision is made here instead (patch 0042, BACKLOG S-57 for a review of each).
++BASE_FEATURE(kTabStripDeclutter, base::FEATURE_ENABLED_BY_DEFAULT);
++// Stedding (privacy Q10): on by default. Chromium's field-trial testing config
++// switched this on in every build until 2026-09-09, so the look and the rounds
++// were measured with it; the config is off in every Stedding build now, and the
++// decision is made here instead (patch 0042, BACKLOG S-57 for a review of each).
++BASE_FEATURE(kToolbarGlowUp, base::FEATURE_ENABLED_BY_DEFAULT);
+ BASE_FEATURE_PARAM(bool,
+                    kToolbarGlowUpReloadEnabled,
+                    &kToolbarGlowUp,
+@@ -62,9 +70,21 @@ BASE_FEATURE_PARAM(bool,
+                    &kToolbarGlowUp,
+                    "back-forward",
+                    true);
+-BASE_FEATURE(kMenuSimplification, base::FEATURE_DISABLED_BY_DEFAULT);
+-BASE_FEATURE(kTabGroupColorRefresh, base::FEATURE_DISABLED_BY_DEFAULT);
+-BASE_FEATURE(kWebuiRefresh2026, base::FEATURE_DISABLED_BY_DEFAULT);
++// Stedding (privacy Q10): on by default. Chromium's field-trial testing config
++// switched this on in every build until 2026-09-09, so the look and the rounds
++// were measured with it; the config is off in every Stedding build now, and the
++// decision is made here instead (patch 0042, BACKLOG S-57 for a review of each).
++BASE_FEATURE(kMenuSimplification, base::FEATURE_ENABLED_BY_DEFAULT);
++// Stedding (privacy Q10): on by default. Chromium's field-trial testing config
++// switched this on in every build until 2026-09-09, so the look and the rounds
++// were measured with it; the config is off in every Stedding build now, and the
++// decision is made here instead (patch 0042, BACKLOG S-57 for a review of each).
++BASE_FEATURE(kTabGroupColorRefresh, base::FEATURE_ENABLED_BY_DEFAULT);
++// Stedding (privacy Q10): on by default. Chromium's field-trial testing config
++// switched this on in every build until 2026-09-09, so the look and the rounds
++// were measured with it; the config is off in every Stedding build now, and the
++// decision is made here instead (patch 0042, BACKLOG S-57 for a review of each).
++BASE_FEATURE(kWebuiRefresh2026, base::FEATURE_ENABLED_BY_DEFAULT);
+ BASE_FEATURE(kAppMenuGlowUp, base::FEATURE_DISABLED_BY_DEFAULT);
+ // Enables the redesigned Settings 2026 refresh features and search UX.
+ BASE_FEATURE(kSettingsRefresh2026, base::FEATURE_DISABLED_BY_DEFAULT);
+diff --git a/chrome/browser/ui/views/tabs/tab_unittest.cc b/chrome/browser/ui/views/tabs/tab_unittest.cc
+index 134fe34cb8421..b7d6bd9004a2c 100644
+--- a/chrome/browser/ui/views/tabs/tab_unittest.cc
++++ b/chrome/browser/ui/views/tabs/tab_unittest.cc
+@@ -19,6 +19,7 @@
+ #include "chrome/browser/ui/tabs/tab_style.h"
+ #include "chrome/browser/ui/tabs/tab_types.h"
+ #include "chrome/browser/ui/ui_features.h"
++#include "ui/base/ui_base_features.h"
+ #include "chrome/browser/ui/views/tabs/fake_base_tab_strip_controller.h"
+ #include "chrome/browser/ui/views/tabs/fake_tab_slot_controller.h"
+ #include "chrome/browser/ui/views/tabs/hovercard/tab_hover_card_controller.h"
+@@ -423,6 +424,15 @@ TEST_F(TabTest, HitTest) {
+ }
+ 
+ TEST_F(TabTest, LayoutAndVisibilityOfElements) {
++  // Stedding (privacy Q10, patch 0042): the 2026 refresh is on by default
++  // in code -- RoundedIcons makes the close button 14 DIP, TabStripDeclutter
++  // hides it on a tab the pointer is not over -- and this case checks
++  // Chromium's own small-tab layout, which is not a Stedding surface (the
++  // sidebar's rows are TabView's). It runs with the refresh off, as upstream
++  // runs it.
++  base::test::ScopedFeatureList refresh_off;
++  refresh_off.InitWithFeatures(
++      {}, {features::kRoundedIcons, features::kTabStripDeclutter});
+   static const std::optional<tabs::TabAlert> kAlertStatesToTest[] = {
+       std::nullopt,
+       tabs::TabAlert::kTabCapturing,
+@@ -650,6 +660,15 @@ TEST_F(TabTest, FaviconDoesntMoveWhenShowingAlertIndicator) {
+ }
+ 
+ TEST_F(TabTest, SmallTabsHideCloseButton) {
++  // Stedding (privacy Q10, patch 0042): the 2026 refresh is on by default
++  // in code -- RoundedIcons makes the close button 14 DIP, TabStripDeclutter
++  // hides it on a tab the pointer is not over -- and this case checks
++  // Chromium's own small-tab layout, which is not a Stedding surface (the
++  // sidebar's rows are TabView's). It runs with the refresh off, as upstream
++  // runs it.
++  base::test::ScopedFeatureList refresh_off;
++  refresh_off.InitWithFeatures(
++      {}, {features::kRoundedIcons, features::kTabStripDeclutter});
+   auto controller = std::make_unique<FakeTabSlotController>();
+   std::unique_ptr<views::Widget> widget =
+       CreateTestWidget(views::Widget::InitParams::CLIENT_OWNS_WIDGET);
+@@ -867,6 +886,15 @@ TEST_F(TabTest, ExtraLeftPaddingShownOnSiteWithoutFavicon) {
+ }
+ 
+ TEST_F(TabTest, ExtraAlertPaddingNotShownOnSmallActiveTab) {
++  // Stedding (privacy Q10, patch 0042): the 2026 refresh is on by default
++  // in code -- RoundedIcons makes the close button 14 DIP, TabStripDeclutter
++  // hides it on a tab the pointer is not over -- and this case checks
++  // Chromium's own small-tab layout, which is not a Stedding surface (the
++  // sidebar's rows are TabView's). It runs with the refresh off, as upstream
++  // runs it.
++  base::test::ScopedFeatureList refresh_off;
++  refresh_off.InitWithFeatures(
++      {}, {features::kRoundedIcons, features::kTabStripDeclutter});
+   auto controller = std::make_unique<FakeTabSlotController>();
+   std::unique_ptr<views::Widget> widget =
+       CreateTestWidget(views::Widget::InitParams::CLIENT_OWNS_WIDGET);
+diff --git a/components/tab_groups/features.cc b/components/tab_groups/features.cc
+index 609849511f563..2a9ce051f6d93 100644
+--- a/components/tab_groups/features.cc
++++ b/components/tab_groups/features.cc
+@@ -8,6 +8,10 @@
+ 
+ namespace tab_groups {
+ 
+-BASE_FEATURE(kUpdateTabGroupColors, base::FEATURE_DISABLED_BY_DEFAULT);
++// Stedding (privacy Q10): on by default. Chromium's field-trial testing config
++// switched this on in every build until 2026-09-09, so the look and the rounds
++// were measured with it; the config is off in every Stedding build now, and the
++// decision is made here instead (patch 0042, BACKLOG S-57 for a review of each).
++BASE_FEATURE(kUpdateTabGroupColors, base::FEATURE_ENABLED_BY_DEFAULT);
+ 
+ }  // namespace tab_groups
+diff --git a/ui/base/ui_base_features.cc b/ui/base/ui_base_features.cc
+index d03a2d6990a71..468452f8e2278 100644
+--- a/ui/base/ui_base_features.cc
++++ b/ui/base/ui_base_features.cc
+@@ -521,7 +521,11 @@ BASE_FEATURE_PARAM(double, kGlassExpandOnHoverOpacity, &kGlassFrame, 0.95);
+ BASE_FEATURE_PARAM(double, kGlassExpandOnHoverBlurRadius, &kGlassFrame, 5.0);
+ BASE_FEATURE_PARAM(bool, kGlassRoundContentCorner, &kGlassFrame, true);
+ 
+-BASE_FEATURE(kRoundedIcons, base::FEATURE_DISABLED_BY_DEFAULT);
++// Stedding (privacy Q10): on by default. Chromium's field-trial testing config
++// switched this on in every build until 2026-09-09, so the look and the rounds
++// were measured with it; the config is off in every Stedding build now, and the
++// decision is made here instead (patch 0042, BACKLOG S-57 for a review of each).
++BASE_FEATURE(kRoundedIcons, base::FEATURE_ENABLED_BY_DEFAULT);
+ BASE_FEATURE(kWebUIRoundedIcons, base::FEATURE_DISABLED_BY_DEFAULT);
+ 
+ // Updates the default dark neutrals for the theme palette.

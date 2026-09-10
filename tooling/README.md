@@ -21,7 +21,7 @@ its configuration from `chromium-version` — never from a value typed twice.
 | `chromium-version` | The pinned upstream Chromium version. Single source of truth. Policy: [ADR 0007](../docs/decisions/0007-chromium-version-pin.md). |
 | `lib.sh` | Shared paths, logging, and preflight checks. Sourced, never executed. |
 | `bootstrap-depot-tools` | Verifies the host toolchain, then installs or updates `depot_tools`. |
-| `sync-chromium` | Materialises the Chromium tree at the pin, outside this repository. |
+| `sync-chromium` | Materialises the Chromium tree at the pin, outside this repository. Refuses under 150 GB free; `STEDDING_SYNC_MIN_FREE_GB` lowers the floor for a run that has done the arithmetic, never under 100 (HANDOFF trap 44). |
 | `build-chromium` | `gn gen` + `autoninja` for a named configuration. |
 | `apply-branding` | Copies `../branding/` assets over the checkout. Not a patch. |
 | `apply-patches` | Replays the patch series onto the pin as commits on `stedding-work`. `--check` answers whether it would apply without touching anything, needs only git (no depot_tools, no Mac, no build), and reports which patches would need a three-way merge. The `series` workflow runs it. |
@@ -33,7 +33,7 @@ its configuration from `chromium-version` — never from a value typed twice.
 | `publish-release` | GitHub pre-release from `dist/`: tag `v<VERSION>`, notes from `docs/release-notes/<tag>.md`; `--check` first |
 | `package-dmg` | Packages a built app into an installable `.dmg`. |
 | `brand/generate.py` | Regenerates the whole brand system from one geometry file. |
-| `check-repo` | Repository hygiene: shell portability, links, ADRs, patch series, the pin, traps, nothing tracked that is ignored, no machine paths. |
+| `check-repo` | Repository hygiene: shell portability, links, ADRs, patch series, the pin, traps, LF line endings, nothing tracked that is ignored, no machine paths. |
 | `check-shell` | shellcheck at the pinned version over every script here, plus `bash -n`. CI calls this exact script. |
 | `check-geometry` | Re-measures the card's gutters and corner radius in `docs/images/*.png` against `probes/geometry.json`. Needs Pillow; runs anywhere, so CI can check this much of the product's appearance without a build. `--report` prints the measurements. |
 | `verify-build` | Runs a built browser and checks it renders, does WebGL, and decodes video. |

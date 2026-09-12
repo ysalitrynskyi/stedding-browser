@@ -100,6 +100,11 @@ hover to peek at it, or ⇧⌘D to show the address row on its own.
 
 ![The sidebar collapsed to a rail of icons](docs/images/readme/rail.png)
 
+**Light and dark.** Sand by day, a blue-to-plum gradient by night, following the
+system or your choice; each Space's colour tints the sidebar.
+
+![The welcome flow's appearance step: light or dark, and the Space colours](docs/images/readme/welcome-appearance.png)
+
 **Private windows** wear a different coat so you always know where you are.
 
 ![A private window in its own colours](docs/images/readme/private.png)

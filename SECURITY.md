@@ -27,9 +27,9 @@ This is a small project without a dedicated security team. Honestly stated:
 
 ## Scope
 
-Stedding ships **unsigned beta binaries** for macOS (Apple silicon) on
-[Releases](https://github.com/ysalitrynskyi/stedding-browser/releases). Anything in one
-of those builds is in scope:
+Stedding ships **unsigned beta binaries** for macOS (Apple silicon) and a Windows x64
+preview on [Releases](https://github.com/ysalitrynskyi/stedding-browser/releases).
+Anything in one of those builds is in scope:
 
 - The Stedding patch series on top of Chromium (`patches/`) and the branding applied to
   the build — our code, our bugs.

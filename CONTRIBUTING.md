@@ -1,10 +1,11 @@
 # Contributing to Stedding Browser
 
-Thanks for your interest. The project ships **unsigned macOS betas** built from a patch
-series on Chromium stable (see [README.md](README.md) and
-[docs/ROADMAP.md](docs/ROADMAP.md)): M0 through M6 are built, M7 waits on signing, and
-Windows and Linux have not started. `tooling/dev status` prints the live counts. That
-shapes what kinds of contributions are useful right now.
+Thanks for your interest. The project ships **unsigned betas** for macOS (Apple
+silicon) and a **Windows preview**, built from a patch series on Chromium stable (see
+[README.md](README.md) and [docs/ROADMAP.md](docs/ROADMAP.md)): M0 through M6 are
+built, M7 waits on the signing certificate, M8 (Windows) is half way, and Linux has
+not started. `tooling/dev status` prints the live counts. That shapes what kinds of
+contributions are useful right now.
 
 ## What helps now
 
@@ -30,8 +31,9 @@ shapes what kinds of contributions are useful right now.
 
 ## Browser code
 
-The patch series is real and per feature (`patches/README.md`, 38 patches on Chromium
-153 as of beta 4). A change follows `docs/AGENT-LOOP.md`: a row in the feature's spec
+The patch series is real and per feature (`patches/README.md`; `tooling/dev status`
+counts it, 45 patches on Chromium 153 as of beta 6). A change follows
+`docs/AGENT-LOOP.md`: a row in the feature's spec
 under `docs/features/`, a failing unit test, the code in the checkout, a fixup into the
 feature's patch (or a new patch for a new feature) with `Why:` and `Removable when:`
 footers, `tooling/dev patch`, and a capture for anything visual. `docs/HANDOFF.md`

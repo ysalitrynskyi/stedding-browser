@@ -240,6 +240,8 @@ met (cold +2.3%, warm −2.0%, memory +0.0% over vanilla).
 
 | File | What's in it |
 |---|---|
+| `docs/README.md` | The index of everything under `docs/`, grouped by who it is for |
+| `docs/INSTALL.md`, `docs/SHORTCUTS.md`, `docs/FAQ.md` | The user-facing pages the README links: installing and verifying, every shortcut on both platforms, questions and answers. Plain language; keep them true when behaviour changes |
 | `docs/AGENT-LOOP.md` | **The working procedure**: research → spec → failing test → implement → build → test → capture → patch |
 | `docs/features/` | One spec per feature; numbered behaviours, each with its test id. The definition of done |
 | `BACKLOG.md` | The one list of open work, by id. Other docs cite ids |

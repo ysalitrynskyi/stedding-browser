@@ -13,16 +13,15 @@ below always means: a fresh macOS user account can install the artifact and run 
 without developer tools, without terminal commands, and without reading build docs
 (Windows/Linux equivalents apply from M8/M9 on).
 
-**Where this stands (2026-09-09):** M0–M6 are built and shipped unsigned as
-`v0.2.0-beta.4` — the ladder was climbed out of order, chasing operator feedback on real
-builds (`docs/ARC-ROUND2.md`), and each feature's own spec under `docs/features/` is the
-record of what passes; `v0.2.0-beta.5` is prepared and waits on the Mac's image. M7
-waits on Apple's organisation enrolment (`BACKLOG.md` S-17). M8 started on 2026-09-08
-with the first Windows build (patch 0039, `docs/features/windows.md` N1–N2), and its
-first slice landed on 2026-09-09: Windows knows the build as Stedding (N3–N5), and a
-per-user installer joins beta 5 as a preview (N6, ADR 0018); the Windows keyboard
-map and menus, signing and updates are still open (`BACKLOG.md` S-56). M9 has not
-started.
+**Where this stands (2026-09-10):** M0–M6 are built and shipped unsigned; the current
+release is `v0.2.0-beta.6`, macOS (Apple silicon) and a Windows x64 preview — the ladder
+was climbed out of order, chasing feedback from real use (`docs/ARC-ROUND2.md`), and each
+feature's own spec under `docs/features/` is the record of what passes. M7 waits on the
+Developer ID certificate (the Apple developer account exists since 2026-09-10;
+`BACKLOG.md` S-17). M8 started on 2026-09-08 with the first Windows build and has its
+first slice and the keyboard map (`docs/features/windows.md` N1–N7): branding, a
+per-user installer, Arc's keys for Windows; little windows, signing, updates and CI are
+open (`S-56`). M9 has not started.
 
 ---
 

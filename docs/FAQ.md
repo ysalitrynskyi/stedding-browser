@@ -20,11 +20,10 @@ acquired. Arc users are on a maintenance-mode product owned by someone else. Ste
 core is BSD-licensed and forkable, so no pivot or acquisition can take it away.
 Details and the other browsers in this space: [COMPETITORS.md](COMPETITORS.md).
 
-**What does the name mean?**
-A *stedding* is a haven: a settled, kept place, named after the English word
-"steading", a homestead. The word stands for using the web outside anyone's surveillance or
-control. Only the word is used; no artwork, trademarks or affiliation are claimed
-([NAMING.md](NAMING.md)).
+**What does "Stedding" mean?**
+A haven. The name is shaped on the English word "steading", a farmstead or homestead,
+which comes from "stead", an old word for a place. It stands for using the web outside
+anyone's surveillance or control. How the name was chosen: [NAMING.md](NAMING.md).
 
 **Who makes it?**
 One maintainer, in the open, on this repository. Most of the work follows feedback

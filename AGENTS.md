@@ -18,11 +18,14 @@ without trusting a VC-funded company's roadmap or telemetry.
   the core stays BSD — see `docs/decisions/0005-open-core.md`)
 - Started: 2026-08-30
 
-The name: a *stedding* is a haven, a settled, kept place, named
-after the English word "steading", a homestead. Metaphor: a place to use the web where surveillance and vendor control
-cannot reach. The name was chosen after vetting 38 candidates against trademark, SEO,
-and pronunciation criteria — full record in `docs/NAMING.md`. We use only the word
-itself; no other party's trademarks, artwork, or claimed affiliation, ever.
+The name: *Stedding* means a haven, a settled, kept place. It is shaped on the English
+word "steading" (a farmstead or homestead), which comes from "stead", an old word for a
+place. The meaning: a place to use the web where surveillance and vendor control cannot
+reach. Say it STED-ding, rhyming with "wedding". The name was chosen after vetting
+candidate names against browser, software, trademark, SEO, and pronunciation criteria —
+full record in `docs/NAMING.md`. Only the word "Stedding" is used, as this browser's
+name. No artwork, names, quotations or other material from any book, film, game or other
+brand, and no claimed affiliation with anyone (`docs/BRAND.md`).
 
 ## The mandate — read this twice
 
@@ -253,7 +256,7 @@ met (cold +2.3%, warm −2.0%, memory +0.0% over vanilla).
 | `docs/QUALITY.md` | The "ready-to-use" bar: performance budgets, release checklist |
 | `docs/PRIVACY.md` | Privacy principles and concrete defaults |
 | `docs/COMPETITORS.md` | Arc, Dia, Zen, Helium, Vivaldi, Brave, Thorium — and our gap |
-| `docs/NAMING.md` | The naming decision record (38 candidates vetted) |
+| `docs/NAMING.md` | The naming decision record: candidates, vetting criteria, outcome |
 | `docs/BRAND.md` | Name meaning, voice, taglines, trademark hygiene |
 | `docs/decisions/` | ADRs — every irreversible decision gets one |
 | `CONTRIBUTING.md` | How to contribute |

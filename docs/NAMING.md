@@ -6,13 +6,8 @@ See also: `decisions/0001-product-name-stedding.md`, `decisions/0004-domain-sted
 
 ## Method
 
-We generated 38 candidate names across three pools:
-
-1. **Wheel of Time deep cuts** — words from Robert Jordan's setting that work as
-   standalone English-adjacent words (the project's working name came from here).
-2. **Sanderson Cosmere terms** — same idea, different fictional universe.
-3. **Invented and real English words** — nautical, avian, wayfinding, and
-   shelter-themed vocabulary, plus coinages.
+We generated candidate names from invented and real English words and coinages
+across nautical, avian, wayfinding, and shelter themes.
 
 Every candidate was vetted with live web searches on the same day against five criteria:
 
@@ -26,44 +21,31 @@ Every candidate was vetted with live web searches on the same day against five c
 
 A name failed if it collided with any browser, with software our target users
 (developers, DevOps, technical users) already know, or with a rights-holder likely to
-contest it. Fictional-universe names carried an extra test: the word had to be usable
-as a plain word without implying affiliation with the rights-holder.
+contest it. A candidate also had to be usable as a name without implying affiliation
+with anyone.
 
-## Why the working name "Sedai" was rejected
+## Why the early working name was rejected
 
-The project started under the working name *Sedai*. Vetting killed it:
-
-- **Sedai Inc (sedai.io)** is a well-funded autonomous cloud-optimization company with
-  granted patents, selling to the same technical/DevOps audience we target. Two
-  software products named "Sedai" aimed at overlapping buyers is a textbook
-  trademark-confusion posture, and they have the resources to contest it.
-- **Pronunciation split**: English speakers read it as *seh-DAY* or *seh-DYE* in
-  roughly equal numbers. A name people cannot say the same way is a name they cannot
-  recommend out loud.
-
-Either problem alone would have been survivable; together they were disqualifying.
+The project's early working name failed vetting on two counts. A well-funded software
+company sells to the same technical audience under that name: two software products
+with one name aimed at overlapping buyers is a textbook trademark-confusion posture,
+and that company has the resources to contest it. And English speakers pronounced it
+two ways; a name people cannot say the same way is a name they cannot recommend out
+loud. Either problem alone would have been survivable; together they were
+disqualifying.
 
 ## Finalists
 
 ### Stedding — winner
 
-- **Meaning matches the product thesis.** A stedding is a haven the One Power cannot
-  touch; the browser is a place the surveillance economy cannot touch. The name *is*
-  the pitch.
+- **Meaning matches the product thesis.** Stedding means a haven, a settled, kept
+  place; the browser is a place to use the web where the surveillance economy cannot
+  reach. The name *is* the pitch.
 - **Clean field.** No products, no live trademarks, no exact-phrase competition for
   "Stedding Browser" — the SERP is effectively empty.
-- **Legal position strengthened by the dictionary.** "Stedding" is a real English
-  dialect variant of "steading" (a small farm; a homestead). We can credibly claim to
-  be using an English word, not a Wheel of Time asset. We still use only the word —
-  no WoT trademarks, artwork, or claimed affiliation, ever.
-
-### Hawkwing — runner-up
-
-- Friction-free English compound: everyone can spell it, say it, and remember it.
-- Exact-phrase SERP for "Hawkwing Browser" was empty.
-- Lost to Stedding on meaning: it evokes speed, not shelter, and speed is not our
-  differentiator. It is also a prominent WoT character name (Artur Hawkwing), which is
-  a weaker "it's just an English word" defense than Stedding has.
+- **Plain English roots.** The name is shaped on the English word "steading", a
+  farmstead or homestead, which comes from "stead", an old word for a place. We use
+  only the word, as this browser's name, and claim no affiliation with anyone.
 
 ### Vesper — runner-up
 
@@ -80,7 +62,6 @@ Either problem alone would have been survivable; together they were disqualifyin
 | Rove | rovebrowser.com exists |
 | Lumar | Lumar (formerly DeepCrawl), an SEO SaaS sold to technical marketers; also a near-homophone of Lemur Browser |
 | Skiff | Dead privacy brand (acquired by Notion, shut down); inheriting its ghost and its grave |
-| Saidar | An existing Linux CLI tool shipped in distro repos, plus saidar.ai |
 | Scry | An existing "Scry browser app"; also rhymes with "spy", the exact opposite of the pitch |
 | Magpie | Name saturated across apps and tools |
 | Lodestar | Saturated; multiple software products |
@@ -88,11 +69,6 @@ Either problem alone would have been survivable; together they were disqualifyin
 | Cairn | Saturated across apps and dev tools |
 | Tern | Dev-tool collision (Tern, the JS analysis engine, among others) |
 | Pharos | Saturated; multiple software products |
-| Roshar, Oathgate, Spren, Terris | Dragonsteel LLC actively trademarks and merchandises Cosmere IP; entire pool eliminated |
-
-The Cosmere elimination is worth stating as policy: we do not take names from a
-universe whose rights-holder demonstrably polices commercial use, regardless of how
-good the word is.
 
 ## Domain
 

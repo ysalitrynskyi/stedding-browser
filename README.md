@@ -280,10 +280,10 @@ in-app updater lands with signing.
 **Intel Mac? Linux?** Neither yet. Apple silicon and Windows x64 today; Linux is the
 next platform after the Windows port is complete.
 
-**What does "Stedding" mean?** A *stedding* is a place in Robert Jordan's Wheel of
-Time where the One Power cannot reach — a haven. It is a metaphor for using the web
-outside anyone's surveillance or control. Only the word is used; no artwork, marks or
-affiliation are claimed ([docs/NAMING.md](docs/NAMING.md)).
+**What does "Stedding" mean?** A haven. The name is shaped on the English word
+"steading", a farmstead or homestead, which comes from "stead", an old word for a
+place. It stands for using the web outside anyone's surveillance or control. How the
+name was chosen: [docs/NAMING.md](docs/NAMING.md).
 
 More questions and answers: [docs/FAQ.md](docs/FAQ.md).
 

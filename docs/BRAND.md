@@ -1,7 +1,7 @@
 # Brand
 
 How Stedding presents itself: the name, the voice, the look, and the rules
-that keep all three safe to use. The naming decision record — 38 candidates and
+that keep all three safe to use. The naming decision record — the candidates and
 the criteria they were vetted against — is in `docs/NAMING.md`.
 
 ## The name
@@ -11,18 +11,18 @@ that. The binary, bundle, and package identifiers use `stedding`.
 
 ### Meaning and story
 
-In Robert Jordan's *Wheel of Time*, a stedding is a haven — a place where the
-One Power cannot touch you. Inside a stedding you cannot be reached by the
-force that shapes everything outside it.
+Stedding means a haven: a settled, kept place. The name is shaped on the
+English word "steading", a farmstead or homestead — a farmhouse and its
+outbuildings. "Steading" comes from Middle English "steding" ("place, farm"),
+and that from Old English "stede" ("locality, place, site"); "stead" is an old
+English word for a place.
 
-That is the metaphor, and it maps precisely onto what this browser is for: a
-place to use the web where surveillance and vendor control cannot reach. The
-power that shapes the rest of the web — tracking, telemetry, ad-driven
-defaults, roadmaps set by someone else's business model — stops at the door.
+That meaning maps precisely onto what this browser is for: a place to use the
+web where surveillance and vendor control cannot reach. What shapes the rest
+of the web — tracking, telemetry, ad-driven defaults, roadmaps set by someone
+else's business model — stops at the door.
 
-The word itself is an English coinage rooted in "stead" and the archaic
-"steading" (a homestead — a settled, kept place). Even without the fantasy
-reference, it reads as what it is: a quiet, held ground.
+The name says what it is: a quiet, held ground.
 
 ### Pronunciation
 
@@ -54,7 +54,7 @@ it is wrong on the website.
 Candidates. None is final; the choice belongs with the first website release.
 
 1. **"Your haven on the web."** — The name's meaning in five words. Warm,
-   direct, works even for readers who have never heard of a stedding.
+   direct, works even for readers who have never met the name.
 2. **"The web, on your terms."** — Leads with control rather than shelter.
    Broader, but less distinctive; many privacy products could say it.
 3. **"Where the web can't track you back."** — Concrete and slightly pointed;
@@ -76,12 +76,13 @@ Suggestions, not decisions — this space is open for exploration. The logo and
 palette do not exist yet; when they do, they get recorded here and in an ADR
 if the choice is hard to reverse.
 
-- **Mood: quiet and natural.** A stedding is old-growth forest and standing
-  stone. Calm, grounded, unhurried. The opposite of neon gradients, glassy
-  chrome, and startup confetti.
-- **Motifs: grove and stone.** Trees, a clearing, a ring of stones, a
-  threshold. Abstract geometry derived from these beats literal illustration —
-  and literal fantasy artwork is ruled out entirely (see trademark hygiene).
+- **Mood: quiet and settled.** The name means a settled, kept place. Calm,
+  grounded, unhurried. The opposite of neon gradients, glassy chrome, and
+  startup confetti.
+- **Motifs: shelter and ground.** A roof line, an arch, a threshold, a hearth,
+  stone. Abstract geometry derived from these beats literal illustration —
+  and material from anyone else's work is ruled out entirely (see trademark
+  hygiene).
 - **Palette.** Deep greens, stone grays, warm off-whites; sparing accent
   color. Must hold up in both light and dark UI themes, since the browser
   chrome is where the brand lives daily.
@@ -98,21 +99,20 @@ it fails.
 
 ## Trademark hygiene
 
-The name borrows a metaphor, not a property. These rules keep it that way.
+The name is shaped on ordinary English words. These rules keep it clear of
+anyone else's brand or work.
 
-- **We use only the word.** "Stedding" appears as a name for this browser and
-  nothing more. No Wheel of Time trademarks, logos, cover art, illustrations,
-  maps, character or place names, quotations, or excerpts — not in the product,
-  the website, the docs, marketing, or community spaces we control.
+- **We use only the word.** Only the word "Stedding" is used, as this
+  browser's name. No artwork, logos, names, quotations or other material from
+  any book, film, game or other brand — not in the product, the website, the
+  docs, marketing, or community spaces we control. Every piece of artwork is
+  our own.
 - **No claimed affiliation.** We do not state or imply endorsement by, or
-  association with, Robert Jordan's estate, Bandersnatch Group, Sony Pictures
-  Television, Amazon, or any other Wheel of Time rights holder. The origin
-  story above is told as attribution, not association.
-- **Different goods, ordinary word.** The browser is desktop software; the
-  Wheel of Time marks cover fiction and entertainment properties. We stay
-  clearly on our side of that line and additionally lean on the word's plain
-  English roots ("stead," "steading"). This is a hygiene policy, not legal
-  advice; if a rights holder ever objects, we engage in good faith.
+  association with, anyone.
+- **Plain English roots.** The name is shaped on plain English: "steading",
+  a farmstead or homestead, from "stead", an old word for a place. This is a
+  hygiene policy, not legal advice; if anyone ever objects to the name, we
+  engage in good faith.
 - **BSD clause 3 protects the name from forks.** BSD-3-Clause forbids using
   the names of the copyright holder or contributors to endorse or promote
   derived products without written permission. Anyone may fork the code — that
@@ -123,4 +123,4 @@ The name borrows a metaphor, not a property. These rules keep it that way.
   2026-08-30. Whether and where to file is an open question; the decision gets
   an ADR when it is made.
 
-When in doubt: the word, the metaphor, our own artwork — nothing else.
+When in doubt: the word, its meaning, our own artwork — nothing else.

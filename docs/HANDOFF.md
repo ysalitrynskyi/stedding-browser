@@ -516,12 +516,13 @@ variables name the machine's paths, so none is in the repo: `STEDDING_CHROMIUM_S
 
 ## Open items
 
-`BACKLOG.md` is the list; do not keep one here. Beta 6 is out on both platforms
-(2026-09-10). Next: `S-58` (the Mac's disk, an owner's decision before the next
-build), the operator's look at beta 6 (`docs/ARC-ROUND2.md` gets a round 10 table
-when it comes), `S-17` (the Developer ID certificate and the notary profile, then
-a signed re-release), `S-56` (the Windows port proper: little windows, signing,
-updates, CI) and `S-48` (the Arc data import run once on a real Arc profile).
+`BACKLOG.md` is the list; do not keep one here. Beta 7 is the Mac image of pin
+153.0.8010.48 (2026-09-16); beta 6 remains the current Windows preview until that
+image joins the tag. Next: the operator's look at beta 6 and 7 (`docs/ARC-ROUND2.md`
+gets a round 10 table when it comes), `S-17` (the Developer ID certificate and the
+notary profile, then a signed re-release), `S-56` (the Windows port proper: the
+beta 7 installer, little windows, signing, updates, CI) and `S-48` (the Arc data
+import run once on a real Arc profile).
 
 ## Release channel
 

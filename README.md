@@ -59,7 +59,7 @@ project's own tooling; every claim below is backed by a test or a measured captu
 
 ## Download
 
-The current release is **0.2.0 beta 6**, built on Chromium 153 (stable). Get it from
+The current release is **0.2.0 beta 7**, built on Chromium 153.0.8010.48 (stable). Get it from
 [stedding.dev](https://stedding.dev/#download) or the
 [Releases page](https://github.com/ysalitrynskyi/stedding-browser/releases/latest):
 
@@ -240,7 +240,7 @@ it against Arc every day. What is out and what comes next:
 
 | | State |
 |---|---|
-| macOS (Apple silicon) | Beta releases since 2026-09-01; the current one is beta 6 |
+| macOS (Apple silicon) | Beta releases since 2026-09-01; the current one is beta 7 |
 | Windows x64 | Preview installer since beta 5: the full interface, Arc's keys for Windows, a per-user install |
 | Code signing and notarisation | Next: the Apple developer account exists; the Developer ID certificate follows (`S-17` in [BACKLOG.md](BACKLOG.md)) |
 | Automatic updates | After signing; checks go to GitHub Releases, with no identifier (ADR 0014) |

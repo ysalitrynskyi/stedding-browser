@@ -239,10 +239,8 @@ with two fixups into patch 0039 that the first macOS build of the Windows-writte
 patches turned up (`docs/ARC-ROUND2.md`, *The Mac pass*). Beta 5 stays a
 Windows-only preview. Signing: the Apple developer account exists since 2026-09-10;
 the certificate and the notary profile are the operator's next step (`S-17`).
-The pin is behind: Chromium stable moved to 153.0.8010.48 on 2026-09-15, a point
-release on our own milestone and therefore a security fix, so `docs/QUALITY.md`'s
-clock is running (14 days; 7 if a fix is exploited in the wild) — `S-52`, the first
-thing to build. Outstanding: `BACKLOG.md`. First vanilla perf comparison is in
+The pin is 153.0.8010.48 (2026-09-16, `S-52`); `v0.2.0-beta.7` is the Mac image of
+that pin. Outstanding: `BACKLOG.md`. First vanilla perf comparison is in
 `docs/perf/README.md`: on the deterministic page list every QUALITY budget is
 met (cold +2.3%, warm −2.0%, memory +0.0% over vanilla).
 
@@ -294,6 +292,8 @@ evening (patches 0037–0038 and fixups into 0001, 0002). `v0.2.0-beta.5` is
 out with round 8 and M8's first slice as the Windows preview alone, and
 `v0.2.0-beta.6` is out on both platforms: from Windows with round 9 on
 2026-09-10, the macOS image added from the Mac the same day.
+`v0.2.0-beta.7` is the Mac image of pin 153.0.8010.48 (2026-09-16); the Windows
+installer for that tag is still to join it (`S-56`).
 
 **Whoever picks this up next** (state as of 2026-09-16): read `docs/HANDOFF.md`
 first — the loop, the dev parameters and the traps, including `tooling/capture-state`
@@ -304,24 +304,16 @@ back (trap 44). `tooling/dev status` says whether the checkout and `unit_tests`
 exist before anything is planned; `tooling/check-pin` says how far behind stable
 the pin is. The order of work:
 
-1. `S-58` first, with the owner: the Mac had 32 GB free on 2026-09-16; a pin update
-   re-syncs and rebuilds most of the tree, and the build refuses under 20 GB. Ask
-   for the room (an external volume for `/Users/Shared/chromium`, or 50 GB moved
-   off the disk) before starting anything that builds.
-2. `S-52`: take 153.0.8010.48 (ADR 0007, `tooling/update-pin --apply`; the series was
-   already rebased once against .27 and applied). Build, the release sweep
-   (`tooling/dev test all` and `tooling/dev test upstream`), captures, and a beta 7
-   on both platforms. The QUALITY clock started on 2026-09-15.
-3. The operator's look at beta 6 — round 10 in `docs/ARC-ROUND2.md`, one table per
-   round, one row per finding with its fix. Ask for the findings; they, not the
+1. The operator's look at beta 6 and 7 — round 10 in `docs/ARC-ROUND2.md`, one table
+   per round, one row per finding with its fix. Ask for the findings; they, not the
    backlog, decide the features.
-4. `S-17` when the Developer ID certificate exists (the steps are in the row): a
+2. `S-17` when the Developer ID certificate exists (the steps are in the row): a
    signed, notarised re-release, then the updater (ADR 0014) behind its settings
    entry.
-5. Then the rest by backlog order: `S-56` (Windows: little windows, signing,
-   updates, CI), `S-48` (the Arc data import on a real profile), `S-51`, `S-57`,
-   `S-47`, `S-54`, `S-55`, `S-50`, `S-49`. Every feature spec names its own `gap`
-   rows.
+3. Then the rest by backlog order: `S-56` (Windows: the beta 7 installer, little
+   windows, signing, updates, CI), `S-48` (the Arc data import on a real profile),
+   `S-51`, `S-57`, `S-47`, `S-54`, `S-55`, `S-50`, `S-49`. Every feature spec names
+   its own `gap` rows.
 
 The website is finished and live (see *Site* above); what remains there is two
 dashboard steps for the owner (`S-59`). Keep README, `docs/INSTALL.md`,

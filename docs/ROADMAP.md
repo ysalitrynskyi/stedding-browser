@@ -14,9 +14,10 @@ without developer tools, without terminal commands, and without reading build do
 (Windows/Linux equivalents apply from M8/M9 on).
 
 **Where this stands (2026-09-16):** M0–M6 are built and shipped unsigned; the current
-release is `v0.2.0-beta.6`, macOS (Apple silicon) and a Windows x64 preview — the ladder
+release is `v0.2.0-beta.7`, macOS (Apple silicon) on Chromium 153.0.8010.48 — the ladder
 was climbed out of order, chasing feedback from real use (`docs/ARC-ROUND2.md`), and each
-feature's own spec under `docs/features/` is the record of what passes. Of M7, the
+feature's own spec under `docs/features/` is the record of what passes. The Windows x64
+preview is still beta 6 until that image joins this tag (`S-56`). Of M7, the
 website is done: https://stedding.dev is live with the download, the release notes
 link, the source link and a security policy (`ysalitrynskyi/stedding.dev`); signing
 waits on the Developer ID certificate (the Apple developer account exists since
@@ -24,7 +25,6 @@ waits on the Developer ID certificate (the Apple developer account exists since
 the first Windows build and has its first slice and the keyboard map
 (`docs/features/windows.md` N1–N7): branding, a per-user installer, Arc's keys for
 Windows; little windows, signing, updates and CI are open (`S-56`). M9 has not started.
-The pin is behind stable's security point release since 2026-09-15 (`S-52`).
 
 ---
 

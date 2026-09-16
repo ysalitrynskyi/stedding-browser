@@ -1,6 +1,6 @@
 # Feature: Independent Space sessions
 
-Status: **S1–S7 built and tested** (ADR 0019). Patch: next in series after 0045.
+Status: **S1–S12 built and tested** (ADR 0019). Patch: 0046.
 Owner docs: `docs/decisions/0019-space-sessions-are-storage-partitions.md`,
 `docs/PRODUCT.md` §2, `docs/features/spaces.md`, `docs/features/windows.md` G5.
 
@@ -35,11 +35,11 @@ the default partition.
 | S5 | A tab opened in a shared Space uses the default partition even when another Space in the same window is isolated. | `SpaceWindowTest.SharedSpaceStaysOnDefaultPartition` | built |
 | S6 | Two tabs of the same http(s) site in two isolated Spaces have different storage partitions, so they do not share cookies. | `SpaceWindowTest.TwoIsolatedSpacesDoNotShareAPartition` | built |
 | S7 | Turning isolation off clears `profile_id` for the purpose of new tabs: a tab opened after that uses the default partition. The on-disk jar stays until a later clear-session row. | `SpaceWindowTest.TurningIsolationOffUsesTheDefaultPartition` | built |
-| S8 | An essentials (Chromium-pinned) tab always uses the default partition, including when the active Space is isolated. | none yet | gap |
-| S9 | Moving a tab into or out of an isolated Space reloads it in the destination jar. | none yet | gap |
-| S10 | Isolation is a Space menu check item ("Independent session") and a row on the Spaces list in chrome://settings/stedding. Off by default. | none yet | partial · the Space menu check item is in; settings row not yet |
-| S11 | `window.open` / a link that opens a tab from an isolated tab inherits that tab's partition (the navigator already reuses the opener's `SiteInstance`). | none yet | gap · covered by the opener path; no extra test in this cut |
-| S12 | A restored tab in an isolated Space is created in that Space's partition, not the default. | none yet | gap · restore currently `WebContents::Create(profile)` |
+| S8 | An essentials (Chromium-pinned) tab always uses the default partition, including when the active Space is isolated. | `SpaceWindowTest.EssentialTabStaysOnTheDefaultPartition` | built |
+| S9 | Moving a tab into or out of an isolated Space reloads it in the destination jar. | `SpaceWindowTest.MovingATabIntoAnIsolatedSpaceRebindsIt` | built |
+| S10 | Isolation is a Space menu check item ("Independent session"), a toggle on each Space in chrome://settings/stedding, and an Independent Session row in the command bar. Off by default. | `CommandBarViewTest.ActionRowsListSpacesAndCaptures`; live: Space menu and the settings toggle | built |
+| S11 | `window.open` / a link that opens a tab from an isolated tab inherits that tab's partition (the navigator reuses the opener's `SiteInstance`). | `SpaceWindowTest.WindowOpenFromIsolatedTabKeepsThePartition` | built |
+| S12 | A restored tab in an isolated Space is created in that Space's partition, not the default. | `SpaceWindowTest.RestoredTabInIsolatedSpaceUsesItsPartition` | built |
 
 "built" means the test exists in the series and passes on the pinned tree. "gap"
 is a behaviour we ship without a test — each one is a backlog follow-up.
@@ -54,6 +54,7 @@ seeing isolated jars. Per-Space proxies or fingerprints.
 ## Running the tests
 
 ```bash
+tooling/dev test sessions
 tooling/dev test spaces
 tooling/dev test windows
 ```

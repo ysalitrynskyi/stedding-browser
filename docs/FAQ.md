@@ -85,6 +85,15 @@ command reachable. Full list of collisions: [SHORTCUTS.md](SHORTCUTS.md).
 Settings → Stedding has a switch for Chromium's full context menus. Stedding's short
 menus are the default.
 
+**Can I be signed into the same site twice?**
+Yes. Right-click a Space chip (or open Settings → Stedding) and turn on
+**Independent session**. That Space keeps its own cookies, cache and site data;
+a second isolated Space can use a different account on the same site. Essentials
+(the top pinned row, visible in every Space) stay on the shared jar, as do
+extensions, history and saved passwords. Off by default: Spaces share one login
+until you opt in. Turning it off sends new tabs back to the shared jar; the
+stored session stays on disk until you isolate that Space again.
+
 ## Privacy
 
 **Does it send anything to Google, or to you?**

@@ -8,7 +8,7 @@ Everything under `docs/`, grouped by who it is for.
 |---|---|
 | [INSTALL.md](INSTALL.md) | Installing on macOS and Windows, verifying the checksum, updating, uninstalling, where your data lives |
 | [SHORTCUTS.md](SHORTCUTS.md) | Every keyboard shortcut, macOS and Windows, and where Stedding differs from Chromium |
-| [FAQ.md](FAQ.md) | Questions and answers |
+| [FAQ.md](FAQ.md) | Questions and answers, including Independent session |
 | [PRIVACY.md](PRIVACY.md) | The privacy principles and every network connection the browser makes |
 | [release-notes/](release-notes/) | What each release changed, with checksums |
 

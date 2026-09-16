@@ -68,6 +68,10 @@ its menu item; only the key moves.
 | ⌥⌘↓ / ⌥⌘↑ | Next / previous tab in the sidebar | Focus the next / previous pane (now F6 / ⇧F6) |
 | ⇧⌘K / Ctrl+Shift+K | Clear the Space | unbound |
 
+Independent session is not a shortcut: it is a check item on the Space chip
+menu, a toggle on each Space in Settings → Stedding, and an **Independent
+Session** row in the command bar (⇧⌘P). Off by default.
+
 ## Notes
 
 - **macOS:** ⌃1–⌃9 are also Mission Control's "Switch to Desktop N" once a second

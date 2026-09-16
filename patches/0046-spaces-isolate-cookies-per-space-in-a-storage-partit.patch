@@ -3,35 +3,177 @@ From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
 Date: Wed, 16 Sep 2026 10:20:48 -0400
 Subject: spaces: isolate cookies per Space in a storage partition
 
-An optional Independent session on a Space puts its new tabs in a
+An optional Independent session on a Space puts its tabs in a
 non-default StoragePartition so the same site can be signed into
-twice in one window. Off, Spaces share the profile jar as today.
-Extensions, settings, history and saved passwords stay on the
-profile (ADR 0019).
+twice in one window. Off, Spaces share the profile jar. Essentials
+stay shared. Moving a tab rebinds it; restore keeps the jar.
+Menu, Settings, and the command bar all expose the toggle.
 
-Why: docs/features/sessions.md S1-S7, ADR 0019.
+Why: docs/features/sessions.md S1-S12, ADR 0019.
 Removable when: Chromium offers per-tab storage partitions as a
 product feature, or Spaces become full Profiles.
 ---
- chrome/browser/ui/navigator/BUILD.gn          |  1 +
- .../browser/ui/navigator/browser_navigator.cc | 19 ++++++
- chrome/browser/ui/spaces/BUILD.gn             |  3 +
- chrome/browser/ui/spaces/space_model.cc       | 19 ++++++
- chrome/browser/ui/spaces/space_model.h        |  6 ++
- .../ui/spaces/space_model_window_unittest.cc  | 65 +++++++++++++++++++
- chrome/browser/ui/spaces/space_registry.cc    | 20 ++++++
- chrome/browser/ui/spaces/space_registry.h     | 11 +++-
- .../ui/spaces/space_registry_unittest.cc      | 38 +++++++++++
- .../ui/spaces/space_storage_partition.cc      | 55 ++++++++++++++++
- .../ui/spaces/space_storage_partition.h       | 49 ++++++++++++++
- .../space_storage_partition_unittest.cc       | 20 ++++++
- .../ui/views/spaces/space_switcher_view.cc    | 17 +++++
- .../ui/views/spaces/space_switcher_view.h     |  1 +
- 14 files changed, 321 insertions(+), 3 deletions(-)
+ .../settings/stedding_page/stedding_page.css  |   4 +
+ .../stedding_page/stedding_page.html.ts       |   6 +
+ .../settings/stedding_page/stedding_page.ts   |   9 +
+ chrome/browser/ui/browser_tabrestore.cc       |  19 ++-
+ chrome/browser/ui/navigator/BUILD.gn          |   1 +
+ .../browser/ui/navigator/browser_navigator.cc |  13 ++
+ chrome/browser/ui/spaces/BUILD.gn             |   5 +
+ chrome/browser/ui/spaces/space_model.cc       |  60 +++++++
+ chrome/browser/ui/spaces/space_model.h        |  12 ++
+ .../ui/spaces/space_model_window_unittest.cc  | 139 ++++++++++++++-
+ chrome/browser/ui/spaces/space_registry.cc    |  20 +++
+ chrome/browser/ui/spaces/space_registry.h     |  11 +-
+ .../ui/spaces/space_registry_unittest.cc      |  38 +++++
+ .../ui/spaces/space_storage_partition.cc      | 160 ++++++++++++++++++
+ .../ui/spaces/space_storage_partition.h       |  85 ++++++++++
+ .../space_storage_partition_unittest.cc       |  20 +++
+ .../ui/views/commandbar/command_bar_view.cc   |  10 ++
+ .../commandbar/command_bar_view_unittest.cc   |   1 +
+ .../ui/views/spaces/space_switcher_view.cc    |  17 ++
+ .../ui/views/spaces/space_switcher_view.h     |   1 +
+ .../browser/ui/webui/settings/settings_ui.cc  |   9 +-
+ .../webui/settings/stedding_spaces_handler.cc |  17 ++
+ .../webui/settings/stedding_spaces_handler.h  |   1 +
+ 23 files changed, 648 insertions(+), 10 deletions(-)
  create mode 100644 chrome/browser/ui/spaces/space_storage_partition.cc
  create mode 100644 chrome/browser/ui/spaces/space_storage_partition.h
  create mode 100644 chrome/browser/ui/spaces/space_storage_partition_unittest.cc
 
+diff --git a/chrome/browser/resources/settings/stedding_page/stedding_page.css b/chrome/browser/resources/settings/stedding_page/stedding_page.css
+index f023e99375e87..10a7f9eef25d8 100644
+--- a/chrome/browser/resources/settings/stedding_page/stedding_page.css
++++ b/chrome/browser/resources/settings/stedding_page/stedding_page.css
+@@ -33,6 +33,10 @@
+   flex: 1;
+ }
+ 
++.space-isolated {
++  flex: none;
++}
++
+ /* routing D5: a Space's rules under its row. */
+ .route-row {
+   align-items: center;
+diff --git a/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts b/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
+index 33ae1aa846479..fa594bfc3c45a 100644
+--- a/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
++++ b/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
+@@ -289,6 +289,12 @@ export function getHtml(this: SettingsSteddingPageElement) {
+           aria-label="${space.displayName}"
+           @change="${this.onSpaceNameChange_}">
+       </cr-input>
++      <cr-toggle class="space-isolated" data-id="${space.id}"
++          ?checked="${space.isolated}"
++          title="$i18n{steddingIndependentSessionLabel}"
++          aria-label="$i18n{steddingIndependentSessionLabel}"
++          @change="${this.onSpaceIsolatedChange_}">
++      </cr-toggle>
+       <cr-icon-button class="icon-delete-gray" data-id="${space.id}"
+           title="$i18n{steddingDeleteSpace}"
+           ?disabled="${this.spaces_.length <= 1}"
+diff --git a/chrome/browser/resources/settings/stedding_page/stedding_page.ts b/chrome/browser/resources/settings/stedding_page/stedding_page.ts
+index b88b702edd083..f922dd8cd1e2e 100644
+--- a/chrome/browser/resources/settings/stedding_page/stedding_page.ts
++++ b/chrome/browser/resources/settings/stedding_page/stedding_page.ts
+@@ -11,12 +11,14 @@
+ import 'chrome://resources/cr_elements/cr_button/cr_button.js';
+ import 'chrome://resources/cr_elements/cr_icon_button/cr_icon_button.js';
+ import 'chrome://resources/cr_elements/cr_input/cr_input.js';
++import 'chrome://resources/cr_elements/cr_toggle/cr_toggle.js';
+ import '../controls/settings_dropdown_menu.js';
+ import '../controls/settings_slider.js';
+ import '../controls/settings_toggle_button.js';
+ import '../settings_page/settings_section.js';
+ 
+ import type {CrInputElement} from 'chrome://resources/cr_elements/cr_input/cr_input.js';
++import type {CrToggleElement} from 'chrome://resources/cr_elements/cr_toggle/cr_toggle.js';
+ import {WebUiListenerMixinLit} from 'chrome://resources/cr_elements/web_ui_listener_mixin_lit.js';
+ import {sendWithPromise} from 'chrome://resources/js/cr.js';
+ import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
+@@ -43,6 +45,7 @@ export interface SteddingSpace {
+   icon: string;
+   color: string;
+   active: boolean;
++  isolated: boolean;
+   routes: SteddingRoute[];
+ }
+ 
+@@ -130,6 +133,12 @@ export class SettingsSteddingPageElement extends
+     chrome.send('steddingRenameSpace', [input.dataset['id'], input.value]);
+   }
+ 
++  protected onSpaceIsolatedChange_(e: Event) {
++    const toggle = e.target as CrToggleElement;
++    chrome.send(
++        'steddingSetSpaceIsolated', [toggle.dataset['id'], toggle.checked]);
++  }
++
+   // routing D5: the dropdown's choices, the active Space first.
+   protected externalOptions_(): Array<{value: string, name: string}> {
+     const options = [{value: '', name: loadTimeData.getString('steddingExternalActiveSpace')}];
+diff --git a/chrome/browser/ui/browser_tabrestore.cc b/chrome/browser/ui/browser_tabrestore.cc
+index 731f79a0458a3..220a9ba0117b3 100644
+--- a/chrome/browser/ui/browser_tabrestore.cc
++++ b/chrome/browser/ui/browser_tabrestore.cc
+@@ -21,6 +21,8 @@
+ #include "chrome/browser/ui/browser_window.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/send_tab_to_self/send_tab_to_self_activation_tracker.h"
++#include "chrome/browser/ui/spaces/space_registry_factory.h"
++#include "chrome/browser/ui/spaces/space_storage_partition.h"
+ #include "chrome/browser/ui/spaces/tab_space_restore_data.h"
+ #include "chrome/browser/ui/stedding/tab_names.h"
+ #include "chrome/browser/ui/tab_ui_helper.h"
+@@ -64,7 +66,8 @@ std::unique_ptr<WebContents> CreateRestoredTab(
+     const sessions::SerializedUserAgentOverride& user_agent_override,
+     const std::map<std::string, std::string>& extra_data,
+     bool initially_hidden,
+-    bool from_session_restore) {
++    bool from_session_restore,
++    bool pin) {
+   GURL restore_url = navigations[selected_navigation].virtual_url();
+   // TODO(ajwong): Remove the temporary session_storage_namespace_map when
+   // we teach session restore to understand that one tab can have multiple
+@@ -76,7 +79,10 @@ std::unique_ptr<WebContents> CreateRestoredTab(
+           browser->GetProfile(), session_storage_namespace);
+   WebContents::CreateParams create_params(
+       browser->GetProfile(),
+-      tab_util::GetSiteInstanceForNewTab(browser->GetProfile(), restore_url));
++      spaces::SiteInstanceForRestoredTab(
++          browser->GetProfile(), restore_url,
++          spaces::SpaceRegistryFactory::GetForProfile(browser->GetProfile()),
++          extra_data, /*essential=*/pin));
+   create_params.initially_hidden = initially_hidden;
+   create_params.desired_renderer_state =
+       WebContents::CreateParams::kNoRendererProcess;
+@@ -293,7 +299,8 @@ WebContents* AddRestoredTab(
+   std::unique_ptr<WebContents> web_contents = CreateRestoredTab(
+       browser, navigations, selected_navigation, extension_app_id,
+       last_active_time_ticks, last_active_time, session_storage_namespace,
+-      user_agent_override, extra_data, initially_hidden, from_session_restore);
++      user_agent_override, extra_data, initially_hidden, from_session_restore,
++      pin);
+ 
+   return AddRestoredTabImpl(std::move(web_contents), browser, tab_index, group,
+                             select, pin, from_session_restore,
+@@ -309,10 +316,14 @@ WebContents* ReplaceRestoredTab(
+     const sessions::SerializedUserAgentOverride& user_agent_override,
+     const std::map<std::string, std::string>& extra_data,
+     bool from_session_restore) {
++  const bool pin_active =
++      browser->tab_strip_model()->GetActiveTab() &&
++      browser->tab_strip_model()->GetActiveTab()->IsPinned();
+   std::unique_ptr<WebContents> web_contents = CreateRestoredTab(
+       browser, navigations, selected_navigation, extension_app_id,
+       base::TimeTicks(), base::Time(), session_storage_namespace,
+-      user_agent_override, extra_data, false, from_session_restore);
++      user_agent_override, extra_data, false, from_session_restore,
++      pin_active);
+   WebContents* raw_web_contents = web_contents.get();
+ 
+   // ReplaceWebContentsAt won't animate in the restoration, so manually do the
 diff --git a/chrome/browser/ui/navigator/BUILD.gn b/chrome/browser/ui/navigator/BUILD.gn
 index eb3a78a311aa1..1438461fb4514 100644
 --- a/chrome/browser/ui/navigator/BUILD.gn
@@ -45,7 +187,7 @@ index eb3a78a311aa1..1438461fb4514 100644
        "//chrome/browser/ui/web_applications:launch_utils",
        "//chrome/browser/ui/window_feature_controller",
 diff --git a/chrome/browser/ui/navigator/browser_navigator.cc b/chrome/browser/ui/navigator/browser_navigator.cc
-index 3bba22660031d..60093d5df9f9b 100644
+index 3bba22660031d..06df1e70809e1 100644
 --- a/chrome/browser/ui/navigator/browser_navigator.cc
 +++ b/chrome/browser/ui/navigator/browser_navigator.cc
 @@ -41,6 +41,7 @@
@@ -64,32 +206,26 @@ index 3bba22660031d..60093d5df9f9b 100644
  #include "content/public/browser/site_isolation_policy.h"
  #include "content/public/browser/web_contents.h"
  #include "extensions/buildflags/buildflags.h"
-@@ -488,6 +490,23 @@ std::unique_ptr<content::WebContents> CreateTargetContents(
+@@ -488,6 +490,17 @@ std::unique_ptr<content::WebContents> CreateTargetContents(
        params.opener ? params.opener->GetSiteInstance()
                      : tab_util::GetSiteInstanceForNewTab(
                            params.browser->GetProfile(), url);
-+  // sessions S4: an isolated Space's new tab (no opener) is created in that
-+  // Space's storage partition so cookies and cache do not leak to other
-+  // Spaces. window.open keeps the opener's SiteInstance, which already
-+  // carries the jar (ADR 0019).
++  // sessions S4, S11: isolated Space new tabs (no opener) use that Space's
++  // jar; window.open keeps the opener's SiteInstance (ADR 0019).
 +  if (!params.opener) {
 +    if (spaces::SpaceModel* const model =
 +            spaces::SpaceModel::From(params.browser)) {
-+      if (std::optional<content::StoragePartitionConfig> config =
-+              spaces::StoragePartitionConfigForSpace(
-+                  params.browser->GetProfile(), model->registry(),
-+                  model->active_id())) {
-+        initial_site_instance_for_new_contents =
-+            content::SiteInstance::CreateForFixedStoragePartition(
-+                params.browser->GetProfile(), url, *config);
-+      }
++      initial_site_instance_for_new_contents =
++          spaces::SiteInstanceForSpaceTab(
++              params.browser->GetProfile(), url, model->registry(),
++              model->active_id(), /*essential=*/false);
 +    }
 +  }
  
    WebContents::CreateParams create_params(
        params.browser->GetProfile(), initial_site_instance_for_new_contents);
 diff --git a/chrome/browser/ui/spaces/BUILD.gn b/chrome/browser/ui/spaces/BUILD.gn
-index 1b58bfbcb97b2..715da99191394 100644
+index 1b58bfbcb97b2..a366fd1c8e946 100644
 --- a/chrome/browser/ui/spaces/BUILD.gn
 +++ b/chrome/browser/ui/spaces/BUILD.gn
 @@ -29,6 +29,7 @@ source_set("spaces") {
@@ -108,7 +244,15 @@ index 1b58bfbcb97b2..715da99191394 100644
      "tab_space_restore_data.cc",
    ]
    public_deps = [
-@@ -100,6 +102,7 @@ source_set("unit_tests") {
+@@ -69,6 +71,7 @@ source_set("spaces") {
+     "//chrome/browser/ui/stedding:sidebar_density",
+     "//chrome/browser:browser_process",
+     "//chrome/browser/profiles:profile",
++    "//chrome/browser/tab_contents",
+     "//chrome/browser/ui:stedding_ui_metrics",
+     "//chrome/browser/ui/stedding/theme",
+     "//chrome/browser/ui/stedding:tab_names",
+@@ -100,6 +103,7 @@ source_set("unit_tests") {
      "space_registry_unittest.cc",
      "space_model_unittest.cc",
      "space_model_window_unittest.cc",
@@ -116,11 +260,27 @@ index 1b58bfbcb97b2..715da99191394 100644
      "space_router_unittest.cc",
    ]
    deps = [
+@@ -124,6 +128,7 @@ source_set("unit_tests") {
+     "//components/sessions",
+     "//components/sessions:test_support",
+     "//chrome/browser/ui/tabs:tab_strip",
++    "//chrome/browser/ui/navigator",
+     "//chrome/test:test_support",
+     "//components/tabs:test_support",
+     "//content/public/browser",
 diff --git a/chrome/browser/ui/spaces/space_model.cc b/chrome/browser/ui/spaces/space_model.cc
-index 909afbb5dc073..0d05e306a1751 100644
+index 909afbb5dc073..c64fac494309e 100644
 --- a/chrome/browser/ui/spaces/space_model.cc
 +++ b/chrome/browser/ui/spaces/space_model.cc
-@@ -918,6 +918,25 @@ void SpaceModel::SetSpaceIcon(const SpaceId& id, std::string icon) {
+@@ -32,6 +32,7 @@
+ #include "chrome/browser/ui/spaces/space_registry.h"
+ #include "chrome/browser/ui/spaces/space_registry_factory.h"
+ #include "chrome/browser/ui/spaces/space_router.h"
++#include "chrome/browser/ui/spaces/space_storage_partition.h"
+ #include "chrome/browser/ui/spaces/tab_space_restore_data.h"
+ #include "chrome/browser/ui/stedding/address_row.h"
+ #include "chrome/browser/ui/stedding/sidebar_density.h"
+@@ -918,12 +919,34 @@ void SpaceModel::SetSpaceIcon(const SpaceId& id, std::string icon) {
    SaveToSession();
  }
  
@@ -133,6 +293,8 @@ index 909afbb5dc073..0d05e306a1751 100644
 +  } else {
 +    registry_->SetProfileId(id, std::string());
 +  }
++  observers_.Notify(&Observer::OnSpaceMetadataChanged, id);
++  RebindTabsInSpace(id);
 +}
 +
 +bool SpaceModel::SpaceIsIsolated(const SpaceId& id) const {
@@ -146,8 +308,66 @@ index 909afbb5dc073..0d05e306a1751 100644
  const SpaceId& SpaceModel::SpaceForTab(tabs::TabInterface* tab) {
    CHECK(tab);
    const auto [it, inserted] =
+       tab_spaces_.try_emplace(tab->GetHandle(), SpaceIdForNewTab(tab));
+   if (inserted) {
+     SaveTabToSession(tab, it->second);
++    MaybeRebindTabJar(tab);
+   }
+   return it->second;
+ }
+@@ -1021,6 +1044,7 @@ void SpaceModel::SetSpaceForOneTab(tabs::TabInterface* tab, const SpaceId& id) {
+   tab_spaces_.insert_or_assign(tab->GetHandle(), id);
+   SaveTabToSession(tab, id);
+   observers_.Notify(&Observer::OnTabSpaceChanged, tab);
++  MaybeRebindTabJar(tab);
+ }
+ 
+ SpaceModel::LastRoute::LastRoute(tabs::TabHandle tab, SpaceId from, SpaceId to)
+@@ -1222,6 +1246,42 @@ void SpaceModel::OnTabPinnedStateChanged(tabs::TabInterface* tab, int index) {
+     essential_homes_.erase(tab->GetHandle());
+   }
+   SaveTabToSession(tab, SpaceForTab(tab));
++  MaybeRebindTabJar(tab);
++}
++
++void SpaceModel::MaybeRebindTabJar(tabs::TabInterface* tab) {
++  if (!tab || !tab_strip_model_) {
++    return;
++  }
++  const tabs::TabHandle handle = tab->GetHandle();
++  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
++      FROM_HERE, base::BindOnce(
++                     [](base::WeakPtr<SpaceModel> model,
++                        tabs::TabHandle handle) {
++                       if (!model || !model->tab_strip_model_) {
++                         return;
++                       }
++                       tabs::TabInterface* const tab = handle.Get();
++                       if (!tab) {
++                         return;
++                       }
++                       RebindTabToSpaceJar(model->tab_strip_model_, tab,
++                                           model->registry_,
++                                           model->SpaceForTab(tab));
++                     },
++                     weak_factory_.GetWeakPtr(), handle));
++}
++
++void SpaceModel::RebindTabsInSpace(const SpaceId& id) {
++  if (!tab_strip_model_) {
++    return;
++  }
++  for (int i = 0; i < tab_strip_model_->count(); ++i) {
++    tabs::TabInterface* const tab = tab_strip_model_->GetTabAtIndex(i);
++    if (SpaceForTab(tab) == id) {
++      MaybeRebindTabJar(tab);
++    }
++  }
+ }
+ 
+ void SpaceModel::SetSpacePinned(tabs::TabInterface* tab, bool pinned) {
 diff --git a/chrome/browser/ui/spaces/space_model.h b/chrome/browser/ui/spaces/space_model.h
-index a311b1b316258..c9f64d0df2589 100644
+index a311b1b316258..cebd2059b0c72 100644
 --- a/chrome/browser/ui/spaces/space_model.h
 +++ b/chrome/browser/ui/spaces/space_model.h
 @@ -227,6 +227,12 @@ class SpaceModel : public TabStripModelObserver,
@@ -163,11 +383,38 @@ index a311b1b316258..c9f64d0df2589 100644
    // The Spaces and which is active, as JSON, for the session to keep.
    std::string Serialize() const;
  
+@@ -323,6 +329,12 @@ class SpaceModel : public TabStripModelObserver,
+   void SetSpaceForOneTab(tabs::TabInterface* tab, const SpaceId& id);
+   void SetSpacePinnedOnOneTab(tabs::TabInterface* tab, bool pinned, bool move);
+ 
++  // sessions S8, S9: after a move or a pin, put the tab on the jar its Space
++  // (or the essentials default) requires. Posted so it does not re-enter the
++  // strip mid-notification.
++  void MaybeRebindTabJar(tabs::TabInterface* tab);
++  void RebindTabsInSpace(const SpaceId& id);
++
+   // If the active tab is not visible in the active Space, activates one that
+   // is, opening a new tab when the Space has none (B3, B4). No-op without a
+   // tab strip, while the window is closing, or when the strip is empty.
 diff --git a/chrome/browser/ui/spaces/space_model_window_unittest.cc b/chrome/browser/ui/spaces/space_model_window_unittest.cc
-index cf0f5d4c9a3d4..427754ab724db 100644
+index cf0f5d4c9a3d4..dd8943e59b3be 100644
 --- a/chrome/browser/ui/spaces/space_model_window_unittest.cc
 +++ b/chrome/browser/ui/spaces/space_model_window_unittest.cc
-@@ -22,6 +22,7 @@
+@@ -9,6 +9,7 @@
+ // to the active tab.
+ 
+ #include <algorithm>
++#include <map>
+ #include <memory>
+ #include <string>
+ #include <utility>
+@@ -18,10 +19,13 @@
+ #include "chrome/browser/ui/archive/archive_mark.h"
+ #include "chrome/browser/ui/browser.h"
+ #include "chrome/browser/ui/browser_commands.h"
++#include "chrome/browser/ui/navigator/browser_navigator.h"
++#include "chrome/browser/ui/navigator/browser_navigator_params.h"
+ #include "chrome/browser/ui/spaces/space.h"
  #include "chrome/browser/ui/spaces/space_commands.h"
  #include "chrome/browser/ui/spaces/space_model.h"
  #include "chrome/browser/ui/spaces/space_router.h"
@@ -175,7 +422,7 @@ index cf0f5d4c9a3d4..427754ab724db 100644
  #include "chrome/browser/ui/spaces/tab_space_restore_data.h"
  #include "chrome/browser/ui/stedding/pin_lifecycle.h"
  #include "chrome/browser/ui/stedding/sleep_tabs.h"
-@@ -36,6 +37,7 @@
+@@ -36,9 +40,11 @@
  #include "components/prefs/pref_service.h"
  #include "components/split_tabs/split_tab_visual_data.h"
  #include "components/tabs/public/tab_interface.h"
@@ -183,7 +430,29 @@ index cf0f5d4c9a3d4..427754ab724db 100644
  #include "content/public/browser/web_contents.h"
  #include "content/public/test/web_contents_tester.h"
  #include "testing/gtest/include/gtest/gtest.h"
-@@ -906,5 +908,68 @@ TEST_F(SpaceWindowTest, ExternalOpenLandsInTheDefaultSpace) {
++#include "ui/base/window_open_disposition.h"
+ #include "url/gurl.h"
+ 
+ namespace spaces {
+@@ -65,9 +71,15 @@ class SpaceWindowTest : public BrowserWithTestWindowTest {
+   // TabModel's constructor attaches the tab helpers, the same as in the real
+   // restore path.
+   tabs::TabInterface* RestoreTab(const std::string& space_id) {
++    std::map<std::string, std::string> extra_data;
++    extra_data[kSessionTabSpaceKey] = space_id;
++    content::WebContents::CreateParams params(
++        profile(),
++        SiteInstanceForRestoredTab(profile(), GURL("https://example.com/"),
++                                   model().registry(), extra_data,
++                                   /*essential=*/false));
+     std::unique_ptr<content::WebContents> contents =
+-        content::WebContents::Create(
+-            content::WebContents::CreateParams(profile()));
++        content::WebContents::Create(params);
+     TabSpaceRestoreData::CreateForWebContents(contents.get(), space_id,
+                                               /*space_pinned=*/false);
+     tabs().AppendTab(
+@@ -906,5 +918,128 @@ TEST_F(SpaceWindowTest, ExternalOpenLandsInTheDefaultSpace) {
    AddTab(browser(), url);
    EXPECT_EQ(home, model().SpaceForTab(tabs().GetActiveTab()));
  }
@@ -248,6 +517,66 @@ index cf0f5d4c9a3d4..427754ab724db 100644
 +  tabs::TabInterface* const shared = OpenTab();
 +  EXPECT_FALSE(IsSpaceStoragePartition(PartitionOf(shared)))
 +      << PartitionOf(shared);
++}
++
++// sessions S8
++TEST_F(SpaceWindowTest, EssentialTabStaysOnTheDefaultPartition) {
++  Space* const work = model().AddSpace("Work", kBlue);
++  model().SetSpaceIsolated(work->id(), true);
++  model().SetActiveSpace(work->id());
++  tabs::TabInterface* const tab = OpenTab();
++  EXPECT_TRUE(IsSpaceStoragePartition(PartitionOf(tab)));
++  tabs().SetTabPinned(tabs().GetIndexOfTab(tab), true);
++  task_environment()->RunUntilIdle();
++  EXPECT_TRUE(tab->IsPinned());
++  EXPECT_FALSE(IsSpaceStoragePartition(PartitionOf(tab))) << PartitionOf(tab);
++}
++
++// sessions S9
++TEST_F(SpaceWindowTest, MovingATabIntoAnIsolatedSpaceRebindsIt) {
++  const SpaceId home = model().active_id();
++  tabs::TabInterface* const tab = OpenTab();
++  EXPECT_FALSE(IsSpaceStoragePartition(PartitionOf(tab)));
++  Space* const work = model().AddSpace("Work", kBlue);
++  model().SetSpaceIsolated(work->id(), true);
++  model().SetSpaceForTab(tab, work->id());
++  task_environment()->RunUntilIdle();
++  EXPECT_TRUE(IsSpaceStoragePartition(PartitionOf(tab))) << PartitionOf(tab);
++  model().SetSpaceForTab(tab, home);
++  task_environment()->RunUntilIdle();
++  EXPECT_FALSE(IsSpaceStoragePartition(PartitionOf(tab))) << PartitionOf(tab);
++}
++
++// sessions S11
++TEST_F(SpaceWindowTest, WindowOpenFromIsolatedTabKeepsThePartition) {
++  Space* const work = model().AddSpace("Work", kBlue);
++  model().SetSpaceIsolated(work->id(), true);
++  model().SetActiveSpace(work->id());
++  tabs::TabInterface* const opener = OpenTab();
++  const auto jar = PartitionOf(opener);
++  ASSERT_TRUE(IsSpaceStoragePartition(jar));
++  NavigateParams params(browser(), GURL("https://example.com/opened"),
++                        ui::PAGE_TRANSITION_LINK);
++  params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
++  params.opener = opener->GetContents()->GetPrimaryMainFrame();
++  Navigate(&params);
++  if (params.navigated_or_inserted_contents) {
++    CommitPendingLoad(
++        &params.navigated_or_inserted_contents->GetController());
++  }
++  EXPECT_EQ(jar.partition_name(),
++            PartitionOf(tabs().GetActiveTab()).partition_name());
++}
++
++// sessions S12
++TEST_F(SpaceWindowTest, RestoredTabInIsolatedSpaceUsesItsPartition) {
++  Space* const work = model().AddSpace("Work", kBlue);
++  model().SetSpaceIsolated(work->id(), true);
++  tabs::TabInterface* const restored = RestoreTab(work->id().ToString());
++  task_environment()->RunUntilIdle();
++  EXPECT_EQ(work->id(), model().SpaceForTab(restored));
++  EXPECT_TRUE(IsSpaceStoragePartition(PartitionOf(restored)))
++      << PartitionOf(restored);
 +}
 +
  }  // namespace
@@ -362,23 +691,57 @@ index 6b9e425345460..5f5b7fd556ca4 100644
  }  // namespace spaces
 diff --git a/chrome/browser/ui/spaces/space_storage_partition.cc b/chrome/browser/ui/spaces/space_storage_partition.cc
 new file mode 100644
-index 0000000000000..c82df21158862
+index 0000000000000..3dfa3aa2ad4ec
 --- /dev/null
 +++ b/chrome/browser/ui/spaces/space_storage_partition.cc
-@@ -0,0 +1,55 @@
+@@ -0,0 +1,160 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
 +
 +#include "chrome/browser/ui/spaces/space_storage_partition.h"
 +
++#include "base/token.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/tab_contents/tab_util.h"
 +#include "chrome/browser/ui/spaces/space_registry.h"
++#include "chrome/browser/ui/spaces/tab_space_restore_data.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "components/tabs/public/tab_interface.h"
 +#include "content/public/browser/browser_context.h"
++#include "content/public/browser/navigation_controller.h"
 +#include "content/public/browser/security_principal.h"
 +#include "content/public/browser/site_instance.h"
 +#include "content/public/browser/web_contents.h"
++#include "content/public/common/referrer.h"
++#include "ui/base/page_transition_types.h"
 +
 +namespace spaces {
++namespace {
++
++bool SameJar(const content::StoragePartitionConfig& a,
++             const std::optional<content::StoragePartitionConfig>& b) {
++  const bool a_space = IsSpaceStoragePartition(a);
++  if (!b) {
++    return !a_space;
++  }
++  return a_space && a.partition_name() == b->partition_name();
++}
++
++std::optional<SpaceId> SpaceIdFromExtraData(
++    const std::map<std::string, std::string>& extra_data) {
++  const auto it = extra_data.find(kSessionTabSpaceKey);
++  if (it == extra_data.end()) {
++    return std::nullopt;
++  }
++  const std::optional<base::Token> token = base::Token::FromString(it->second);
++  if (!token) {
++    return std::nullopt;
++  }
++  return SpaceId::FromRawToken(*token);
++}
++
++}  // namespace
 +
 +std::optional<content::StoragePartitionConfig>
 +StoragePartitionConfigForProfileId(content::BrowserContext* browser_context,
@@ -420,13 +783,84 @@ index 0000000000000..c82df21158862
 +      .GetStoragePartitionConfig();
 +}
 +
++scoped_refptr<content::SiteInstance> SiteInstanceForSpaceTab(
++    content::BrowserContext* browser_context,
++    const GURL& url,
++    const SpaceRegistry* registry,
++    const SpaceId& id,
++    bool essential) {
++  if (!browser_context) {
++    return nullptr;
++  }
++  if (!essential) {
++    if (std::optional<content::StoragePartitionConfig> config =
++            StoragePartitionConfigForSpace(browser_context, registry, id)) {
++      return content::SiteInstance::CreateForFixedStoragePartition(
++          browser_context, url, *config);
++    }
++  }
++  Profile* const profile = Profile::FromBrowserContext(browser_context);
++  return tab_util::GetSiteInstanceForNewTab(profile, url);
++}
++
++scoped_refptr<content::SiteInstance> SiteInstanceForRestoredTab(
++    content::BrowserContext* browser_context,
++    const GURL& url,
++    const SpaceRegistry* registry,
++    const std::map<std::string, std::string>& extra_data,
++    bool essential) {
++  const std::optional<SpaceId> id = SpaceIdFromExtraData(extra_data);
++  if (!id) {
++    Profile* const profile = Profile::FromBrowserContext(browser_context);
++    return tab_util::GetSiteInstanceForNewTab(profile, url);
++  }
++  return SiteInstanceForSpaceTab(browser_context, url, registry, *id,
++                                 essential);
++}
++
++void RebindTabToSpaceJar(TabStripModel* tabs,
++                         tabs::TabInterface* tab,
++                         const SpaceRegistry* registry,
++                         const SpaceId& id) {
++  if (!tabs || !tab) {
++    return;
++  }
++  content::WebContents* const old_contents = tab->GetContents();
++  if (!old_contents) {
++    return;
++  }
++  content::BrowserContext* const context = old_contents->GetBrowserContext();
++  const bool essential = tab->IsPinned();
++  const std::optional<content::StoragePartitionConfig> target =
++      essential ? std::nullopt
++                : StoragePartitionConfigForSpace(context, registry, id);
++  if (SameJar(StoragePartitionConfigForWebContents(old_contents), target)) {
++    return;
++  }
++  GURL url = old_contents->GetLastCommittedURL();
++  if (url.is_empty()) {
++    url = old_contents->GetVisibleURL();
++  }
++  scoped_refptr<content::SiteInstance> site_instance = SiteInstanceForSpaceTab(
++      context, url.is_empty() ? GURL("about:blank") : url, registry, id,
++      essential);
++  content::WebContents::CreateParams params(context, site_instance);
++  std::unique_ptr<content::WebContents> fresh =
++      content::WebContents::Create(params);
++  if (!url.is_empty() && !url.IsAboutBlank()) {
++    fresh->GetController().LoadURL(url, content::Referrer(),
++                                   ui::PAGE_TRANSITION_RELOAD, std::string());
++  }
++  tabs->DiscardWebContents(old_contents, std::move(fresh));
++}
++
 +}  // namespace spaces
 diff --git a/chrome/browser/ui/spaces/space_storage_partition.h b/chrome/browser/ui/spaces/space_storage_partition.h
 new file mode 100644
-index 0000000000000..dff0ffc8c6e30
+index 0000000000000..34f24eb6e67d5
 --- /dev/null
 +++ b/chrome/browser/ui/spaces/space_storage_partition.h
-@@ -0,0 +1,49 @@
+@@ -0,0 +1,85 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -434,16 +868,27 @@ index 0000000000000..dff0ffc8c6e30
 +#ifndef CHROME_BROWSER_UI_SPACES_SPACE_STORAGE_PARTITION_H_
 +#define CHROME_BROWSER_UI_SPACES_SPACE_STORAGE_PARTITION_H_
 +
++#include <map>
 +#include <optional>
++#include <string>
 +#include <string_view>
 +
++#include "base/memory/scoped_refptr.h"
 +#include "chrome/browser/ui/spaces/space_id.h"
 +#include "content/public/browser/storage_partition_config.h"
++#include "url/gurl.h"
++
++class TabStripModel;
 +
 +namespace content {
 +class BrowserContext;
++class SiteInstance;
 +class WebContents;
 +}  // namespace content
++
++namespace tabs {
++class TabInterface;
++}
 +
 +namespace spaces {
 +
@@ -472,6 +917,31 @@ index 0000000000000..dff0ffc8c6e30
 +// null.
 +content::StoragePartitionConfig StoragePartitionConfigForWebContents(
 +    content::WebContents* web_contents);
++
++// SiteInstance a new tab for `id` should use. Essentials (Chromium-pinned)
++// always get the default jar (sessions S8). Isolated Spaces get a fixed
++// partition; everyone else the profile default.
++scoped_refptr<content::SiteInstance> SiteInstanceForSpaceTab(
++    content::BrowserContext* browser_context,
++    const GURL& url,
++    const SpaceRegistry* registry,
++    const SpaceId& id,
++    bool essential);
++
++// Same, from session extra_data (`stedding.space`) at restore (sessions S12).
++scoped_refptr<content::SiteInstance> SiteInstanceForRestoredTab(
++    content::BrowserContext* browser_context,
++    const GURL& url,
++    const SpaceRegistry* registry,
++    const std::map<std::string, std::string>& extra_data,
++    bool essential);
++
++// If `tab`'s WebContents is not already in the jar `id` requires, replace it
++// (sessions S8, S9). No-op when the jars already match, or without a strip.
++void RebindTabToSpaceJar(TabStripModel* tabs,
++                         tabs::TabInterface* tab,
++                         const SpaceRegistry* registry,
++                         const SpaceId& id);
 +
 +}  // namespace spaces
 +
@@ -502,6 +972,39 @@ index 0000000000000..2df961b786b72
 +
 +}  // namespace
 +}  // namespace spaces
+diff --git a/chrome/browser/ui/views/commandbar/command_bar_view.cc b/chrome/browser/ui/views/commandbar/command_bar_view.cc
+index 8be058892fb6d..9f484f1237f87 100644
+--- a/chrome/browser/ui/views/commandbar/command_bar_view.cc
++++ b/chrome/browser/ui/views/commandbar/command_bar_view.cc
+@@ -415,6 +415,16 @@ void CommandBarView::BuildActions() {
+                    model->AddSpace(std::string(), choice.color)->id());
+              },
+              base::Unretained(spaces))});
++    const bool isolated = spaces->SpaceIsIsolated(spaces->active_id());
++    actions_.push_back(
++        {isolated ? u"Independent Session: On" : u"Independent Session",
++         std::u16string(),
++         base::BindRepeating(
++             [](spaces::SpaceModel* model, bool isolated) {
++               model->SetSpaceIsolated(model->active_id(), !isolated);
++             },
++             base::Unretained(spaces), isolated),
++         /*keeps_bar_open=*/true});
+   }
+   // little E1: inside a little window, the Spaces of the last-active window.
+   if (stedding::IsLittleWindow(browser_)) {
+diff --git a/chrome/browser/ui/views/commandbar/command_bar_view_unittest.cc b/chrome/browser/ui/views/commandbar/command_bar_view_unittest.cc
+index 2110fcd9ae74a..625eb6672b3bd 100644
+--- a/chrome/browser/ui/views/commandbar/command_bar_view_unittest.cc
++++ b/chrome/browser/ui/views/commandbar/command_bar_view_unittest.cc
+@@ -173,6 +173,7 @@ TEST_F(CommandBarViewTest, ActionRowsListSpacesAndCaptures) {
+   EXPECT_TRUE(HasTitle(*bar, u"Capture the Full Document"));
+   EXPECT_TRUE(HasTitle(*bar, u"Collapse or Expand the Sidebar"));
+   EXPECT_TRUE(HasTitle(*bar, u"New Space"));
++  EXPECT_TRUE(HasTitle(*bar, u"Independent Session"));
+   EXPECT_TRUE(HasTitle(*bar, u"Short context menus: On"));
+   std::ignore = work;
+ }
 diff --git a/chrome/browser/ui/views/spaces/space_switcher_view.cc b/chrome/browser/ui/views/spaces/space_switcher_view.cc
 index 8607f2c89a057..42e8255194fca 100644
 --- a/chrome/browser/ui/views/spaces/space_switcher_view.cc
@@ -566,3 +1069,77 @@ index 765884325e205..09346abd12390 100644
  
    // views::TextfieldController:
    bool HandleKeyEvent(views::Textfield* sender,
+diff --git a/chrome/browser/ui/webui/settings/settings_ui.cc b/chrome/browser/ui/webui/settings/settings_ui.cc
+index d60fe73e7ee91..cb2bc372b8b3b 100644
+--- a/chrome/browser/ui/webui/settings/settings_ui.cc
++++ b/chrome/browser/ui/webui/settings/settings_ui.cc
+@@ -694,7 +694,14 @@ SettingsUI::SettingsUI(content::WebUI* web_ui)
+   html_source->AddString(
+       "steddingSpacesIntro",
+       "This window's Spaces. Rename here; the sidebar's + adds one and its "
+-      "context menu sets icon and colour.");
++      "context menu sets icon and colour. Independent session gives a Space "
++      "its own cookies, so you can sign into the same site twice.");
++  html_source->AddString("steddingIndependentSessionLabel",
++                         "Independent session");
++  html_source->AddString(
++      "steddingIndependentSessionSubLabel",
++      "This Space keeps its own cookies and site data. Essentials stay "
++      "shared. Off by default.");
+   html_source->AddString("steddingSpaceNamePlaceholder", "Space name");
+   html_source->AddString("steddingDeleteSpace", "Delete Space");
+   html_source->AddString("steddingImportArcLabel", "Import from Arc");
+diff --git a/chrome/browser/ui/webui/settings/stedding_spaces_handler.cc b/chrome/browser/ui/webui/settings/stedding_spaces_handler.cc
+index e1cde34237b6e..57d9edfa6671e 100644
+--- a/chrome/browser/ui/webui/settings/stedding_spaces_handler.cc
++++ b/chrome/browser/ui/webui/settings/stedding_spaces_handler.cc
+@@ -98,6 +98,10 @@ void SteddingSpacesHandler::RegisterMessages() {
+       "steddingDeleteSpace",
+       base::BindRepeating(&SteddingSpacesHandler::HandleDeleteSpace,
+                           base::Unretained(this)));
++  web_ui()->RegisterMessageCallback(
++      "steddingSetSpaceIsolated",
++      base::BindRepeating(&SteddingSpacesHandler::HandleSetSpaceIsolated,
++                          base::Unretained(this)));
+ }
+ 
+ void SteddingSpacesHandler::OnJavascriptAllowed() {
+@@ -148,6 +152,7 @@ base::ListValue SteddingSpacesHandler::ListSpaces() {
+                                  SkColorGetG(space->color()),
+                                  SkColorGetB(space->color())));
+     entry.Set("active", space->id() == model->active_id());
++    entry.Set("isolated", model->SpaceIsIsolated(space->id()));
+     // routing D5: this Space's rules, with their index in the pref.
+     base::ListValue routes;
+     const std::vector<spaces::Route> all =
+@@ -191,6 +196,18 @@ void SteddingSpacesHandler::HandleRenameSpace(const base::ListValue& args) {
+   model->SetSpaceName(*id, args[1].GetString());
+ }
+ 
++void SteddingSpacesHandler::HandleSetSpaceIsolated(
++    const base::ListValue& args) {
++  CHECK_EQ(2U, args.size());
++  AllowJavascript();
++  const std::optional<spaces::SpaceId> id = ParseId(args[0]);
++  spaces::SpaceModel* const model = GetModel();
++  if (!id || !model || !model->GetSpace(*id) || !args[1].is_bool()) {
++    return;
++  }
++  model->SetSpaceIsolated(*id, args[1].GetBool());
++}
++
+ void SteddingSpacesHandler::HandleListBackups(const base::ListValue& args) {
+   CHECK_EQ(1U, args.size());
+   AllowJavascript();
+diff --git a/chrome/browser/ui/webui/settings/stedding_spaces_handler.h b/chrome/browser/ui/webui/settings/stedding_spaces_handler.h
+index eb49da81b5938..84bdc1b6593d9 100644
+--- a/chrome/browser/ui/webui/settings/stedding_spaces_handler.h
++++ b/chrome/browser/ui/webui/settings/stedding_spaces_handler.h
+@@ -50,6 +50,7 @@ class SteddingSpacesHandler : public settings::SettingsPageUIHandler,
+ 
+   void HandleGetSpaces(const base::ListValue& args);
+   void HandleRenameSpace(const base::ListValue& args);
++  void HandleSetSpaceIsolated(const base::ListValue& args);
+   void HandleDeleteSpace(const base::ListValue& args);
+   // routing D5: steddingAddRoute(spaceId, site) and steddingRemoveRoute(index).
+   // import I19, I20: steddingListBackups(callback) -> [{path, label}],

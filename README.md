@@ -81,7 +81,9 @@ Not available yet: Intel Macs and Linux. See [Status and roadmap](#status-and-ro
 **Spaces.** Each Space is a set of tabs with its own colour, icon and pinned sites.
 Switch with the chips at the bottom of the sidebar, with ⌃1–⌃9, or by swiping. A Space
 you leave puts its tabs to sleep; sites can be routed so they always open in the right
-Space.
+Space. Turn on **Independent session** on a Space (chip menu, or Settings → Stedding)
+and that Space keeps its own cookies: you can be signed into the same site with a
+different account in another Space. Essentials stay shared. Off by default.
 
 ![Four Spaces in the switcher at the bottom of the sidebar, each with its own colour](docs/images/readme/spaces.png)
 
@@ -133,6 +135,9 @@ buttons and Arc's keyboard mapped to Ctrl and Alt.
 **Spaces**
 - Per-Space tabs, colour and icon; a chip switcher with drag to reorder; keys for
   everything (⌃1–9, ⌥⌘←/→, ⌥⇧⌘←/→ to move a tab across).
+- Independent session (optional): a Space can keep its own cookies and site data
+  so the same site can be signed into twice in one window. Chip menu or Settings
+  → Stedding. Essentials stay on the shared jar.
 - Routing: a site opens in the Space it belongs to, with a toast that undoes it.
 - One sidebar for every window; ⌥⇧⌘N opens a blank window with Spaces of its own.
 

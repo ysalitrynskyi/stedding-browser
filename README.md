@@ -22,6 +22,7 @@
 </p>
 
 <p align="center">
+  <a href="https://stedding.dev">stedding.dev</a> ·
   <a href="#download">Download</a> ·
   <a href="#a-tour">Tour</a> ·
   <a href="#features">Features</a> ·
@@ -59,7 +60,8 @@ project's own tooling; every claim below is backed by a test or a measured captu
 ## Download
 
 The current release is **0.2.0 beta 6**, built on Chromium 153 (stable). Get it from
-the [Releases page](https://github.com/ysalitrynskyi/stedding-browser/releases/latest):
+[stedding.dev](https://stedding.dev/#download) or the
+[Releases page](https://github.com/ysalitrynskyi/stedding-browser/releases/latest):
 
 | Platform | File | Notes |
 |---|---|---|

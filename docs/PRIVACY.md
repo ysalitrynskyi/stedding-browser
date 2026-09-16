@@ -35,8 +35,8 @@ bug. Report it through SECURITY.md.
 
 | Connection | To | Contains | Why |
 |---|---|---|---|
-| Browser update check | Stedding infrastructure | Version, platform, architecture. No unique ID, no cookies. | Security updates are non-negotiable for a Chromium fork. |
-| Security component updates | Stedding infrastructure (mirrored) | Component name and version. | Chromium ships security-critical data as components (e.g. certificate revocation sets). We mirror the ones we keep; the exact list is documented in ARCHITECTURE.md before 1.0. Components fetched from Google by stock Chromium are proxied or removed. |
+| Browser update check | GitHub Releases API (`api.github.com`), per `decisions/0014` — see "The update check" below. **Off** until it has a settings entry; no build so far makes it. | A plain GET; no unique ID, no cookies, no query. | Security updates are non-negotiable for a Chromium fork. |
+| Security component updates | Google's component update service, as in stock Chromium: no patch in the series changes it yet. Mirroring or removal is decided before 1.0 (ARCHITECTURE.md); what a fresh profile actually contacts is recorded by the audit in `BACKLOG.md` S-50. | Component name and version. | Chromium ships security-critical data as components (e.g. certificate revocation sets). We mirror the ones we keep; the exact list is documented in ARCHITECTURE.md before 1.0. Components fetched from Google by stock Chromium are proxied or removed. |
 | Safe Browsing list updates | See Safe Browsing section | Hashed URL prefixes, not URLs. | Phishing/malware protection. |
 | The user's own browsing | Sites the user visits | Whatever the user does. | This is a web browser. Includes the DNS, TLS (OCSP/CT), and favicon traffic that browsing implies. |
 | Extension install/update | Chrome Web Store (Google) | Standard store traffic. | Only once the user installs an extension. See extension note below. |

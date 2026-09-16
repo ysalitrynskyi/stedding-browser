@@ -539,7 +539,7 @@ automatically, and with what — Sparkle and `chrome/updater` are both still can
 for that, and both need signing first. Full-size updates before deltas; correctness and
 signature verification before either.
 
-**stedding.dev is a website, not infrastructure.** Separate repository, Astro, static.
+**stedding.dev is a website, not infrastructure.** Separate repository (`ysalitrynskyi/stedding.dev`, live since 2026-09-16), Astro, static, Cloudflare Pages.
 Download link, release notes, security policy, source link. Deliberately not on the path
 of an update check: if the site is down, updates still work.
 

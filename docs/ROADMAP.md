@@ -13,15 +13,18 @@ below always means: a fresh macOS user account can install the artifact and run 
 without developer tools, without terminal commands, and without reading build docs
 (Windows/Linux equivalents apply from M8/M9 on).
 
-**Where this stands (2026-09-10):** M0–M6 are built and shipped unsigned; the current
+**Where this stands (2026-09-16):** M0–M6 are built and shipped unsigned; the current
 release is `v0.2.0-beta.6`, macOS (Apple silicon) and a Windows x64 preview — the ladder
 was climbed out of order, chasing feedback from real use (`docs/ARC-ROUND2.md`), and each
-feature's own spec under `docs/features/` is the record of what passes. M7 waits on the
-Developer ID certificate (the Apple developer account exists since 2026-09-10;
-`BACKLOG.md` S-17). M8 started on 2026-09-08 with the first Windows build and has its
-first slice and the keyboard map (`docs/features/windows.md` N1–N7): branding, a
-per-user installer, Arc's keys for Windows; little windows, signing, updates and CI are
-open (`S-56`). M9 has not started.
+feature's own spec under `docs/features/` is the record of what passes. Of M7, the
+website is done: https://stedding.dev is live with the download, the release notes
+link, the source link and a security policy (`ysalitrynskyi/stedding.dev`); signing
+waits on the Developer ID certificate (the Apple developer account exists since
+2026-09-10; `BACKLOG.md` S-17) and the updater follows it. M8 started on 2026-09-08 with
+the first Windows build and has its first slice and the keyboard map
+(`docs/features/windows.md` N1–N7): branding, a per-user installer, Arc's keys for
+Windows; little windows, signing, updates and CI are open (`S-56`). M9 has not started.
+The pin is behind stable's security point release since 2026-09-15 (`S-52`).
 
 ---
 
@@ -242,10 +245,10 @@ Scope:
   updates over HTTPS; update checks contain no identifying data beyond what the
   updater strictly needs (documented in `docs/PRIVACY.md`).
 - Update safety gates from `docs/QUALITY.md`: n-1 upgrade test and rollback path.
-- stedding.dev live: download, release notes, source link, security policy. The site
-  lives in its own repository (`ysalitrynskyi/stedding-site`, Astro, static) and is
-  deliberately not on the path of an update check — see
-  `decisions/0014-github-releases-as-update-channel.md`.
+- stedding.dev live: download, release notes, source link, security policy. Done
+  2026-09-16: the site lives in its own repository (`ysalitrynskyi/stedding.dev`,
+  Astro, static, Cloudflare Pages) and is deliberately not on the path of an update
+  check — see `decisions/0014-github-releases-as-update-channel.md`.
 - Release checklist from `docs/QUALITY.md` adopted as the gate for every release from
   here on.
 

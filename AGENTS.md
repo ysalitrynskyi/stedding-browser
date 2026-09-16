@@ -12,7 +12,11 @@ Arc-style interface: sidebar with vertical tabs, workspaces, split view, and a c
 bar. Built for technical users who want privacy, control, and a modern, productive UI —
 without trusting a VC-funded company's roadmap or telemetry.
 
-- Site/domain: **stedding.dev** (owned, DNS on Cloudflare)
+- Site: **https://stedding.dev** — live since 2026-09-16 from its own private repository
+  (`ysalitrynskyi/stedding.dev`: Astro, static, Cloudflare Pages; it reads the latest
+  release from the GitHub Releases API at build time and is not on the update path,
+  ADR 0014). The website's own rules and deployment steps are in that repository
+  (`AGENTS.md`, `docs/DEPLOYMENT.md`); DNS on Cloudflare.
 - Repo: `ysalitrynskyi/stedding-browser` on GitHub
 - License: **BSD-3-Clause** (permissive; closed-source or paid add-ons may exist later,
   the core stays BSD — see `docs/decisions/0005-open-core.md`)
@@ -235,7 +239,10 @@ with two fixups into patch 0039 that the first macOS build of the Windows-writte
 patches turned up (`docs/ARC-ROUND2.md`, *The Mac pass*). Beta 5 stays a
 Windows-only preview. Signing: the Apple developer account exists since 2026-09-10;
 the certificate and the notary profile are the operator's next step (`S-17`).
-Outstanding: `BACKLOG.md`. First vanilla perf comparison is in
+The pin is behind: Chromium stable moved to 153.0.8010.48 on 2026-09-15, a point
+release on our own milestone and therefore a security fix, so `docs/QUALITY.md`'s
+clock is running (14 days; 7 if a fix is exploited in the wild) — `S-52`, the first
+thing to build. Outstanding: `BACKLOG.md`. First vanilla perf comparison is in
 `docs/perf/README.md`: on the deterministic page list every QUALITY budget is
 met (cold +2.3%, warm −2.0%, memory +0.0% over vanilla).
 
@@ -288,29 +295,38 @@ out with round 8 and M8's first slice as the Windows preview alone, and
 `v0.2.0-beta.6` is out on both platforms: from Windows with round 9 on
 2026-09-10, the macOS image added from the Mac the same day.
 
-**Whoever picks this up next**: read `docs/HANDOFF.md` first — the loop, the dev
-parameters and the traps, now including `tooling/capture-state` (a capture that
-needs neither the keyboard nor the pointer, trap 29), the rule that a release
-sweep runs Chromium's own suites around what the series touches, not only the
-Stedding filters (trap 31), and what a vanished checkout costs and how it comes
+**Whoever picks this up next** (state as of 2026-09-16): read `docs/HANDOFF.md`
+first — the loop, the dev parameters and the traps, including `tooling/capture-state`
+(a capture that needs neither the keyboard nor the pointer, trap 29), the rule that a
+release sweep runs Chromium's own suites around what the series touches, not only
+the Stedding filters (trap 31), and what a vanished checkout costs and how it comes
 back (trap 44). `tooling/dev status` says whether the checkout and `unit_tests`
-exist before anything else is planned. What to build next is the operator's look
-at beta 6; `docs/ARC-ROUND2.md` is where each round's findings are recorded, one
-table per round, and the fix for each. `S-58` (the Mac's disk: an owner's
-decision, since the checkout and a build need 85 GB on a volume that is 88% full)
-comes before the next build. Until then the open rows are `S-52` (take
-153.0.8010.27: the pin was Mac stable when it was taken and the line has moved
-since), `S-51` (a legacy profile still reads the Chromium-named keychain item and
-nothing rewrites it), `S-49` (a builder that can actually build — until it exists
-CI checks repository hygiene and nothing verifies the product), `S-45` (Google's
-new tab page when Google is chosen), `S-47` (an input-free settings probe), `S-48`
-(the Arc data import run once against a real Arc profile), `S-56` (M8: the Windows
-port's remainder after the first slice -- the keyboard map and the menus, signing,
-updates, CI), `S-50` (the idle-network
-audit as a recorded run) and `S-17` (signing: the developer account exists, the
-Developer ID certificate and the notary profile are the operator's to make on the
-Mac, then `tooling/sign-release` and a signed re-release). Every feature spec
-names its own `gap` rows.
+exist before anything is planned; `tooling/check-pin` says how far behind stable
+the pin is. The order of work:
+
+1. `S-58` first, with the owner: the Mac had 32 GB free on 2026-09-16; a pin update
+   re-syncs and rebuilds most of the tree, and the build refuses under 20 GB. Ask
+   for the room (an external volume for `/Users/Shared/chromium`, or 50 GB moved
+   off the disk) before starting anything that builds.
+2. `S-52`: take 153.0.8010.48 (ADR 0007, `tooling/update-pin --apply`; the series was
+   already rebased once against .27 and applied). Build, the release sweep
+   (`tooling/dev test all` and `tooling/dev test upstream`), captures, and a beta 7
+   on both platforms. The QUALITY clock started on 2026-09-15.
+3. The operator's look at beta 6 — round 10 in `docs/ARC-ROUND2.md`, one table per
+   round, one row per finding with its fix. Ask for the findings; they, not the
+   backlog, decide the features.
+4. `S-17` when the Developer ID certificate exists (the steps are in the row): a
+   signed, notarised re-release, then the updater (ADR 0014) behind its settings
+   entry.
+5. Then the rest by backlog order: `S-56` (Windows: little windows, signing,
+   updates, CI), `S-48` (the Arc data import on a real profile), `S-51`, `S-57`,
+   `S-47`, `S-54`, `S-55`, `S-50`, `S-49`. Every feature spec names its own `gap`
+   rows.
+
+The website is finished and live (see *Site* above); what remains there is two
+dashboard steps for the owner (`S-59`). Keep README, `docs/INSTALL.md`,
+`docs/SHORTCUTS.md` and `docs/FAQ.md` true after every release: they are the
+product's front door, written for people, and the site takes its facts from them.
 
 How to work here is `docs/HANDOFF.md`: the loop, the dev parameters that recreate
 any state for a capture, and the traps. Two rules that cost the most when broken:

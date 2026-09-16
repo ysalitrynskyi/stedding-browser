@@ -17,6 +17,13 @@ in one contributor's head. Read both.
 - Build output: `out/release` (proprietary codecs on). `out/official` exists
   for performance baselines (never quote numbers from `release`;
   `docs/QUALITY.md`).
+- The website: `~/work/stedding.dev` (`ysalitrynskyi/stedding.dev`, private), live
+  at https://stedding.dev since 2026-09-16. Astro, static, Cloudflare Pages from
+  `main`; it reads the latest release from the GitHub Releases API at build time and
+  rebuilds itself every 6 hours through a deploy hook, so a published release reaches
+  the site without a change there. Its rules and its dashboard steps are its own
+  `AGENTS.md` and `docs/DEPLOYMENT.md`; its facts come from this repository's README,
+  `docs/INSTALL.md`, `docs/SHORTCUTS.md` and `docs/FAQ.md`, so keep those true.
 
 ## The loop that works
 
@@ -539,6 +546,9 @@ into the existing release and refreshed the notes with the checksum. With a
 Developer ID in the keychain (`S-17`), `tooling/sign-release release` goes between
 `verify-build` and `package-dmg`, which then takes `--app
 dist/signed/stable/Stedding.app`, and the notes lose the right-click paragraph.
+After `publish-release`, nothing is needed on the site: its scheduled rebuild reads
+`releases/latest` (once the deploy hook secret is a URL, `S-59`); to see the new
+version at once, run the site's *Rebuild* workflow by hand or push to its `main`.
 
 The push moved ahead of the publish on purpose. `gh release create` cuts the tag on
 the remote, so publishing from an unpushed commit tagged whatever the remote's default

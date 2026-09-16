@@ -61,7 +61,8 @@ behaviour we ship without a test — each one is a backlog item.
 ## Out of scope here
 
 Sync across devices (`docs/PRODUCT.md`, needs a decision), Space-level themes beyond one
-colour, and a per-Space new-tab page.
+colour, and a per-Space new-tab page. Independent cookies and site storage per Space
+are `docs/features/sessions.md` (ADR 0019), not this file.
 
 ## Running the tests
 

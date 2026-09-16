@@ -1,0 +1,568 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Wed, 16 Sep 2026 10:20:48 -0400
+Subject: spaces: isolate cookies per Space in a storage partition
+
+An optional Independent session on a Space puts its new tabs in a
+non-default StoragePartition so the same site can be signed into
+twice in one window. Off, Spaces share the profile jar as today.
+Extensions, settings, history and saved passwords stay on the
+profile (ADR 0019).
+
+Why: docs/features/sessions.md S1-S7, ADR 0019.
+Removable when: Chromium offers per-tab storage partitions as a
+product feature, or Spaces become full Profiles.
+---
+ chrome/browser/ui/navigator/BUILD.gn          |  1 +
+ .../browser/ui/navigator/browser_navigator.cc | 19 ++++++
+ chrome/browser/ui/spaces/BUILD.gn             |  3 +
+ chrome/browser/ui/spaces/space_model.cc       | 19 ++++++
+ chrome/browser/ui/spaces/space_model.h        |  6 ++
+ .../ui/spaces/space_model_window_unittest.cc  | 65 +++++++++++++++++++
+ chrome/browser/ui/spaces/space_registry.cc    | 20 ++++++
+ chrome/browser/ui/spaces/space_registry.h     | 11 +++-
+ .../ui/spaces/space_registry_unittest.cc      | 38 +++++++++++
+ .../ui/spaces/space_storage_partition.cc      | 55 ++++++++++++++++
+ .../ui/spaces/space_storage_partition.h       | 49 ++++++++++++++
+ .../space_storage_partition_unittest.cc       | 20 ++++++
+ .../ui/views/spaces/space_switcher_view.cc    | 17 +++++
+ .../ui/views/spaces/space_switcher_view.h     |  1 +
+ 14 files changed, 321 insertions(+), 3 deletions(-)
+ create mode 100644 chrome/browser/ui/spaces/space_storage_partition.cc
+ create mode 100644 chrome/browser/ui/spaces/space_storage_partition.h
+ create mode 100644 chrome/browser/ui/spaces/space_storage_partition_unittest.cc
+
+diff --git a/chrome/browser/ui/navigator/BUILD.gn b/chrome/browser/ui/navigator/BUILD.gn
+index eb3a78a311aa1..1438461fb4514 100644
+--- a/chrome/browser/ui/navigator/BUILD.gn
++++ b/chrome/browser/ui/navigator/BUILD.gn
+@@ -95,6 +95,7 @@ source_set("impl") {
+       "//chrome/browser/ui/browser_ui_controller",
+       "//chrome/browser/ui/browser_window",
+       "//chrome/browser/ui/location_bar",
++      "//chrome/browser/ui/spaces",
+       "//chrome/browser/ui/web_applications",
+       "//chrome/browser/ui/web_applications:launch_utils",
+       "//chrome/browser/ui/window_feature_controller",
+diff --git a/chrome/browser/ui/navigator/browser_navigator.cc b/chrome/browser/ui/navigator/browser_navigator.cc
+index 3bba22660031d..60093d5df9f9b 100644
+--- a/chrome/browser/ui/navigator/browser_navigator.cc
++++ b/chrome/browser/ui/navigator/browser_navigator.cc
+@@ -41,6 +41,7 @@
+ #include "chrome/browser/ui/navigator/browser_navigator_params_utils.h"
+ #include "chrome/browser/ui/singleton_tabs.h"
+ #include "chrome/browser/ui/spaces/space_model.h"
++#include "chrome/browser/ui/spaces/space_storage_partition.h"
+ #include "chrome/browser/ui/status_bubble.h"
+ #include "chrome/browser/ui/tab_helpers.h"
+ #include "chrome/browser/ui/tabs/split_tab_metrics.h"
+@@ -72,6 +73,7 @@
+ #include "content/public/browser/render_frame_host.h"
+ #include "content/public/browser/render_process_host.h"
+ #include "content/public/browser/render_view_host.h"
++#include "content/public/browser/site_instance.h"
+ #include "content/public/browser/site_isolation_policy.h"
+ #include "content/public/browser/web_contents.h"
+ #include "extensions/buildflags/buildflags.h"
+@@ -488,6 +490,23 @@ std::unique_ptr<content::WebContents> CreateTargetContents(
+       params.opener ? params.opener->GetSiteInstance()
+                     : tab_util::GetSiteInstanceForNewTab(
+                           params.browser->GetProfile(), url);
++  // sessions S4: an isolated Space's new tab (no opener) is created in that
++  // Space's storage partition so cookies and cache do not leak to other
++  // Spaces. window.open keeps the opener's SiteInstance, which already
++  // carries the jar (ADR 0019).
++  if (!params.opener) {
++    if (spaces::SpaceModel* const model =
++            spaces::SpaceModel::From(params.browser)) {
++      if (std::optional<content::StoragePartitionConfig> config =
++              spaces::StoragePartitionConfigForSpace(
++                  params.browser->GetProfile(), model->registry(),
++                  model->active_id())) {
++        initial_site_instance_for_new_contents =
++            content::SiteInstance::CreateForFixedStoragePartition(
++                params.browser->GetProfile(), url, *config);
++      }
++    }
++  }
+ 
+   WebContents::CreateParams create_params(
+       params.browser->GetProfile(), initial_site_instance_for_new_contents);
+diff --git a/chrome/browser/ui/spaces/BUILD.gn b/chrome/browser/ui/spaces/BUILD.gn
+index 1b58bfbcb97b2..715da99191394 100644
+--- a/chrome/browser/ui/spaces/BUILD.gn
++++ b/chrome/browser/ui/spaces/BUILD.gn
+@@ -29,6 +29,7 @@ source_set("spaces") {
+     "space_commands.h",
+     "space_id.h",
+     "space_model.h",
++    "space_storage_partition.h",
+     "tab_space_restore_data.h",
+   ]
+   sources = [
+@@ -41,6 +42,7 @@ source_set("spaces") {
+     "space_registry_factory.cc",
+     "space_commands.cc",
+     "space_model.cc",
++    "space_storage_partition.cc",
+     "tab_space_restore_data.cc",
+   ]
+   public_deps = [
+@@ -100,6 +102,7 @@ source_set("unit_tests") {
+     "space_registry_unittest.cc",
+     "space_model_unittest.cc",
+     "space_model_window_unittest.cc",
++    "space_storage_partition_unittest.cc",
+     "space_router_unittest.cc",
+   ]
+   deps = [
+diff --git a/chrome/browser/ui/spaces/space_model.cc b/chrome/browser/ui/spaces/space_model.cc
+index 909afbb5dc073..0d05e306a1751 100644
+--- a/chrome/browser/ui/spaces/space_model.cc
++++ b/chrome/browser/ui/spaces/space_model.cc
+@@ -918,6 +918,25 @@ void SpaceModel::SetSpaceIcon(const SpaceId& id, std::string icon) {
+   SaveToSession();
+ }
+ 
++void SpaceModel::SetSpaceIsolated(const SpaceId& id, bool isolated) {
++  if (!registry_) {
++    return;
++  }
++  if (isolated) {
++    registry_->EnsureIsolated(id);
++  } else {
++    registry_->SetProfileId(id, std::string());
++  }
++}
++
++bool SpaceModel::SpaceIsIsolated(const SpaceId& id) const {
++  if (!registry_) {
++    return false;
++  }
++  const RegistryEntry* const entry = registry_->Find(id);
++  return entry && !entry->profile_id.empty();
++}
++
+ const SpaceId& SpaceModel::SpaceForTab(tabs::TabInterface* tab) {
+   CHECK(tab);
+   const auto [it, inserted] =
+diff --git a/chrome/browser/ui/spaces/space_model.h b/chrome/browser/ui/spaces/space_model.h
+index a311b1b316258..c9f64d0df2589 100644
+--- a/chrome/browser/ui/spaces/space_model.h
++++ b/chrome/browser/ui/spaces/space_model.h
+@@ -227,6 +227,12 @@ class SpaceModel : public TabStripModelObserver,
+   void SetSpaceColor(const SpaceId& id, SkColor color);
+   void SetSpaceIcon(const SpaceId& id, std::string icon);
+ 
++  // sessions S2, S7: isolation is the registry's `profile_id`. No-op without
++  // a registry (blank, private, a model with no window).
++  void SetSpaceIsolated(const SpaceId& id, bool isolated);
++  bool SpaceIsIsolated(const SpaceId& id) const;
++  const SpaceRegistry* registry() const { return registry_; }
++
+   // The Spaces and which is active, as JSON, for the session to keep.
+   std::string Serialize() const;
+ 
+diff --git a/chrome/browser/ui/spaces/space_model_window_unittest.cc b/chrome/browser/ui/spaces/space_model_window_unittest.cc
+index cf0f5d4c9a3d4..427754ab724db 100644
+--- a/chrome/browser/ui/spaces/space_model_window_unittest.cc
++++ b/chrome/browser/ui/spaces/space_model_window_unittest.cc
+@@ -22,6 +22,7 @@
+ #include "chrome/browser/ui/spaces/space_commands.h"
+ #include "chrome/browser/ui/spaces/space_model.h"
+ #include "chrome/browser/ui/spaces/space_router.h"
++#include "chrome/browser/ui/spaces/space_storage_partition.h"
+ #include "chrome/browser/ui/spaces/tab_space_restore_data.h"
+ #include "chrome/browser/ui/stedding/pin_lifecycle.h"
+ #include "chrome/browser/ui/stedding/sleep_tabs.h"
+@@ -36,6 +37,7 @@
+ #include "components/prefs/pref_service.h"
+ #include "components/split_tabs/split_tab_visual_data.h"
+ #include "components/tabs/public/tab_interface.h"
++#include "content/public/browser/storage_partition_config.h"
+ #include "content/public/browser/web_contents.h"
+ #include "content/public/test/web_contents_tester.h"
+ #include "testing/gtest/include/gtest/gtest.h"
+@@ -906,5 +908,68 @@ TEST_F(SpaceWindowTest, ExternalOpenLandsInTheDefaultSpace) {
+   AddTab(browser(), url);
+   EXPECT_EQ(home, model().SpaceForTab(tabs().GetActiveTab()));
+ }
++
++content::StoragePartitionConfig PartitionOf(tabs::TabInterface* tab) {
++  return StoragePartitionConfigForWebContents(tab->GetContents());
++}
++
++// sessions S4
++TEST_F(SpaceWindowTest, IsolatedSpaceTabUsesItsPartition) {
++  Space* const work = model().AddSpace("Work", kBlue);
++  ASSERT_TRUE(model().registry());
++  model().SetSpaceIsolated(work->id(), true);
++  ASSERT_TRUE(model().SpaceIsIsolated(work->id()));
++  model().SetActiveSpace(work->id());
++  tabs::TabInterface* const tab = OpenTab();
++  EXPECT_EQ(work->id(), model().SpaceForTab(tab));
++  const auto& config = PartitionOf(tab);
++  EXPECT_TRUE(IsSpaceStoragePartition(config)) << config;
++  EXPECT_EQ(model().registry()->Find(work->id())->profile_id,
++            config.partition_name());
++}
++
++// sessions S5
++TEST_F(SpaceWindowTest, SharedSpaceStaysOnDefaultPartition) {
++  Space* const work = model().AddSpace("Work", kBlue);
++  model().SetSpaceIsolated(work->id(), true);
++  tabs::TabInterface* const home_tab = OpenTab();
++  EXPECT_FALSE(IsSpaceStoragePartition(PartitionOf(home_tab)))
++      << PartitionOf(home_tab);
++  model().SetActiveSpace(work->id());
++  tabs::TabInterface* const work_tab = OpenTab();
++  EXPECT_TRUE(IsSpaceStoragePartition(PartitionOf(work_tab)));
++  EXPECT_NE(PartitionOf(home_tab), PartitionOf(work_tab));
++}
++
++// sessions S6
++TEST_F(SpaceWindowTest, TwoIsolatedSpacesDoNotShareAPartition) {
++  Space* const work = model().AddSpace("Work", kBlue);
++  Space* const mail = model().AddSpace("Mail", SK_ColorGREEN);
++  model().SetSpaceIsolated(work->id(), true);
++  model().SetSpaceIsolated(mail->id(), true);
++  model().SetActiveSpace(work->id());
++  tabs::TabInterface* const work_tab = OpenTab();
++  model().SetActiveSpace(mail->id());
++  tabs::TabInterface* const mail_tab = OpenTab();
++  EXPECT_TRUE(IsSpaceStoragePartition(PartitionOf(work_tab)));
++  EXPECT_TRUE(IsSpaceStoragePartition(PartitionOf(mail_tab)));
++  EXPECT_NE(PartitionOf(work_tab).partition_name(),
++            PartitionOf(mail_tab).partition_name());
++}
++
++// sessions S7
++TEST_F(SpaceWindowTest, TurningIsolationOffUsesTheDefaultPartition) {
++  Space* const work = model().AddSpace("Work", kBlue);
++  model().SetSpaceIsolated(work->id(), true);
++  model().SetActiveSpace(work->id());
++  tabs::TabInterface* const isolated = OpenTab();
++  EXPECT_TRUE(IsSpaceStoragePartition(PartitionOf(isolated)));
++  model().SetSpaceIsolated(work->id(), false);
++  EXPECT_FALSE(model().SpaceIsIsolated(work->id()));
++  tabs::TabInterface* const shared = OpenTab();
++  EXPECT_FALSE(IsSpaceStoragePartition(PartitionOf(shared)))
++      << PartitionOf(shared);
++}
++
+ }  // namespace
+ }  // namespace spaces
+diff --git a/chrome/browser/ui/spaces/space_registry.cc b/chrome/browser/ui/spaces/space_registry.cc
+index 8d216273c8413..421106088b119 100644
+--- a/chrome/browser/ui/spaces/space_registry.cc
++++ b/chrome/browser/ui/spaces/space_registry.cc
+@@ -105,6 +105,26 @@ void SpaceRegistry::SetColor(const SpaceId& id, SkColor color, bool chosen) {
+   }
+ }
+ 
++void SpaceRegistry::SetProfileId(const SpaceId& id, std::string profile_id) {
++  if (RegistryEntry* const entry = FindMutable(id)) {
++    if (entry->profile_id == profile_id) {
++      return;
++    }
++    entry->profile_id = std::move(profile_id);
++    Changed();
++  }
++}
++
++void SpaceRegistry::EnsureIsolated(const SpaceId& id) {
++  if (RegistryEntry* const entry = FindMutable(id)) {
++    if (!entry->profile_id.empty()) {
++      return;
++    }
++    entry->profile_id = base::Token::CreateRandom().ToString();
++    Changed();
++  }
++}
++
+ void SpaceRegistry::AddObserver(Observer* observer) {
+   observers_.AddObserver(observer);
+ }
+diff --git a/chrome/browser/ui/spaces/space_registry.h b/chrome/browser/ui/spaces/space_registry.h
+index 1fb6018216e3d..48ac66507c501 100644
+--- a/chrome/browser/ui/spaces/space_registry.h
++++ b/chrome/browser/ui/spaces/space_registry.h
+@@ -20,9 +20,9 @@ class PrefService;
+ 
+ namespace spaces {
+ 
+-// One Space as the profile knows it (ADR 0016). `profile_id` is empty in
+-// round 6; the field exists so per-Space profiles need no second migration
+-// (docs/features/windows.md G5).
++// One Space as the profile knows it (ADR 0016). `profile_id` is empty until
++// isolation is turned on; then it is the storage-partition name (ADR 0019,
++// docs/features/sessions.md).
+ struct RegistryEntry {
+   RegistryEntry(SpaceId id, std::string name, SkColor color);
+   RegistryEntry(const RegistryEntry& other);
+@@ -67,6 +67,11 @@ class SpaceRegistry : public KeyedService {
+   void SetName(const SpaceId& id, std::string name);
+   void SetIcon(const SpaceId& id, std::string icon);
+   void SetColor(const SpaceId& id, SkColor color, bool chosen);
++  // sessions S2: `profile_id` is the storage-partition name (ADR 0019). Empty
++  // means the default jar. EnsureIsolated writes a random token if empty and
++  // leaves an existing one; SetProfileId("") turns isolation off for new tabs.
++  void SetProfileId(const SpaceId& id, std::string profile_id);
++  void EnsureIsolated(const SpaceId& id);
+ 
+   void AddObserver(Observer* observer);
+   void RemoveObserver(Observer* observer);
+diff --git a/chrome/browser/ui/spaces/space_registry_unittest.cc b/chrome/browser/ui/spaces/space_registry_unittest.cc
+index 6b9e425345460..5f5b7fd556ca4 100644
+--- a/chrome/browser/ui/spaces/space_registry_unittest.cc
++++ b/chrome/browser/ui/spaces/space_registry_unittest.cc
+@@ -54,5 +54,43 @@ TEST(SpaceRegistryTest, RoundTrip) {
+       SpaceRegistry::FromValue(SpaceRegistry::ToValue(again.entries())).size());
+ }
+ 
++// sessions S2: turning isolation on writes a token that survives the round
++// trip; a second EnsureIsolated leaves it.
++TEST(SpaceRegistryTest, IsolatedProfileIdRoundTrips) {
++  TestingPrefServiceSimple prefs;
++  prefs.registry()->RegisterListPref(stedding::prefs::kSpaceRegistry);
++  SpaceId work_id = SpaceId::CreateEmpty();
++  std::string first_id;
++  {
++    SpaceRegistry registry(&prefs);
++    work_id = registry.Add("Work", SK_ColorBLUE);
++    EXPECT_TRUE(registry.Find(work_id)->profile_id.empty());
++    registry.EnsureIsolated(work_id);
++    first_id = registry.Find(work_id)->profile_id;
++    EXPECT_FALSE(first_id.empty());
++    registry.EnsureIsolated(work_id);
++    EXPECT_EQ(first_id, registry.Find(work_id)->profile_id);
++  }
++  SpaceRegistry again(&prefs);
++  ASSERT_EQ(1u, again.entries().size());
++  EXPECT_EQ(first_id, again.Find(work_id)->profile_id);
++  again.SetProfileId(work_id, std::string());
++  EXPECT_TRUE(again.Find(work_id)->profile_id.empty());
++}
++
++// sessions S3
++TEST(SpaceRegistryTest, TwoIsolatedSpacesGetDifferentIds) {
++  TestingPrefServiceSimple prefs;
++  prefs.registry()->RegisterListPref(stedding::prefs::kSpaceRegistry);
++  SpaceRegistry registry(&prefs);
++  const SpaceId a = registry.Add("A", SK_ColorBLUE);
++  const SpaceId b = registry.Add("B", SK_ColorGREEN);
++  registry.EnsureIsolated(a);
++  registry.EnsureIsolated(b);
++  EXPECT_NE(registry.Find(a)->profile_id, registry.Find(b)->profile_id);
++  EXPECT_FALSE(registry.Find(a)->profile_id.empty());
++  EXPECT_FALSE(registry.Find(b)->profile_id.empty());
++}
++
+ }  // namespace
+ }  // namespace spaces
+diff --git a/chrome/browser/ui/spaces/space_storage_partition.cc b/chrome/browser/ui/spaces/space_storage_partition.cc
+new file mode 100644
+index 0000000000000..c82df21158862
+--- /dev/null
++++ b/chrome/browser/ui/spaces/space_storage_partition.cc
+@@ -0,0 +1,55 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/spaces/space_storage_partition.h"
++
++#include "chrome/browser/ui/spaces/space_registry.h"
++#include "content/public/browser/browser_context.h"
++#include "content/public/browser/security_principal.h"
++#include "content/public/browser/site_instance.h"
++#include "content/public/browser/web_contents.h"
++
++namespace spaces {
++
++std::optional<content::StoragePartitionConfig>
++StoragePartitionConfigForProfileId(content::BrowserContext* browser_context,
++                                   std::string_view profile_id) {
++  if (!browser_context || profile_id.empty()) {
++    return std::nullopt;
++  }
++  return content::StoragePartitionConfig::Create(
++      browser_context, kSpacePartitionDomain, profile_id,
++      /*in_memory=*/false);
++}
++
++std::optional<content::StoragePartitionConfig> StoragePartitionConfigForSpace(
++    content::BrowserContext* browser_context,
++    const SpaceRegistry* registry,
++    const SpaceId& id) {
++  if (!registry) {
++    return std::nullopt;
++  }
++  const RegistryEntry* const entry = registry->Find(id);
++  if (!entry) {
++    return std::nullopt;
++  }
++  return StoragePartitionConfigForProfileId(browser_context, entry->profile_id);
++}
++
++bool IsSpaceStoragePartition(const content::StoragePartitionConfig& config) {
++  return config.partition_domain() == kSpacePartitionDomain &&
++         !config.partition_name().empty();
++}
++
++content::StoragePartitionConfig StoragePartitionConfigForWebContents(
++    content::WebContents* web_contents) {
++  if (!web_contents || !web_contents->GetSiteInstance()) {
++    return content::StoragePartitionConfig();
++  }
++  return web_contents->GetSiteInstance()
++      ->GetSecurityPrincipal()
++      .GetStoragePartitionConfig();
++}
++
++}  // namespace spaces
+diff --git a/chrome/browser/ui/spaces/space_storage_partition.h b/chrome/browser/ui/spaces/space_storage_partition.h
+new file mode 100644
+index 0000000000000..dff0ffc8c6e30
+--- /dev/null
++++ b/chrome/browser/ui/spaces/space_storage_partition.h
+@@ -0,0 +1,49 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_SPACES_SPACE_STORAGE_PARTITION_H_
++#define CHROME_BROWSER_UI_SPACES_SPACE_STORAGE_PARTITION_H_
++
++#include <optional>
++#include <string_view>
++
++#include "chrome/browser/ui/spaces/space_id.h"
++#include "content/public/browser/storage_partition_config.h"
++
++namespace content {
++class BrowserContext;
++class WebContents;
++}  // namespace content
++
++namespace spaces {
++
++class SpaceRegistry;
++
++// Partition domain for isolated Spaces (ADR 0019). Must be [a-z]*.
++inline constexpr char kSpacePartitionDomain[] = "spaces";
++
++// The on-disk partition for `profile_id`, or nullopt when `profile_id` is
++// empty (the Space shares the profile's default jar).
++std::optional<content::StoragePartitionConfig> StoragePartitionConfigForProfileId(
++    content::BrowserContext* browser_context,
++    std::string_view profile_id);
++
++// The partition the tabs of `id` should be created in, or nullopt when that
++// Space is not isolated (empty `profile_id`, no registry, or unknown id).
++std::optional<content::StoragePartitionConfig> StoragePartitionConfigForSpace(
++    content::BrowserContext* browser_context,
++    const SpaceRegistry* registry,
++    const SpaceId& id);
++
++// True when `config` is one of ours: domain `spaces` and a non-empty name.
++bool IsSpaceStoragePartition(const content::StoragePartitionConfig& config);
++
++// The partition `web_contents` was created in. Default when `web_contents` is
++// null.
++content::StoragePartitionConfig StoragePartitionConfigForWebContents(
++    content::WebContents* web_contents);
++
++}  // namespace spaces
++
++#endif  // CHROME_BROWSER_UI_SPACES_SPACE_STORAGE_PARTITION_H_
+diff --git a/chrome/browser/ui/spaces/space_storage_partition_unittest.cc b/chrome/browser/ui/spaces/space_storage_partition_unittest.cc
+new file mode 100644
+index 0000000000000..2df961b786b72
+--- /dev/null
++++ b/chrome/browser/ui/spaces/space_storage_partition_unittest.cc
+@@ -0,0 +1,20 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/spaces/space_storage_partition.h"
++
++#include "content/public/browser/storage_partition_config.h"
++#include "testing/gtest/include/gtest/gtest.h"
++
++namespace spaces {
++namespace {
++
++TEST(SpaceStoragePartitionTest, EmptyProfileIdIsNoPartition) {
++  EXPECT_FALSE(StoragePartitionConfigForProfileId(nullptr, "").has_value());
++  EXPECT_FALSE(StoragePartitionConfigForProfileId(nullptr, "abc").has_value());
++  EXPECT_FALSE(IsSpaceStoragePartition(content::StoragePartitionConfig()));
++}
++
++}  // namespace
++}  // namespace spaces
+diff --git a/chrome/browser/ui/views/spaces/space_switcher_view.cc b/chrome/browser/ui/views/spaces/space_switcher_view.cc
+index 8607f2c89a057..42e8255194fca 100644
+--- a/chrome/browser/ui/views/spaces/space_switcher_view.cc
++++ b/chrome/browser/ui/views/spaces/space_switcher_view.cc
+@@ -104,6 +104,7 @@ constexpr int kRemoveSpaceCommand = 200;
+ // spaces B27: the keyboard path to reordering.
+ constexpr int kMoveSpaceLeftCommand = 201;
+ constexpr int kMoveSpaceRightCommand = 202;
++constexpr int kIsolateSpaceCommand = 203;
+ 
+ // The colour choices live in space_colors.h: the welcome flow shows the same
+ // five (welcome W7).
+@@ -458,6 +459,7 @@ void SpaceSwitcherView::ShowMenuForSpace(
+             gfx::CanvasImageSource::MakeImageSkia<SwatchSource>(color)));
+   }
+   menu_model_->AddSeparator(ui::NORMAL_SEPARATOR);
++  menu_model_->AddCheckItem(kIsolateSpaceCommand, u"Independent session");
+   menu_model_->AddItem(kRenameSpaceCommand, u"Rename Space");
+   menu_model_->AddItem(kMoveSpaceLeftCommand, u"Move Left");
+   menu_model_->AddItem(kMoveSpaceRightCommand, u"Move Right");
+@@ -483,6 +485,11 @@ void SpaceSwitcherView::ExecuteCommand(int command_id, int event_flags) {
+     }
+     return;
+   }
++  if (command_id == kIsolateSpaceCommand) {
++    model_->SetSpaceIsolated(*menu_space_,
++                             !model_->SpaceIsIsolated(*menu_space_));
++    return;
++  }
+   if (command_id == kRenameSpaceCommand) {
+     BeginRename(*menu_space_);
+     return;
+@@ -536,9 +543,19 @@ bool SpaceSwitcherView::IsCommandIdEnabled(int command_id) const {
+     return menu_space_ && tab && !tab->IsPinned() &&
+            const_cast<SpaceModel&>(*model_).SpaceForTab(tab) != *menu_space_;
+   }
++  if (command_id == kIsolateSpaceCommand) {
++    return menu_space_ && model_->registry();
++  }
+   return true;
+ }
+ 
++bool SpaceSwitcherView::IsCommandIdChecked(int command_id) const {
++  if (command_id == kIsolateSpaceCommand) {
++    return menu_space_ && model_->SpaceIsIsolated(*menu_space_);
++  }
++  return false;
++}
++
+ std::optional<SpaceId> SpaceSwitcherView::SpaceAtScreenPoint(
+     const gfx::Point& point_in_screen) const {
+   for (const auto& [view, id] : chips_) {
+diff --git a/chrome/browser/ui/views/spaces/space_switcher_view.h b/chrome/browser/ui/views/spaces/space_switcher_view.h
+index 765884325e205..09346abd12390 100644
+--- a/chrome/browser/ui/views/spaces/space_switcher_view.h
++++ b/chrome/browser/ui/views/spaces/space_switcher_view.h
+@@ -111,6 +111,7 @@ class SpaceSwitcherView : public views::View,
+   // ui::SimpleMenuModel::Delegate:
+   void ExecuteCommand(int command_id, int event_flags) override;
+   bool IsCommandIdEnabled(int command_id) const override;
++  bool IsCommandIdChecked(int command_id) const override;
+ 
+   // views::TextfieldController:
+   bool HandleKeyEvent(views::Textfield* sender,

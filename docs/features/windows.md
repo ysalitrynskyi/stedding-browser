@@ -1,6 +1,6 @@
 # Feature: One sidebar for every window
 
-Status: **G0, G1, G3–G5 built, G2 a gap** (round 6, `docs/ROUND6-PLAN.md` R6-31; ADR 0016); **N1–N7 partial** (M8, rounds 8 and 9).
+Status: **G0, G1, G3–G5 built, G2 a gap** (round 6, `docs/ROUND6-PLAN.md` R6-31; ADR 0016); **N1–N7 partial** (M8, rounds 8 and 9). G5's `profile_id` is the isolated-session partition name (ADR 0019).
 Owner docs: `docs/decisions/0016-space-registry.md`, `docs/PRODUCT.md` §10. Patch: 0036.
 
 A second window shows the same Spaces, essentials and pins as the first. The Space list
@@ -24,7 +24,7 @@ ghost row everywhere else.
 | G2 | A pinned tab is a real tab in one window at a time; other windows show its row as a ghost (muted favicon, "in another window" on hover); a click moves the WebContents here (detach, then insert, no reload), ⌥-click focuses the window that has it. | none yet | gap · the next pass: a pinned tab is still a tab of one window with no ghost row elsewhere |
 | G3 | The registry serialises to profile prefs (`stedding.spaces.registry`); per-window extra data keeps the active Space and memberships so the B9 rebuild path is unchanged; the settings page reads the registry. | `SpaceRegistryTest.RoundTrip`; the session's per-window data is unchanged (`SessionRebuildTest.*` still green) | built |
 | G4 | "New Blank Window" (⌥⇧⌘N, the app menu) opens a window that opts out of the registry: Arc's Blank Window. | `SpaceWindowTest.BlankWindowHasItsOwnSpaces`; live: `w4_blank_window` | built |
-| G5 | The registry's Space carries a profile id, empty in round 6, so per-Space profiles need no second migration (critic #9). | `SpaceRegistryTest.RoundTrip` (the empty profile id survives the round trip) | built |
+| G5 | The registry's Space carries a profile id, empty until isolation is turned on, so per-Space sessions need no second migration (critic #9, ADR 0019). Empty means the default storage partition; non-empty is that Space's partition name (`docs/features/sessions.md`). | `SpaceRegistryTest.RoundTrip` (the empty profile id survives the round trip); `SpaceRegistryTest.IsolatedProfileIdRoundTrips` | built · empty field; isolation writes it (sessions S2) |
 
 ## Notes
 

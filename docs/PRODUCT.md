@@ -81,9 +81,14 @@ Space icons, the Library, and a `+` control.
   drag the Space icon to reorder.
 - **Theme and icon** **[1.0]** — per-Space colour theme picker. The same picker also
   sets app-wide light/dark/automatic.
-- **Per-Space Profiles** **[1.0]** — bind a Space to a profile. A profile scopes
-  logins, cookies, history, archive timing, default-browser choice, favorites and
-  extensions. New profiles start empty.
+- **Per-Space sessions** **[1.0]** — a Space can keep its own cookies, HTTP cache
+  and site storage so the same site can be signed into with different credentials
+  in different Spaces of one window. Opt-in per Space; off, Spaces share the
+  profile's jar as they do today. Extensions, settings, history and saved
+  passwords stay on the profile. This is a Chromium `StoragePartition`, not a
+  Chrome profile (`docs/decisions/0019-space-sessions-are-storage-partitions.md`,
+  `docs/features/sessions.md`). Binding two Spaces to one jar, or giving a Space
+  its own extensions, is a later ADR.
 - **Move tabs between Spaces** **[1.0]** — command bar "Move to [Space]", right-click,
   or drag sideways.
 - **Air Traffic Control** **[1.0]** — rules routing URLs to Spaces: *contains* or

@@ -8,6 +8,11 @@ tabs, Spaces, pinned tabs and folders, and a command bar. It is Chromium plus a 
 of patches, built for people who want that interface without trusting a company's
 roadmap or servers. See the [README](../README.md).
 
+**Does it have AI?**
+No. There is no bundled model, no chat in the command bar, and no intern that reads
+a Space's cookies. Extensions can add a chatbot if you want one. The decision is
+[ADR 0020](decisions/0020-no-bundled-model.md).
+
 **Is it a fork of Arc?**
 No. Arc is closed source, so nothing of it can be reused. Stedding is built on
 Chromium's open-source code; the sidebar, Spaces, the command bar and everything else

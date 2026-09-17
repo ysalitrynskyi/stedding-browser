@@ -188,20 +188,17 @@ alongside.
 - **New Documents** **[1.0]** — a configurable "new note" action that opens the user's
   chosen service (Notion, Google Docs, Word, Confluence).
 
-## 8. Arc Max (AI) — [needs decision]
+## 8. Arc Max (AI) — closed by ADR 0020
 
 Arc Max bundles: 5-second previews on hover, tidy tab titles, tidy downloads, tidy
 tabs, Ask on Page, Instant Links, and ChatGPT in the command bar.
 
-**Every one of these requires a model provider.** `ROADMAP.md` lists built-in AI
-features as out of scope for 1.0, and `VISION.md` is hostile to bundled cloud services.
-Full Arc parity and that out-of-scope list cannot both be true, and this document will
-not paper over it: **this needs a decision**, recorded as its own ADR, covering whether
-Stedding ships AI features at all, and if so whether they are local, bring-your-own-key,
-or hosted.
-
-Two are separable and are **[1.0]** because they need no model: *tidy downloads*
-(grouping downloads sensibly) and the *hover preview* affordance itself.
+**Stedding ships no bundled model** (`docs/decisions/0020-no-bundled-model.md`).
+Command-bar chat, Ask on Page, Instant Links' "Folder of …", and a persistent
+agent that holds a Space's cookies are never. The no-model halves remain
+**[1.0]**: *tidy downloads* (grouping by day and kind) and the *hover preview*
+affordance as a screenshot of the tab, not a summary. Tidy titles may ship later
+as an optional local heuristic.
 
 ## 9. Media and downloads
 
@@ -266,8 +263,9 @@ Two are separable and are **[1.0]** because they need no model: *tidy downloads*
 Three things in this document need a human decision before the roadmap can be
 restructured honestly, because each collides with a documented out-of-scope item:
 
-1. **AI features (§8)** — the whole Arc Max bundle.
-2. **Sync (§10)** — requires infrastructure and an account model we have rejected.
+1. **AI features (§8)** — closed by ADR 0020: no bundled model, no Space intern.
+2. **Sync (§10)** — no Stedding account; the local catalog travels as a file
+   (`docs/features/sidebar-file.md`).
 3. **Hosted sharing (§2, §6)** — Share Space, Share Quote, the Boost gallery.
 
 Until those are settled, "full parity" means *full parity with the local, offline
@@ -284,5 +282,7 @@ largest items in this document and is most of why parity looked out of reach.
 - **Auto Archive can be turned off.** Arc does not permit that.
 - **PWA support**, which Arc lacks.
 - **No telemetry**, per `PRIVACY.md`.
+- **No bundled model, no Space intern, no command-bar chat** (ADR 0020). Dia exists
+  for people who want an AI browser.
 - **Open source under BSD**, so the browser cannot be discontinued out from under its
   users — which is precisely what happened to Arc's.

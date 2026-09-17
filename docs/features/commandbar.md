@@ -1,6 +1,6 @@
 # Feature: Command bar
 
-Status: **K1–K11, K13–K17 built**; **K12 partial** (round 6, `docs/ROUND6-PLAN.md` R6-11, patch 0022).
+Status: **K1–K11, K13–K18 built**; **K12 partial** (round 6, `docs/ROUND6-PLAN.md` R6-11, patch 0022).
 Owner docs: `docs/PRODUCT.md` ("Command bar"). Patch: `0005`.
 
 ⌘T opens a bar over the page. It lists open tabs from every Space, then the omnibox's own
@@ -30,6 +30,8 @@ On Windows every chord below is the Mac's with ⌘ read as Ctrl and ⌥⌘ as Ct
 | K15 | In private and popup windows the actions list holds Chromium's actions only: no Space, pin, folder or archive rows (B14, V2). | `CommandBarViewTest.PopupWindowsListChromiumActionsOnly` | built |
 | K16 | A row whose target is absent is hidden: Move to Space for an essentials tab, tab-scoped rows while a peek is open. | `CommandBarViewTest.RowsWithoutATargetAreHidden` (the essentials case), `CommandBarViewTest.TabRowsStepAsideWhileAPeekIsOpen` (the peek case, through a seam the test window needs; live: `w2_bar_peek`). | built |
 | K17 | A dropdown preference appears as one cycling row ("Archive after: 12 hours ▸"): Enter advances to the next value and the row re-reads. | CommandBarViewTest.DropdownPrefRowCycles | built |
+| K18 | Typed `keyword query` whose first token is a search-engine keyword (`TemplateURL`) navigates that engine's `%s` template. An unknown keyword still uses the default engine. | `CommandBarViewTest.KeywordQueryUsesThatEngine`; `CommandBarViewTest.UnknownKeywordStaysADefaultSearch` | built |
+| K19 | Default ⌘T lists every Space (K2). A later isolated-⌘T mode (`@<space>` prefix, or a setting) filters open and archived rows to that Space. History stays profile-wide and labelled. | `CommandBarViewTest.AtSpacePrefixFiltersOpenAndArchived` | planned |
 
 ## Notes from the live check (2026-09-05)
 

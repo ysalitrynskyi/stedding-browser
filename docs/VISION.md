@@ -103,7 +103,8 @@ presence on it is.
 - **No AI gimmicks bolted on.** Any AI-assisted feature must be opt-in,
   clearly labeled, and off by default. Nothing sends page content or browsing
   data to a model without an explicit action by the user. Dia exists for people
-  who want an AI browser; Stedding is not that.
+  who want an AI browser; Stedding is not that. ADR 0020: no bundled model, no
+  command-bar chat, no intern that holds a Space's cookies.
 - **No mobile, initially.** Desktop (macOS, Windows, Linux) is the whole scope
   until 1.0 is shipped and stable. A mobile browser is a different product with
   different constraints, and doing it badly would violate the quality bar.

@@ -1,0 +1,1541 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Wed, 16 Sep 2026 21:22:22 -0400
+Subject: feat: session wall, host routes, site search, split pair, folder
+ insert
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Wipe an isolated Space's jar without deleting the Space; copy a tab into
+another jar; match routes on host not only eTLD+1; keyword search in the
+command bar; a split writes a shared extra_data key and a rename covers
+both panes; a folder drop can insert between children.
+
+Why: Independent session was silent; staging and prod shared a site rule;
+⌘T could not speak engine keywords; a split did not restore as a pair;
+folder reorder only appended.
+Removable when: upstream Spaces, ATC and the command bar match this.
+---
+ chrome/browser/ui/spaces/BUILD.gn             |   3 +
+ .../ui/spaces/session_rebuild_unittest.cc     |  29 +++
+ chrome/browser/ui/spaces/space_model.cc       | 233 +++++++++++++++++-
+ chrome/browser/ui/spaces/space_model.h        |  33 +++
+ .../ui/spaces/space_model_window_unittest.cc  | 191 +++++++++++++-
+ chrome/browser/ui/spaces/space_router.cc      |  53 +++-
+ chrome/browser/ui/spaces/space_router.h       |   8 +-
+ .../ui/spaces/space_router_unittest.cc        |  49 +++-
+ .../ui/spaces/space_storage_partition.cc      |  69 ++++++
+ .../ui/spaces/space_storage_partition.h       |  16 ++
+ .../space_storage_partition_unittest.cc       |  28 +++
+ .../ui/spaces/tab_space_restore_data.cc       |  10 +-
+ .../ui/spaces/tab_space_restore_data.h        |   7 +-
+ chrome/browser/ui/stedding/tab_names.cc       |  50 ++--
+ chrome/browser/ui/tabs/tab_strip_model.cc     |  44 ++++
+ chrome/browser/ui/tabs/tab_strip_model.h      |   7 +
+ .../ui/tabs/tab_strip_model_unittest.cc       |  27 ++
+ .../ui/views/commandbar/command_bar_view.cc   |  25 +-
+ .../commandbar/command_bar_view_unittest.cc   |  33 +++
+ components/tabs/impl/tab_strip_collection.cc  |  11 +-
+ components/tabs/public/tab_strip_collection.h |   6 +
+ 21 files changed, 893 insertions(+), 39 deletions(-)
+
+diff --git a/chrome/browser/ui/spaces/BUILD.gn b/chrome/browser/ui/spaces/BUILD.gn
+index a366fd1c8e946..0f90472b7b09b 100644
+--- a/chrome/browser/ui/spaces/BUILD.gn
++++ b/chrome/browser/ui/spaces/BUILD.gn
+@@ -83,6 +83,7 @@ source_set("spaces") {
+     "//components/sessions",
+     "//content/public/browser",
+     "//chrome/browser/ui/browser_window",
++    "//services/network/public/mojom",
+     "//url",
+   ]
+ 
+@@ -133,7 +134,9 @@ source_set("unit_tests") {
+     "//components/tabs:test_support",
+     "//content/public/browser",
+     "//crypto",
++    "//net",
+     "//sql",
++    "//services/network/public/mojom",
+     "//testing/gmock",
+     "//testing/gtest",
+   ]
+diff --git a/chrome/browser/ui/spaces/session_rebuild_unittest.cc b/chrome/browser/ui/spaces/session_rebuild_unittest.cc
+index 62876c7866070..7a532a6aa6cef 100644
+--- a/chrome/browser/ui/spaces/session_rebuild_unittest.cc
++++ b/chrome/browser/ui/spaces/session_rebuild_unittest.cc
+@@ -21,7 +21,9 @@
+ #include "chrome/browser/ui/spaces/space_model.h"
+ #include "chrome/browser/ui/spaces/tab_space_restore_data.h"
+ #include "chrome/browser/ui/stedding/tab_names.h"
++#include "chrome/browser/ui/tabs/split_tab_metrics.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "components/split_tabs/split_tab_visual_data.h"
+ #include "chrome/test/base/browser_with_test_window_test.h"
+ #include "components/sessions/content/session_tab_helper.h"
+ #include "components/sessions/core/serialized_navigation_entry_test_helper.h"
+@@ -154,6 +156,33 @@ TEST_F(SessionRebuildTest, TitleSurvivesRebuild) {
+   EXPECT_TRUE(found);
+ }
+ 
++// splits J1: both panes re-emit the same stedding.split token.
++TEST_F(SessionRebuildTest, SplitIdSurvivesRebuild) {
++  AddTab(browser(), GURL("https://example.com/a"));
++  tabs::TabInterface* const a = tabs().GetActiveTab();
++  AddTab(browser(), GURL("https://example.com/b"));
++  tabs::TabInterface* const b = tabs().GetActiveTab();
++  tabs().AddToNewSplit({tabs().GetIndexOfTab(a)},
++                       split_tabs::SplitTabVisualData(),
++                       split_tabs::SplitTabCreatedSource::kToolbarButton);
++  ASSERT_TRUE(a->IsSplit() && b->IsSplit());
++  const std::string token = a->GetSplit()->ToString();
++
++  const std::unique_ptr<sessions::SessionWindow> window = RebuildAndRestore();
++  int found = 0;
++  for (const auto& tab : window->tabs) {
++    const std::string& split = ExtraData(tab->extra_data, kSessionTabSplitKey);
++    if (tab->tab_id ==
++            sessions::SessionTabHelper::IdForTab(a->GetContents()) ||
++        tab->tab_id ==
++            sessions::SessionTabHelper::IdForTab(b->GetContents())) {
++      EXPECT_EQ(token, split);
++      ++found;
++    }
++  }
++  EXPECT_EQ(2, found);
++}
++
+ TEST_F(SessionRebuildTest, PinnedUrlSurvivesRebuild) {
+   AddTab(browser(), GURL("https://example.com/home"));
+   tabs::TabInterface* const pinned = tabs().GetActiveTab();
+diff --git a/chrome/browser/ui/spaces/space_model.cc b/chrome/browser/ui/spaces/space_model.cc
+index c64fac494309e..ef2ff902dafaf 100644
+--- a/chrome/browser/ui/spaces/space_model.cc
++++ b/chrome/browser/ui/spaces/space_model.cc
+@@ -12,6 +12,8 @@
+ 
+ #include "base/check.h"
+ #include "base/functional/bind.h"
++#include "base/functional/callback_helpers.h"
++#include "base/time/time.h"
+ #include "base/json/json_reader.h"
+ #include "base/json/json_writer.h"
+ #include "base/strings/string_number_conversions.h"
+@@ -52,7 +54,14 @@
+ #include "components/split_tabs/split_tab_id.h"
+ #include "components/tabs/public/split_tab_data.h"
+ #include "components/tabs/public/tab_interface.h"
++#include "content/public/browser/browser_context.h"
++#include "content/public/browser/navigation_controller.h"
++#include "content/public/browser/reload_type.h"
++#include "content/public/browser/site_instance.h"
++#include "components/split_tabs/split_tab_visual_data.h"
+ #include "content/public/browser/web_contents.h"
++#include "content/public/common/referrer.h"
++#include "ui/base/page_transition_types.h"
+ #include "url/gurl.h"
+ 
+ namespace spaces {
+@@ -329,6 +338,18 @@ void SpaceModel::SyncWithRegistry(bool seed) {
+   if (!GetSpace(active_id_)) {
+     active_id_ = spaces_.front()->id();
+   }
++  std::map<SpaceId, std::string> doomed_jars;
++  for (const SpaceId& id : removed) {
++    if (const auto it = isolated_jars_.find(id); it != isolated_jars_.end()) {
++      doomed_jars[id] = it->second;
++    }
++  }
++  isolated_jars_.clear();
++  for (const RegistryEntry& entry : registry_->entries()) {
++    if (!entry.profile_id.empty()) {
++      isolated_jars_[entry.id] = entry.profile_id;
++    }
++  }
+   std::vector<tabs::TabInterface*> moved;
+   for (const SpaceId& id : removed) {
+     last_active_.erase(id);
+@@ -345,6 +366,10 @@ void SpaceModel::SyncWithRegistry(bool seed) {
+   }
+   for (tabs::TabInterface* const tab : moved) {
+     observers_.Notify(&Observer::OnTabSpaceChanged, tab);
++    MaybeRebindTabJar(tab);
++  }
++  for (const auto& [id, jar] : doomed_jars) {
++    WipeIsolatedJar(jar, base::DoNothing());
+   }
+   for (const SpaceId& id : added) {
+     observers_.Notify(&Observer::OnSpaceAdded, id);
+@@ -401,20 +426,45 @@ bool SpaceModel::MoveSpace(const SpaceId& id, int delta) {
+ }
+ 
+ bool SpaceModel::RemoveSpace(const SpaceId& id) {
++  return RemoveSpace(id, base::DoNothing());
++}
++
++bool SpaceModel::RemoveSpace(const SpaceId& id, base::OnceClosure wipe_done) {
+   // A window must always have somewhere for its tabs to live, and removing the
+   // active Space would orphan the tabs currently in the tab strip. Both are
+   // refused rather than half-handled.
+   if (spaces_.size() <= 1u || id == active_id_) {
++    if (wipe_done) {
++      std::move(wipe_done).Run();
++    }
+     return false;
+   }
++  std::string jar;
++  if (const auto it = isolated_jars_.find(id); it != isolated_jars_.end()) {
++    jar = it->second;
++  } else if (registry_) {
++    if (const RegistryEntry* const entry = registry_->Find(id)) {
++      jar = entry->profile_id;
++    }
++  }
+   if (registry_) {
+-    // The sync moves the tabs and tells the observers.
+-    return registry_->Remove(id);
++    // The sync moves the tabs and tells the observers. Wipe the jar after.
++    if (!registry_->Remove(id)) {
++      if (wipe_done) {
++        std::move(wipe_done).Run();
++      }
++      return false;
++    }
++    WipeIsolatedJar(jar, std::move(wipe_done));
++    return true;
+   }
+   auto it = std::ranges::find_if(
+       spaces_,
+       [&id](const std::unique_ptr<Space>& s) { return s->id() == id; });
+   if (it == spaces_.end()) {
++    if (wipe_done) {
++      std::move(wipe_done).Run();
++    }
+     return false;
+   }
+   spaces_.erase(it);
+@@ -440,6 +490,7 @@ bool SpaceModel::RemoveSpace(const SpaceId& id) {
+ 
+   observers_.Notify(&Observer::OnSpaceRemoved, id);
+   SaveToSession();
++  WipeIsolatedJar(jar, std::move(wipe_done));
+   return true;
+ }
+ 
+@@ -925,8 +976,12 @@ void SpaceModel::SetSpaceIsolated(const SpaceId& id, bool isolated) {
+   }
+   if (isolated) {
+     registry_->EnsureIsolated(id);
++    if (const RegistryEntry* const entry = registry_->Find(id)) {
++      isolated_jars_[id] = entry->profile_id;
++    }
+   } else {
+     registry_->SetProfileId(id, std::string());
++    isolated_jars_.erase(id);
+   }
+   observers_.Notify(&Observer::OnSpaceMetadataChanged, id);
+   RebindTabsInSpace(id);
+@@ -940,6 +995,176 @@ bool SpaceModel::SpaceIsIsolated(const SpaceId& id) const {
+   return entry && !entry->profile_id.empty();
+ }
+ 
++bool SpaceModel::WipeIsolatedSession(const SpaceId& id) {
++  return WipeIsolatedSession(id, base::DoNothing());
++}
++
++bool SpaceModel::WipeIsolatedSession(const SpaceId& id,
++                                     base::OnceClosure done) {
++  if (!tab_strip_model_ || !SpaceIsIsolated(id)) {
++    if (done) {
++      std::move(done).Run();
++    }
++    return false;
++  }
++  const RegistryEntry* const entry = registry_ ? registry_->Find(id) : nullptr;
++  if (!entry || entry->profile_id.empty()) {
++    if (done) {
++      std::move(done).Run();
++    }
++    return false;
++  }
++  isolated_jars_[id] = entry->profile_id;
++  return WipeIsolatedSpacePartition(
++      BrowserContextForWipe(), entry->profile_id,
++      base::BindOnce(
++          [](base::WeakPtr<SpaceModel> self, SpaceId id,
++             base::OnceClosure done) {
++            if (self) {
++              self->ReloadTabsInSpace(id);
++            }
++            if (done) {
++              std::move(done).Run();
++            }
++          },
++          weak_factory_.GetWeakPtr(), id, std::move(done)));
++}
++
++content::BrowserContext* SpaceModel::BrowserContextForWipe() const {
++  if (!tab_strip_model_) {
++    return nullptr;
++  }
++  for (int i = 0; i < tab_strip_model_->count(); ++i) {
++    if (content::WebContents* const contents =
++            tab_strip_model_->GetWebContentsAt(i)) {
++      return contents->GetBrowserContext();
++    }
++  }
++  return nullptr;
++}
++
++void SpaceModel::ReloadTabsInSpace(const SpaceId& id) {
++  if (!tab_strip_model_) {
++    return;
++  }
++  for (int i = 0; i < tab_strip_model_->count(); ++i) {
++    tabs::TabInterface* const tab = tab_strip_model_->GetTabAtIndex(i);
++    if (SpaceForTab(tab) != id) {
++      continue;
++    }
++    if (content::WebContents* const contents = tab->GetContents()) {
++      contents->GetController().Reload(content::ReloadType::NORMAL,
++                                       /*check_for_repost=*/false);
++    }
++  }
++}
++
++void SpaceModel::WipeIsolatedJar(std::string_view profile_id,
++                                 base::OnceClosure done) {
++  if (profile_id.empty()) {
++    if (done) {
++      std::move(done).Run();
++    }
++    return;
++  }
++  WipeIsolatedSpacePartition(BrowserContextForWipe(), profile_id,
++                             std::move(done));
++}
++
++void SpaceModel::MaybeRestoreSplit(tabs::TabInterface* tab) {
++  if (!tab || !tab_strip_model_) {
++    return;
++  }
++  const tabs::TabHandle handle = tab->GetHandle();
++  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
++      FROM_HERE, base::BindOnce(
++                     [](base::WeakPtr<SpaceModel> model,
++                        tabs::TabHandle handle) {
++                       if (!model || !model->tab_strip_model_) {
++                         return;
++                       }
++                       tabs::TabInterface* const tab = handle.Get();
++                       if (!tab || tab->IsSplit()) {
++                         return;
++                       }
++                       content::WebContents* const contents =
++                           tab->GetContents();
++                       const TabSpaceRestoreData* const restored =
++                           contents ? TabSpaceRestoreData::FromWebContents(
++                                          contents)
++                                    : nullptr;
++                       if (!restored || restored->split_id().empty()) {
++                         return;
++                       }
++                       const std::optional<base::Token> token =
++                           base::Token::FromString(restored->split_id());
++                       if (!token) {
++                         return;
++                       }
++                       std::vector<int> indices;
++                       for (int i = 0; i < model->tab_strip_model_->count();
++                            ++i) {
++                         tabs::TabInterface* const other =
++                             model->tab_strip_model_->GetTabAtIndex(i);
++                         if (other->IsSplit()) {
++                           continue;
++                         }
++                         content::WebContents* const other_contents =
++                             other->GetContents();
++                         const TabSpaceRestoreData* const other_restored =
++                             other_contents
++                                 ? TabSpaceRestoreData::FromWebContents(
++                                       other_contents)
++                                 : nullptr;
++                         if (other_restored && other_restored->split_id() ==
++                                                   restored->split_id()) {
++                           indices.push_back(i);
++                         }
++                       }
++                       if (indices.size() != 2u) {
++                         return;
++                       }
++                       model->tab_strip_model_->RestoreSplit(
++                           split_tabs::SplitTabId::FromRawToken(*token),
++                           indices, split_tabs::SplitTabVisualData());
++                     },
++                     weak_factory_.GetWeakPtr(), handle));
++}
++
++tabs::TabInterface* SpaceModel::CopyTabToSpace(tabs::TabInterface* tab,
++                                               const SpaceId& dest) {
++  if (!tab || !tab_strip_model_ || !GetSpace(dest) || tab->IsPinned()) {
++    return nullptr;
++  }
++  content::WebContents* const source = tab->GetContents();
++  if (!source) {
++    return nullptr;
++  }
++  content::BrowserContext* const context = source->GetBrowserContext();
++  GURL url = source->GetLastCommittedURL();
++  if (url.is_empty()) {
++    url = source->GetVisibleURL();
++  }
++  if (url.is_empty()) {
++    url = GURL("about:blank");
++  }
++  scoped_refptr<content::SiteInstance> site_instance = SiteInstanceForSpaceTab(
++      context, url, registry_, dest, /*essential=*/false);
++  content::WebContents::CreateParams params(context, site_instance);
++  std::unique_ptr<content::WebContents> fresh =
++      content::WebContents::Create(params);
++  if (!url.IsAboutBlank()) {
++    fresh->GetController().LoadURL(url, content::Referrer(),
++                                   ui::PAGE_TRANSITION_TYPED, std::string());
++  }
++  const int index = tab_strip_model_->count();
++  tab_strip_model_->InsertWebContentsAt(index, std::move(fresh),
++                                        AddTabTypes::ADD_NONE);
++  tabs::TabInterface* const copy = tab_strip_model_->GetTabAtIndex(index);
++  SetSpaceForTab(copy, dest);
++  return copy;
++}
++
+ const SpaceId& SpaceModel::SpaceForTab(tabs::TabInterface* tab) {
+   CHECK(tab);
+   const auto [it, inserted] =
+@@ -947,6 +1172,7 @@ const SpaceId& SpaceModel::SpaceForTab(tabs::TabInterface* tab) {
+   if (inserted) {
+     SaveTabToSession(tab, it->second);
+     MaybeRebindTabJar(tab);
++    MaybeRestoreSplit(tab);
+   }
+   return it->second;
+ }
+@@ -1011,6 +1237,9 @@ SpaceModel::SessionExtraDataForTab(const tabs::TabInterface* tab,
+   if (const std::optional<GURL> home = HomeUrl(tab)) {
+     data.emplace_back(kSessionTabHomeKey, home->spec());
+   }
++  if (tab && tab->IsSplit()) {
++    data.emplace_back(kSessionTabSplitKey, tab->GetSplit()->ToString());
++  }
+   return data;
+ }
+ 
+diff --git a/chrome/browser/ui/spaces/space_model.h b/chrome/browser/ui/spaces/space_model.h
+index cebd2059b0c72..3b800d6f531f3 100644
+--- a/chrome/browser/ui/spaces/space_model.h
++++ b/chrome/browser/ui/spaces/space_model.h
+@@ -10,10 +10,12 @@
+ #include <optional>
+ #include <set>
+ #include <string>
++#include <string_view>
+ #include <utility>
+ #include <vector>
+ 
+ #include "base/functional/callback.h"
++#include "base/functional/callback_helpers.h"
+ #include "base/memory/raw_ptr.h"
+ #include "base/memory/weak_ptr.h"
+ #include "base/observer_list.h"
+@@ -37,6 +39,10 @@ class BrowserWindowInterface;
+ class SessionService;
+ class TabStripModel;
+ 
++namespace content {
++class BrowserContext;
++}  // namespace content
++
+ namespace stedding {
+ class AddressRow;
+ class PageThemeColorController;
+@@ -54,6 +60,9 @@ inline constexpr char kSessionTabSpacePinKey[] = "stedding.spacepin";
+ // The key a pinned tab's home URL is written under (pins H2).
+ inline constexpr char kSessionTabHomeKey[] = "stedding.home";
+ 
++// splits J1: both panes of a split write this so they restore as a pair.
++inline constexpr char kSessionTabSplitKey[] = "stedding.split";
++
+ // The Spaces belonging to one browser window, and which of them is active.
+ //
+ // One window has exactly one SpaceModel and always at least one Space, so
+@@ -153,6 +162,9 @@ class SpaceModel : public TabStripModelObserver,
+   // always have somewhere for its tabs to be. Returns false without changing
+   // anything. Otherwise the Space's tabs move to the active Space (B5).
+   bool RemoveSpace(const SpaceId& id);
++  // sessions S17: after the tabs have moved, wipe the isolated jar. `wipe_done`
++  // runs when ClearData has scheduled (or immediately when there is no jar).
++  bool RemoveSpace(const SpaceId& id, base::OnceClosure wipe_done);
+ 
+   // spaces B27: moves `id` by `delta` places in switcher order, clamped to
+   // the ends; the order persists with the Spaces and Ctrl-N follows it.
+@@ -233,6 +245,17 @@ class SpaceModel : public TabStripModelObserver,
+   bool SpaceIsIsolated(const SpaceId& id) const;
+   const SpaceRegistry* registry() const { return registry_; }
+ 
++  // sessions S13: wipe the isolated jar, keep the Space and profile_id, reload
++  // tabs in that Space after ClearData. False when the Space is not isolated.
++  bool WipeIsolatedSession(const SpaceId& id);
++  bool WipeIsolatedSession(const SpaceId& id, base::OnceClosure done);
++
++  // sessions S14: insert a copy of `tab` in `dest`'s jar. The source tab is
++  // unchanged. Null when dest is missing, `tab` is an essential, or there is
++  // no strip.
++  tabs::TabInterface* CopyTabToSpace(tabs::TabInterface* tab,
++                                     const SpaceId& dest);
++
+   // The Spaces and which is active, as JSON, for the session to keep.
+   std::string Serialize() const;
+ 
+@@ -334,6 +357,16 @@ class SpaceModel : public TabStripModelObserver,
+   // strip mid-notification.
+   void MaybeRebindTabJar(tabs::TabInterface* tab);
+   void RebindTabsInSpace(const SpaceId& id);
++  void ReloadTabsInSpace(const SpaceId& id);
++  // splits J1: when a restored tab parks `stedding.split`, pair it with the
++  // other pane that carried the same token.
++  void MaybeRestoreSplit(tabs::TabInterface* tab);
++  content::BrowserContext* BrowserContextForWipe() const;
++  void WipeIsolatedJar(std::string_view profile_id, base::OnceClosure done);
++
++  // Last known isolated jar name per Space, so a delete can wipe after the
++  // registry entry is gone.
++  std::map<SpaceId, std::string> isolated_jars_;
+ 
+   // If the active tab is not visible in the active Space, activates one that
+   // is, opening a new tab when the Space has none (B3, B4). No-op without a
+diff --git a/chrome/browser/ui/spaces/space_model_window_unittest.cc b/chrome/browser/ui/spaces/space_model_window_unittest.cc
+index dd8943e59b3be..ca64d8aa850d5 100644
+--- a/chrome/browser/ui/spaces/space_model_window_unittest.cc
++++ b/chrome/browser/ui/spaces/space_model_window_unittest.cc
+@@ -27,9 +27,18 @@
+ #include "chrome/browser/ui/spaces/space_router.h"
+ #include "chrome/browser/ui/spaces/space_storage_partition.h"
+ #include "chrome/browser/ui/spaces/tab_space_restore_data.h"
++#include "base/run_loop.h"
++#include "base/test/bind.h"
++#include "base/time/time.h"
++#include "content/public/browser/storage_partition.h"
++#include "net/cookies/canonical_cookie.h"
++#include "net/cookies/cookie_options.h"
++#include "net/cookies/cookie_partition_key_collection.h"
++#include "services/network/public/mojom/cookie_manager.mojom.h"
+ #include "chrome/browser/ui/stedding/pin_lifecycle.h"
+ #include "chrome/browser/ui/stedding/sleep_tabs.h"
+ #include "chrome/browser/ui/stedding/stedding_prefs.h"
++#include "chrome/browser/ui/stedding/tab_names.h"
+ #include "chrome/browser/ui/tabs/split_tab_metrics.h"
+ #include "chrome/browser/ui/tabs/tab_enums.h"
+ #include "chrome/browser/ui/tabs/tab_model.h"
+@@ -40,8 +49,10 @@
+ #include "components/prefs/pref_service.h"
+ #include "components/split_tabs/split_tab_visual_data.h"
+ #include "components/tabs/public/tab_interface.h"
++#include "content/public/browser/browser_context.h"
+ #include "content/public/browser/storage_partition_config.h"
+ #include "content/public/browser/web_contents.h"
++#include "net/cookies/cookie_access_result.h"
+ #include "content/public/test/web_contents_tester.h"
+ #include "testing/gtest/include/gtest/gtest.h"
+ #include "ui/base/window_open_disposition.h"
+@@ -70,9 +81,13 @@ class SpaceWindowTest : public BrowserWithTestWindowTest {
+   // Inserts a tab that carries session restore data, as a restored tab does.
+   // TabModel's constructor attaches the tab helpers, the same as in the real
+   // restore path.
+-  tabs::TabInterface* RestoreTab(const std::string& space_id) {
++  tabs::TabInterface* RestoreTab(const std::string& space_id,
++                                 const std::string& split_id = std::string()) {
+     std::map<std::string, std::string> extra_data;
+     extra_data[kSessionTabSpaceKey] = space_id;
++    if (!split_id.empty()) {
++      extra_data[kSessionTabSplitKey] = split_id;
++    }
+     content::WebContents::CreateParams params(
+         profile(),
+         SiteInstanceForRestoredTab(profile(), GURL("https://example.com/"),
+@@ -80,14 +95,64 @@ class SpaceWindowTest : public BrowserWithTestWindowTest {
+                                    /*essential=*/false));
+     std::unique_ptr<content::WebContents> contents =
+         content::WebContents::Create(params);
+-    TabSpaceRestoreData::CreateForWebContents(contents.get(), space_id,
+-                                              /*space_pinned=*/false);
++    RestoreSpaceFromExtraData(contents.get(), extra_data);
+     tabs().AppendTab(
+         std::make_unique<tabs::TabModel>(std::move(contents), &tabs()),
+         /*foreground=*/true);
+     return tabs().GetActiveTab();
+   }
+ 
++  static void PutCookie(content::BrowserContext* context,
++                        const content::StoragePartitionConfig& config,
++                        const GURL& url) {
++    content::StoragePartition* const partition =
++        context->GetStoragePartition(config);
++    ASSERT_TRUE(partition);
++    network::mojom::CookieManager* const cookies =
++        partition->GetCookieManagerForBrowserProcess();
++    std::unique_ptr<net::CanonicalCookie> cookie =
++        net::CanonicalCookie::CreateForTesting(
++            url, "k=v", base::Time::Now(), net::CookieSourceType::kOther);
++    ASSERT_TRUE(cookie);
++    net::CookieOptions options;
++    options.set_include_httponly();
++    options.set_same_site_cookie_context(
++        net::CookieOptions::SameSiteCookieContext::MakeInclusive());
++    base::RunLoop loop;
++    cookies->SetCanonicalCookie(*cookie, url, options,
++                                base::BindLambdaForTesting(
++                                    [&](net::CookieAccessResult) { loop.Quit(); }));
++    loop.Run();
++  }
++
++  static size_t CookieCount(content::BrowserContext* context,
++                            const content::StoragePartitionConfig& config,
++                            const GURL& url) {
++    content::StoragePartition* const partition =
++        context->GetStoragePartition(config);
++    if (!partition) {
++      return 0;
++    }
++    network::mojom::CookieManager* const cookies =
++        partition->GetCookieManagerForBrowserProcess();
++    net::CookieOptions options;
++    options.set_include_httponly();
++    options.set_same_site_cookie_context(
++        net::CookieOptions::SameSiteCookieContext::MakeInclusive());
++    base::RunLoop loop;
++    size_t n = 0;
++    cookies->GetCookieList(
++        url, options, net::CookiePartitionKeyCollection(),
++        base::BindLambdaForTesting(
++            [&](const net::CookieAccessResultList& included,
++                const net::CookieAccessResultList&) {
++              n = included.size();
++              loop.Quit();
++            }));
++    loop.Run();
++    return n;
++  }
++
+   std::vector<tabs::TabInterface*> TabsIn(const SpaceId& id) {
+     std::vector<tabs::TabInterface*> out;
+     for (int i = 0; i < tabs().count(); ++i) {
+@@ -1041,5 +1106,125 @@ TEST_F(SpaceWindowTest, RestoredTabInIsolatedSpaceUsesItsPartition) {
+       << PartitionOf(restored);
+ }
+ 
++// sessions S13
++TEST_F(SpaceWindowTest, WipeIsolatedSessionKeepsTheSpaceAndTheId) {
++  const SpaceId home = model().active_id();
++  Space* const work = model().AddSpace("Work", kBlue);
++  model().SetSpaceIsolated(work->id(), true);
++  model().SetActiveSpace(work->id());
++  tabs::TabInterface* const tab = OpenTab();
++  const auto config = PartitionOf(tab);
++  const GURL url("https://example.com/");
++  ASSERT_TRUE(IsSpaceStoragePartition(config));
++  PutCookie(profile(), config, url);
++  ASSERT_EQ(1u, CookieCount(profile(), config, url));
++  base::RunLoop loop;
++  EXPECT_TRUE(model().WipeIsolatedSession(work->id(), loop.QuitClosure()));
++  loop.Run();
++  EXPECT_EQ(0u, CookieCount(profile(), config, url));
++  EXPECT_TRUE(model().GetSpace(work->id()));
++  EXPECT_TRUE(model().SpaceIsIsolated(work->id()));
++  EXPECT_EQ(config.partition_name(),
++            model().registry()->Find(work->id())->profile_id);
++  EXPECT_EQ(work->id(), model().SpaceForTab(tab));
++  EXPECT_FALSE(model().WipeIsolatedSession(home));
++}
++
++// sessions S14
++TEST_F(SpaceWindowTest, CopyTabToIsolatedSpaceKeepsTheSourceJar) {
++  tabs::TabInterface* const source = OpenTab();
++  const auto source_jar = PartitionOf(source);
++  EXPECT_FALSE(IsSpaceStoragePartition(source_jar));
++  Space* const work = model().AddSpace("Work", kBlue);
++  model().SetSpaceIsolated(work->id(), true);
++  const int before = tabs().count();
++  tabs::TabInterface* const copy = model().CopyTabToSpace(source, work->id());
++  ASSERT_TRUE(copy);
++  EXPECT_EQ(before + 1, tabs().count());
++  EXPECT_NE(source, copy);
++  EXPECT_EQ(source_jar, PartitionOf(source)) << "source jar unchanged";
++  EXPECT_EQ(source, tabs().GetTabAtIndex(tabs().GetIndexOfTab(source)));
++  task_environment()->RunUntilIdle();
++  EXPECT_EQ(work->id(), model().SpaceForTab(copy));
++  EXPECT_TRUE(IsSpaceStoragePartition(PartitionOf(copy)));
++  EXPECT_NE(PartitionOf(source).partition_name(),
++            PartitionOf(copy).partition_name());
++  tabs().SetTabPinned(tabs().GetIndexOfTab(source), true);
++  EXPECT_EQ(nullptr, model().CopyTabToSpace(source, work->id()));
++}
++
++// splits J1
++TEST_F(SpaceWindowTest, SplitPinRenameAndRestoreKeepThePair) {
++  tabs::TabInterface* const a = OpenTab();
++  tabs::TabInterface* const b = OpenTab();
++  tabs::TabInterface* const c = OpenTab();
++  tabs().AddToNewSplit({tabs().GetIndexOfTab(b)},
++                       split_tabs::SplitTabVisualData(),
++                       split_tabs::SplitTabCreatedSource::kToolbarButton);
++  ASSERT_TRUE(b->IsSplit() && c->IsSplit());
++  EXPECT_EQ(*b->GetSplit(), *c->GetSplit());
++  model().SetSpacePinned(b, true);
++  EXPECT_TRUE(model().IsSpacePinned(b));
++  EXPECT_TRUE(model().IsSpacePinned(c));
++  stedding::SetTabName(browser(), b, u"Pair");
++  EXPECT_EQ(u"Pair", stedding::TabName(b->GetContents()));
++  EXPECT_EQ(u"Pair", stedding::TabName(c->GetContents()));
++  const auto extra_b =
++      model().SessionExtraDataForTab(b, model().SpaceForTab(b));
++  const auto extra_c =
++      model().SessionExtraDataForTab(c, model().SpaceForTab(c));
++  auto split_of =
++      [](const std::vector<std::pair<std::string, std::string>>& extra)
++      -> std::string {
++    for (const auto& [key, value] : extra) {
++      if (key == kSessionTabSplitKey) {
++        return value;
++      }
++    }
++    return std::string();
++  };
++  EXPECT_FALSE(split_of(extra_b).empty());
++  EXPECT_EQ(split_of(extra_b), split_of(extra_c));
++  EXPECT_TRUE(split_of(model().SessionExtraDataForTab(a, model().SpaceForTab(a)))
++                  .empty());
++
++  const std::string token = split_of(extra_b);
++  const SpaceId home = model().SpaceForTab(b);
++  tabs().CloseWebContentsAt(tabs().GetIndexOfTab(b),
++                            TabCloseTypes::CLOSE_USER_GESTURE);
++  tabs().CloseWebContentsAt(tabs().GetIndexOfTab(c),
++                            TabCloseTypes::CLOSE_USER_GESTURE);
++  task_environment()->RunUntilIdle();
++  tabs::TabInterface* const first = RestoreTab(home.ToString(), token);
++  tabs::TabInterface* const second = RestoreTab(home.ToString(), token);
++  task_environment()->RunUntilIdle();
++  EXPECT_TRUE(first->IsSplit());
++  EXPECT_TRUE(second->IsSplit());
++  EXPECT_EQ(*first->GetSplit(), *second->GetSplit());
++  EXPECT_EQ(token, first->GetSplit()->ToString());
++}
++
++// sessions S17
++TEST_F(SpaceWindowTest, DeletingAnIsolatedSpaceWipesItsPartition) {
++  const SpaceId home = model().active_id();
++  Space* const work = model().AddSpace("Work", kBlue);
++  model().SetSpaceIsolated(work->id(), true);
++  model().SetActiveSpace(work->id());
++  tabs::TabInterface* const tab = OpenTab();
++  const auto config = PartitionOf(tab);
++  const GURL url("https://example.com/");
++  ASSERT_TRUE(IsSpaceStoragePartition(config));
++  PutCookie(profile(), config, url);
++  ASSERT_EQ(1u, CookieCount(profile(), config, url));
++  model().SetActiveSpace(home);
++  base::RunLoop loop;
++  ASSERT_TRUE(model().RemoveSpace(work->id(), loop.QuitClosure()));
++  loop.Run();
++  EXPECT_EQ(0u, CookieCount(profile(), config, url));
++  EXPECT_FALSE(model().GetSpace(work->id()));
++  EXPECT_FALSE(IsSpaceStoragePartition(PartitionOf(tab)))
++      << "the tab left the wiped jar";
++}
++
+ }  // namespace
+ }  // namespace spaces
+diff --git a/chrome/browser/ui/spaces/space_router.cc b/chrome/browser/ui/spaces/space_router.cc
+index 5b4dacb4bab9a..397b95ac088d1 100644
+--- a/chrome/browser/ui/spaces/space_router.cc
++++ b/chrome/browser/ui/spaces/space_router.cc
+@@ -5,6 +5,7 @@
+ #include "chrome/browser/ui/spaces/space_router.h"
+ 
+ #include <algorithm>
++#include <string_view>
+ #include <utility>
+ 
+ #include "base/no_destructor.h"
+@@ -38,20 +39,48 @@ std::string SiteOf(const GURL& url) {
+   return base::ToLowerASCII(domain.empty() ? url.host() : domain);
+ }
+ 
++std::string HostOf(const GURL& url) {
++  if (!url.is_valid() || !url.has_host()) {
++    return std::string();
++  }
++  return base::ToLowerASCII(url.host());
++}
++
++bool HostSuffixMatches(std::string_view host, std::string_view pattern) {
++  if (host == pattern) {
++    return true;
++  }
++  if (host.size() <= pattern.size()) {
++    return false;
++  }
++  return host[host.size() - pattern.size() - 1] == '.' &&
++         host.ends_with(pattern);
++}
++
+ bool RouteMatches(const Route& route, const GURL& url) {
+   if (route.pattern.empty() || !url.is_valid()) {
+     return false;
+   }
++  const std::string pattern = base::ToLowerASCII(route.pattern);
+   switch (route.match) {
+     case Route::Match::kSite:
+-      return SiteOf(url) == base::ToLowerASCII(route.pattern);
++      return SiteOf(url) == pattern;
+     case Route::Match::kContains:
+-      return base::ToLowerASCII(url.spec())
+-                 .find(base::ToLowerASCII(route.pattern)) != std::string::npos;
++      return base::ToLowerASCII(url.spec()).find(pattern) != std::string::npos;
+     case Route::Match::kEquals: {
+       const GURL wanted(route.pattern);
+       return wanted.is_valid() ? wanted == url : url.spec() == route.pattern;
+     }
++    case Route::Match::kHost: {
++      const size_t colon = pattern.find(':');
++      if (colon != std::string::npos) {
++        return HostOf(url) == pattern.substr(0, colon) &&
++               url.port() == pattern.substr(colon + 1);
++      }
++      return HostOf(url) == pattern;
++    }
++    case Route::Match::kHostSuffix:
++      return HostSuffixMatches(HostOf(url), pattern);
+   }
+   return false;
+ }
+@@ -78,6 +107,14 @@ Route SiteRouteFor(const GURL& url, const std::string& space) {
+   return route;
+ }
+ 
++Route HostRouteFor(const GURL& url, const std::string& space) {
++  Route route;
++  route.match = Route::Match::kHost;
++  route.pattern = HostOf(url);
++  route.space = space;
++  return route;
++}
++
+ const char* MatchName(Route::Match match) {
+   switch (match) {
+     case Route::Match::kSite:
+@@ -86,6 +123,10 @@ const char* MatchName(Route::Match match) {
+       return "contains";
+     case Route::Match::kEquals:
+       return "equals";
++    case Route::Match::kHost:
++      return "host";
++    case Route::Match::kHostSuffix:
++      return "host-suffix";
+   }
+   return "site";
+ }
+@@ -100,6 +141,12 @@ std::optional<Route::Match> MatchFromName(std::string_view name) {
+   if (name == "equals") {
+     return Route::Match::kEquals;
+   }
++  if (name == "host") {
++    return Route::Match::kHost;
++  }
++  if (name == "host-suffix") {
++    return Route::Match::kHostSuffix;
++  }
+   return std::nullopt;
+ }
+ 
+diff --git a/chrome/browser/ui/spaces/space_router.h b/chrome/browser/ui/spaces/space_router.h
+index 2e6ebdb87f891..cc89a83ff561d 100644
+--- a/chrome/browser/ui/spaces/space_router.h
++++ b/chrome/browser/ui/spaces/space_router.h
+@@ -19,7 +19,7 @@ namespace spaces {
+ 
+ // docs/features/routing.md D1: a rule that sends an address to a Space.
+ struct Route {
+-  enum class Match { kSite, kContains, kEquals };
++  enum class Match { kSite, kContains, kEquals, kHost, kHostSuffix };
+   Match match = Match::kSite;
+   std::string pattern;
+   // The Space's id, as SpaceId::ToString() writes it.
+@@ -31,6 +31,9 @@ struct Route {
+ // its host when it has no registry (localhost, an IP).
+ std::string SiteOf(const GURL& url);
+ 
++// The address's host, lowercased. Empty when the URL has no host.
++std::string HostOf(const GURL& url);
++
+ bool RouteMatches(const Route& route, const GURL& url);
+ 
+ // The Space of the first matching route. A link that peeks is never routed
+@@ -42,6 +45,9 @@ std::optional<std::string> RouteFor(const std::vector<Route>& routes,
+ // D5: the rule the tab menu writes -- the address's site, no regex.
+ Route SiteRouteFor(const GURL& url, const std::string& space);
+ 
++// D9: the rule from the address's host (staging.example.com stays that host).
++Route HostRouteFor(const GURL& url, const std::string& space);
++
+ const char* MatchName(Route::Match match);
+ std::optional<Route::Match> MatchFromName(std::string_view name);
+ 
+diff --git a/chrome/browser/ui/spaces/space_router_unittest.cc b/chrome/browser/ui/spaces/space_router_unittest.cc
+index 91505fc8aa99f..d46e3b013e948 100644
+--- a/chrome/browser/ui/spaces/space_router_unittest.cc
++++ b/chrome/browser/ui/spaces/space_router_unittest.cc
+@@ -45,6 +45,41 @@ TEST(SpaceRouterTest, MatchTable) {
+   EXPECT_EQ("", SiteOf(GURL("about:blank")));
+ }
+ 
++// D7, D8: host and host-suffix are not eTLD+1.
++TEST(SpaceRouterTest, HostAndHostSuffix) {
++  const std::vector<Route> routes = {
++      Make(Route::Match::kHost, "staging.example.com", "staging"),
++      Make(Route::Match::kHostSuffix, "staging.example.com", "staging-tree"),
++      Make(Route::Match::kSite, "example.com", "prod"),
++      Make(Route::Match::kHost, "localhost:3000", "dev"),
++  };
++  EXPECT_EQ("staging",
++            RouteFor(routes, GURL("https://staging.example.com/app")));
++  EXPECT_EQ("prod", RouteFor(routes, GURL("https://example.com/")));
++  EXPECT_EQ("prod", RouteFor(routes, GURL("https://www.example.com/")));
++  EXPECT_EQ("staging-tree",
++            RouteFor(routes, GURL("https://foo.staging.example.com/")));
++  EXPECT_FALSE(
++      RouteMatches(Make(Route::Match::kHostSuffix, "staging.example.com", "x"),
++                   GURL("https://example.com/")));
++  EXPECT_EQ("localhost", HostOf(GURL("http://localhost:3000/x")));
++  EXPECT_TRUE(RouteMatches(Make(Route::Match::kHost, "localhost:3000", "dev"),
++                           GURL("http://localhost:3000/x")));
++  EXPECT_FALSE(RouteMatches(Make(Route::Match::kHost, "localhost:3000", "dev"),
++                            GURL("http://localhost:5173/x")));
++}
++
++// D9: HostRouteFor writes the host, not the site.
++TEST(SpaceRouterTest, HostRouteForIsHostScoped) {
++  const Route route =
++      HostRouteFor(GURL("https://staging.example.com/x?y=1"), "staging");
++  EXPECT_EQ(Route::Match::kHost, route.match);
++  EXPECT_EQ("staging.example.com", route.pattern);
++  EXPECT_EQ("staging", route.space);
++  EXPECT_TRUE(RouteMatches(route, GURL("https://staging.example.com/other")));
++  EXPECT_FALSE(RouteMatches(route, GURL("https://example.com/")));
++}
++
+ // D5: the rule the tab menu writes is the address's site, nothing more.
+ TEST(SpaceRouterTest, RuleFromTabIsSiteScoped) {
+   const Route route =
+@@ -64,16 +99,22 @@ TEST(SpaceRouterTest, PrefsRoundTrip) {
+   AddRoute(&prefs, Make(Route::Match::kSite, "github.com", "work"));
+   AddRoute(&prefs, Make(Route::Match::kContains, "/docs/", "study"));
+   AddRoute(&prefs, Make(Route::Match::kSite, "GitHub.com", "play"));
++  AddRoute(&prefs, Make(Route::Match::kHost, "staging.example.com", "staging"));
++  AddRoute(&prefs, Make(Route::Match::kHostSuffix, "dev.example.com", "dev"));
+   std::vector<Route> routes = ReadRoutes(&prefs);
+-  ASSERT_EQ(2u, routes.size());
++  ASSERT_EQ(4u, routes.size());
+   EXPECT_EQ("/docs/", routes[0].pattern);
+   EXPECT_EQ("play", routes[1].space) << "the later rule replaced the first";
++  EXPECT_EQ(Route::Match::kHost, routes[2].match);
++  EXPECT_EQ(Route::Match::kHostSuffix, routes[3].match);
+   RemoveRoute(&prefs, 0);
+   routes = ReadRoutes(&prefs);
+-  ASSERT_EQ(1u, routes.size());
++  ASSERT_EQ(3u, routes.size());
+   EXPECT_EQ("GitHub.com", routes[0].pattern);
++  EXPECT_EQ("host", MatchName(routes[1].match));
++  EXPECT_EQ("host-suffix", MatchName(routes[2].match));
+   RemoveRoute(&prefs, 5);
+-  EXPECT_EQ(1u, ReadRoutes(&prefs).size());
++  EXPECT_EQ(3u, ReadRoutes(&prefs).size());
+   // A malformed entry is skipped.
+   base::ListValue raw = RoutesToValue(routes);
+   base::DictValue bad;
+@@ -81,7 +122,7 @@ TEST(SpaceRouterTest, PrefsRoundTrip) {
+   bad.Set("pattern", "x");
+   bad.Set("space", "y");
+   raw.Append(std::move(bad));
+-  EXPECT_EQ(1u, RoutesFromValue(raw).size());
++  EXPECT_EQ(3u, RoutesFromValue(raw).size());
+ }
+ 
+ // D3: an external open is taken once.
+diff --git a/chrome/browser/ui/spaces/space_storage_partition.cc b/chrome/browser/ui/spaces/space_storage_partition.cc
+index 3dfa3aa2ad4ec..89c886d8d04d3 100644
+--- a/chrome/browser/ui/spaces/space_storage_partition.cc
++++ b/chrome/browser/ui/spaces/space_storage_partition.cc
+@@ -15,9 +15,13 @@
+ #include "content/public/browser/navigation_controller.h"
+ #include "content/public/browser/security_principal.h"
+ #include "content/public/browser/site_instance.h"
++#include "content/public/browser/storage_partition.h"
+ #include "content/public/browser/web_contents.h"
+ #include "content/public/common/referrer.h"
++#include "services/network/public/mojom/cookie_manager.mojom.h"
+ #include "ui/base/page_transition_types.h"
++#include "base/functional/callback_helpers.h"
++#include "base/time/time.h"
+ 
+ namespace spaces {
+ namespace {
+@@ -157,4 +161,69 @@ void RebindTabToSpaceJar(TabStripModel* tabs,
+   tabs->DiscardWebContents(old_contents, std::move(fresh));
+ }
+ 
++std::string IsolationMarkForSpace(const SpaceRegistry* registry,
++                                  const SpaceId& id) {
++  if (!registry) {
++    return std::string();
++  }
++  const RegistryEntry* const entry = registry->Find(id);
++  if (!entry || entry->profile_id.empty()) {
++    return std::string();
++  }
++  return "Independent session";
++}
++
++bool WipeIsolatedSpacePartition(content::BrowserContext* browser_context,
++                                std::string_view profile_id,
++                                base::OnceClosure done) {
++  auto finish = [&](bool ok) {
++    if (done) {
++      std::move(done).Run();
++    }
++    return ok;
++  };
++  std::optional<content::StoragePartitionConfig> config =
++      StoragePartitionConfigForProfileId(browser_context, profile_id);
++  if (!config) {
++    return finish(false);
++  }
++  content::StoragePartition* const partition =
++      browser_context->GetStoragePartition(*config);
++  if (!partition) {
++    return finish(false);
++  }
++  if (!done) {
++    done = base::DoNothing();
++  }
++  partition->ClearData(
++      content::StoragePartition::REMOVE_DATA_MASK_ALL,
++      /*filter_builder=*/nullptr,
++      content::StoragePartition::StorageKeyPolicyMatcherFunction(),
++      network::mojom::CookieDeletionFilter::New(),
++      /*perform_storage_cleanup=*/false, base::Time(), base::Time::Max(),
++      std::move(done));
++  return true;
++}
++
++bool WipeIsolatedSpacePartition(content::BrowserContext* browser_context,
++                                const SpaceRegistry* registry,
++                                const SpaceId& id,
++                                base::OnceClosure done) {
++  if (!registry) {
++    if (done) {
++      std::move(done).Run();
++    }
++    return false;
++  }
++  const RegistryEntry* const entry = registry->Find(id);
++  if (!entry) {
++    if (done) {
++      std::move(done).Run();
++    }
++    return false;
++  }
++  return WipeIsolatedSpacePartition(browser_context, entry->profile_id,
++                                    std::move(done));
++}
++
+ }  // namespace spaces
+diff --git a/chrome/browser/ui/spaces/space_storage_partition.h b/chrome/browser/ui/spaces/space_storage_partition.h
+index 34f24eb6e67d5..c3ae8e39c7122 100644
+--- a/chrome/browser/ui/spaces/space_storage_partition.h
++++ b/chrome/browser/ui/spaces/space_storage_partition.h
+@@ -10,6 +10,7 @@
+ #include <string>
+ #include <string_view>
+ 
++#include "base/functional/callback.h"
+ #include "base/memory/scoped_refptr.h"
+ #include "chrome/browser/ui/spaces/space_id.h"
+ #include "content/public/browser/storage_partition_config.h"
+@@ -80,6 +81,21 @@ void RebindTabToSpaceJar(TabStripModel* tabs,
+                          const SpaceRegistry* registry,
+                          const SpaceId& id);
+ 
++// sessions S16: "Independent session" when `id` is isolated, empty otherwise.
++std::string IsolationMarkForSpace(const SpaceRegistry* registry,
++                                  const SpaceId& id);
++
++// sessions S13: wipe the named partition's site data. `done` runs when
++// ClearData has scheduled (or immediately when there is no jar). False when
++// there is no jar to wipe.
++bool WipeIsolatedSpacePartition(content::BrowserContext* browser_context,
++                                std::string_view profile_id,
++                                base::OnceClosure done);
++bool WipeIsolatedSpacePartition(content::BrowserContext* browser_context,
++                                const SpaceRegistry* registry,
++                                const SpaceId& id,
++                                base::OnceClosure done = base::OnceClosure());
++
+ }  // namespace spaces
+ 
+ #endif  // CHROME_BROWSER_UI_SPACES_SPACE_STORAGE_PARTITION_H_
+diff --git a/chrome/browser/ui/spaces/space_storage_partition_unittest.cc b/chrome/browser/ui/spaces/space_storage_partition_unittest.cc
+index 2df961b786b72..00a3f6378b37d 100644
+--- a/chrome/browser/ui/spaces/space_storage_partition_unittest.cc
++++ b/chrome/browser/ui/spaces/space_storage_partition_unittest.cc
+@@ -4,8 +4,13 @@
+ 
+ #include "chrome/browser/ui/spaces/space_storage_partition.h"
+ 
++#include "chrome/browser/ui/spaces/space_registry.h"
++#include "chrome/browser/ui/stedding/stedding_prefs.h"
++#include "components/prefs/pref_registry_simple.h"
++#include "components/prefs/testing_pref_service.h"
+ #include "content/public/browser/storage_partition_config.h"
+ #include "testing/gtest/include/gtest/gtest.h"
++#include "third_party/skia/include/core/SkColor.h"
+ 
+ namespace spaces {
+ namespace {
+@@ -16,5 +21,28 @@ TEST(SpaceStoragePartitionTest, EmptyProfileIdIsNoPartition) {
+   EXPECT_FALSE(IsSpaceStoragePartition(content::StoragePartitionConfig()));
+ }
+ 
++// sessions S13: a shared Space has no jar to wipe.
++TEST(SpaceStoragePartitionTest, WipeSharedSpaceIsNoOp) {
++  EXPECT_FALSE(WipeIsolatedSpacePartition(nullptr, nullptr,
++                                          SpaceId::CreateEmpty()));
++  TestingPrefServiceSimple prefs;
++  prefs.registry()->RegisterListPref(stedding::prefs::kSpaceRegistry);
++  SpaceRegistry registry(&prefs);
++  const SpaceId id = registry.Add("Home", SK_ColorBLUE);
++  EXPECT_FALSE(WipeIsolatedSpacePartition(nullptr, &registry, id));
++}
++
++// sessions S16
++TEST(SpaceStoragePartitionTest, IsolationMarkFollowsProfileId) {
++  EXPECT_TRUE(IsolationMarkForSpace(nullptr, SpaceId::CreateEmpty()).empty());
++  TestingPrefServiceSimple prefs;
++  prefs.registry()->RegisterListPref(stedding::prefs::kSpaceRegistry);
++  SpaceRegistry registry(&prefs);
++  const SpaceId id = registry.Add("Work", SK_ColorBLUE);
++  EXPECT_TRUE(IsolationMarkForSpace(&registry, id).empty());
++  registry.EnsureIsolated(id);
++  EXPECT_EQ("Independent session", IsolationMarkForSpace(&registry, id));
++}
++
+ }  // namespace
+ }  // namespace spaces
+diff --git a/chrome/browser/ui/spaces/tab_space_restore_data.cc b/chrome/browser/ui/spaces/tab_space_restore_data.cc
+index 605535e63e6bb..20c93c99840d7 100644
+--- a/chrome/browser/ui/spaces/tab_space_restore_data.cc
++++ b/chrome/browser/ui/spaces/tab_space_restore_data.cc
+@@ -14,11 +14,13 @@ namespace spaces {
+ TabSpaceRestoreData::TabSpaceRestoreData(content::WebContents* contents,
+                                          std::string space_id,
+                                          bool space_pinned,
+-                                         std::string home)
++                                         std::string home,
++                                         std::string split_id)
+     : content::WebContentsUserData<TabSpaceRestoreData>(*contents),
+       space_id_(std::move(space_id)),
+       space_pinned_(space_pinned),
+-      home_(std::move(home)) {}
++      home_(std::move(home)),
++      split_id_(std::move(split_id)) {}
+ 
+ TabSpaceRestoreData::~TabSpaceRestoreData() = default;
+ 
+@@ -36,9 +38,11 @@ void RestoreSpaceFromExtraData(
+   }
+   const auto pin = extra_data.find(kSessionTabSpacePinKey);
+   const auto home = extra_data.find(kSessionTabHomeKey);
++  const auto split = extra_data.find(kSessionTabSplitKey);
+   TabSpaceRestoreData::CreateForWebContents(
+       web_contents, it->second, pin != extra_data.end() && pin->second == "1",
+-      home != extra_data.end() ? home->second : std::string());
++      home != extra_data.end() ? home->second : std::string(),
++      split != extra_data.end() ? split->second : std::string());
+ }
+ 
+ FolderRestorePath::FolderRestorePath(content::WebContents* contents,
+diff --git a/chrome/browser/ui/spaces/tab_space_restore_data.h b/chrome/browser/ui/spaces/tab_space_restore_data.h
+index 3306acf790ddd..0ee7685a6d4fe 100644
+--- a/chrome/browser/ui/spaces/tab_space_restore_data.h
++++ b/chrome/browser/ui/spaces/tab_space_restore_data.h
+@@ -33,6 +33,9 @@ class TabSpaceRestoreData
+   bool space_pinned() const { return space_pinned_; }
+   // The pinned tab's home URL spec, empty when none was recorded (pins H2).
+   const std::string& home() const { return home_; }
++  // splits J1: both panes write the same token; empty when the tab is not a
++  // split.
++  const std::string& split_id() const { return split_id_; }
+ 
+  private:
+   friend class content::WebContentsUserData<TabSpaceRestoreData>;
+@@ -40,11 +43,13 @@ class TabSpaceRestoreData
+   TabSpaceRestoreData(content::WebContents* contents,
+                       std::string space_id,
+                       bool space_pinned,
+-                      std::string home = std::string());
++                      std::string home = std::string(),
++                      std::string split_id = std::string());
+ 
+   const std::string space_id_;
+   const bool space_pinned_;
+   const std::string home_;
++  const std::string split_id_;
+ 
+   WEB_CONTENTS_USER_DATA_KEY_DECL();
+ };
+diff --git a/chrome/browser/ui/stedding/tab_names.cc b/chrome/browser/ui/stedding/tab_names.cc
+index 755b7d796e064..70f789d9aa000 100644
+--- a/chrome/browser/ui/stedding/tab_names.cc
++++ b/chrome/browser/ui/stedding/tab_names.cc
+@@ -8,6 +8,7 @@
+ #include <string>
+ #include <tuple>
+ #include <utility>
++#include <vector>
+ 
+ #include "base/functional/bind.h"
+ #include "base/strings/utf_string_conversions.h"
+@@ -18,6 +19,7 @@
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "components/sessions/content/session_tab_helper.h"
++#include "components/tabs/public/split_tab_data.h"
+ #include "components/sessions/core/session_service_commands.h"
+ #include "components/tabs/public/tab_interface.h"
+ #include "content/public/browser/web_contents.h"
+@@ -77,30 +79,40 @@ std::u16string TabName(const content::WebContents* contents) {
+ void SetTabName(BrowserWindowInterface* browser,
+                 tabs::TabInterface* tab,
+                 std::u16string name) {
+-  content::WebContents* const contents = tab ? tab->GetContents() : nullptr;
+-  if (!contents) {
+-    return;
+-  }
+-  TabNameData* const data = TabNameData::FromWebContents(contents);
+-  if (name.empty()) {
+-    if (data) {
+-      contents->RemoveUserData(TabNameData::UserDataKey());
++  std::vector<tabs::TabInterface*> peers;
++  if (tab && tab->IsSplit() && browser) {
++    if (split_tabs::SplitTabData* const data =
++            browser->GetTabStripModel()->GetSplitData(*tab->GetSplit())) {
++      peers = data->ListTabs();
+     }
+-  } else if (data) {
+-    data->set_name(name);
+-  } else {
+-    TabNameData::CreateForWebContents(contents, name);
+   }
+-  // Written now and re-emitted on every rebuild (R16); an empty value clears
+-  // the key for a restore that reads this log before the next rebuild.
++  if (peers.empty() && tab) {
++    peers.push_back(tab);
++  }
+   SessionService* const session_service =
+       browser ? SessionServiceFactory::GetForProfile(browser->GetProfile())
+               : nullptr;
+-  const SessionID tab_id = sessions::SessionTabHelper::IdForTab(contents);
+-  if (session_service && tab_id.is_valid()) {
+-    session_service->AddTabExtraData(browser->GetSessionID(), tab_id,
+-                                     kSessionTabNameKey,
+-                                     base::UTF16ToUTF8(name));
++  for (tabs::TabInterface* const each : peers) {
++    content::WebContents* const contents = each ? each->GetContents() : nullptr;
++    if (!contents) {
++      continue;
++    }
++    TabNameData* const data = TabNameData::FromWebContents(contents);
++    if (name.empty()) {
++      if (data) {
++        contents->RemoveUserData(TabNameData::UserDataKey());
++      }
++    } else if (data) {
++      data->set_name(name);
++    } else {
++      TabNameData::CreateForWebContents(contents, name);
++    }
++    const SessionID tab_id = sessions::SessionTabHelper::IdForTab(contents);
++    if (session_service && tab_id.is_valid()) {
++      session_service->AddTabExtraData(browser->GetSessionID(), tab_id,
++                                       kSessionTabNameKey,
++                                       base::UTF16ToUTF8(name));
++    }
+   }
+ }
+ 
+diff --git a/chrome/browser/ui/tabs/tab_strip_model.cc b/chrome/browser/ui/tabs/tab_strip_model.cc
+index 1b30d87bac5a3..c9065a7049472 100644
+--- a/chrome/browser/ui/tabs/tab_strip_model.cc
++++ b/chrome/browser/ui/tabs/tab_strip_model.cc
+@@ -4901,6 +4901,50 @@ bool TabStripModel::MoveTabsToFolder(const std::vector<int> indices,
+   return moved;
+ }
+ 
++bool TabStripModel::MoveTabsToFolderAt(const std::vector<int> indices,
++                                       tabs::FolderTabCollection* folder,
++                                       size_t child_index) {
++  CHECK(folder);
++  if (indices.empty()) {
++    return false;
++  }
++  for (const int index : indices) {
++    CHECK(ContainsIndex(index));
++    if (IsTabPinned(index)) {
++      return false;
++    }
++  }
++  const size_t folder_tabs = folder->TabCountRecursive();
++  if (folder_tabs == 0 ||
++      !contents_data_->CanMoveTabsIntoFolder(indices, folder)) {
++    return false;
++  }
++  if (child_index >= folder->ChildCount()) {
++    return MoveTabsToFolder(indices, folder);
++  }
++  const size_t recursive =
++      std::min(child_index, folder_tabs - 1);
++  const int destination =
++      GetIndexOfTab(folder->GetTabAtIndexRecursive(recursive));
++  int num_tabs_to_left = 0;
++  for (const int index : indices) {
++    if (index < destination) {
++      ++num_tabs_to_left;
++    }
++  }
++  bool moved = false;
++  MoveTabsWithNotifications(
++      indices, destination - num_tabs_to_left,
++      base::BindOnce(
++          [](tabs::TabStripCollection* contents,
++             const std::vector<int>& indices, tabs::FolderTabCollection* folder,
++             size_t child_index, bool* out) {
++            *out = contents->MoveTabsIntoFolderAt(indices, folder, child_index);
++          },
++          contents_data_.get(), indices, folder, child_index, &moved));
++  return moved;
++}
++
+ void TabStripModel::MoveTabsAndSetPropertiesImpl(
+     const std::vector<int>& indices,
+     int destination_index,
+diff --git a/chrome/browser/ui/tabs/tab_strip_model.h b/chrome/browser/ui/tabs/tab_strip_model.h
+index 55fe48a9b6d16..cac9c346ace9a 100644
+--- a/chrome/browser/ui/tabs/tab_strip_model.h
++++ b/chrome/browser/ui/tabs/tab_strip_model.h
+@@ -717,6 +717,13 @@ class TabStripModel {
+   bool MoveTabsToFolder(const std::vector<int> indices,
+                         tabs::FolderTabCollection* folder);
+ 
++  // folders F10: insert `indices` at `child_index` among the folder's
++  // children (0 = first). `child_index` past the end appends, same as
++  // MoveTabsToFolder.
++  bool MoveTabsToFolderAt(const std::vector<int> indices,
++                          tabs::FolderTabCollection* folder,
++                          size_t child_index);
++
+   // Stedding (docs/features/menus.md M7): moves every tab of `folder` out
+   // to where the folder sits, in order; the emptied folder leaves the tree.
+   // A nested folder's tabs come out with the rest.
+diff --git a/chrome/browser/ui/tabs/tab_strip_model_unittest.cc b/chrome/browser/ui/tabs/tab_strip_model_unittest.cc
+index a069252646707..927de6a0434c3 100644
+--- a/chrome/browser/ui/tabs/tab_strip_model_unittest.cc
++++ b/chrome/browser/ui/tabs/tab_strip_model_unittest.cc
+@@ -6439,6 +6439,33 @@ TEST_F(TabStripModelTest, MoveTabsToFolderAppendsNestsAndRefusesPins) {
+   tabstrip()->CloseAllTabs();
+ }
+ 
++// folders F10: insert between children, not only at the end.
++TEST_F(TabStripModelTest, MoveTabsToFolderAtInsertsBetweenChildren) {
++  ASSERT_NO_FATAL_FAILURE(
++      PrepareTabstripForSelectionTest(tabstrip(), 4, 0, {0}));
++  tabs::TabInterface* const a = tabstrip()->GetTabAtIndex(0);
++  tabs::TabInterface* const b = tabstrip()->GetTabAtIndex(1);
++  tabs::TabInterface* const c = tabstrip()->GetTabAtIndex(2);
++  tabs::TabInterface* const d = tabstrip()->GetTabAtIndex(3);
++  tabs::FolderTabCollection* const folder = tabstrip()->AddToNewFolder({1, 2});
++  ASSERT_NE(nullptr, folder);
++  EXPECT_EQ(folder, b->GetParentCollection());
++  EXPECT_EQ(folder, c->GetParentCollection());
++
++  EXPECT_TRUE(tabstrip()->MoveTabsToFolderAt({3}, folder, 1));
++  EXPECT_EQ(4, tabstrip()->count());
++  EXPECT_EQ(folder, d->GetParentCollection());
++  EXPECT_EQ(folder, b->GetParentCollection());
++  EXPECT_EQ(folder, c->GetParentCollection());
++  EXPECT_NE(folder, a->GetParentCollection());
++  EXPECT_EQ(1, tabstrip()->GetIndexOfTab(b));
++  EXPECT_EQ(2, tabstrip()->GetIndexOfTab(d)) << "inserted between b and c";
++  EXPECT_EQ(3, tabstrip()->GetIndexOfTab(c));
++  EXPECT_EQ(3u, folder->TabCountRecursive());
++
++  tabstrip()->CloseAllTabs();
++}
++
+ TEST_F(TabStripModelTest, AddToNewGroupDeletesGroup) {
+   tabstrip()->AppendWebContents(CreateWebContents(), true);
+   tabstrip()->AddToNewGroup({0});
+diff --git a/chrome/browser/ui/views/commandbar/command_bar_view.cc b/chrome/browser/ui/views/commandbar/command_bar_view.cc
+index 9f484f1237f87..d42b961be059e 100644
+--- a/chrome/browser/ui/views/commandbar/command_bar_view.cc
++++ b/chrome/browser/ui/views/commandbar/command_bar_view.cc
+@@ -1001,6 +1001,29 @@ void CommandBarView::GoTo(const Result& result) {
+ 
+ CommandBarView::Classification CommandBarView::Classify(
+     const std::u16string& text) const {
++  // K18: `keyword query` uses that TemplateURL's %s template when the first
++  // token is a known engine keyword.
++  TemplateURLService* const service =
++      TemplateURLServiceFactory::GetForProfile(browser_->GetProfile());
++  if (service) {
++    const size_t space = text.find(u' ');
++    if (space != std::u16string::npos && space > 0) {
++      const std::u16string keyword = text.substr(0, space);
++      const std::u16string query = text.substr(space + 1);
++      if (!query.empty()) {
++        if (const TemplateURL* const turl =
++                service->GetTemplateURLForKeyword(keyword)) {
++          if (turl->url_ref().SupportsReplacement(
++                  service->search_terms_data())) {
++            return {GURL(turl->url_ref().ReplaceSearchTerms(
++                        TemplateURLRef::SearchTermsArgs(query),
++                        service->search_terms_data())),
++                    true};
++          }
++        }
++      }
++    }
++  }
+   // The omnibox's own classifier: "example.com" is a site, "dfsfsf3233" is a
+   // search, and it knows the difference the way the address bar does.
+   if (AutocompleteClassifier* const classifier =
+@@ -1017,8 +1040,6 @@ CommandBarView::Classification CommandBarView::Classify(
+     }
+   }
+   // No classifier (tests without one): search with the default engine.
+-  TemplateURLService* const service =
+-      TemplateURLServiceFactory::GetForProfile(browser_->GetProfile());
+   const TemplateURL* const provider =
+       service ? service->GetDefaultSearchProvider() : nullptr;
+   if (!provider) {
+diff --git a/chrome/browser/ui/views/commandbar/command_bar_view_unittest.cc b/chrome/browser/ui/views/commandbar/command_bar_view_unittest.cc
+index 625eb6672b3bd..59b8337cd58e1 100644
+--- a/chrome/browser/ui/views/commandbar/command_bar_view_unittest.cc
++++ b/chrome/browser/ui/views/commandbar/command_bar_view_unittest.cc
+@@ -22,6 +22,9 @@
+ #include "chrome/browser/ui/views/frame/browser_view.h"
+ #include "chrome/test/base/browser_with_test_window_test.h"
+ #include "components/prefs/pref_service.h"
++#include "components/search_engines/template_url.h"
++#include "components/search_engines/template_url_data.h"
++#include "components/search_engines/template_url_service.h"
+ #include "components/sessions/core/session_id.h"
+ #include "testing/gtest/include/gtest/gtest.h"
+ #include "ui/base/accelerators/accelerator.h"
+@@ -377,4 +380,34 @@ TEST_F(CommandBarViewTest, TypedTextWithoutAClassifierBecomesASearch) {
+   EXPECT_NE("dfsfsfsdfdsfcvv3233", result.destination.host());
+ }
+ 
++// commandbar K18
++TEST_F(CommandBarViewTest, KeywordQueryUsesThatEngine) {
++  TemplateURLServiceFactory::GetInstance()->SetTestingFactoryAndUse(
++      profile(),
++      base::BindRepeating(&TemplateURLServiceFactory::BuildInstanceFor));
++  TemplateURLService* const service =
++      TemplateURLServiceFactory::GetForProfile(profile());
++  ASSERT_TRUE(service);
++  TemplateURLData data;
++  data.SetShortName(u"GitHub");
++  data.SetKeyword(u"gh");
++  data.SetURL("https://github.com/search?q={searchTerms}");
++  service->Add(std::make_unique<TemplateURL>(data));
++  const auto bar = std::make_unique<stedding::CommandBarView>(browser());
++  const auto result = bar->ClassifyForTesting(u"gh rust iterators");
++  EXPECT_TRUE(result.is_search);
++  EXPECT_EQ("github.com", result.destination.host());
++  EXPECT_NE(std::string::npos, result.destination.spec().find("rust"));
++}
++
++TEST_F(CommandBarViewTest, UnknownKeywordStaysADefaultSearch) {
++  TemplateURLServiceFactory::GetInstance()->SetTestingFactoryAndUse(
++      profile(),
++      base::BindRepeating(&TemplateURLServiceFactory::BuildInstanceFor));
++  const auto bar = std::make_unique<stedding::CommandBarView>(browser());
++  const auto result = bar->ClassifyForTesting(u"notakeyword hello");
++  EXPECT_TRUE(result.is_search);
++  EXPECT_NE("notakeyword", result.destination.host());
++}
++
+ }  // namespace stedding
+diff --git a/components/tabs/impl/tab_strip_collection.cc b/components/tabs/impl/tab_strip_collection.cc
+index 501c1f49aa17e..8142f89504547 100644
+--- a/components/tabs/impl/tab_strip_collection.cc
++++ b/components/tabs/impl/tab_strip_collection.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "components/tabs/public/tab_strip_collection.h"
+ 
++#include <algorithm>
+ #include <memory>
+ #include <optional>
+ #include <set>
+@@ -191,12 +192,20 @@ bool TabStripCollection::CanMoveTabsIntoFolder(
+ bool TabStripCollection::MoveTabsIntoFolderRecursive(
+     const std::vector<int>& tab_indices,
+     FolderTabCollection* folder) {
++  return MoveTabsIntoFolderAt(tab_indices, folder, folder->ChildCount());
++}
++
++bool TabStripCollection::MoveTabsIntoFolderAt(
++    const std::vector<int>& tab_indices,
++    FolderTabCollection* folder,
++    size_t child_index) {
+   if (!CanMoveTabsIntoFolder(tab_indices, folder)) {
+     return false;
+   }
++  const size_t index = std::min(child_index, folder->ChildCount());
+   MoveNodesIntoFolder(
+       GetTabsAndCollectionsForMove(tab_indices, FolderMoveRetainSet()), folder,
+-      {folder->GetHandle(), folder->ChildCount()});
++      {folder->GetHandle(), index});
+   return true;
+ }
+ 
+diff --git a/components/tabs/public/tab_strip_collection.h b/components/tabs/public/tab_strip_collection.h
+index a95ebf5d485d4..39b1a501e09e1 100644
+--- a/components/tabs/public/tab_strip_collection.h
++++ b/components/tabs/public/tab_strip_collection.h
+@@ -77,6 +77,12 @@ class TabStripCollection : public TabCollection {
+   bool MoveTabsIntoFolderRecursive(const std::vector<int>& tab_indices,
+                                    FolderTabCollection* folder);
+ 
++  // Stedding folders F10: insert at `child_index` among the folder's
++  // children, not only at the end.
++  bool MoveTabsIntoFolderAt(const std::vector<int>& tab_indices,
++                            FolderTabCollection* folder,
++                            size_t child_index);
++
+   // Stedding: whether MoveTabsIntoFolderRecursive would accept the move.
+   bool CanMoveTabsIntoFolder(const std::vector<int>& tab_indices,
+                              const FolderTabCollection* folder);

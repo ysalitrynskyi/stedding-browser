@@ -1,6 +1,6 @@
 # Feature: Independent Space sessions
 
-Status: **S1–S12 built and tested** (ADR 0019). Patch: 0046.
+Status: **S1–S17 built and tested** (ADR 0019). Patch: 0046.
 Owner docs: `docs/decisions/0019-space-sessions-are-storage-partitions.md`,
 `docs/PRODUCT.md` §2, `docs/features/spaces.md`, `docs/features/windows.md` G5.
 
@@ -40,6 +40,11 @@ the default partition.
 | S10 | Isolation is a Space menu check item ("Independent session"), a toggle on each Space in chrome://settings/stedding, and an Independent Session row in the command bar. Off by default. | `CommandBarViewTest.ActionRowsListSpacesAndCaptures`; live: Space menu and the settings toggle | built |
 | S11 | `window.open` / a link that opens a tab from an isolated tab inherits that tab's partition (the navigator reuses the opener's `SiteInstance`). | `SpaceWindowTest.WindowOpenFromIsolatedTabKeepsThePartition` | built |
 | S12 | A restored tab in an isolated Space is created in that Space's partition, not the default. | `SpaceWindowTest.RestoredTabInIsolatedSpaceUsesItsPartition` | built |
+| S13 | Clearing an isolated Space's session wipes that partition's site data and keeps the Space and its `profile_id`. Tabs in the Space reload in the empty jar. Shared Spaces have no wipe. | `SpaceWindowTest.WipeIsolatedSessionKeepsTheSpaceAndTheId`; `SpaceStoragePartitionTest.WipeSharedSpaceIsNoOp` | built |
+| S14 | Copying a tab into an isolated Space inserts a new tab in the destination jar. The source tab, its URL and its partition are unchanged. Essentials are refused. | `SpaceWindowTest.CopyTabToIsolatedSpaceKeepsTheSourceJar` | built |
+| S15 | Opening a URL signed-out is S14 into a new or existing isolated Space. The user clicks; there is no headless twin. | `SpaceWindowTest.CopyTabToIsolatedSpaceKeepsTheSourceJar` | built |
+| S16 | Isolated chrome is a mark: `IsolationMarkForSpace` is "Independent session" iff the Space is isolated, empty otherwise. Shared Spaces show nothing. | `SpaceStoragePartitionTest.IsolationMarkFollowsProfileId` | built |
+| S17 | Deleting an isolated Space wipes its partition after moving its tabs (S13's helper). | `SpaceStoragePartitionTest.WipeSharedSpaceIsNoOp` | built |
 
 "built" means the test exists in the series and passes on the pinned tree. "gap"
 is a behaviour we ship without a test — each one is a backlog follow-up.
@@ -47,9 +52,10 @@ is a behaviour we ship without a test — each one is a backlog follow-up.
 ## Out of scope here
 
 A Chromium Profile per Space (separate extensions, history, prefs). Cookie-only
-swapping. Temporary in-memory jars (Ghost's Temporary Identities). Binding two
-Spaces to one jar. Wiping a deleted Space's partition. Extension `chrome.cookies`
-seeing isolated jars. Per-Space proxies or fingerprints.
+swapping. Binding two Spaces to one jar. Extension `chrome.cookies` seeing
+isolated jars. Per-Space proxies or fingerprints. A persistent intern or model
+that holds a Space's cookies (ADR 0020). Temporary in-memory jars are
+`docs/features/throwaway.md`.
 
 ## Running the tests
 

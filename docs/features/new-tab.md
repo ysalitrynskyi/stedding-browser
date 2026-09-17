@@ -1,6 +1,6 @@
 # Feature: New tab page
 
-Status: **N1–N5 built**.
+Status: **N1–N5 built**; **N6–N8 planned**.
 Owner docs: `docs/PRIVACY.md` (no request on a new tab), `docs/UI-SPEC.md`. Patch: `0003`
 (the de-Google patch: default search, choice screen, local new tab page).
 
@@ -17,3 +17,6 @@ command-bar shortcut, not a feed.
 | N3 | The page says how to open the command bar, using the platform's own shortcut glyphs (⌘T on macOS, Ctrl+T elsewhere); the "Stedding" settings section can turn the line off. | live: capture; `tooling/probes/ntp.json`; settings T4 | built |
 | N4 | The page's background follows the theme (sand in light, the gradient's ground in dark), with no hard-coded Google colours. | `tooling/probes/ntp.json` | built |
 | N5 | A setting hides the shortcut row entirely, for users who want Arc's empty page. | settings T5 (live) | built |
+| N6 | Space home: a new tab in Space S lists that Space's pins, recents and yesterday's archive. No feed, no network (N1). | `MorningDigestTest.CardIsForTheTabsSpace` | planned |
+| N7 | Morning card: after local midnight, one card of local facts (archived, slept with a recorded reason, downloads started in S). Counts and titles, never a generated paragraph. Off-able. | `MorningDigestTest.EmptySpaceHasNoCard` | planned |
+| N8 | Isolated visits do not rank in ⌘T of another Space unless a modifier is held (command bar K19). | `CommandBarViewTest.AtSpacePrefixFiltersOpenAndArchived` | planned |

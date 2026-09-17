@@ -31,7 +31,7 @@ On Windows every chord below is the Mac's with ⌘ read as Ctrl and ⌥⌘ as Ct
 | K16 | A row whose target is absent is hidden: Move to Space for an essentials tab, tab-scoped rows while a peek is open. | `CommandBarViewTest.RowsWithoutATargetAreHidden` (the essentials case), `CommandBarViewTest.TabRowsStepAsideWhileAPeekIsOpen` (the peek case, through a seam the test window needs; live: `w2_bar_peek`). | built |
 | K17 | A dropdown preference appears as one cycling row ("Archive after: 12 hours ▸"): Enter advances to the next value and the row re-reads. | CommandBarViewTest.DropdownPrefRowCycles | built |
 | K18 | Typed `keyword query` whose first token is a search-engine keyword (`TemplateURL`) navigates that engine's `%s` template. An unknown keyword still uses the default engine. | `CommandBarViewTest.KeywordQueryUsesThatEngine`; `CommandBarViewTest.UnknownKeywordStaysADefaultSearch` | built |
-| K19 | Default ⌘T lists every Space (K2). A later isolated-⌘T mode (`@<space>` prefix, or a setting) filters open and archived rows to that Space. History stays profile-wide and labelled. | `CommandBarViewTest.AtSpacePrefixFiltersOpenAndArchived` | planned |
+| K19 | `@Work rust` filters open and archived rows to Spaces whose name starts with that prefix. History stays profile-wide. | `SpaceQueryTest.AtSpacePrefixFiltersOpenAndArchived` | built |
 
 ## Notes from the live check (2026-09-05)
 

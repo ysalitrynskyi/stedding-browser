@@ -488,6 +488,36 @@ into the fresh profile.
     rebuild for two test files). Fold into the latest patch that can own the
     change, and fold before the sweep, not between sweeps.
 
+45. **A point release is a delta, not a re-sync -- and nothing else may touch the
+    checkout's git while the series goes on.** On 2026-09-18, with 29 GB free,
+    153.0.8010.48 became .53 through `tooling/update-pin --apply`, which now hands
+    `tooling/sync-chromium --point-release` to a same-milestone bump: a 25 GB
+    floor (`STEDDING_SYNC_POINT_RELEASE_MIN_FREE_GB`, never under 20) instead of the
+    150 GB a checkout from nothing needs, because what moves is the tag's delta,
+    the dependencies that changed and the release's PGO profile. The sync's
+    `git checkout -f` drops the branding; `tooling/apply-branding` puts it back
+    once the series is on. Of 48 patches one conflicted: upstream added
+    `old_elevator_iids` and `old_tracing_service_iids` beside the COM ids that
+    0041 replaces with Stedding's own, resolved by keeping Stedding's GUIDs and
+    empty old-id lists (Stedding's never changed). And a `git status` from a
+    second shell while `tooling/apply-patches` was mid-`git am` took `index.lock`,
+    the apply died at patch 0016 with "unable to write index file", and the rest
+    of the series went on by hand. Read the log, not the tree, while it runs.
+
+46. **A green unit test is not a shipped behaviour.** Patches 0047-0048
+    (2026-09-16 and 17) added a dozen behaviours with tests and marked every one
+    built. On 2026-09-18 a grep of the checkout for their call sites found seven
+    that no menu, key or setting reaches -- the clipboard fence, the sidebar file,
+    copy-to-jar, the isolation mark, folder insert at an index, `HostRouteFor`,
+    the throwaway Space -- and two command-bar rows that flipped a flag nothing
+    read (Focus, Hide Other Spaces), so a user who chose them saw nothing happen.
+    The specs' state column now says `model only` for the first kind; the rows
+    were wired or withdrawn for the second (`S-61`). `tooling/check-repo` cannot
+    tell a called function from an uncalled one, so the audit is by hand: for
+    every public function a patch adds, grep the checkout for a caller outside
+    the tests before the spec says built. A behaviour is shipped when a user can
+    reach it and its test is green -- both, not either.
+
 ## The Windows build
 
 Git for Windows for the bash tooling, PowerShell for the rest, Visual Studio's own
@@ -516,13 +546,14 @@ variables name the machine's paths, so none is in the repo: `STEDDING_CHROMIUM_S
 
 ## Open items
 
-`BACKLOG.md` is the list; do not keep one here. Beta 7 is the Mac image of pin
-153.0.8010.48 (2026-09-16); beta 6 remains the current Windows preview until that
-image joins the tag. Next: the operator's look at beta 6 and 7 (`docs/ARC-ROUND2.md`
-gets a round 10 table when it comes), `S-17` (the Developer ID certificate and the
-notary profile, then a signed re-release), `S-56` (the Windows port proper: the
-beta 7 installer, little windows, signing, updates, CI) and `S-48` (the Arc data
-import run once on a real Arc profile).
+`BACKLOG.md` is the list; do not keep one here. Beta 8 is the Mac image of pin
+153.0.8010.53 (2026-09-18); beta 6 remains the current Windows preview until a
+Windows image joins a tag. Next: the operator's look at beta 7 and 8
+(`docs/ARC-ROUND2.md` gets a round 10 table when it comes), `S-17` (the Developer
+ID certificate and the notary profile, then a signed re-release), `S-56` (the
+Windows port proper: the beta 8 installer, little windows, signing, updates, CI),
+`S-58` (the disk, before any milestone bump) and `S-48` (the Arc data import run
+once on a real Arc profile).
 
 ## Release channel
 
@@ -548,8 +579,10 @@ Developer ID in the keychain (`S-17`), `tooling/sign-release release` goes betwe
 `verify-build` and `package-dmg`, which then takes `--app
 dist/signed/stable/Stedding.app`, and the notes lose the right-click paragraph.
 After `publish-release`, nothing is needed on the site: its scheduled rebuild reads
-`releases/latest` (once the deploy hook secret is a URL, `S-59`); to see the new
-version at once, run the site's *Rebuild* workflow by hand or push to its `main`.
+the release list, pre-releases included (once the deploy hook secret is a URL,
+`S-59`); to see the new version at once, push to the site's `main`, which
+Cloudflare builds on its own (the *Rebuild* workflow is the hook and fails until
+`S-59` is done).
 
 The push moved ahead of the publish on purpose. `gh release create` cuts the tag on
 the remote, so publishing from an unpushed commit tagged whatever the remote's default

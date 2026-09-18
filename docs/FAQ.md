@@ -97,7 +97,9 @@ a second isolated Space can use a different account on the same site. Essentials
 (the top pinned row, visible in every Space) stay on the shared jar, as do
 extensions, history and saved passwords. Off by default: Spaces share one login
 until you opt in. Turning it off sends new tabs back to the shared jar; the
-stored session stays on disk until you isolate that Space again.
+stored session stays on disk until you isolate that Space again. To sign that
+Space out of everything at once, right-click its chip and choose **Clear
+Independent Session**; deleting the Space clears it too.
 
 ## Privacy
 

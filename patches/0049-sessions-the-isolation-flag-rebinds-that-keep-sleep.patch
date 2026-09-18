@@ -1,0 +1,805 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Fri, 18 Sep 2026 10:14:33 -0400
+Subject: sessions: the isolation flag, rebinds that keep sleep and history,
+ Clear Independent Session, Focus and the coat in the switcher
+
+Independent session was a token alone: turning it off cleared the token,
+so turning it on again made a new, empty jar and left the old one on disk
+unreachable. Isolation is now a flag beside the token
+(RegistryEntry::isolated); off keeps the token, on again reattaches the
+same jar, and a registry written before the flag existed reads a token
+as on. Rebinding a tab to another jar restores its serialized entries
+and keeps WasDiscarded, so a sleeping tab stays asleep with its history
+and the user's name for it; an awake tab reloads. Clear Independent
+Session on the Space chip menu wipes an isolated jar (site data and the
+HTTP cache) in place. A registry with no PrefService, a Blank Window's,
+gets in-memory jars. The sidebar file carries the flag, not the token.
+
+Focus This Space and Hide Other Spaces now reach the switcher: the
+active chip alone, no "+", chip drag off, until the flag clears. The
+Open in Throwaway row is withdrawn until a throwaway Space is forgotten
+when it closes (throwaway T2).
+
+Why: docs/features/sessions.md S2, S7, S9, S13, S18, S19; focus Fc1;
+share-coat Sc1; the 2026-09-18 audit (docs/HANDOFF.md, trap 46).
+Removable when: patches 0046-0048 fold into upstream or go.
+---
+ chrome/browser/ui/spaces/sidebar_file.cc      |   8 +-
+ .../ui/spaces/sidebar_file_unittest.cc        |   8 +-
+ chrome/browser/ui/spaces/space_model.cc       |  17 ++-
+ .../ui/spaces/space_model_window_unittest.cc  |  70 ++++++++++++
+ chrome/browser/ui/spaces/space_registry.cc    |  30 +++++-
+ chrome/browser/ui/spaces/space_registry.h     |  16 ++-
+ .../ui/spaces/space_registry_unittest.cc      |  36 ++++++-
+ .../ui/spaces/space_storage_partition.cc      | 100 +++++++++++++++---
+ .../space_storage_partition_unittest.cc       |   3 +
+ chrome/browser/ui/stedding/tab_names.cc       |  12 +++
+ chrome/browser/ui/stedding/tab_names.h        |   4 +
+ .../ui/views/commandbar/command_bar_view.cc   |  11 +-
+ .../ui/views/spaces/space_switcher_view.cc    |  86 ++++++++++-----
+ 13 files changed, 336 insertions(+), 65 deletions(-)
+
+diff --git a/chrome/browser/ui/spaces/sidebar_file.cc b/chrome/browser/ui/spaces/sidebar_file.cc
+index 21b88c2eb948b..a7ca80c7919bf 100644
+--- a/chrome/browser/ui/spaces/sidebar_file.cc
++++ b/chrome/browser/ui/spaces/sidebar_file.cc
+@@ -22,7 +22,7 @@ base::DictValue SidebarFileFromCatalog(
+     dict.Set("icon", entry.icon);
+     dict.Set("color", static_cast<int>(entry.color));
+     dict.Set("color_chosen", entry.color_chosen);
+-    dict.Set("isolated", !entry.profile_id.empty());
++    dict.Set("isolated", entry.isolated);
+     space_list.Append(std::move(dict));
+   }
+   file.Set("spaces", std::move(space_list));
+@@ -65,9 +65,9 @@ bool SidebarFileToCatalog(const base::DictValue& file,
+         entry.icon = *icon;
+       }
+       entry.color_chosen = dict->FindBool("color_chosen").value_or(false);
+-      if (dict->FindBool("isolated").value_or(false)) {
+-        entry.profile_id = "1";
+-      }
++      // The flag travels; the token (the jar's name) does not, so an import
++      // starts a fresh jar on first use.
++      entry.isolated = dict->FindBool("isolated").value_or(false);
+       spaces->push_back(std::move(entry));
+     }
+   }
+diff --git a/chrome/browser/ui/spaces/sidebar_file_unittest.cc b/chrome/browser/ui/spaces/sidebar_file_unittest.cc
+index c5cad597f69df..372f6555c4321 100644
+--- a/chrome/browser/ui/spaces/sidebar_file_unittest.cc
++++ b/chrome/browser/ui/spaces/sidebar_file_unittest.cc
+@@ -14,6 +14,7 @@ TEST(SidebarFileTest, ExportRoundTripsCatalog) {
+   RegistryEntry work(SpaceId::GenerateNew(), "Work", SK_ColorBLUE);
+   work.icon = "W";
+   work.profile_id = "secret-jar-token";
++  work.isolated = true;
+   RegistryEntry home(SpaceId::GenerateNew(), "Home", SK_ColorRED);
+   std::vector<RegistryEntry> spaces = {work, home};
+   Route route;
+@@ -33,9 +34,9 @@ TEST(SidebarFileTest, ExportRoundTripsCatalog) {
+   ASSERT_EQ(2u, read_spaces.size());
+   EXPECT_EQ(work.id, read_spaces[0].id);
+   EXPECT_EQ("Work", read_spaces[0].name);
+-  EXPECT_FALSE(read_spaces[0].profile_id.empty()) << "isolated as a boolean";
+-  EXPECT_NE("secret-jar-token", read_spaces[0].profile_id);
+-  EXPECT_TRUE(read_spaces[1].profile_id.empty());
++  EXPECT_TRUE(read_spaces[0].isolated) << "isolated as a boolean";
++  EXPECT_TRUE(read_spaces[0].profile_id.empty()) << "the jar's name stays home";
++  EXPECT_FALSE(read_spaces[1].isolated);
+   ASSERT_EQ(1u, read_routes.size());
+   EXPECT_EQ(Route::Match::kHost, read_routes[0].match);
+   EXPECT_EQ("staging.example.com", read_routes[0].pattern);
+@@ -44,6 +45,7 @@ TEST(SidebarFileTest, ExportRoundTripsCatalog) {
+ TEST(SidebarFileTest, JarsAreNotInTheFile) {
+   RegistryEntry work(SpaceId::GenerateNew(), "Work", SK_ColorBLUE);
+   work.profile_id = "cookie-jar";
++  work.isolated = true;
+   const base::DictValue file = SidebarFileFromCatalog({work}, {});
+   const base::ListValue* const list = file.FindList("spaces");
+   ASSERT_TRUE(list);
+diff --git a/chrome/browser/ui/spaces/space_model.cc b/chrome/browser/ui/spaces/space_model.cc
+index b45ac52a55eab..5c9c2f0941240 100644
+--- a/chrome/browser/ui/spaces/space_model.cc
++++ b/chrome/browser/ui/spaces/space_model.cc
+@@ -732,11 +732,21 @@ void SpaceModel::SetActiveSpaceByIndex(size_t index) {
+ }
+ 
+ void SpaceModel::SetFocus(bool focus) {
++  if (in_focus_ == focus) {
++    return;
++  }
+   in_focus_ = focus;
++  // focus Fc1: the switcher redraws with the active chip alone, or with all.
++  observers_.Notify(&Observer::OnSpaceMetadataChanged, active_id_);
+ }
+ 
+ void SpaceModel::SetShareCoat(bool coat) {
++  if (share_coat_ == coat) {
++    return;
++  }
+   share_coat_ = coat;
++  // share-coat Sc1: same redraw as Focus.
++  observers_.Notify(&Observer::OnSpaceMetadataChanged, active_id_);
+ }
+ 
+ Space* SpaceModel::AddThrowawaySpace() {
+@@ -1016,8 +1026,9 @@ void SpaceModel::SetSpaceIsolated(const SpaceId& id, bool isolated) {
+       isolated_jars_[id] = entry->profile_id;
+     }
+   } else {
+-    registry_->SetProfileId(id, std::string());
+-    isolated_jars_.erase(id);
++    // sessions S7: the token and the jar stay for next time; only new tabs
++    // stop using it. isolated_jars_ keeps the name so a delete still wipes.
++    registry_->SetIsolated(id, false);
+   }
+   observers_.Notify(&Observer::OnSpaceMetadataChanged, id);
+   RebindTabsInSpace(id);
+@@ -1028,7 +1039,7 @@ bool SpaceModel::SpaceIsIsolated(const SpaceId& id) const {
+     return false;
+   }
+   const RegistryEntry* const entry = registry_->Find(id);
+-  return entry && !entry->profile_id.empty();
++  return entry && entry->isolated;
+ }
+ 
+ bool SpaceModel::WipeIsolatedSession(const SpaceId& id) {
+diff --git a/chrome/browser/ui/spaces/space_model_window_unittest.cc b/chrome/browser/ui/spaces/space_model_window_unittest.cc
+index e217cfac5816f..de5fa6e60ddf7 100644
+--- a/chrome/browser/ui/spaces/space_model_window_unittest.cc
++++ b/chrome/browser/ui/spaces/space_model_window_unittest.cc
+@@ -24,6 +24,7 @@
+ #include "chrome/browser/ui/spaces/space.h"
+ #include "chrome/browser/ui/spaces/space_commands.h"
+ #include "chrome/browser/ui/spaces/space_model.h"
++#include "chrome/browser/ui/spaces/space_registry.h"
+ #include "chrome/browser/ui/spaces/space_router.h"
+ #include "chrome/browser/ui/spaces/space_storage_partition.h"
+ #include "chrome/browser/ui/spaces/tab_space_restore_data.h"
+@@ -1238,5 +1239,74 @@ TEST_F(SpaceWindowTest, DeletingAnIsolatedSpaceWipesItsPartition) {
+       << "the tab left the wiped jar";
+ }
+ 
++
++// sessions S7
++TEST_F(SpaceWindowTest, TurningIsolationOffKeepsTheJarForNextTime) {
++  Space* const work = model().AddSpace("Work", kBlue);
++  model().SetSpaceIsolated(work->id(), true);
++  model().SetActiveSpace(work->id());
++  const std::string jar = PartitionOf(OpenTab()).partition_name();
++  ASSERT_FALSE(jar.empty());
++  model().SetSpaceIsolated(work->id(), false);
++  EXPECT_FALSE(model().SpaceIsIsolated(work->id()));
++  EXPECT_FALSE(IsSpaceStoragePartition(PartitionOf(OpenTab())));
++  EXPECT_EQ(jar, model().registry()->Find(work->id())->profile_id)
++      << "the token stays";
++  model().SetSpaceIsolated(work->id(), true);
++  EXPECT_EQ(jar, PartitionOf(OpenTab()).partition_name())
++      << "the same jar, with its logins";
++}
++
++// sessions S9
++TEST_F(SpaceWindowTest, RebindKeepsASleepingTabAsleepWithItsHistory) {
++  tabs::TabInterface* const tab = OpenTab();
++  NavigateAndCommit(tab->GetContents(), GURL("https://example.com/second"));
++  ASSERT_EQ(2, tab->GetContents()->GetController().GetEntryCount());
++  OpenTab();  // Another tab is active, so `tab` can sleep.
++  // Asleep the way the lifecycle unit does it (sleep_tabs.cc), without the
++  // unit: a null contents that carries the entries and WasDiscarded.
++  content::WebContents* const old_contents = tab->GetContents();
++  content::WebContents::CreateParams null_params(profile());
++  null_params.desired_renderer_state =
++      content::WebContents::CreateParams::kNoRendererProcess;
++  std::unique_ptr<content::WebContents> null_contents =
++      content::WebContents::Create(null_params);
++  null_contents->GetController().CopyStateFrom(&old_contents->GetController(),
++                                               /*needs_reload=*/false);
++  null_contents->SetWasDiscarded(true);
++  tabs().DiscardWebContents(old_contents, std::move(null_contents));
++  ASSERT_TRUE(tab->GetContents()->WasDiscarded());
++  stedding::SetTabName(browser(), tab, u"Named");
++
++  Space* const work = model().AddSpace("Work", kBlue);
++  model().SetSpaceIsolated(work->id(), true);
++  model().SetSpaceForTab(tab, work->id());
++  task_environment()->RunUntilIdle();
++  content::WebContents* const rebound = tab->GetContents();
++  EXPECT_TRUE(IsSpaceStoragePartition(PartitionOf(tab))) << PartitionOf(tab);
++  EXPECT_TRUE(rebound->WasDiscarded()) << "still asleep";
++  EXPECT_EQ(2, rebound->GetController().GetEntryCount()) << "history kept";
++  EXPECT_EQ(GURL("https://example.com/second"), rebound->GetLastCommittedURL());
++  EXPECT_EQ(u"Named", stedding::TabName(rebound)) << "the name came along";
++}
++
++// sessions S18
++TEST_F(SpaceWindowTest, UnpersistedRegistryIsolatesInMemory) {
++  SpaceRegistry unpersisted(nullptr);
++  const SpaceId blank = unpersisted.Add("Blank", kBlue);
++  unpersisted.EnsureIsolated(blank);
++  const std::optional<content::StoragePartitionConfig> in_memory =
++      StoragePartitionConfigForSpace(profile(), &unpersisted, blank);
++  ASSERT_TRUE(in_memory);
++  EXPECT_TRUE(in_memory->in_memory()) << "a Blank Window's jar never lands";
++
++  Space* const work = model().AddSpace("Work", kBlue);
++  model().SetSpaceIsolated(work->id(), true);
++  const std::optional<content::StoragePartitionConfig> on_disk =
++      StoragePartitionConfigForSpace(profile(), model().registry(), work->id());
++  ASSERT_TRUE(on_disk);
++  EXPECT_FALSE(on_disk->in_memory());
++}
++
+ }  // namespace
+ }  // namespace spaces
+diff --git a/chrome/browser/ui/spaces/space_registry.cc b/chrome/browser/ui/spaces/space_registry.cc
+index 071ad2e5ba0aa..5fa2f3739656b 100644
+--- a/chrome/browser/ui/spaces/space_registry.cc
++++ b/chrome/browser/ui/spaces/space_registry.cc
+@@ -117,10 +117,27 @@ void SpaceRegistry::SetProfileId(const SpaceId& id, std::string profile_id) {
+ 
+ void SpaceRegistry::EnsureIsolated(const SpaceId& id) {
+   if (RegistryEntry* const entry = FindMutable(id)) {
+-    if (!entry->profile_id.empty()) {
++    if (entry->isolated && !entry->profile_id.empty()) {
+       return;
+     }
+-    entry->profile_id = base::Token::CreateRandom().ToString();
++    if (entry->profile_id.empty()) {
++      entry->profile_id = base::Token::CreateRandom().ToString();
++    }
++    entry->isolated = true;
++    Changed();
++  }
++}
++
++void SpaceRegistry::SetIsolated(const SpaceId& id, bool isolated) {
++  if (isolated) {
++    EnsureIsolated(id);
++    return;
++  }
++  if (RegistryEntry* const entry = FindMutable(id)) {
++    if (!entry->isolated) {
++      return;
++    }
++    entry->isolated = false;
+     Changed();
+   }
+ }
+@@ -130,9 +147,8 @@ void SpaceRegistry::EnsureThrowaway(const SpaceId& id) {
+     if (entry->profile_id.empty()) {
+       entry->profile_id = base::Token::CreateRandom().ToString();
+     }
+-    if (!entry->in_memory) {
+-      entry->in_memory = true;
+-    }
++    entry->in_memory = true;
++    entry->isolated = true;
+     Changed();
+   }
+ }
+@@ -164,6 +180,7 @@ base::ListValue SpaceRegistry::ToValue(
+     dict.Set("color", static_cast<int>(entry.color));
+     dict.Set("color_chosen", entry.color_chosen);
+     dict.Set("profile", entry.profile_id);
++    dict.Set("isolated", entry.isolated);
+     dict.Set("in_memory", entry.in_memory);
+     list.Append(std::move(dict));
+   }
+@@ -196,6 +213,9 @@ std::vector<RegistryEntry> SpaceRegistry::FromValue(
+     if (const std::string* const profile = dict->FindString("profile")) {
+       entry.profile_id = *profile;
+     }
++    // S19: before the flag, a token was the whole of "on" (beta 7).
++    entry.isolated =
++        dict->FindBool("isolated").value_or(!entry.profile_id.empty());
+     entry.in_memory = dict->FindBool("in_memory").value_or(false);
+     if (std::ranges::none_of(entries, [&](const RegistryEntry& existing) {
+           return existing.id == entry.id;
+diff --git a/chrome/browser/ui/spaces/space_registry.h b/chrome/browser/ui/spaces/space_registry.h
+index 348c612dd8025..42df7f72a0aaa 100644
+--- a/chrome/browser/ui/spaces/space_registry.h
++++ b/chrome/browser/ui/spaces/space_registry.h
+@@ -35,6 +35,10 @@ struct RegistryEntry {
+   SkColor color;
+   bool color_chosen = false;
+   std::string profile_id;
++  // sessions S2, S7: whether the Space's tabs use that partition right now.
++  // Off keeps the token, so on again reattaches the same jar (ADR 0019). A
++  // registry from before the flag existed (beta 7) reads a token as on (S19).
++  bool isolated = false;
+   // docs/features/throwaway.md T1: in-memory partition; not session-restored.
+   bool in_memory = false;
+ };
+@@ -69,11 +73,17 @@ class SpaceRegistry : public KeyedService {
+   void SetName(const SpaceId& id, std::string name);
+   void SetIcon(const SpaceId& id, std::string icon);
+   void SetColor(const SpaceId& id, SkColor color, bool chosen);
+-  // sessions S2: `profile_id` is the storage-partition name (ADR 0019). Empty
+-  // means the default jar. EnsureIsolated writes a random token if empty and
+-  // leaves an existing one; SetProfileId("") turns isolation off for new tabs.
++  // sessions S2: `profile_id` is the storage-partition name (ADR 0019) and
++  // `isolated` says whether the Space's tabs use it. EnsureIsolated writes a
++  // random token when there is none and turns the flag on; SetIsolated(id,
++  // false) turns it off and keeps the token for next time (S7). SetProfileId
++  // is the raw write, for tests and the importer.
+   void SetProfileId(const SpaceId& id, std::string profile_id);
+   void EnsureIsolated(const SpaceId& id);
++  void SetIsolated(const SpaceId& id, bool isolated);
++  // sessions S18: a registry with no PrefService (a Blank Window's) is never
++  // written; its isolated Spaces get in-memory partitions.
++  bool persists() const { return prefs_ != nullptr; }
+   // throwaway T1: isolated + in-memory jar. Leaves an existing token.
+   void EnsureThrowaway(const SpaceId& id);
+ 
+diff --git a/chrome/browser/ui/spaces/space_registry_unittest.cc b/chrome/browser/ui/spaces/space_registry_unittest.cc
+index 6f9acd904dbeb..bdbc7515ea8f2 100644
+--- a/chrome/browser/ui/spaces/space_registry_unittest.cc
++++ b/chrome/browser/ui/spaces/space_registry_unittest.cc
+@@ -68,14 +68,46 @@ TEST(SpaceRegistryTest, IsolatedProfileIdRoundTrips) {
+     registry.EnsureIsolated(work_id);
+     first_id = registry.Find(work_id)->profile_id;
+     EXPECT_FALSE(first_id.empty());
++    EXPECT_TRUE(registry.Find(work_id)->isolated);
+     registry.EnsureIsolated(work_id);
+     EXPECT_EQ(first_id, registry.Find(work_id)->profile_id);
+   }
+   SpaceRegistry again(&prefs);
+   ASSERT_EQ(1u, again.entries().size());
+   EXPECT_EQ(first_id, again.Find(work_id)->profile_id);
+-  again.SetProfileId(work_id, std::string());
+-  EXPECT_TRUE(again.Find(work_id)->profile_id.empty());
++  EXPECT_TRUE(again.Find(work_id)->isolated);
++  // S7: off keeps the token; on again is the same jar.
++  again.SetIsolated(work_id, false);
++  EXPECT_FALSE(again.Find(work_id)->isolated);
++  EXPECT_EQ(first_id, again.Find(work_id)->profile_id);
++  again.SetIsolated(work_id, true);
++  EXPECT_TRUE(again.Find(work_id)->isolated);
++  EXPECT_EQ(first_id, again.Find(work_id)->profile_id);
++}
++
++// sessions S19: a registry written before the flag existed reads a token as
++// on, so beta 7's isolated Spaces keep their jars across the update.
++TEST(SpaceRegistryTest, OldRegistryTokenMeansIsolated) {
++  base::ListValue raw;
++  base::DictValue with_token;
++  with_token.Set("id", SpaceId::GenerateNew().ToString());
++  with_token.Set("name", "Work");
++  with_token.Set("color", 0);
++  with_token.Set("profile", "beta-seven-token");
++  raw.Append(std::move(with_token));
++  base::DictValue off;
++  off.Set("id", SpaceId::GenerateNew().ToString());
++  off.Set("name", "Home");
++  off.Set("color", 0);
++  off.Set("profile", "kept-token");
++  off.Set("isolated", false);
++  raw.Append(std::move(off));
++  const std::vector<RegistryEntry> entries = SpaceRegistry::FromValue(raw);
++  ASSERT_EQ(2u, entries.size());
++  EXPECT_TRUE(entries[0].isolated) << "a beta 7 token means on";
++  EXPECT_EQ("beta-seven-token", entries[0].profile_id);
++  EXPECT_FALSE(entries[1].isolated) << "off, with its jar kept";
++  EXPECT_EQ("kept-token", entries[1].profile_id);
+ }
+ 
+ TEST(SpaceRegistryTest, ThrowawayIsInMemoryAndIsolated) {
+diff --git a/chrome/browser/ui/spaces/space_storage_partition.cc b/chrome/browser/ui/spaces/space_storage_partition.cc
+index 1b2900da79cde..a8b302b79a1ab 100644
+--- a/chrome/browser/ui/spaces/space_storage_partition.cc
++++ b/chrome/browser/ui/spaces/space_storage_partition.cc
+@@ -4,21 +4,32 @@
+ 
+ #include "chrome/browser/ui/spaces/space_storage_partition.h"
+ 
++#include <memory>
++#include <vector>
++
+ #include "base/token.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/tab_contents/tab_util.h"
+ #include "chrome/browser/ui/spaces/space_registry.h"
+ #include "chrome/browser/ui/spaces/tab_space_restore_data.h"
++#include "chrome/browser/ui/stedding/tab_names.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "components/sessions/content/content_serialized_navigation_builder.h"
++#include "components/sessions/core/serialized_navigation_entry.h"
+ #include "components/tabs/public/tab_interface.h"
+ #include "content/public/browser/browser_context.h"
+ #include "content/public/browser/navigation_controller.h"
++#include "content/public/browser/navigation_entry.h"
++#include "content/public/browser/restore_type.h"
++#include "content/public/browser/visibility.h"
+ #include "content/public/browser/security_principal.h"
+ #include "content/public/browser/site_instance.h"
+ #include "content/public/browser/storage_partition.h"
+ #include "content/public/browser/web_contents.h"
+ #include "content/public/common/referrer.h"
++#include "services/network/public/mojom/clear_data_filter.mojom.h"
+ #include "services/network/public/mojom/cookie_manager.mojom.h"
++#include "services/network/public/mojom/network_context.mojom.h"
+ #include "ui/base/page_transition_types.h"
+ #include "base/functional/callback_helpers.h"
+ #include "base/time/time.h"
+@@ -69,11 +80,14 @@ std::optional<content::StoragePartitionConfig> StoragePartitionConfigForSpace(
+     return std::nullopt;
+   }
+   const RegistryEntry* const entry = registry->Find(id);
+-  if (!entry) {
++  if (!entry || !entry->isolated) {
+     return std::nullopt;
+   }
+-  return StoragePartitionConfigForProfileId(browser_context, entry->profile_id,
+-                                            entry->in_memory);
++  // sessions S18: a registry nobody writes (a Blank Window's) gets jars that
++  // live as long as the window; nothing of them reaches the disk.
++  return StoragePartitionConfigForProfileId(
++      browser_context, entry->profile_id,
++      entry->in_memory || !registry->persists());
+ }
+ 
+ bool IsSpaceStoragePartition(const content::StoragePartitionConfig& config) {
+@@ -145,21 +159,76 @@ void RebindTabToSpaceJar(TabStripModel* tabs,
+   if (SameJar(StoragePartitionConfigForWebContents(old_contents), target)) {
+     return;
+   }
+-  GURL url = old_contents->GetLastCommittedURL();
++
++  // The page's history travels the way session restore carries it: serialized
++  // entries, which name URLs and titles and nothing of the old jar (no
++  // SiteInstance, no session storage). The initial entry of a tab that has
++  // committed nothing is not history.
++  content::NavigationController& old_controller = old_contents->GetController();
++  std::vector<sessions::SerializedNavigationEntry> navigations;
++  int selected = -1;
++  for (int i = 0; i < old_controller.GetEntryCount(); ++i) {
++    content::NavigationEntry* const entry = old_controller.GetEntryAtIndex(i);
++    if (!entry || entry->IsInitialEntry() ||
++        entry->GetVirtualURL().is_empty()) {
++      continue;
++    }
++    if (i == old_controller.GetLastCommittedEntryIndex()) {
++      selected = static_cast<int>(navigations.size());
++    }
++    navigations.push_back(
++        sessions::ContentSerializedNavigationBuilder::FromNavigationEntry(
++            static_cast<int>(navigations.size()), entry));
++  }
++  if (selected < 0 && !navigations.empty()) {
++    selected = static_cast<int>(navigations.size()) - 1;
++  }
++  GURL url = navigations.empty() ? old_contents->GetVisibleURL()
++                                 : navigations[selected].virtual_url();
+   if (url.is_empty()) {
+-    url = old_contents->GetVisibleURL();
++    url = GURL("about:blank");
++  }
++
++  // A sleeping tab stays asleep (tabs R5): no renderer, the entries restored
++  // so the row keeps its title, WasDiscarded so the sidebar keeps its dimmed
++  // look. An awake tab reloads in the new jar.
++  const bool asleep = old_contents->WasDiscarded();
++  content::WebContents::CreateParams params(
++      context, SiteInstanceForSpaceTab(context, url, registry, id, essential));
++  params.initially_hidden =
++      old_contents->GetVisibility() == content::Visibility::HIDDEN;
++  params.last_active_time_ticks = old_contents->GetLastActiveTimeTicks();
++  params.last_active_time = old_contents->GetLastActiveTime();
++  if (asleep) {
++    params.desired_renderer_state =
++        content::WebContents::CreateParams::kNoRendererProcess;
+   }
+-  scoped_refptr<content::SiteInstance> site_instance = SiteInstanceForSpaceTab(
+-      context, url.is_empty() ? GURL("about:blank") : url, registry, id,
+-      essential);
+-  content::WebContents::CreateParams params(context, site_instance);
+   std::unique_ptr<content::WebContents> fresh =
+       content::WebContents::Create(params);
+-  if (!url.is_empty() && !url.IsAboutBlank()) {
++  if (!navigations.empty()) {
++    std::vector<std::unique_ptr<content::NavigationEntry>> entries =
++        sessions::ContentSerializedNavigationBuilder::ToNavigationEntries(
++            navigations, context);
++    fresh->GetController().Restore(selected, content::RestoreType::kRestored,
++                                   &entries);
++  } else if (!url.IsAboutBlank()) {
+     fresh->GetController().LoadURL(url, content::Referrer(),
+                                    ui::PAGE_TRANSITION_RELOAD, std::string());
+   }
+-  tabs->DiscardWebContents(old_contents, std::move(fresh));
++  // The user's name for the tab rides on the contents (tabs R14).
++  stedding::CarryTabName(old_contents, fresh.get());
++  if (asleep) {
++    fresh->SetWasDiscarded(true);
++  }
++  content::WebContents* const raw_fresh = fresh.get();
++  // DiscardWebContents attaches the tab helpers through the strip's delegate
++  // and tells the observers the contents were replaced.
++  std::unique_ptr<content::WebContents> gone =
++      tabs->DiscardWebContents(old_contents, std::move(fresh));
++  if (!asleep && !navigations.empty()) {
++    raw_fresh->GetController().LoadIfNecessary();
++  }
++  gone.reset();
+ }
+ 
+ std::string IsolationMarkForSpace(const SpaceRegistry* registry,
+@@ -168,7 +237,7 @@ std::string IsolationMarkForSpace(const SpaceRegistry* registry,
+     return std::string();
+   }
+   const RegistryEntry* const entry = registry->Find(id);
+-  if (!entry || entry->profile_id.empty()) {
++  if (!entry || !entry->isolated) {
+     return std::string();
+   }
+   return "Independent session";
+@@ -196,6 +265,13 @@ bool WipeIsolatedSpacePartition(content::BrowserContext* browser_context,
+   if (!done) {
+     done = base::DoNothing();
+   }
++  // The HTTP cache is not site data to ClearData, and a page fetched while
++  // signed in is the session too.
++  if (network::mojom::NetworkContext* const network =
++          partition->GetNetworkContext()) {
++    network->ClearHttpCache(base::Time(), base::Time::Max(),
++                            /*filter=*/nullptr, base::DoNothing());
++  }
+   partition->ClearData(
+       content::StoragePartition::REMOVE_DATA_MASK_ALL,
+       /*filter_builder=*/nullptr,
+diff --git a/chrome/browser/ui/spaces/space_storage_partition_unittest.cc b/chrome/browser/ui/spaces/space_storage_partition_unittest.cc
+index 00a3f6378b37d..fd055acd58b79 100644
+--- a/chrome/browser/ui/spaces/space_storage_partition_unittest.cc
++++ b/chrome/browser/ui/spaces/space_storage_partition_unittest.cc
+@@ -42,6 +42,9 @@ TEST(SpaceStoragePartitionTest, IsolationMarkFollowsProfileId) {
+   EXPECT_TRUE(IsolationMarkForSpace(&registry, id).empty());
+   registry.EnsureIsolated(id);
+   EXPECT_EQ("Independent session", IsolationMarkForSpace(&registry, id));
++  registry.SetIsolated(id, false);
++  EXPECT_TRUE(IsolationMarkForSpace(&registry, id).empty())
++      << "off keeps the token but is not isolated";
+ }
+ 
+ }  // namespace
+diff --git a/chrome/browser/ui/stedding/tab_names.cc b/chrome/browser/ui/stedding/tab_names.cc
+index 70f789d9aa000..bfeaad6a703d3 100644
+--- a/chrome/browser/ui/stedding/tab_names.cc
++++ b/chrome/browser/ui/stedding/tab_names.cc
+@@ -116,6 +116,18 @@ void SetTabName(BrowserWindowInterface* browser,
+   }
+ }
+ 
++void CarryTabName(content::WebContents* from, content::WebContents* to) {
++  const std::u16string name = TabName(from);
++  if (!to || name.empty()) {
++    return;
++  }
++  if (TabNameData* const data = TabNameData::FromWebContents(to)) {
++    data->set_name(name);
++  } else {
++    TabNameData::CreateForWebContents(to, name);
++  }
++}
++
+ void RestoreTabNameFromExtraData(
+     content::WebContents* contents,
+     const std::map<std::string, std::string>& extra_data) {
+diff --git a/chrome/browser/ui/stedding/tab_names.h b/chrome/browser/ui/stedding/tab_names.h
+index c9d1979ae2c0e..7fca4f73cc508 100644
+--- a/chrome/browser/ui/stedding/tab_names.h
++++ b/chrome/browser/ui/stedding/tab_names.h
+@@ -36,6 +36,10 @@ void SetTabName(BrowserWindowInterface* browser,
+                 tabs::TabInterface* tab,
+                 std::u16string name);
+ 
++// sessions S9: the name rides on the WebContents, so when a tab's contents
++// are replaced (a jar change) it moves to the new ones. No-op without a name.
++void CarryTabName(content::WebContents* from, content::WebContents* to);
++
+ // Session restore: adopt the name stored with a restored tab, if any.
+ void RestoreTabNameFromExtraData(
+     content::WebContents* contents,
+diff --git a/chrome/browser/ui/views/commandbar/command_bar_view.cc b/chrome/browser/ui/views/commandbar/command_bar_view.cc
+index 04c6c0617dafc..e5c0aad32ad2c 100644
+--- a/chrome/browser/ui/views/commandbar/command_bar_view.cc
++++ b/chrome/browser/ui/views/commandbar/command_bar_view.cc
+@@ -444,15 +444,8 @@ void CommandBarView::BuildActions() {
+              },
+              base::Unretained(spaces)),
+          /*keeps_bar_open=*/true});
+-    actions_.push_back(
+-        {u"Open in Throwaway", std::u16string(),
+-         base::BindRepeating(
+-             [](spaces::SpaceModel* model) {
+-               if (spaces::Space* const space = model->AddThrowawaySpace()) {
+-                 model->SetActiveSpace(space->id());
+-               }
+-             },
+-             base::Unretained(spaces))});
++    // throwaway T1 stays a model until T2 (a throwaway Space must not come
++    // back after a restart with a fresh jar); no row opens one yet.
+   }
+   // little E1: inside a little window, the Spaces of the last-active window.
+   if (stedding::IsLittleWindow(browser_)) {
+diff --git a/chrome/browser/ui/views/spaces/space_switcher_view.cc b/chrome/browser/ui/views/spaces/space_switcher_view.cc
+index 42e8255194fca..402e743b1c356 100644
+--- a/chrome/browser/ui/views/spaces/space_switcher_view.cc
++++ b/chrome/browser/ui/views/spaces/space_switcher_view.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "chrome/browser/ui/views/spaces/space_switcher_view.h"
+ 
++#include <algorithm>
++
+ #include <array>
+ #include <memory>
+ #include <string>
+@@ -105,6 +107,8 @@ constexpr int kRemoveSpaceCommand = 200;
+ constexpr int kMoveSpaceLeftCommand = 201;
+ constexpr int kMoveSpaceRightCommand = 202;
+ constexpr int kIsolateSpaceCommand = 203;
++// sessions S13: wipe the isolated jar, keep the Space.
++constexpr int kWipeSessionCommand = 204;
+ 
+ // The colour choices live in space_colors.h: the welcome flow shows the same
+ // five (welcome W7).
+@@ -252,10 +256,18 @@ void SpaceSwitcherView::Rebuild() {
+   // this view) keeps the left. Spreading the chips across the row read as
+   // "weirdly centred" with two or three Spaces.
+   add_spacer();
++  // focus Fc1, share-coat Sc1: while either lasts the row is the active chip
++  // alone, no "+", and chips_ is shorter than spaces(); every lookup below
++  // goes by chip index or Space id, never by position in the model.
++  const bool hide_others = model_->in_focus() || model_->share_coat();
+   const auto& spaces = model_->spaces();
+   for (size_t i = 0; i < spaces.size(); ++i) {
+     const Space& space = *spaces[i];
+     const bool active = space.id() == model_->active_id();
++    if (!SwitcherChipVisible(hide_others, active)) {
++      continue;
++    }
++    const size_t chip_index = chips_.size();
+ 
+     const std::u16string name = model_->DisplayName(space.id());
+     // A Space the user has not given an icon still gets a glyph, taken from
+@@ -285,13 +297,13 @@ void SpaceSwitcherView::Rebuild() {
+               self->hover_callback_.Run(entered ? name : std::u16string(),
+                                         bounds);
+             },
+-            base::Unretained(this), i, name),
++            base::Unretained(this), chip_index, name),
+         base::BindRepeating(&SpaceSwitcherView::OnChipDragged,
+-                            base::Unretained(this), i),
++                            base::Unretained(this), chip_index),
+         base::BindRepeating(&SpaceSwitcherView::OnChipReleased,
+-                            base::Unretained(this), i),
++                            base::Unretained(this), chip_index),
+         base::BindRepeating(&SpaceSwitcherView::OnChipCaptureLost,
+-                            base::Unretained(this), i));
++                            base::Unretained(this), chip_index));
+     button->SetHorizontalAlignment(gfx::ALIGN_CENTER);
+     button->SetPreferredSize(gfx::Size(kIconSize, kIconSize));
+     button->SetTooltipText(name);
+@@ -311,23 +323,26 @@ void SpaceSwitcherView::Rebuild() {
+   }
+   add_spacer();
+ 
+-  // A real plus icon, the size of a chip's glyph: the text "+" read as a
+-  // stray character beside the emoji (2026-09-05).
+-  auto add = std::make_unique<views::LabelButton>(base::BindRepeating(
+-      &SpaceSwitcherView::OnNewSpacePressed, base::Unretained(this)));
+-  add->SetImageModel(views::Button::STATE_NORMAL,
+-                     ui::ImageModel::FromVectorIcon(
+-                         vector_icons::kAdd2Icon,
+-                         ui::kColorLabelForegroundSecondary, kGlyphSize + 2));
+-  add->SetImageCentered(true);
+-  add->SetHorizontalAlignment(gfx::ALIGN_CENTER);
+-  add->SetPreferredSize(gfx::Size(kIconSize, kIconSize));
+-  add->SetTooltipText(u"New Space");
+-  add->SetBorder(views::CreateEmptyBorder(gfx::Insets()));
+-  if (collapsed_) {
+-    add->SetProperty(views::kMarginsKey, chip_margin);
++  if (SwitcherShowsAdd(hide_others)) {
++    // A real plus icon, the size of a chip's glyph: the text "+" read as a
++    // stray character beside the emoji (2026-09-05).
++    auto add = std::make_unique<views::LabelButton>(base::BindRepeating(
++        &SpaceSwitcherView::OnNewSpacePressed, base::Unretained(this)));
++    add->SetImageModel(
++        views::Button::STATE_NORMAL,
++        ui::ImageModel::FromVectorIcon(vector_icons::kAdd2Icon,
++                                       ui::kColorLabelForegroundSecondary,
++                                       kGlyphSize + 2));
++    add->SetImageCentered(true);
++    add->SetHorizontalAlignment(gfx::ALIGN_CENTER);
++    add->SetPreferredSize(gfx::Size(kIconSize, kIconSize));
++    add->SetTooltipText(u"New Space");
++    add->SetBorder(views::CreateEmptyBorder(gfx::Insets()));
++    if (collapsed_) {
++      add->SetProperty(views::kMarginsKey, chip_margin);
++    }
++    icon_row_->AddChildView(std::move(add));
+   }
+-  icon_row_->AddChildView(std::move(add));
+   // The open row is one chip tall and takes its width from the sidebar's
+   // flex; the rail's stack measures itself in ApplyOverflow, dots and all
+   // (sidebar Y13). Stacked, the view sits in a vertical BoxLayout, which
+@@ -350,11 +365,22 @@ void SpaceSwitcherView::ApplyOverflow() {
+                             : SwitcherOverflows(width(), chips_.size());
+   const auto& spaces = model_->spaces();
+   std::vector<int> widths;
+-  for (size_t i = 0; i < chips_.size() && i < spaces.size(); ++i) {
++  for (size_t i = 0; i < chips_.size(); ++i) {
+     auto* const chip = views::AsViewClass<views::LabelButton>(chips_[i].first);
+     if (!chip) {
+       continue;
+     }
++    // The chip's Space by id: with Focus or the share coat on, chips_ holds
++    // the active chip alone and position in the model says nothing.
++    const auto it = std::ranges::find_if(
++        spaces, [&](const std::unique_ptr<Space>& candidate) {
++          return candidate->id() == chips_[i].second;
++        });
++    if (it == spaces.end()) {
++      continue;
++    }
++    const Space& space = **it;
++    const size_t model_index = static_cast<size_t>(it - spaces.begin());
+     const bool active = chips_[i].second == model_->active_id();
+     // Stacked, the pointer does not grow the dots: the stack would change
+     // height under it and the chip it rests on would move away. The chips'
+@@ -365,9 +391,9 @@ void SpaceSwitcherView::ApplyOverflow() {
+     const bool dot = chip_width == kSwitcherDot;
+     chip->SetPreferredSize(dot ? gfx::Size(kSwitcherDot, kSwitcherDot)
+                                : gfx::Size(kIconSize, kIconSize));
+-    chip->SetText(dot ? std::u16string() : GlyphFor(*spaces[i], i));
++    chip->SetText(dot ? std::u16string() : GlyphFor(space, model_index));
+     chip->SetBackground(dot ? views::CreateRoundedRectBackground(
+-                                  spaces[i]->color(), kSwitcherDot / 2)
++                                  space.color(), kSwitcherDot / 2)
+                             : nullptr);
+   }
+   if (collapsed_) {
+@@ -460,6 +486,7 @@ void SpaceSwitcherView::ShowMenuForSpace(
+   }
+   menu_model_->AddSeparator(ui::NORMAL_SEPARATOR);
+   menu_model_->AddCheckItem(kIsolateSpaceCommand, u"Independent session");
++  menu_model_->AddItem(kWipeSessionCommand, u"Clear Independent Session");
+   menu_model_->AddItem(kRenameSpaceCommand, u"Rename Space");
+   menu_model_->AddItem(kMoveSpaceLeftCommand, u"Move Left");
+   menu_model_->AddItem(kMoveSpaceRightCommand, u"Move Right");
+@@ -490,6 +517,12 @@ void SpaceSwitcherView::ExecuteCommand(int command_id, int event_flags) {
+                              !model_->SpaceIsIsolated(*menu_space_));
+     return;
+   }
++  if (command_id == kWipeSessionCommand) {
++    // sessions S13: the jar is emptied, the Space and its id stay, the tabs
++    // reload signed out.
++    model_->WipeIsolatedSession(*menu_space_);
++    return;
++  }
+   if (command_id == kRenameSpaceCommand) {
+     BeginRename(*menu_space_);
+     return;
+@@ -546,6 +579,9 @@ bool SpaceSwitcherView::IsCommandIdEnabled(int command_id) const {
+   if (command_id == kIsolateSpaceCommand) {
+     return menu_space_ && model_->registry();
+   }
++  if (command_id == kWipeSessionCommand) {
++    return menu_space_ && model_->SpaceIsIsolated(*menu_space_);
++  }
+   return true;
+ }
+ 
+@@ -610,7 +646,9 @@ bool SpaceSwitcherView::HandleKeyEvent(views::Textfield* sender,
+ 
+ void SpaceSwitcherView::OnChipDragged(size_t chip_index,
+                                       const ui::MouseEvent& event) {
+-  if (chip_index >= chips_.size()) {
++  // One chip on show is nothing to reorder against (focus Fc1, share-coat Sc1).
++  if (chip_index >= chips_.size() || model_->in_focus() ||
++      model_->share_coat()) {
+     return;
+   }
+   drag_chip_ = chip_index;

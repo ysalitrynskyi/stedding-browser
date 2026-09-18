@@ -138,6 +138,7 @@ consequences we will not hide:
 | Crash reporting | Off | Opt in |
 | Update checks | On (no identifiers) | — (required for a safe product) |
 | Search engine | User chooses at first run | Change anytime |
+| Cookies per Space | Off: every Space shares the profile's jar | Independent session on a Space keeps its own cookies, cache and site data on this disk; Clear Independent Session empties it; deleting the Space deletes it (`features/sessions.md`) |
 | Search suggestions | Off | Opt in |
 | Safe Browsing | On (hash-prefix only) | Turn off |
 | Google sync | Not available | — |

@@ -37,13 +37,16 @@ Three designs were weighed.
   `SiteInstance::CreateForFixedStoragePartition` against
   `StoragePartitionConfig::Create(context, "spaces", profile_id, false)`.
 - `RegistryEntry::profile_id` is that partition name. Empty means the Space
-  shares the profile's default partition (today's behaviour). Non-empty is a
-  random `base::Token` written the first time isolation is turned on, so
-  turning it off and on again reattaches the same jar. It is not a Chrome
+  has never been isolated. Non-empty is a random `base::Token` written the
+  first time isolation is turned on and kept from then on; whether the Space
+  is isolated right now is the `isolated` flag beside it, so turning it off
+  and on again reattaches the same jar with its logins. A registry written
+  before the flag existed (beta 7) reads a token as on. It is not a Chrome
   profile path and not the Space's runtime id.
 - Isolation is **opt-in per Space**. Essentials stay on the default partition
   (they are in every Space, B6). Private windows have no Spaces. A Blank
-  Window's in-memory registry can isolate; nothing is written to disk.
+  Window's in-memory registry can isolate; its partitions are in-memory too,
+  so nothing is written to disk.
 - New files under `chrome/browser/ui/spaces/` own the helper. The one
   upstream hunk is `CreateTargetContents` in `browser_navigator.cc`, which
   already chooses the `SiteInstance`. No `content/`, `blink/` or `net/`
@@ -64,6 +67,7 @@ Three designs were weighed.
 - PRODUCT §2's "profile" wording is this ADR: a storage partition, not a
   Chromium profile. Binding two Spaces to one jar, or giving a Space its
   own extension set, is a later ADR.
-- Deleting an isolated Space leaves its partition on disk until a later
-  "clear this Space's session" row wipes it. Orphan data is bounded by the
-  number of Spaces the user has ever isolated.
+- Deleting an isolated Space wipes its partition once its tabs have moved
+  (sessions S17); Clear Independent Session on the chip menu wipes it in
+  place (S13). Turning isolation off keeps the jar for the next time it is
+  turned on, so the data on disk is bounded by the Spaces that exist.

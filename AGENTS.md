@@ -221,6 +221,17 @@ Built, with tests or measured captures:
   `tooling/dev test upstream` and seven of Chromium's own cases now assert what
   this fork does. The macOS image joined beta 6 that day; the README's captures
   are from it.
+- **Independent sessions and the keep-pile** (2026-09-16 to 18; patches 0046–0048,
+  ADR 0019, ADR 0020; `docs/features/sessions.md`): a Space can keep its own
+  cookies, cache and site data in a Chromium `StoragePartition` -- the chip menu's
+  check item, a toggle in Settings → Stedding, a row in ⌘T -- with essentials on
+  the shared jar, a moved tab rebound with its history and name (asleep stays
+  asleep), Clear Independent Session on the chip menu, the jar wiped when the
+  Space goes, and off-then-on reattaching the same jar. With it: keyword search
+  and `@Space` in ⌘T, a split that restores as a pair and renames as one, host
+  and host-suffix routes, Focus and Hide Other Spaces. The 2026-09-18 audit of
+  those two patches (HANDOFF trap 46) found seven helpers with tests and no
+  surface; their spec rows say `model only` and `S-61` lists them.
 
 Read `docs/HANDOFF.md` before touching anything — it carries the working loop,
 every dev parameter, and the traps already paid for, numbered contiguously and cited
@@ -239,8 +250,10 @@ with two fixups into patch 0039 that the first macOS build of the Windows-writte
 patches turned up (`docs/ARC-ROUND2.md`, *The Mac pass*). Beta 5 stays a
 Windows-only preview. Signing: the Apple developer account exists since 2026-09-10;
 the certificate and the notary profile are the operator's next step (`S-17`).
-The pin is 153.0.8010.48 (2026-09-16, `S-52`); `v0.2.0-beta.7` is the Mac image of
-that pin. Outstanding: `BACKLOG.md`. First vanilla perf comparison is in
+The pin is 153.0.8010.53 (2026-09-18, `S-62`: the point release with sixteen
+security fixes, taken the day after it shipped); `v0.2.0-beta.8` is the Mac image
+of that pin and `v0.2.0-beta.7` (153.0.8010.48) the one before. Outstanding:
+`BACKLOG.md`. First vanilla perf comparison is in
 `docs/perf/README.md`: on the deterministic page list every QUALITY budget is
 met (cold +2.3%, warm −2.0%, memory +0.0% over vanilla).
 
@@ -292,10 +305,12 @@ evening (patches 0037–0038 and fixups into 0001, 0002). `v0.2.0-beta.5` is
 out with round 8 and M8's first slice as the Windows preview alone, and
 `v0.2.0-beta.6` is out on both platforms: from Windows with round 9 on
 2026-09-10, the macOS image added from the Mac the same day.
-`v0.2.0-beta.7` is the Mac image of pin 153.0.8010.48 (2026-09-16); the Windows
-installer for that tag is still to join it (`S-56`).
+`v0.2.0-beta.7` (2026-09-16) is the Mac image of pin 153.0.8010.48 with
+independent sessions, and `v0.2.0-beta.8` (2026-09-18) the Mac image of
+153.0.8010.53 with the audit's fixes; the Windows installer for a current tag is
+still to join it (`S-56`).
 
-**Whoever picks this up next** (state as of 2026-09-16): read `docs/HANDOFF.md`
+**Whoever picks this up next** (state as of 2026-09-18): read `docs/HANDOFF.md`
 first — the loop, the dev parameters and the traps, including `tooling/capture-state`
 (a capture that needs neither the keyboard nor the pointer, trap 29), the rule that a
 release sweep runs Chromium's own suites around what the series touches, not only
@@ -304,16 +319,19 @@ back (trap 44). `tooling/dev status` says whether the checkout and `unit_tests`
 exist before anything is planned; `tooling/check-pin` says how far behind stable
 the pin is. The order of work:
 
-1. The operator's look at beta 6 and 7 — round 10 in `docs/ARC-ROUND2.md`, one table
+1. The operator's look at beta 7 and 8 — round 10 in `docs/ARC-ROUND2.md`, one table
    per round, one row per finding with its fix. Ask for the findings; they, not the
-   backlog, decide the features.
+   backlog, decide the features. Independent sessions have not been tried on a real
+   site by anyone yet; that is the first thing to ask about.
 2. `S-17` when the Developer ID certificate exists (the steps are in the row): a
    signed, notarised re-release, then the updater (ADR 0014) behind its settings
    entry.
-3. Then the rest by backlog order: `S-56` (Windows: the beta 7 installer, little
-   windows, signing, updates, CI), `S-48` (the Arc data import on a real profile),
-   `S-51`, `S-57`, `S-47`, `S-54`, `S-55`, `S-50`, `S-49`. Every feature spec names
-   its own `gap` rows.
+3. Then the rest by backlog order: `S-61` (the keep-pile's `model only` rows: wire
+   or withdraw, trap 46), `S-56` (Windows: the beta 8 installer, little windows,
+   signing, updates, CI), `S-48` (the Arc data import on a real profile), `S-51`,
+   `S-57`, `S-47`, `S-54`, `S-55`, `S-50`, `S-49`. `S-58` before any milestone
+   bump: M154 is stable and the Mac has no room for a re-sync. Every feature spec
+   names its own `gap` rows.
 
 The website is finished and live (see *Site* above); what remains there is two
 dashboard steps for the owner (`S-59`). Keep README, `docs/INSTALL.md`,

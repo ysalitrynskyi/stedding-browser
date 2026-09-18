@@ -13,8 +13,8 @@ below always means: a fresh macOS user account can install the artifact and run 
 without developer tools, without terminal commands, and without reading build docs
 (Windows/Linux equivalents apply from M8/M9 on).
 
-**Where this stands (2026-09-16):** M0–M6 are built and shipped unsigned; the current
-release is `v0.2.0-beta.7`, macOS (Apple silicon) on Chromium 153.0.8010.48 — the ladder
+**Where this stands (2026-09-18):** M0–M6 are built and shipped unsigned; the current
+release is `v0.2.0-beta.8`, macOS (Apple silicon) on Chromium 153.0.8010.53 — the ladder
 was climbed out of order, chasing feedback from real use (`docs/ARC-ROUND2.md`), and each
 feature's own spec under `docs/features/` is the record of what passes. The Windows x64
 preview is still beta 6 until that image joins this tag (`S-56`). Of M7, the

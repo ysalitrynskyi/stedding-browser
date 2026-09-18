@@ -333,8 +333,8 @@ the pin is. The order of work:
    bump: M154 is stable and the Mac has no room for a re-sync. Every feature spec
    names its own `gap` rows.
 
-The website is finished and live (see *Site* above); what remains there is two
-dashboard steps for the owner (`S-59`). Keep README, `docs/INSTALL.md`,
+The website is finished and live (see *Site* above); what remains there is one
+dashboard step for the owner, the www redirect (`S-59`). Keep README, `docs/INSTALL.md`,
 `docs/SHORTCUTS.md` and `docs/FAQ.md` true after every release: they are the
 product's front door, written for people, and the site takes its facts from them.
 

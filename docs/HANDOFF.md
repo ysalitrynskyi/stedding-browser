@@ -578,11 +578,11 @@ into the existing release and refreshed the notes with the checksum. With a
 Developer ID in the keychain (`S-17`), `tooling/sign-release release` goes between
 `verify-build` and `package-dmg`, which then takes `--app
 dist/signed/stable/Stedding.app`, and the notes lose the right-click paragraph.
-After `publish-release`, nothing is needed on the site: its scheduled rebuild reads
-the release list, pre-releases included (once the deploy hook secret is a URL,
-`S-59`); to see the new version at once, push to the site's `main`, which
-Cloudflare builds on its own (the *Rebuild* workflow is the hook and fails until
-`S-59` is done).
+After `publish-release`, nothing is needed on the site: its scheduled rebuild
+(every six hours) reads the release list, pre-releases included. To see the new
+version at once, `gh workflow run rebuild.yml -R ysalitrynskyi/stedding.dev`
+(the deploy hook; working since 2026-09-18) or push to the site's `main`, which
+Cloudflare builds on its own.
 
 The push moved ahead of the publish on purpose. `gh release create` cuts the tag on
 the remote, so publishing from an unpushed commit tagged whatever the remote's default

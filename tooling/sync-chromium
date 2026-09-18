@@ -5,6 +5,8 @@
 #   tooling/sync-chromium                 # checkout + dependencies at the pin
 #   tooling/sync-chromium --nohooks       # skip runhooks (toolchain/binary downloads)
 #   tooling/sync-chromium --all-tags      # fetch every upstream tag (slow; rarely needed)
+#   tooling/sync-chromium --point-release # an existing checkout moves to a point release
+#                                         # on its own milestone; a 25 GB floor, not 150
 #
 # Idempotent: re-running moves an existing checkout to the pinned version.
 # The tree is created at $CHROMIUM_ROOT (default ~/chromium) — outside this repo.
@@ -31,10 +33,12 @@ main() {
 
     RUN_HOOKS=1
     ALL_TAGS=0
+    POINT_RELEASE=0
     for arg in "$@"; do
       case "$arg" in
         --nohooks)  RUN_HOOKS=0 ;;
         --all-tags) ALL_TAGS=1 ;;
+        --point-release) POINT_RELEASE=1 ;;
         -h|--help)  sed -n '2,10p' "$0"; exit 0 ;;
         *)          die "unknown argument: $arg" ;;
       esac
@@ -52,6 +56,26 @@ main() {
     min_free="${STEDDING_SYNC_MIN_FREE_GB:-150}"
     case "$min_free" in ''|*[!0-9]*) die "STEDDING_SYNC_MIN_FREE_GB takes whole GB, got '$min_free'" ;; esac
     [ "$min_free" -ge 100 ] || die "STEDDING_SYNC_MIN_FREE_GB must be at least 100 (the measured working set is about 85 GB)"
+    if [ "$POINT_RELEASE" -eq 1 ]; then
+      # A point release on the milestone the checkout already holds is not a
+      # re-sync: the tag fetch is the delta of a few hundred commits, gclient
+      # moves the handful of dependencies that changed, and the hooks fetch the
+      # release's PGO profile (about 1 GB). Measured 2026-09-18 for
+      # 153.0.8010.48 -> .53 (docs/HANDOFF.md, trap 45). The floor here covers
+      # that with room for the incremental build that follows; the 150 GB above
+      # is for a checkout that does not exist yet. The flag is refused when the
+      # checkout is missing or on another milestone, because then it IS a
+      # re-sync and the full floor applies.
+      [ -f "$CHROMIUM_SRC/chrome/VERSION" ] \
+        || die "--point-release needs an existing checkout at $CHROMIUM_SRC; without one this is a full sync"
+      have_major="$(sed -n 's/^MAJOR=//p' "$CHROMIUM_SRC/chrome/VERSION")"
+      [ "$have_major" = "$CHROMIUM_MILESTONE" ] \
+        || die "--point-release: the checkout is M$have_major and the pin is M$CHROMIUM_MILESTONE; a milestone bump is a full sync"
+      min_free="${STEDDING_SYNC_POINT_RELEASE_MIN_FREE_GB:-25}"
+      case "$min_free" in ''|*[!0-9]*) die "STEDDING_SYNC_POINT_RELEASE_MIN_FREE_GB takes whole GB, got '$min_free'" ;; esac
+      [ "$min_free" -ge 20 ] || die "STEDDING_SYNC_POINT_RELEASE_MIN_FREE_GB must be at least 20"
+      log "point release on M$CHROMIUM_MILESTONE: the floor is $min_free GB, not the full-sync 150"
+    fi
     require_free_gb "$CHROMIUM_ROOT" "$min_free"
     require_no_ancestor_node_modules "$CHROMIUM_ROOT"
 

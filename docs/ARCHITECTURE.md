@@ -116,7 +116,11 @@ Policy for moving the pin: `decisions/0007-chromium-version-pin.md`.
   "Measured results". Both floors can be lowered for a run that has done the
   arithmetic: `STEDDING_SYNC_MIN_FREE_GB` (never under 100) and `STEDDING_MIN_FREE_GB`
   (never under 20, for incremental chunks). The checkout was deleted for disk once and
-  re-synced from 109 GB free (`docs/HANDOFF.md`, trap 44).
+  re-synced from 109 GB free (`docs/HANDOFF.md`, trap 44). A point release on the
+  milestone the checkout already holds is not a re-sync: `tooling/sync-chromium
+  --point-release` (what `tooling/update-pin --apply` passes for a same-milestone
+  bump) fetches the delta and the release's PGO profile and asks for 25 GB
+  (`STEDDING_SYNC_POINT_RELEASE_MIN_FREE_GB`, never under 20; trap 45).
 - **No `node_modules` in any directory above the checkout.** Chromium's TypeScript
   build resolves modules the way node does — by walking up parent directories — so a
   stray `node_modules` in your home directory leaks its `@types` into the build. The

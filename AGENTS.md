@@ -5,6 +5,12 @@ context. Read it before doing anything else. It is model-agnostic and tool-agnos
 everything you need is in this repo, nothing depends on a particular assistant, session,
 or machine.
 
+## Machine context (this host)
+
+Walk-up: `~/work/AGENTS.md`. Runbooks: `~/work/_runbooks/README.md`.
+**SSH:** never without operator yes naming the exact host — `ssh-and-hosts.md`.
+**Azure Foundry ON** (images via `azure_image`). Old resource banned. `azure-enabled.md`.
+
 ## What this project is
 
 **Stedding Browser** — a fully open-source, Chromium-based desktop browser with an

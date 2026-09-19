@@ -39,7 +39,8 @@ from real use recorded in [ARC-ROUND2.md](ARC-ROUND2.md).
 **Why is the build unsigned, and is it safe?**
 Code signing needs an Apple Developer ID certificate (and, on Windows, a code-signing
 certificate); the Apple account exists and the certificate is the next step. Until
-then macOS warns on the first launch and right-click → Open gets past it once. Every
+then macOS calls the downloaded app "damaged"; the one Terminal command in
+[INSTALL.md](INSTALL.md) gets past it, and right-click → Open does not. Every
 release is built from the tagged commit in this repository, and its SHA-256 checksum
 is published beside the file so you can check what you downloaded
 ([INSTALL.md](INSTALL.md)).

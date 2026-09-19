@@ -174,7 +174,7 @@ copyleft conditions). No other project on this list offers all three.
 Honesty section. As of 2026-09-05:
 
 - **We ship an unsigned beta, on one platform.** macOS on Apple silicon only, and the
-  image is unsigned until M7, so installing it means a right-click bypass past
+  image is unsigned until M7, so installing it means a Terminal command past
   Gatekeeper and no automatic updates. Every browser above ships a signed, updating
   build on more platforms than we do; Zen and Brave ship polished products today.
 - **No track record.** Keeping a Chromium fork current with security updates is a

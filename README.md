@@ -65,7 +65,7 @@ The current release is **0.2.0 beta 8**, built on Chromium 153.0.8010.53 (stable
 
 | Platform | File | Notes |
 |---|---|---|
-| macOS, Apple silicon (M1 or later) | `Stedding-<version>-arm64.dmg` | Open the DMG, drag **Stedding** to Applications, then **right-click → Open** the first time. |
+| macOS, Apple silicon (M1 or later) | `Stedding-<version>-arm64.dmg` | Open the DMG, drag **Stedding** to Applications, then run `xattr -dr com.apple.quarantine /Applications/Stedding.app` once in Terminal ([why](docs/INSTALL.md#macos-apple-silicon)). |
 | Windows 10 / 11, x64 | `Stedding-<version>-win-x64.exe` | Installs for the current user, no administrator prompt. If SmartScreen appears: **More info → Run anyway**, once. |
 
 The builds are **not yet code-signed** (an Apple developer account exists; the
@@ -249,7 +249,7 @@ it against Arc every day. What is out and what comes next:
 | Linux | After Windows (milestone M9 in [docs/ROADMAP.md](docs/ROADMAP.md)) |
 | Sync between machines | Not planned as a service; export, backup and restore files instead |
 
-Known limits in the current builds: the first launch needs the right-click (unsigned);
+Known limits in the current builds: the first launch needs one Terminal command (unsigned);
 ⌃1–⌃9 collide with macOS Mission Control once you have a second desktop (the Spaces
 menu keeps the commands reachable); a clipboard manager that owns ⇧⌘C system-wide
 takes it before the browser does.
@@ -265,10 +265,10 @@ of patches that add the sidebar, Spaces, the command bar and the rest, written f
 scratch for this project.
 
 **Why is it unsigned? Is it safe to open?** Signing needs an Apple Developer ID
-certificate, which is being set up. Until then macOS shows a warning on the first
-launch; right-click → Open gets past it once. Every build is made from the tagged
-commit on this repository and its checksum is published beside it, so you can check
-what you downloaded.
+certificate, which is being set up. Until then macOS calls the downloaded app
+"damaged"; the one Terminal command in [docs/INSTALL.md](docs/INSTALL.md) gets past
+it. Every build is made from the tagged commit on this repository and its checksum is
+published beside it, so you can check what you downloaded.
 
 **Do my Chrome extensions work?** Yes. Stedding is Chromium; extensions install from
 the Chrome Web Store as usual.

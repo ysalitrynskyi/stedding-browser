@@ -4,8 +4,8 @@ Stedding ships as beta pre-releases on the
 [Releases page](https://github.com/ysalitrynskyi/stedding-browser/releases). Each
 release carries one file per platform and a SHA-256 checksum for each.
 
-The builds are **not code-signed yet**. On macOS that means one extra click on the
-first launch; on Windows, one SmartScreen prompt. Signing and notarisation are the
+The builds are **not code-signed yet**. On macOS that means one Terminal command
+before the first launch; on Windows, one SmartScreen prompt. Signing and notarisation are the
 next step (`S-17` in [BACKLOG.md](../BACKLOG.md)); once they land, this page loses
 those paragraphs.
 
@@ -14,15 +14,22 @@ those paragraphs.
 Requirements: a Mac with an M-series chip (M1 or later). Intel Macs are not supported
 yet.
 
-1. Download `Stedding-<version>-arm64.dmg` from the latest release.
+1. Download `Stedding-<version>-arm64.dmg` from the latest release and check its
+   checksum ([below](#verifying-the-download)).
 2. Open the DMG and drag **Stedding** into **Applications**.
-3. In Applications, **right-click Stedding → Open**, then confirm in the dialog. This
-   is needed once; every later launch is a normal double-click.
+3. Open Terminal and run, once:
 
-Do not turn Gatekeeper off system-wide for this; the per-app step above is enough.
+   ```bash
+   xattr -dr com.apple.quarantine /Applications/Stedding.app
+   ```
 
-If macOS says the app "is damaged and can't be opened", the download was altered in
-transit. Check the checksum (below) and download again.
+   Then open Stedding as usual. Every later launch is a normal double-click.
+
+Without step 3, macOS says Stedding "is damaged and can't be opened" and offers to
+move it to the Trash. The app is not damaged: that is what macOS says about an
+unsigned build of Chromium downloaded from the internet, and right-click → Open does
+not get past it. The command removes the download mark from this one app, which is
+why the checksum comes first. Do not turn Gatekeeper off system-wide for this.
 
 ### Verifying the download
 
@@ -46,8 +53,9 @@ Saved passwords are encrypted with a key kept in the macOS keychain under the na
 
 ### Updating
 
-Download the new DMG and drag Stedding over the old one in Applications. Your profile
-is untouched. In-app updates arrive with signing (`S-17`).
+Download the new DMG and drag Stedding over the old one in Applications, then run
+the command in step 3 again: each download carries the mark anew. Your profile is
+untouched. In-app updates arrive with signing (`S-17`).
 
 ### Uninstalling
 

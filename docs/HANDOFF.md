@@ -518,6 +518,23 @@ into the fresh profile.
     the tests before the spec says built. A behaviour is shipped when a user can
     reach it and its test is green -- both, not either.
 
+47. **A release is tried the way a user gets it: downloaded.** Every macOS
+    pre-release up to beta 8 told users to right-click → Open the unsigned app on
+    its first launch, and nobody had tried that on a download: `verify-build`
+    launches the app from `out/release`, which carries no quarantine mark, so no
+    check ever met Gatekeeper. On 2026-09-19 the operator downloaded beta 8 through
+    a browser and macOS said Stedding "is damaged and can't be opened", which no
+    right-click gets past. The download was intact (its checksum matched); the
+    signature is the cause: the linker gives each Mach-O an ad-hoc signature, the
+    bundle has no sealed resources, and Gatekeeper reports that on a quarantined
+    app as damage (`codesign --verify --deep --strict`: "code has no resources but
+    signature indicates they must be present"). Until `S-17`, the install step is
+    `xattr -dr com.apple.quarantine` on the one app, after the checksum
+    (`docs/INSTALL.md`). Before a release is announced, run `syspolicy_check
+    distribution` on the app that goes into the image: anything short of a pass
+    means the notes carry the unsigned paragraph, and the paragraph is one that was
+    tried on a downloaded copy.
+
 ## The Windows build
 
 Git for Windows for the bash tooling, PowerShell for the rest, Visual Studio's own
@@ -557,8 +574,8 @@ once on a real Arc profile).
 
 ## Release channel
 
-Pre-releases on GitHub Releases, unsigned, with the Gatekeeper right-click
-instructions in the notes and the sha256 beside the DMG. The order, all from the
+Pre-releases on GitHub Releases, unsigned, with the Gatekeeper instructions
+(`docs/INSTALL.md`'s `xattr` command, trap 47) in the notes and the sha256 beside the DMG. The order, all from the
 repo root with a clean tree: bump `VERSION`, `tooling/dev build release chrome`
 (the About line is a build flag), `tooling/verify-build --app
 .../out/release/Stedding.app`, empty `dist/`, `tooling/package-dmg release`
@@ -577,7 +594,7 @@ of trap 31, and the captures the README shows -- and `publish-release` uploaded
 into the existing release and refreshed the notes with the checksum. With a
 Developer ID in the keychain (`S-17`), `tooling/sign-release release` goes between
 `verify-build` and `package-dmg`, which then takes `--app
-dist/signed/stable/Stedding.app`, and the notes lose the right-click paragraph.
+dist/signed/stable/Stedding.app`, and the notes and `docs/INSTALL.md` lose the unsigned paragraph.
 After `publish-release`, nothing is needed on the site: its scheduled rebuild
 (every six hours) reads the release list, pre-releases included. To see the new
 version at once, `gh workflow run rebuild.yml -R ysalitrynskyi/stedding.dev`

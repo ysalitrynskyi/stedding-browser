@@ -549,6 +549,23 @@ into the fresh profile.
     colour is one line in a capture or a run, and it is now what the release
     sweep does (`tooling/verify-build`).
 
+49. **Chromium's signer had never been run here with a real identity.** Until
+    2026-09-23 the only signing run was `--development` (2026-09-03), which skips
+    Gatekeeper and notarization. The first Developer ID run failed three times in a
+    row, each a fault nothing had exercised: `tooling/sign-release` passed
+    `--notary-arg --keychain-profile=...`, which the signer's parser reads as an
+    option with no value; upstream's `validate_app` asked Gatekeeper about the app
+    before notarizing it, and current macOS rejects every Developer ID app until it
+    is notarized ("source=Unnotarized Developer ID"), with a `NameError` in the
+    error path hiding the message; and `Distribution.to_config` dropped the
+    notarization level, so every distribution read the default whatever
+    `--notarize` said. Patch 0051 fixes the two upstream faults and assesses only
+    after stapling. The fourth run signed and submitted, then waited out the
+    signer's two-hour limit on the team's first notarization, which Apple can
+    hold longer. Chromium's signer tests need Python 3.11 exactly (3.10 lacks
+    `asyncio.TaskGroup`, 3.12 dropped `assertEquals`); on another version compare
+    the failure list with and without a change, as the 0051 change was.
+
 ## The Windows build
 
 Git for Windows for the bash tooling, PowerShell for the rest, Visual Studio's own

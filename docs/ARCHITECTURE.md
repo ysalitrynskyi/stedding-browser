@@ -529,6 +529,20 @@ signing/notarization lands at M7. Builds before that — including M2, the first
 pre-alpha — ship unsigned, with the Gatekeeper bypass documented alongside each
 release.
 
+**Signing** runs Chromium's own signer (`chrome/installer/mac/signing`, built into
+`out/<config>/Stedding Packaging` by `chrome/installer/mac:mac`) through
+`tooling/sign-release`: every helper with its entitlements, the hardened runtime, a
+notarytool submission, the ticket stapled, then `spctl` must answer "accepted,
+source=Notarized Developer ID" or the script fails. The identity and the notary
+profile come from the operator's environment and keychain, never from this
+repository (`BACKLOG.md` `S-17`). Patch 0051 is what makes the signer work with a
+Developer ID on current macOS: upstream assessed the app with Gatekeeper before
+notarizing it, which rejects every unnotarized Developer ID app, and dropped the
+notarization level from the per-distribution config (`docs/HANDOFF.md`, trap 49).
+The signer waits two hours for Apple at most; a team's first submission can take
+longer, and a timed-out run loses its signed copy with the signer's work directory,
+so the rerun signs again.
+
 **Update checks go to the GitHub Releases API** — `decisions/0014-github-releases-as-update-channel.md`.
 The browser compares its version against the latest release of the repository and says
 when a newer one exists. No account, no identifier, no telemetry; GitHub sees an IP and

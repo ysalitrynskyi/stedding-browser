@@ -1,0 +1,124 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Wed, 23 Sep 2026 07:54:31 -0400
+Subject: mac signing: a Developer ID build can be signed and notarized in one
+ run
+
+Chromium's signer assessed the freshly signed app with Gatekeeper before
+notarizing it. On current macOS every Developer ID app is rejected until
+it is notarized ("rejected, source=Unnotarized Developer ID"), so the
+assessment failed every run, and its error path raised NameError on a
+missing import instead of reporting the command. The first Developer ID
+run of this series stopped there (2026-09-23).
+
+Two upstream faults and one change:
+- signing.py imports subprocess, so a failed verification is reported.
+- Distribution.to_config now carries the notarization level into the
+  per-distribution config. It was dropped, so every distribution config
+  read the default, STAPLE, whatever --notarize said; the pkg step's
+  --timestamp followed the default too.
+- validate_app assesses with Gatekeeper only when no notarization
+  follows. After stapling, tooling/sign-release assesses and fails unless
+  the answer is "accepted, source=Notarized Developer ID".
+
+Tests: the two sign_chrome cases that expect an assessment now sign
+without notarization, and a new case checks that signing before
+notarization does not assess.
+
+Why: docs/ARCHITECTURE.md "Signing"; BACKLOG S-17.
+Removable when: upstream carries the level into the distribution config
+and moves the assessment after stapling, or Stedding signs elsewhere.
+---
+ chrome/installer/mac/signing/model.py      |  1 +
+ chrome/installer/mac/signing/parts_test.py | 27 ++++++++++++++++++++--
+ chrome/installer/mac/signing/signing.py    |  6 ++++-
+ 3 files changed, 31 insertions(+), 3 deletions(-)
+
+diff --git a/chrome/installer/mac/signing/model.py b/chrome/installer/mac/signing/model.py
+index 8207e4afe6cdd..d99619b02f970 100644
+--- a/chrome/installer/mac/signing/model.py
++++ b/chrome/installer/mac/signing/model.py
+@@ -449,6 +449,7 @@ class Distribution(object):
+                     'identity',
+                     'installer_identity',
+                     'codesign_requirements_basic',
++                    'notarize',
+                 ),
+             )
+         )
+diff --git a/chrome/installer/mac/signing/parts_test.py b/chrome/installer/mac/signing/parts_test.py
+index 0657b5c1828c4..e15ad136dcc2b 100644
+--- a/chrome/installer/mac/signing/parts_test.py
++++ b/chrome/installer/mac/signing/parts_test.py
+@@ -221,7 +221,10 @@ class TestSignChrome(unittest.TestCase):
+         kwargs['run_command_all_output_async'].return_value = ('', 0, '', '')
+ 
+         dist = model.Distribution()
+-        config = dist.to_config(test_config.TestConfig())
++        # Gatekeeper is assessed here only when no notarization follows.
++        config = dist.to_config(
++            test_config.TestConfig(
++                notarize=model.NotarizeAndStapleLevel.NONE))
+ 
+         asyncio.run(parts.sign_chrome(self.paths, config, sign_framework=True))
+ 
+@@ -290,6 +293,23 @@ class TestSignChrome(unittest.TestCase):
+             ]
+         )
+ 
++    @mock.patch('signing.parts._sanity_check_version_keys')
++    def test_sign_chrome_before_notarization_skips_assess(
++            self, *args, **kwargs):
++        # A Developer ID app is rejected ("Unnotarized Developer ID") until it
++        # is notarized, so the assessment waits for the stapled app.
++        kwargs['run_command_all_output_async'].return_value = ('', 0, '', '')
++        dist = model.Distribution()
++        config = dist.to_config(
++            test_config.TestConfig(
++                notarize=model.NotarizeAndStapleLevel.STAPLE))
++
++        asyncio.run(parts.sign_chrome(self.paths, config, sign_framework=True))
++
++        self.assertNotIn(
++            mock.call(['spctl', '--assess', '-vv', '/$W/App Product.app']),
++            kwargs['run_command_all_output_async'].await_args_list)
++
+     @mock.patch('signing.parts._sanity_check_version_keys')
+     def test_sign_chrome_no_assess(self, *args, **kwargs):
+         dist = model.Distribution()
+@@ -357,7 +377,10 @@ class TestSignChrome(unittest.TestCase):
+             manager.attach_mock(kwargs[kwarg], kwarg)
+ 
+         dist = model.Distribution()
+-        config = dist.to_config(test_config.TestConfig())
++        # Gatekeeper is assessed here only when no notarization follows.
++        config = dist.to_config(
++            test_config.TestConfig(
++                notarize=model.NotarizeAndStapleLevel.NONE))
+ 
+         asyncio.run(parts.sign_chrome(self.paths, config, sign_framework=False))
+ 
+diff --git a/chrome/installer/mac/signing/signing.py b/chrome/installer/mac/signing/signing.py
+index eb02fb7ba993e..47775611cc8b5 100644
+--- a/chrome/installer/mac/signing/signing.py
++++ b/chrome/installer/mac/signing/signing.py
+@@ -9,6 +9,7 @@ bundle that need to be signed, as well as providing utilities to sign them.
+ import asyncio
+ import os.path
+ import re
++import subprocess
+ 
+ from signing import commands, invoker, logger
+ 
+@@ -162,7 +163,10 @@ async def validate_app(paths, config, part):
+             )
+         )
+     ]
+-    if config.run_spctl_assess:
++    # Gatekeeper rejects a Developer ID app until it is notarized
++    # ("source=Unnotarized Developer ID"), so an assessment here can only pass
++    # when no notarization follows; after stapling, the caller assesses.
++    if config.run_spctl_assess and not config.notarize.should_notarize():
+         tasks += [
+             asyncio.create_task(
+                 commands.run_command_all_output_async(

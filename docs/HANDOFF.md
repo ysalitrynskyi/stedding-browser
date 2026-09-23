@@ -535,6 +535,20 @@ into the fresh profile.
     means the notes carry the unsigned paragraph, and the paragraph is one that was
     tried on a downloaded copy.
 
+48. **Nobody had run the browser in full screen.** Every capture, probe and
+    test since patch 0013 ran in a window. macOS in full screen moves the top
+    container into an overlay widget of its own, so the toolbar is no longer in
+    the browser view's widget, and the window background's page bar converted
+    its bounds anyway: a CHECK, and the browser aborted a second after launch
+    (toolbar T24, 2026-09-19). The operator met it as "it crashes on launch":
+    their session had a full-screen window, so the restore hit it every time.
+    Two lessons. A view another window may own -- the toolbar, the top
+    container, anything in it -- is converted only after `GetWidget()` says it
+    is still this window's. And a state the product supports is a state
+    something must enter: `--start-fullscreen` with a page that carries a theme
+    colour is one line in a capture or a run, and it is now what the release
+    sweep does (`tooling/verify-build`).
+
 ## The Windows build
 
 Git for Windows for the bash tooling, PowerShell for the rest, Visual Studio's own

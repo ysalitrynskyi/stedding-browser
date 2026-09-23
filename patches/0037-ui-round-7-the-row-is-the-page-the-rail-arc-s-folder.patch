@@ -52,7 +52,8 @@ on upstream's vertical tabs rather than patched onto them.
  chrome/browser/ui/stedding_ui_metrics.cc      |  24 ++-
  chrome/browser/ui/stedding_ui_metrics.h       |  17 ++
  .../layout/stedding_browser_view_layout.cc    |  47 +++++-
- .../views/frame/stedding_window_background.cc |  22 ++-
+ .../views/frame/stedding_window_background.cc |  35 +++-
+ .../stedding_window_background_unittest.cc    |  45 ++++++
  .../frame/vertical_tab_strip_region_view.cc   |  46 +++++-
  .../frame/vertical_tab_strip_region_view.h    |   5 +
  .../views/location_bar/location_bar_view.cc   |  85 +++++++++-
@@ -78,9 +79,11 @@ on upstream's vertical tabs rather than patched onto them.
  ...rtical_tab_strip_top_container_unittest.cc |  68 +++++++-
  .../browser/ui/views/toolbar/toolbar_view.cc  |  48 ++++--
  .../browser/ui/views/toolbar/toolbar_view.h   |   5 +
- 38 files changed, 990 insertions(+), 94 deletions(-)
+ chrome/test/BUILD.gn                          |   1 +
+ 40 files changed, 1049 insertions(+), 94 deletions(-)
  create mode 100644 chrome/browser/ui/stedding/theme/page_bar_color_supplier_unittest.cc
  create mode 100644 chrome/browser/ui/stedding/theme/page_theme_color_controller_unittest.cc
+ create mode 100644 chrome/browser/ui/views/frame/stedding_window_background_unittest.cc
  create mode 100644 chrome/browser/ui/views/tabs/common/folder_view_unittest.cc
  create mode 100644 chrome/browser/ui/views/tabs/common/sidebar_symbols.cc
  create mode 100644 chrome/browser/ui/views/tabs/common/sidebar_symbols.h
@@ -596,10 +599,18 @@ index 5b12a954bbd80..57b53b73df39e 100644
                                      std::max(current.lower_left(), ours));
    if (merged != current) {
 diff --git a/chrome/browser/ui/views/frame/stedding_window_background.cc b/chrome/browser/ui/views/frame/stedding_window_background.cc
-index e9fcfcc5413e2..daea5715b64eb 100644
+index e9fcfcc5413e2..ba22c97dc3928 100644
 --- a/chrome/browser/ui/views/frame/stedding_window_background.cc
 +++ b/chrome/browser/ui/views/frame/stedding_window_background.cc
-@@ -147,9 +147,10 @@ void SteddingWindowBackground::PaintPageBar(gfx::Canvas* canvas,
+@@ -30,6 +30,7 @@
+ #include "ui/native_theme/native_theme.h"
+ #include "ui/views/view.h"
+ #include "ui/views/view_utils.h"
++#include "ui/views/widget/widget.h"
+ 
+ namespace stedding {
+ namespace {
+@@ -147,9 +148,22 @@ void SteddingWindowBackground::PaintPageBar(gfx::Canvas* canvas,
    }
    // Whichever side of the contrast line the page is on, the bar takes it;
    // the toolbar's icons and text flip to match through the ColorProvider
@@ -610,10 +621,22 @@ index e9fcfcc5413e2..daea5715b64eb 100644
 +  // page's colour exactly (toolbar T15): it was blended 85% over the ground
 +  // until 2026-09-05, which made a white page's row grey.
 +  const SkColor bar = *controller->color();
++
++  // In full screen on macOS the top container, toolbar included, moves into
++  // an overlay widget of its own (immersive mode). A view in another widget
++  // has no rectangle on this canvas, and converting one is a CHECK: entering
++  // full screen over any page with a theme colour crashed the browser, and a
++  // session that restored such a window crashed every launch (toolbar T24).
++  // The overlay's row keeps its own colour there.
++  const views::Widget* const widget = browser_view->GetWidget();
++  if (browser_view->toolbar()->GetWidget() != widget ||
++      browser_view->multi_contents_view()->GetWidget() != widget) {
++    return;
++  }
  
    // Both views sit inside containers of their own; the canvas is the browser
    // view's, so their rectangles are converted into it. With their parent-
-@@ -166,9 +167,10 @@ void SteddingWindowBackground::PaintPageBar(gfx::Canvas* canvas,
+@@ -166,9 +180,10 @@ void SteddingWindowBackground::PaintPageBar(gfx::Canvas* canvas,
    }
    const float radius =
        static_cast<float>(stedding::kContentsCornerRadius.Get());
@@ -626,7 +649,7 @@ index e9fcfcc5413e2..daea5715b64eb 100644
    cc::PaintFlags flags;
    flags.setAntiAlias(true);
    flags.setColor(bar);
-@@ -177,6 +179,16 @@ void SteddingWindowBackground::PaintPageBar(gfx::Canvas* canvas,
+@@ -177,6 +192,16 @@ void SteddingWindowBackground::PaintPageBar(gfx::Canvas* canvas,
        {radius, radius}, {radius, radius}, {0, 0}, {0, 0}};
    rrect.setRectRadii(gfx::RectFToSkRect(surface), radii);
    canvas->DrawPath(SkPath::RRect(rrect), flags);
@@ -643,6 +666,57 @@ index e9fcfcc5413e2..daea5715b64eb 100644
  }
  
  }  // namespace stedding
+diff --git a/chrome/browser/ui/views/frame/stedding_window_background_unittest.cc b/chrome/browser/ui/views/frame/stedding_window_background_unittest.cc
+new file mode 100644
+index 0000000000000..df8519edd9110
+--- /dev/null
++++ b/chrome/browser/ui/views/frame/stedding_window_background_unittest.cc
+@@ -0,0 +1,45 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/views/frame/stedding_window_background.h"
++
++#include <memory>
++#include <utility>
++
++#include "chrome/browser/ui/stedding/theme/page_theme_color_controller.h"
++#include "chrome/browser/ui/views/frame/browser_view.h"
++#include "chrome/browser/ui/views/frame/test_with_browser_view.h"
++#include "chrome/browser/ui/views/toolbar/toolbar_view.h"
++#include "testing/gtest/include/gtest/gtest.h"
++#include "third_party/skia/include/core/SkColor.h"
++#include "ui/gfx/canvas.h"
++#include "ui/gfx/geometry/size.h"
++#include "ui/views/view.h"
++
++using SteddingWindowBackgroundTest = TestWithBrowserView;
++
++// Toolbar T24. In full screen on macOS the toolbar lives in an overlay widget
++// of its own, and painting the page bar converted its bounds into the browser
++// view anyway: a CHECK, so full screen over a page with a theme colour crashed
++// the browser. A toolbar taken out of the browser view's hierarchy stands in
++// for the overlay's.
++TEST_F(SteddingWindowBackgroundTest, PaintsWhileTheToolbarIsInAnotherWidget) {
++  stedding::PageThemeColorController* const controller =
++      stedding::PageThemeColorController::From(browser());
++  ASSERT_TRUE(controller);
++  controller->SetColorForTesting(SK_ColorWHITE);
++
++  ToolbarView* const toolbar = browser_view()->toolbar();
++  ASSERT_TRUE(toolbar);
++  views::View* const parent = toolbar->parent();
++  ASSERT_TRUE(parent);
++  const size_t index = *parent->GetIndexOf(toolbar);
++  std::unique_ptr<ToolbarView> detached = parent->RemoveChildViewT(toolbar);
++
++  stedding::SteddingWindowBackground background(browser_view());
++  gfx::Canvas canvas(gfx::Size(200, 200), 1.0f, /*is_opaque=*/true);
++  background.Paint(&canvas, browser_view());
++
++  parent->AddChildViewAt(std::move(detached), index);
++}
 diff --git a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
 index cfc1c41ff8cbf..3798e8a29b2eb 100644
 --- a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
@@ -2144,3 +2218,15 @@ index 2b6016a598f54..23a055ace8edd 100644
  
    // An alias for `location_bar_view_` or `toolbar_webview_->GetLocationBar()`.
    raw_ptr<LocationBar> location_bar_ = nullptr;
+diff --git a/chrome/test/BUILD.gn b/chrome/test/BUILD.gn
+index 90035be13fbed..6864149be6f37 100644
+--- a/chrome/test/BUILD.gn
++++ b/chrome/test/BUILD.gn
+@@ -7803,6 +7803,7 @@ test("unit_tests") {
+       "../browser/ui/views/device_chooser_content_view_unittest.cc",
+       "../browser/ui/views/download/download_in_progress_dialog_view_unittest.cc",
+       "../browser/ui/views/frame/browser_view_unittest.cc",
++      "../browser/ui/views/frame/stedding_window_background_unittest.cc",
+       "../browser/ui/views/frame/layout/browser_view_layout_params_unittest.cc",
+       "../browser/ui/views/frame/multi_contents_drop_target_view_unittest.cc",
+       "../browser/ui/views/frame/multi_contents_view_drop_target_controller_unittest.cc",

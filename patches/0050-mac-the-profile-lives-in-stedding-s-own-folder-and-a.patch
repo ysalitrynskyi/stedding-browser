@@ -1,0 +1,275 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Wed, 23 Sep 2026 06:30:58 -0400
+Subject: mac: the profile lives in Stedding's own folder, and an early one
+ comes across
+
+The Mac builds kept the profile in ~/Library/Application Support/Chromium,
+Chromium's default for an unbranded build: any Chromium on the same Mac
+shares that folder, so two browsers would run in one profile with one
+process singleton between them, and passwords would be sealed with the
+other's keychain key. docs/INSTALL.md and the FAQ already promised
+~/Library/Application Support/Stedding, which is what Windows does
+(%LOCALAPPDATA%\Stedding, windows N3).
+
+The default product directory is "Stedding". On the first launch that
+finds no folder of Stedding's own, a profile an earlier build left in
+Chromium's folder is cloned across (clonefile on APFS, a copy moved in
+whole elsewhere), before anything creates the new folder; Chromium's
+folder is left as it was. Only a profile Stedding created or used moves:
+its GCM category names the product that created it ("com.stedding.macosx",
+never rewritten), or it carries Stedding's own preferences. The copied
+process-singleton links are dropped.
+
+Why: docs/features/windows.md N8; docs/ARC-ROUND2.md round 10 (found
+2026-09-19 while reproducing the full-screen crash).
+Removable when: never for the folder name, which is branding; the
+migration once no Mac build from before this patch is in use.
+---
+ chrome/app/chrome_main_delegate.cc     |  5 ++
+ chrome/common/chrome_paths_internal.h  | 12 +++++
+ chrome/common/chrome_paths_mac.mm      | 70 +++++++++++++++++++++++-
+ chrome/common/chrome_paths_unittest.cc | 75 ++++++++++++++++++++++++++
+ 4 files changed, 160 insertions(+), 2 deletions(-)
+
+diff --git a/chrome/app/chrome_main_delegate.cc b/chrome/app/chrome_main_delegate.cc
+index 5655d73273aa3..1896aa6b092d7 100644
+--- a/chrome/app/chrome_main_delegate.cc
++++ b/chrome/app/chrome_main_delegate.cc
+@@ -609,6 +609,11 @@ void InitializeUserDataDir(base::CommandLine* command_line) {
+ #endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+ #if BUILDFLAG(IS_MAC)
+   policy::path_parser::CheckUserDataDirPolicy(&user_data_dir);
++  // Before anything creates the default folder: a profile left in Chromium's
++  // folder by an earlier Stedding moves across once (patch 0050).
++  if (user_data_dir.empty() && process_type.empty()) {
++    chrome::MigrateDefaultUserDataDirectoryIfNeeded();
++  }
+ #endif  // BUILDFLAG(IS_MAC)
+ 
+   const bool specified_directory_was_invalid =
+diff --git a/chrome/common/chrome_paths_internal.h b/chrome/common/chrome_paths_internal.h
+index 8deb4b983847c..594daa2458dc3 100644
+--- a/chrome/common/chrome_paths_internal.h
++++ b/chrome/common/chrome_paths_internal.h
+@@ -85,6 +85,18 @@ bool GetLocalLibraryDirectory(base::FilePath* result);
+ // Get the global Application Support directory (under /Library/).
+ bool GetGlobalApplicationSupportDirectory(base::FilePath* result);
+ 
++// The first macOS builds of Stedding kept the profile in Chromium's folder,
++// ~/Library/Application Support/Chromium. Clones `legacy` to `target` when
++// `target` does not exist yet and `legacy`'s default profile was created by
++// Stedding or carries Stedding's own preferences; returns whether it did. Blocks on disk: call it
++// before the browser process starts its threads.
++bool MigrateLegacyUserDataDirectory(const base::FilePath& legacy,
++                                    const base::FilePath& target);
++
++// MigrateLegacyUserDataDirectory() from Chromium's folder to the default user
++// data directory.
++void MigrateDefaultUserDataDirectoryIfNeeded();
++
+ #endif  // BUILDFLAG(IS_MAC)
+ 
+ // Checks if the |process_type| has the rights to access the profile.
+diff --git a/chrome/common/chrome_paths_mac.mm b/chrome/common/chrome_paths_mac.mm
+index 6829c9cb92c22..ea55704c70fd7 100644
+--- a/chrome/common/chrome_paths_mac.mm
++++ b/chrome/common/chrome_paths_mac.mm
+@@ -4,6 +4,7 @@
+ 
+ #import <Foundation/Foundation.h>
+ #include <string.h>
++#include <sys/clonefile.h>
+ 
+ #include <memory>
+ #include <string>
+@@ -13,6 +14,8 @@
+ #include "base/base_paths.h"
+ #include "base/check_op.h"
+ #include "base/compiler_specific.h"
++#include "base/files/file_util.h"
++#include "base/json/json_reader.h"
+ #include "base/memory/free_deleter.h"
+ #include "base/path_service.h"
+ #include "base/strings/sys_string_conversions.h"
+@@ -37,7 +40,10 @@ char* ProductDirNameForBundle(NSBundle* chrome_bundle) {
+ #elif BUILDFLAG(GOOGLE_CHROME_BRANDING)
+       product_dir_name = "Google/Chrome";
+ #else
+-      product_dir_name = "Chromium";
++      // Stedding keeps its own folder (patch 0050): Chromium's is shared by
++      // any Chromium on the same Mac, whose profile it would mix with this
++      // one's.
++      product_dir_name = "Stedding";
+ #endif
+     }
+ 
+@@ -51,7 +57,7 @@ char* ProductDirNameForBundle(NSBundle* chrome_bundle) {
+ // ~/Library/Application Support that should hold the product application
+ // data. This can be overridden by setting the CrProductDirName key in the
+ // outer browser .app's Info.plist. The default is "Google/Chrome" for
+-// officially-branded builds, and "Chromium" for unbranded builds. For the
++// officially-branded builds, and "Stedding" for unbranded builds. For the
+ // official canary channel, the Info.plist will have CrProductDirName set
+ // to "Google/Chrome Canary".
+ std::string ProductDirName() {
+@@ -87,6 +93,66 @@ bool GetDefaultUserDataDirectory(base::FilePath* result) {
+   return GetDefaultUserDataDirectoryForProduct(ProductDirName(), result);
+ }
+ 
++bool MigrateLegacyUserDataDirectory(const base::FilePath& legacy,
++                                    const base::FilePath& target) {
++  if (base::PathExists(target) || !base::DirectoryExists(legacy)) {
++    return false;
++  }
++  // Only a folder Stedding has run in. Every profile names the product that
++  // created it in its GCM category ("com.stedding.macosx"; a Chromium writes
++  // "org.chromium.macosx" and the value is never rewritten), and a profile
++  // whose user changed a Stedding setting also has a "stedding" dictionary.
++  // The dictionary alone missed a real profile from an early beta, which had
++  // no Stedding setting changed.
++  std::string prefs;
++  if (!base::ReadFileToStringWithMaxSize(
++          legacy.Append("Default").Append("Preferences"), &prefs,
++          64 * 1024 * 1024)) {
++    return false;
++  }
++  const std::optional<base::DictValue> dict =
++      base::JSONReader::ReadDict(prefs, base::JSON_PARSE_RFC);
++  if (!dict) {
++    return false;
++  }
++  const std::string* const category =
++      dict->FindStringByDottedPath("gcm.product_category_for_subtypes");
++  const bool created_by_stedding =
++      category && category->starts_with("com.stedding.");
++  if (!created_by_stedding && !dict->FindDict("stedding")) {
++    return false;
++  }
++  // A clone on APFS costs no space and leaves Chromium's folder as it was, so
++  // a Chromium that shared it keeps working. Elsewhere a copy, made beside the
++  // target and moved in whole, so a failure leaves no half profile behind.
++  if (clonefile(legacy.value().c_str(), target.value().c_str(), 0) != 0) {
++    const base::FilePath staging = target.AddExtension("migrating");
++    base::DeletePathRecursively(staging);
++    if (!base::CopyDirectory(legacy, staging, /*recursive=*/true) ||
++        !base::Move(staging, target)) {
++      base::DeletePathRecursively(staging);
++      return false;
++    }
++  }
++  // The copied process-singleton links name the old folder's last process.
++  for (const char* name : {"SingletonLock", "SingletonSocket",
++                           "SingletonCookie"}) {
++    base::DeleteFile(target.Append(name));
++  }
++  return true;
++}
++
++void MigrateDefaultUserDataDirectoryIfNeeded() {
++  base::FilePath target;
++  base::FilePath legacy;
++  if (!GetDefaultUserDataDirectory(&target) ||
++      !GetDefaultUserDataDirectoryForProduct("Chromium", &legacy) ||
++      legacy == target) {
++    return;
++  }
++  MigrateLegacyUserDataDirectory(legacy, target);
++}
++
+ bool GetUserDocumentsDirectory(base::FilePath* result) {
+   return base::apple::GetUserDirectory(NSDocumentDirectory, result);
+ }
+diff --git a/chrome/common/chrome_paths_unittest.cc b/chrome/common/chrome_paths_unittest.cc
+index 1937f983b715c..0bfaa400599a4 100644
+--- a/chrome/common/chrome_paths_unittest.cc
++++ b/chrome/common/chrome_paths_unittest.cc
+@@ -9,6 +9,8 @@
+ #include "base/base_paths.h"
+ #include "base/environment.h"
+ #include "base/files/file_path.h"
++#include "base/files/file_util.h"
++#include "base/files/scoped_temp_dir.h"
+ #include "base/path_service.h"
+ #include "base/test/scoped_feature_list.h"
+ #include "build/branding_buildflags.h"
+@@ -215,6 +217,79 @@ TEST(ChromePaths, UserMediaDirectories) {
+ }
+ #endif
+ 
++#if BUILDFLAG(IS_MAC)
++#if !BUILDFLAG(GOOGLE_CHROME_BRANDING) && \
++    !BUILDFLAG(GOOGLE_CHROME_FOR_TESTING_BRANDING)
++// Patch 0050: Stedding's profile is not in Chromium's folder.
++TEST(ChromePaths, DefaultUserDataDirIsSteddingsOwn) {
++  base::FilePath user_data_dir;
++  ASSERT_TRUE(GetDefaultUserDataDirectory(&user_data_dir));
++  EXPECT_EQ("Stedding", user_data_dir.BaseName().value());
++}
++#endif
++
++// Patch 0050: a profile an earlier Stedding left in Chromium's folder comes
++// across once, and Chromium's folder stays as it was.
++TEST(ChromePaths, MovesASteddingProfileOutOfChromiumsFolder) {
++  base::ScopedTempDir temp;
++  ASSERT_TRUE(temp.CreateUniqueTempDir());
++  const base::FilePath legacy = temp.GetPath().Append("Chromium");
++  const base::FilePath target = temp.GetPath().Append("Stedding");
++  const base::FilePath prefs = base::FilePath("Default").Append("Preferences");
++  ASSERT_TRUE(base::CreateDirectory(legacy.Append("Default")));
++  ASSERT_TRUE(base::WriteFile(legacy.Append(prefs),
++                              R"({"browser":{},"stedding":{}})"));
++  ASSERT_TRUE(base::CreateSymbolicLink(base::FilePath("host-1"),
++                                       legacy.Append("SingletonLock")));
++
++  EXPECT_TRUE(MigrateLegacyUserDataDirectory(legacy, target));
++  EXPECT_TRUE(base::PathExists(target.Append(prefs)));
++  EXPECT_FALSE(base::IsLink(target.Append("SingletonLock")));
++  EXPECT_TRUE(base::PathExists(legacy.Append(prefs)));
++  EXPECT_TRUE(base::IsLink(legacy.Append("SingletonLock")));
++
++  // Once: the next launch finds its folder and leaves it be.
++  ASSERT_TRUE(base::WriteFile(target.Append("marker"), "kept"));
++  EXPECT_FALSE(MigrateLegacyUserDataDirectory(legacy, target));
++  EXPECT_TRUE(base::PathExists(target.Append("marker")));
++}
++
++// Patch 0050: an early beta's profile names Stedding only in its GCM
++// category -- no Stedding setting was ever changed in it -- and still comes
++// across (the operator's own, 2026-09-23).
++TEST(ChromePaths, MovesAProfileSteddingCreatedWithNoSteddingSettings) {
++  base::ScopedTempDir temp;
++  ASSERT_TRUE(temp.CreateUniqueTempDir());
++  const base::FilePath legacy = temp.GetPath().Append("Chromium");
++  const base::FilePath target = temp.GetPath().Append("Stedding");
++  ASSERT_TRUE(base::CreateDirectory(legacy.Append("Default")));
++  ASSERT_TRUE(base::WriteFile(
++      legacy.Append("Default").Append("Preferences"),
++      R"({"gcm":{"product_category_for_subtypes":"com.stedding.macosx"}})"));
++
++  EXPECT_TRUE(MigrateLegacyUserDataDirectory(legacy, target));
++  EXPECT_TRUE(
++      base::PathExists(target.Append("Default").Append("Preferences")));
++}
++
++// Patch 0050: Chromium's own profile, with no Stedding preferences, stays
++// where it is and Stedding starts a fresh one.
++TEST(ChromePaths, LeavesChromiumsOwnProfileAlone) {
++  base::ScopedTempDir temp;
++  ASSERT_TRUE(temp.CreateUniqueTempDir());
++  const base::FilePath legacy = temp.GetPath().Append("Chromium");
++  const base::FilePath target = temp.GetPath().Append("Stedding");
++  ASSERT_TRUE(base::CreateDirectory(legacy.Append("Default")));
++  ASSERT_TRUE(base::WriteFile(
++      legacy.Append("Default").Append("Preferences"),
++      R"({"browser":{},"gcm":{"product_category_for_subtypes":)"
++      R"("org.chromium.macosx"}})"));
++
++  EXPECT_FALSE(MigrateLegacyUserDataDirectory(legacy, target));
++  EXPECT_FALSE(base::PathExists(target));
++}
++#endif  // BUILDFLAG(IS_MAC)
++
+ TEST(ChromePaths, DefaultUserDataDirectory) {
+   EXPECT_TRUE(IsUsingDefaultDataDirectory().value());
+ 

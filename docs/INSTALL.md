@@ -44,7 +44,12 @@ The number must match the one in the notes exactly.
 ### Where your data is
 
 Your profile — tabs, Spaces, history, passwords, extensions — lives in
-`~/Library/Application Support/Stedding`. Sidebar snapshots are written into the
+`~/Library/Application Support/Stedding`. Mac builds up to beta 8 kept it in
+`~/Library/Application Support/Chromium` by mistake, a folder any Chromium on the
+same Mac also uses. The first launch of a later build copies that profile into
+Stedding's own folder and leaves the old one as it was; once you have checked that
+your tabs and Spaces came across, and if you run no Chromium yourself, you can delete
+the old folder. Sidebar snapshots are written into the
 profile every hour (**Settings → Stedding → Restore sidebar…** lists them), and
 **Export Space…** writes a Space to a file you can keep or move to another machine.
 

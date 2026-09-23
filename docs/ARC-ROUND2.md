@@ -242,3 +242,17 @@ trap 27).
 | 6 | Moving from Arc should be one click. | The welcome flow's Arc block moves Spaces, pins, folders, tabs, history and passwords with one button; the settings row and the ⌘T action move everything too (import I6, I21–I23, patch 0038). |
 | — | Quitting with a folder in the sidebar aborted (`bad_variant_access`): the page-colour re-theme ran inside the tab strip's close-all notification and reached a folder header whose folder was already gone. | The re-theme is posted after the change and skipped while the window empties; the header gives no folder for a node that is not one (folders F12). |
 | — | macOS asked for a keychain and named the product "Chromium" during an import. | The keychain item is Stedding's own, with the Chromium item as a fallback so an earlier beta's passwords still decrypt (import I24). |
+
+
+## Round 10 — the operator's look at beta 8 (2026-09-19)
+
+The first time anyone installed a release the way a user does: downloaded through a
+browser, dragged to Applications, opened. Two of the three findings were waiting there
+for every user of every Mac beta so far; the third turned up while fixing them.
+
+| # | Found | Fix |
+|---|---|---|
+| 1 | "Stedding.app is damaged and can't be opened. You should move it to the Trash." on the first launch of the downloaded image. | Not damage and not the download (the checksum matched): the app carries only the ad-hoc signatures the linker leaves, which seal no resources, and macOS says that about a quarantined app. Right-click → Open, which every page of ours gave, cannot get past that dialog. `INSTALL.md`, the README, the FAQ, the notes of beta 7 and beta 8, the site's download card and the line `package-dmg` prints now give the step that works -- `xattr -dr com.apple.quarantine` on the one app, after the checksum (`docs/HANDOFF.md`, trap 47). Signing (`S-17`) removes the step. |
+| 2 | "it crashes on launch after a sec". | Full screen. macOS moves the top container into an overlay widget of its own, and the window background converted the toolbar's bounds into the browser view anyway: a CHECK, so full screen over any page with a theme colour aborted the browser, and the operator's restored session had a full-screen window (toolbar T24, trap 48). The bar is painted only while the toolbar and the card are in the window's own widget. `tooling/verify-build` now opens the browser full screen over a themed page, so the state is entered on every release sweep. |
+| — | Found while reproducing 2: the Mac builds kept the profile in `~/Library/Application Support/Chromium`, which any Chromium on the same Mac shares -- one process singleton between two browsers, and passwords sealed with the other's keychain key -- while `INSTALL.md` promised Stedding's own folder. | macOS uses `~/Library/Application Support/Stedding`, as Windows uses `%LOCALAPPDATA%\Stedding`. A profile an earlier build left in Chromium's folder is cloned across on the first launch that finds no folder of Stedding's own, and only when that profile carries Stedding's own preferences; Chromium's folder is left as it was (windows N8, patch 0050). |
+

@@ -8,6 +8,11 @@ someone's recollection of clicking around once.
     tooling/verify-build --app ~/chromium/src/out/release/Chromium.app
     tooling/verify-build --app ... --offline      # skip the network navigation
     tooling/verify-build --app ... --json out.json
+    tooling/verify-build --app ... --no-fullscreen  # skip the full-screen check
+
+The full-screen check opens the browser full screen for about ten seconds, which takes
+the screen (macOS gives a full-screen window a Space of its own). Skip it with
+--no-fullscreen when someone is using the machine; the release sweep runs it.
 
 Required to pass: the app launches, renders a page, WebGL 1 and 2 draw and read back
 a known colour, and at least one royalty-free video codec decodes a real frame.
@@ -37,6 +42,17 @@ HERE = Path(__file__).resolve().parent
 VERIFY_DIR = HERE / "verify"
 LAUNCH_TIMEOUT_S = 120
 NETWORK_URL = "https://example.com/"
+# Toolbar T24: in full screen macOS moves the toolbar into an overlay widget of its
+# own, and the window background painted the page bar from it anyway -- a CHECK, so
+# full screen over a page that carries a theme colour aborted the browser about a
+# second in (docs/HANDOFF.md, trap 48). The page below carries one.
+FULLSCREEN_WATCH_S = 12
+FULLSCREEN_PAGE = (
+    "<!doctype html><meta charset=\"utf-8\">"
+    "<meta name=\"theme-color\" content=\"#336699\">"
+    "<title>full screen</title>"
+    "<body style=\"background:#336699\">full screen</body>"
+)
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -132,6 +148,34 @@ def run_probe(app: Path, offline: bool) -> dict:
         server.server_close()
 
 
+def run_fullscreen_probe(app: Path) -> dict:
+    """Open the browser full screen over a themed page and see whether it stays up."""
+    with tempfile.TemporaryDirectory(prefix="stedding-verify-fs-") as tmp:
+        page = Path(tmp) / "themed.html"
+        page.write_text(FULLSCREEN_PAGE, encoding="utf-8")
+        argv = [
+            str(app_executable(app)),
+            f"--user-data-dir={Path(tmp) / 'profile'}",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--start-fullscreen",
+            page.as_uri(),
+        ]
+        proc = subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            code = proc.wait(timeout=FULLSCREEN_WATCH_S)
+            return {"survived": False,
+                    "reason": f"the browser stopped with code {code} in full screen"}
+        except subprocess.TimeoutExpired:
+            return {"survived": True}
+        finally:
+            proc.terminate()
+            try:
+                proc.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+
+
 GREEN, RED, YELLOW, DIM, RESET = "\033[32m", "\033[31m", "\033[33m", "\033[2m", "\033[0m"
 
 
@@ -184,6 +228,16 @@ def report(results: dict, offline: bool) -> int:
     for codec, answer in results.get("codecs", {}).items():
         line("PASS" if answer != "no" else "note", codec, answer)
 
+    print("\nfull screen")
+    fs = results.get("fullscreen", {})
+    if fs.get("skipped"):
+        line("skip", "full screen", "--no-fullscreen")
+    elif fs.get("survived"):
+        line("PASS", "full screen", f"up after {FULLSCREEN_WATCH_S}s over a themed page")
+    else:
+        line("FAIL", "full screen", fs.get("reason", "the browser did not stay up"))
+        failures += 1
+
     print("\nnetwork")
     net = results.get("network", {})
     if offline or net.get("skipped"):
@@ -208,6 +262,8 @@ def main() -> int:
     parser.add_argument("--app", required=True, type=Path)
     parser.add_argument("--offline", action="store_true", help="skip the network navigation")
     parser.add_argument("--json", type=Path, help="write the raw probe results here")
+    parser.add_argument("--no-fullscreen", action="store_true",
+                        help="skip the full-screen check (it takes the screen)")
     args = parser.parse_args()
 
     app = args.app.resolve()
@@ -226,6 +282,13 @@ def main() -> int:
 
     if "_error" in results:
         raise SystemExit(results["_error"])
+
+    if args.no_fullscreen:
+        results["fullscreen"] = {"skipped": True}
+    else:
+        print("full screen: taking the screen for "
+              f"{FULLSCREEN_WATCH_S}s (--no-fullscreen skips it)")
+        results["fullscreen"] = run_fullscreen_probe(app)
 
     if args.json:
         args.json.write_text(json.dumps(results, indent=2) + "\n", encoding="utf-8")

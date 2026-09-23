@@ -319,10 +319,11 @@ back (trap 44). `tooling/dev status` says whether the checkout and `unit_tests`
 exist before anything is planned; `tooling/check-pin` says how far behind stable
 the pin is. The order of work:
 
-1. The operator's look at beta 7 and 8 — round 10 in `docs/ARC-ROUND2.md`, one table
-   per round, one row per finding with its fix. Ask for the findings; they, not the
-   backlog, decide the features. Independent sessions have not been tried on a real
-   site by anyone yet; that is the first thing to ask about.
+1. The operator's look at beta 8 — round 10 in `docs/ARC-ROUND2.md`, one row per
+   finding with its fix. Its first three (the "damaged" dialog, the full-screen crash,
+   the profile in Chromium's folder: patch 0050) are fixed in the series and wait on
+   the next release. Ask for the rest; the findings, not the backlog, decide the
+   features. Independent sessions have not been tried on a real site by anyone yet.
 2. `S-17` when the Developer ID certificate exists (the steps are in the row): a
    signed, notarised re-release, then the updater (ADR 0014) behind its settings
    entry.

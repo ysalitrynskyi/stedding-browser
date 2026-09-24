@@ -52,17 +52,19 @@ PLATFORMS = ("Mac", "Windows", "Linux")
 SHIPPING_PLATFORM = "Mac"
 DASH = "https://chromiumdash.appspot.com/fetch_releases?channel=Stable&platform={}&num=20"
 # What each platform's stable channel serves right now, with the share of users each
-# build reaches. chromiumdash lists releases without that share, so an "early stable"
-# build -- the next milestone to a sliver of users about a week before its full
-# rollout -- looked like the channel's version: on 2026-09-24 this script reported
-# M155 as Mac stable while it reached 0.5% of Macs and M154 reached all of them.
+# build reaches. chromiumdash lists releases without that share, so the report could
+# not say that a new milestone was an "early stable" build to a sliver of users: on
+# 2026-09-24 it showed M155 as Mac stable with no word that it reached 0.5% of Macs
+# while M154 reached all of them. The pin follows the newest build on the channel,
+# early stable included (ADR 0007; the owner, 2026-09-24: "always latest one"), so
+# the share is reported, not used to hide a build.
 SLICES = (
     "https://versionhistory.googleapis.com/v1/chrome/platforms/{}/channels/stable/"
     "versions/all/releases?filter=endtime=none"
 )
 SLICE_PLATFORM = {"Mac": "mac", "Windows": "win", "Linux": "linux"}
-# Below this share a build is a trial slice (early stable, a holdback respin), not
-# what the channel serves. Google's early stable is about 1%; a full rollout is 100%.
+# Below this share a build is named as a partial rollout in the report. Google's
+# early stable is about 1%; a full rollout is 100%.
 EARLY_FRACTION = 0.05
 
 
@@ -126,9 +128,9 @@ def fetch_slices(platform: str) -> dict[str, float]:
 
 
 def split_early(stable, shares):
-    """(stable without trial slices, the trial slices per platform). A build served to
-    fewer than EARLY_FRACTION of users is not what the channel is on, so the verdict
-    never sees it; a build no longer served keeps its place in the history."""
+    """(stable without partial rollouts, the partial rollouts per platform): the
+    builds served to fewer than EARLY_FRACTION of a platform's users. The verdict
+    reads every build; this only tells the report which ones to name."""
     kept: dict[str, list[str]] = {}
     early: dict[str, list[str]] = {}
     for platform, versions in stable.items():
@@ -308,18 +310,18 @@ def self_test() -> int:
         failures += 1
     else:
         print("  ok   a rollback is reported alongside a point release")
-    # An early-stable build of the next milestone and a holdback respin on our own
-    # line, each to a sliver of users, are not the channel's version.
-    kept, early = split_early(
-        {"Mac": ["901.0.1100.4", "900.0.1000.20", "900.0.1000.22"]},
-        {"Mac": {"901.0.1100.4": 0.005, "900.0.1000.20": 1.0, "900.0.1000.22": 0.005}},
+    # An early-stable build of the next milestone is the channel's newest build and
+    # the pin follows it; the report names it as a partial rollout.
+    stable_fixture = {"Mac": ["901.0.1100.4", "900.0.1000.20"]}
+    _, early = split_early(
+        stable_fixture, {"Mac": {"901.0.1100.4": 0.005, "900.0.1000.20": 1.0}}
     )
-    state, latest, _ = verdict(version_key("900.0.1000.20"), kept)
-    if state != "current" or early.get("Mac") != ["901.0.1100.4", "900.0.1000.22"]:
-        print(f"  FAIL trial slices: got {state} ({latest}), early {early}", file=sys.stderr)
+    state, latest, _ = verdict(version_key("900.0.1000.20"), stable_fixture)
+    if state != "behind" or latest != "901.0.1100.4" or early.get("Mac") != ["901.0.1100.4"]:
+        print(f"  FAIL early stable: got {state} ({latest}), early {early}", file=sys.stderr)
         failures += 1
     else:
-        print("  ok   900.0.1000.20 -> current, with M901 early stable set aside")
+        print("  ok   900.0.1000.20 -> behind (901.0.1100.4, early stable, named as such)")
     if failures:
         print(f"{failures} self-test failure(s)", file=sys.stderr)
         return 1
@@ -367,17 +369,20 @@ def main(argv: list[str]) -> int:
         except (urllib.error.URLError, ValueError, TimeoutError, json.JSONDecodeError) as error:
             # Without the shares every build counts, as before; say so.
             print(f"could not read rollout shares for {platform}: {error}", file=sys.stderr)
-    stable, early = split_early(stable, shares)
+    _, early = split_early(stable, shares)
 
     state, latest, reasons = verdict(pinned_key, stable)
-    for version in sorted({v for vs in early.values() for v in vs}, key=version_key,
+    # Only what is ahead of the pin: an older line's respin is not ours to follow.
+    for version in sorted({v for vs in early.values() for v in vs
+                           if version_key(v) > pinned_key}, key=version_key,
                           reverse=True):
         platforms = sorted(p for p, vs in early.items() if version in vs)
         share = max(shares[p][version] for p in platforms)
         reasons.append(
-            f"not counted: {version} reaches {share:.1%} of {', '.join(platforms)} "
-            "stable users, a trial slice (early stable or a holdback). Early stable "
-            "usually becomes the full rollout about a week later."
+            f"partial rollout: {version} reaches {share:.1%} of {', '.join(platforms)} "
+            "stable users (early stable, or a respin being tried). It is on the stable "
+            "channel and the pin follows it (ADR 0007); the full rollout usually comes "
+            "about a week after early stable."
         )
 
     report = [f"pin:     {pinned}", "         serving          highest"]

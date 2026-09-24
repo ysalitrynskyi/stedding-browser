@@ -27,6 +27,12 @@ and configuration may not, because those are what silently go stale.
 - The initial pin is `153.0.8010.12` (M153).
 - Security point releases move the pin on the timetable in `../QUALITY.md` (7 days
   for in-the-wild exploits, 14 otherwise).
+- **Early stable is.** Google ships the next milestone to a small share of stable
+  users about a week before the full rollout; that build is on the stable channel and
+  the pin follows it (amended 2026-09-24, the owner: "always latest one" -- the pin
+  went from M153 straight to the M155 early-stable build). `tooling/check-pin` names
+  such a build as a partial rollout with its share of users, and a respin on the way
+  to the full rollout is a point release on our milestone.
 - **Extended stable is not our channel.** It trades feature currency for enterprise
   change-management we do not need, and it eventually stops receiving fixes.
 - Moving the pin is always its own commit, recording the version, the upstream

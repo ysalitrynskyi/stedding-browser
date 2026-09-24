@@ -1,6 +1,6 @@
 # Feature: Folders
 
-Status: **F1–F9, F11–F12 built and tested; F10 model only**. F12 is round 7 (`docs/ARC-ROUND2.md`, 2026-09-05).
+Status: **F1–F9, F11–F13 built and tested; F10 model only**. F12 is round 7 (`docs/ARC-ROUND2.md`, 2026-09-05); F13 round 10.
 Owner docs: `docs/decisions/0013-folders-are-a-collection-type.md` (model). Patches: `0008` (the whole feature; the series is per feature since `S-11`), `0037` (F12, round 7).
 
 A folder is a named, collapsible container of tabs in the sidebar. Folders nest. A folder is
@@ -23,6 +23,7 @@ folder's membership cannot be overwritten by an outer group (ADR 0013).
 | F10 | Dragging a tab between two tabs inside an expanded folder places it there (the strip's own reorder is folder-aware). `MoveTabsToFolderAt` inserts at a child index; F7 still appends. | `TabStripModelTest.MoveTabsToFolderAtInsertsBetweenChildren` | partial · model only, the drag target still appends (F7); nothing computes a child index for a drop yet |
 | F11 | The tab-strip mojom carries a Folder variant (id, title, collapse state) instead of mapping FOLDER to the plain container. | live: a window with nested folders under the API observer, no crash; `TabStripModelTest.AddToNewFolder*` drives the converter | built |
 | F12 | Arc's folder row: macOS's own "folder" symbol (the family Arc draws with; Chromium's folder icon where there is none) in the favicon column in place of the chevron, a semibold title on the title column, and the tab rows' hover tint and radius on the header. The header sits on the tab rows' column: it had been indented like the folder's own children since patch 0008 (the header check ran before the header was named, found 2026-09-05). The header never reads a folder that has left the tree: a node that no longer names a collection gives no folder, and the window's page-colour re-theme is posted one turn after the tab strip's change instead of running inside it (closing every tab at quit reached a header whose folder was gone and aborted on the variant, 2026-09-05). | `FolderViewTest.HeaderShowsAFolderGlyphAndASemiboldTitle` (the glyph, the weight, the header's zero indent), `FolderViewTest.HeaderSurvivesANodeThatIsNotAFolder`, `PageThemeColorControllerTest.*`; live: `r7_folder` (the glyph and the title); a `folder_tabs/2` launch quit through the AppleEvent under lldb with no abort (done, 2026-09-05 18:02) | built |
+| F13 | In the rail a folder's rows sit on the rail's one column: the rows inside it lose their indent, and the header is its glyph alone, centred like the rows' favicons; at the open width the indent and the title come back. Keyed on the width being drawn (HANDOFF trap 33). Two levels of indent had pushed a nested folder's glyph 28 DIP into a 44 DIP column, where it was clipped into a different-looking icon (operator, round 10: "when collapsed ... looks weird"). | `FolderViewTest.RailDropsTheIndentAndTheTitle` | built |
 
 ## Running the tests
 

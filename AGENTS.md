@@ -248,11 +248,12 @@ the notes were the Mac's to add to beta 6, and it did on 2026-09-10 -- after
 re-syncing a checkout that had been deleted for disk (`docs/HANDOFF.md`, trap 44),
 with two fixups into patch 0039 that the first macOS build of the Windows-written
 patches turned up (`docs/ARC-ROUND2.md`, *The Mac pass*). Beta 5 stays a
-Windows-only preview. Signing: the Apple developer account exists since 2026-09-10;
-the certificate and the notary profile are the operator's next step (`S-17`).
-The pin is 153.0.8010.53 (2026-09-18, `S-62`: the point release with sixteen
-security fixes, taken the day after it shipped); `v0.2.0-beta.8` is the Mac image
-of that pin and `v0.2.0-beta.7` (153.0.8010.48) the one before. Outstanding:
+Windows-only preview. Signing: the Developer ID certificate and the notary profile
+exist since 2026-09-23, and the signer works end to end (`S-17`, patch 0051).
+The pin is 155.0.8059.12 (2026-09-24, `S-64`: Google's early-stable build of M155,
+taken straight from M153 because the owner wants the newest stable-channel build,
+ADR 0007); the series is 52 patches on it. `v0.2.0-beta.8` is the Mac image of the
+previous pin, 153.0.8010.53, and `v0.2.0-beta.7` (153.0.8010.48) the one before. Outstanding:
 `BACKLOG.md`. First vanilla perf comparison is in
 `docs/perf/README.md`: on the deterministic page list every QUALITY budget is
 met (cold +2.3%, warm −2.0%, memory +0.0% over vanilla).

@@ -1,0 +1,232 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Thu, 24 Sep 2026 08:27:26 -0400
+Subject: spaces: the list slides in from the side of the Space being entered
+
+Changing Space swapped the sidebar's rows in one frame; Arc animates the
+change, and the operator read the swap as "no animation for scroll
+between spaces" (round 10, 2026-09-24).
+
+The Space's own rows -- its pins, tabs and folders, the unpinned list --
+now come in from the side of the Space being entered: from the right for
+a Space later in the switcher, from the left for an earlier one,
+mirrored in a right-to-left UI, 36 DIP and a fade over 200 ms with an
+ease-out, whatever changed the Space (the switcher, the keys, the
+swipe). The essentials above stay still. Nothing moves when
+stedding::ShouldAnimate() says no (motion O1).
+
+The tab visibility controller, which swaps the rows, reports the two
+Spaces after it does; the region view animates the list's layer.
+
+Why: docs/features/spaces.md B32.
+Removable when: never; the slide is Stedding's.
+---
+ chrome/browser/ui/stedding/motion.cc          |  8 +++
+ chrome/browser/ui/stedding/motion.h           | 10 ++++
+ chrome/browser/ui/stedding/motion_unittest.cc | 11 ++++
+ .../frame/vertical_tab_strip_region_view.cc   | 54 +++++++++++++++++++
+ .../frame/vertical_tab_strip_region_view.h    |  4 ++
+ .../spaces/space_tab_visibility_controller.cc |  3 ++
+ .../spaces/space_tab_visibility_controller.h  |  9 ++++
+ 7 files changed, 99 insertions(+)
+
+diff --git a/chrome/browser/ui/stedding/motion.cc b/chrome/browser/ui/stedding/motion.cc
+index efaf4c2385034..fcf19696c5c3e 100644
+--- a/chrome/browser/ui/stedding/motion.cc
++++ b/chrome/browser/ui/stedding/motion.cc
+@@ -21,4 +21,12 @@ bool ShouldAnimate(const PrefService* prefs) {
+   return !prefs || prefs->GetBoolean(prefs::kUiAnimate);
+ }
+ 
++int SpaceSlideDirection(int from_index, int to_index, bool rtl) {
++  if (from_index < 0 || to_index < 0 || from_index == to_index) {
++    return 0;
++  }
++  const int direction = to_index > from_index ? 1 : -1;
++  return rtl ? -direction : direction;
++}
++
+ }  // namespace stedding
+diff --git a/chrome/browser/ui/stedding/motion.h b/chrome/browser/ui/stedding/motion.h
+index 35e1d7fb7248c..f97b05c8051b3 100644
+--- a/chrome/browser/ui/stedding/motion.h
++++ b/chrome/browser/ui/stedding/motion.h
+@@ -16,6 +16,16 @@ namespace stedding {
+ // profile's; null means no profile is at hand and only the system decides.
+ bool ShouldAnimate(const PrefService* prefs);
+ 
++// docs/features/spaces.md B32: when the active Space changes, the sidebar's
++// list slides in from the side of the Space being entered. +1 means from the
++// right (a Space later in the switcher), -1 from the left, 0 no slide (the
++// same Space, or an index that is not known). Mirrored under right-to-left.
++int SpaceSlideDirection(int from_index, int to_index, bool rtl);
++
++// How far the list starts from its place, and how long it takes to settle.
++inline constexpr int kSpaceSlideOffsetDip = 36;
++inline constexpr int kSpaceSlideDurationMs = 200;
++
+ }  // namespace stedding
+ 
+ #endif  // CHROME_BROWSER_UI_STEDDING_MOTION_H_
+diff --git a/chrome/browser/ui/stedding/motion_unittest.cc b/chrome/browser/ui/stedding/motion_unittest.cc
+index e1f0cfcc1917a..09749bb9c2354 100644
+--- a/chrome/browser/ui/stedding/motion_unittest.cc
++++ b/chrome/browser/ui/stedding/motion_unittest.cc
+@@ -49,4 +49,15 @@ TEST_F(MotionTest, CaptureParameterStillsIt) {
+ }
+ 
+ }  // namespace
++// Spaces B32: the next Space comes in from the right, the previous one from
++// the left, mirrored in a right-to-left UI; nothing slides for the same Space.
++TEST(SpaceSlideTest, ComesInFromTheSideOfTheSpaceBeingEntered) {
++  EXPECT_EQ(1, SpaceSlideDirection(0, 1, /*rtl=*/false));
++  EXPECT_EQ(1, SpaceSlideDirection(0, 3, /*rtl=*/false));
++  EXPECT_EQ(-1, SpaceSlideDirection(2, 1, /*rtl=*/false));
++  EXPECT_EQ(-1, SpaceSlideDirection(0, 1, /*rtl=*/true));
++  EXPECT_EQ(0, SpaceSlideDirection(1, 1, /*rtl=*/false));
++  EXPECT_EQ(0, SpaceSlideDirection(-1, 1, /*rtl=*/false));
++}
++
+ }  // namespace stedding
+diff --git a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+index 56d55201153fd..725a1cc7fb623 100644
+--- a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
++++ b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+@@ -106,6 +106,12 @@
+ #include "ui/views/view.h"
+ #include "ui/views/view_class_properties.h"
+ #include "ui/views/view_utils.h"
++#include "chrome/browser/ui/stedding/motion.h"
++#include "ui/compositor/layer_animator.h"
++#include "ui/compositor/scoped_layer_animation_settings.h"
++#include "ui/gfx/animation/tween.h"
++#include "ui/gfx/geometry/transform.h"
++#include "ui/views/controls/scroll_view.h"
+ 
+ namespace {
+ 
+@@ -1149,6 +1155,8 @@ void VerticalTabStripRegionView::OnTabStripViewSet() {
+     // The Space title and the Clear line follow every Space change.
+     space_tab_visibility_->SetOnSpaceChanged(base::BindRepeating(
+         &VerticalTabStripRegionView::UpdateSpaceTitle, base::Unretained(this)));
++    space_tab_visibility_->SetOnActiveSpaceChanged(base::BindRepeating(
++        &VerticalTabStripRegionView::SlideInSpaceList, base::Unretained(this)));
+   }
+ 
+   // Folder headers accept a dropped tab. Built here because the FolderViews
+@@ -1159,6 +1167,52 @@ void VerticalTabStripRegionView::OnTabStripViewSet() {
+   OnCollapseStateChanged(state_controller_->GetCollapseState());
+ }
+ 
++void VerticalTabStripRegionView::SlideInSpaceList(const spaces::SpaceId& from,
++                                                  const spaces::SpaceId& to) {
++  // The Space's own rows -- its pins, tabs and folders -- live in the unpinned
++  // list; the essentials above them are in every Space and stay still.
++  views::ScrollView* const list =
++      tab_strip_view() ? tab_strip_view()->unpinned_tabs_scroll_view() : nullptr;
++  spaces::SpaceModel* const model =
++      spaces::SpaceModel::From(browser_view()->browser());
++  if (!list || !model ||
++      !stedding::ShouldAnimate(browser_view()->GetProfile()->GetPrefs())) {
++    return;
++  }
++  int from_index = -1;
++  int to_index = -1;
++  const auto& all = model->spaces();
++  for (size_t i = 0; i < all.size(); ++i) {
++    if (all[i]->id() == from) {
++      from_index = static_cast<int>(i);
++    }
++    if (all[i]->id() == to) {
++      to_index = static_cast<int>(i);
++    }
++  }
++  const int direction =
++      stedding::SpaceSlideDirection(from_index, to_index, base::i18n::IsRTL());
++  if (direction == 0) {
++    return;
++  }
++  if (!list->layer()) {
++    list->SetPaintToLayer();
++    list->layer()->SetFillsBoundsOpaquely(false);
++  }
++  ui::Layer* const layer = list->layer();
++  layer->GetAnimator()->StopAnimating();
++  gfx::Transform start;
++  start.Translate(direction * stedding::kSpaceSlideOffsetDip, 0);
++  layer->SetTransform(start);
++  layer->SetOpacity(0.0f);
++  ui::ScopedLayerAnimationSettings settings(layer->GetAnimator());
++  settings.SetTransitionDuration(
++      base::Milliseconds(stedding::kSpaceSlideDurationMs));
++  settings.SetTweenType(gfx::Tween::EASE_OUT);
++  layer->SetTransform(gfx::Transform());
++  layer->SetOpacity(1.0f);
++}
++
+ TabDragTarget* VerticalTabStripRegionView::GetTabDragTargetInsideTabStrip(
+     const gfx::Point& point_in_screen) {
+   if (!folder_drag_target_) {
+diff --git a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
+index f5c95924a59fe..f64a652a6dd74 100644
+--- a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
++++ b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
+@@ -14,6 +14,7 @@
+ #include "base/timer/timer.h"
+ #include "chrome/browser/ui/animation/browser_animation_types.h"
+ #include "chrome/browser/ui/omnibox/omnibox_tab_helper.h"
++#include "chrome/browser/ui/spaces/space_id.h"
+ #include "chrome/browser/ui/tabs/tab_data.h"
+ #include "chrome/browser/ui/tabs/vertical_tab_strip_state.h"
+ #include "chrome/browser/ui/tabs/vertical_tab_strip_state_controller.h"
+@@ -364,6 +365,9 @@ class VerticalTabStripRegionView final
+   // out the Space boundary.
+   void UpdateSpaceTitle();
+ 
++  // Spaces B32: the list slides in from the side of the Space being entered.
++  void SlideInSpaceList(const spaces::SpaceId& from, const spaces::SpaceId& to);
++
+   void OnSpaceChipHovered(const std::u16string& name,
+                           const gfx::Rect& chip_bounds);
+ 
+diff --git a/chrome/browser/ui/views/spaces/space_tab_visibility_controller.cc b/chrome/browser/ui/views/spaces/space_tab_visibility_controller.cc
+index cbee5b21ff847..2a24e95f45c5b 100644
+--- a/chrome/browser/ui/views/spaces/space_tab_visibility_controller.cc
++++ b/chrome/browser/ui/views/spaces/space_tab_visibility_controller.cc
+@@ -163,6 +163,9 @@ void SpaceTabVisibilityController::OnActiveSpaceChanged(const SpaceId& from,
+   }
+   UpdateTabVisibility();
+   UpdateWindowTint();
++  if (on_active_space_changed_) {
++    on_active_space_changed_.Run(from, to);
++  }
+ }
+ 
+ void SpaceTabVisibilityController::OnSpaceMetadataChanged(const SpaceId& id) {
+diff --git a/chrome/browser/ui/views/spaces/space_tab_visibility_controller.h b/chrome/browser/ui/views/spaces/space_tab_visibility_controller.h
+index be856c1a45442..f7fe94ac06789 100644
+--- a/chrome/browser/ui/views/spaces/space_tab_visibility_controller.h
++++ b/chrome/browser/ui/views/spaces/space_tab_visibility_controller.h
+@@ -57,6 +57,13 @@ class SpaceTabVisibilityController : public SpaceModel::Observer,
+ 
+   // Runs after any change the sidebar's chrome (Space title, Clear line)
+   // has to follow: the active Space, its metadata, or a tab's Space or pin.
++  // Runs after the active Space changed and the rows were swapped, with the
++  // Space left and the one entered (the list's slide, spaces B32).
++  void SetOnActiveSpaceChanged(
++      base::RepeatingCallback<void(const SpaceId&, const SpaceId&)> on_changed) {
++    on_active_space_changed_ = std::move(on_changed);
++  }
++
+   void SetOnSpaceChanged(base::RepeatingClosure on_changed) {
+     on_space_changed_ = std::move(on_changed);
+   }
+@@ -78,6 +85,8 @@ class SpaceTabVisibilityController : public SpaceModel::Observer,
+   void PinTabsForTesting();
+ 
+   base::RepeatingClosure on_space_changed_;
++  base::RepeatingCallback<void(const SpaceId&, const SpaceId&)>
++      on_active_space_changed_;
+   const raw_ref<SpaceModel> model_;
+   const raw_ref<TabStripModel> tab_strip_model_;
+   const raw_ref<views::View> tab_strip_root_;

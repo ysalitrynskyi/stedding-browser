@@ -566,6 +566,28 @@ into the fresh profile.
     `asyncio.TaskGroup`, 3.12 dropped `assertEquals`); on another version compare
     the failure list with and without a change, as the 0051 change was.
 
+50. **M155 took `Browser` away, and a milestone rebase is two jobs.** Upstream's
+    Bedrock work removed `BrowserWindowInterface::GetBrowserForMigrationOnly()`,
+    `BrowserList`, `TestWithBrowserView` and `browser_view_unittest.cc`, and made
+    `BrowserView::browser()` return the interface. The rebase itself (conflicts,
+    `zdiff3` on, the tab menu enum and toast ids handled by rule) is the first
+    job; the port is the second, and only the compiler finds it -- build with
+    `KEEP_GOING=1` so one pass lists every error. The port: take the interface
+    wherever a `Browser` was held (`GetTabStripModel()`, `GetProfile()`,
+    `GetSessionID()`; the interface still has an inline `tab_strip_model()` for
+    migrating callers, so upstream lines that use it need no change); a URL with
+    parameters goes through `BrowserWebContentsDelegate::From(window)->OpenURLFromTab`,
+    which is what `Browser::OpenURL` did; tests hold `std::unique_ptr<BrowserWindowInterface>`
+    from `CreateBrowser`. The fixes go back into the patches they belong to by
+    blame: one `--fixup` per owning patch, hunk by hunk, then one autosquash.
+    Fixups placed early collide with later patches' lines; resolve a fixup's
+    conflict with the stage's own side, ported, and a feature patch's with its
+    own side, ported -- the first run took the stage's side for both and lost 97
+    lines, which the tree-identity check against the pre-squash snapshot caught.
+    A correction a later patch's context blocks goes into the last patch that
+    touches the file. The snapshot is what makes this safe: the squash is done
+    when the tree is identical, not when the rebase says so.
+
 ## The Windows build
 
 Git for Windows for the bash tooling, PowerShell for the rest, Visual Studio's own

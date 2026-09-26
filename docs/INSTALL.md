@@ -104,10 +104,11 @@ from other apps, signing, and automatic updates (`S-56`).
 
 ## First start
 
-The first window opens the welcome flow: choose a search engine, import from Arc (or
-Chrome, Firefox, Safari), pick a Space colour, set Stedding as the default browser if
-you want, and see the keyboard shortcuts. Everything on it can be changed later in
-**Settings → Stedding**.
+The first window opens the welcome flow: choose a search engine, import from Arc, or
+from Safari or Firefox on macOS (Chrome, Brave and Edge are not on this step yet;
+on Windows the step lists Edge, Internet Explorer and Firefox), pick a Space colour,
+set Stedding as the default browser if you want, and see the keyboard shortcuts.
+Everything on it can be changed later in **Settings → Stedding**.
 
 ## Linux
 

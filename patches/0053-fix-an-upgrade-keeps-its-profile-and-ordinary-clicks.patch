@@ -1,0 +1,1242 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Sat, 26 Sep 2026 16:24:44 -0400
+Subject: fix: an upgrade keeps its profile, and ordinary clicks stop
+ destroying data
+
+Crashpad init asks PathService for the crash-dump directory, which creates
+~/Library/Application Support/Stedding before profile migration. An empty
+folder, or one that holds only Crashpad, blocked the move out of Chromium's
+folder, so the first launch of this series would open a blank profile.
+Migration now runs first, and a Crashpad-only folder still receives the old
+profile. A marker records that the secrets were encrypted under the Chromium
+keychain item.
+
+The keychain no longer mints a new key when the old item cannot be read, and
+a fresh profile does not adopt Chromium's key. An existing profile copies
+that key once under Stedding's name. HTTPS-First balanced mode follows the
+registered pref, which was on while the effective check ignored it. macOS
+no longer reads Google Chrome's External Extensions directory. DuckDuckGo
+is the search fallback even when the regional list omits it.
+
+The collapsed rail is 44 DIP, above the 42 DIP narrow threshold, so a hovered
+row centred the close button on the favicon. A rail row is narrow until
+hover-expand. A plain click selects a drifted pin; reset is Option-click or
+the essentials badge. The drag ends before that choice, so a reset cannot
+leave the window uncloseable. Peek starts off. The Space sleep timer starts
+at Never, and sleep skips audible, captured, picture-in-picture, fullscreen
+video, beforeunload and form tabs, and the on-screen split pane. Clear keeps
+folders and opens a new tab rather than closing the window. Switching the
+strip drops the visibility controller and the folder drag target before the
+view is freed, and rebuilds them with the new strip. Move to Space and
+Route to Space ids, which are a range rather than one switch case, are
+handled for the horizontal strip. A link dropped on a folder is placed
+before or after it instead of hitting NOTREACHED. Session writes fetch
+SessionService at each write.
+
+Horizontal tab mode stays.
+
+Why: the next release must not open an empty profile, mint a key over saved
+passwords, or crash on the horizontal-tabs toggle and a folder drop.
+Removable when: profile migration, the keychain item and these behaviours
+are upstream or the features are withdrawn.
+---
+ chrome/app/chrome_main_delegate.cc            |  12 ++
+ .../extensions/external_provider_impl.cc      |  39 +++---
+ ...ps_first_mode_settings_tracker_unittest.cc |   6 +-
+ chrome/browser/ssl/https_upgrades_util.cc     |  11 +-
+ chrome/browser/ui/spaces/space_model.cc       | 126 ++++++++++++++++--
+ chrome/browser/ui/spaces/space_model.h        |  20 ++-
+ .../ui/stedding/privacy_defaults_unittest.cc  |   2 +
+ chrome/browser/ui/stedding/sleep_tabs.cc      |  47 ++++++-
+ chrome/browser/ui/stedding/stedding_prefs.cc  |   7 +-
+ .../ui/stedding/stedding_prefs_unittest.cc    |  11 +-
+ .../ui/tabs/stedding_folder_session.cc        |  17 ++-
+ .../browser/ui/tabs/stedding_folder_session.h |   6 +-
+ chrome/browser/ui/tabs/tab_strip_model.cc     |  16 +++
+ .../frame/vertical_tab_strip_region_view.cc   |   6 +
+ .../tabs/common/tab_link_drop_handler.cc      |  43 +++++-
+ .../views/tabs/common/tab_link_drop_handler.h |   3 +
+ .../browser/ui/views/tabs/common/tab_view.cc  |  39 +++---
+ .../browser/ui/views/tabs/common/tab_view.h   |   5 +
+ .../tabs/common/tab_view_vertical_layout.cc   |   8 +-
+ chrome/common/chrome_paths_mac.mm             |  98 ++++++++++++--
+ chrome/common/chrome_paths_unittest.cc        |  28 ++++
+ .../os_crypt/common/keychain_password_mac.mm  |  55 +++++++-
+ .../common/keychain_password_mac_unittest.mm  |   7 +-
+ .../template_url_prepopulate_data.cc          |  22 ++-
+ 24 files changed, 534 insertions(+), 100 deletions(-)
+
+diff --git a/chrome/app/chrome_main_delegate.cc b/chrome/app/chrome_main_delegate.cc
+index bbbbe51c2cf94..9ab561f99cf5a 100644
+--- a/chrome/app/chrome_main_delegate.cc
++++ b/chrome/app/chrome_main_delegate.cc
+@@ -1486,6 +1486,18 @@ void ChromeMainDelegate::PreSandboxStartup() {
+ #endif
+ 
+ #if BUILDFLAG(IS_MAC)
++  // Before Crashpad. DIR_CRASH_DUMPS is the default user-data directory plus
++  // "Crashpad", and PathService creates the parents. If that runs first, the
++  // empty Stedding folder blocks the one-time move out of Chromium's folder
++  // and an upgrade opens a blank profile (patch 0050).
++  if (process_type.empty()) {
++    base::FilePath policy_user_data_dir =
++        command_line.GetSwitchValuePath(switches::kUserDataDir);
++    policy::path_parser::CheckUserDataDirPolicy(&policy_user_data_dir);
++    if (policy_user_data_dir.empty()) {
++      chrome::MigrateDefaultUserDataDirectoryIfNeeded();
++    }
++  }
+   InitMacCrashReporter(command_line, process_type);
+   SetUpInstallerPreferences(command_line);
+ #endif
+diff --git a/chrome/browser/extensions/external_provider_impl.cc b/chrome/browser/extensions/external_provider_impl.cc
+index 9340e989771f1..460fcf266e191 100644
+--- a/chrome/browser/extensions/external_provider_impl.cc
++++ b/chrome/browser/extensions/external_provider_impl.cc
+@@ -830,16 +830,11 @@ void ExternalProviderImpl::CreateExternalProviders(
+     return;
+   }
+ 
+-#if !BUILDFLAG(IS_WIN)
+-  // On Mac OS, items in /Library/... should be written by the superuser.
+-  // Check that all components of the path are writable by root only.
+-  ExternalPrefLoader::Options check_admin_permissions_on_mac;
+-#if BUILDFLAG(IS_MAC)
+-  check_admin_permissions_on_mac =
+-      ExternalPrefLoader::ENSURE_PATH_CONTROLLED_BY_ADMIN;
+-#else
+-  check_admin_permissions_on_mac = ExternalPrefLoader::NONE;
+-#endif
++#if !BUILDFLAG(IS_WIN) && !BUILDFLAG(IS_MAC)
++  // Stedding does not load Chrome's external-extensions directory on Mac, so
++  // the admin-path check that existed for it is gone with that provider.
++  ExternalPrefLoader::Options check_admin_permissions_on_mac =
++      ExternalPrefLoader::NONE;
+   int bundled_extension_creation_flags = Extension::NO_FLAGS;
+ #endif
+ #if BUILDFLAG(IS_CHROMEOS)
+@@ -884,16 +879,14 @@ void ExternalProviderImpl::CreateExternalProviders(
+         ManifestLocation::kExternalPrefDownload,
+         bundled_extension_creation_flags));
+ #endif
+-#if BUILDFLAG(IS_WIN)
+-    // Stedding (privacy Q9): Chromium's registry loader reads Google
+-    // Chrome's own key, Software\Google\Chrome\Extensions, whatever the
+-    // build's branding, and installs what third-party installers put there
+-    // from Google's update server -- on the operator's PC, Adobe's Acrobat
+-    // extension, with an "Action required" chip on the app menu until the
+-    // user accepted it (2026-09-08). Chrome's key is not Stedding's: a
+-    // vendor that registered for Chrome did not register for this browser.
+-    // No provider. Policy-forced extensions and the user's own installs
+-    // come through other providers and stay.
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
++    // Stedding (privacy Q9): do not read Chrome's external-extensions list.
++    // On Windows that is Software\Google\Chrome\Extensions, which installed
++    // Adobe Acrobat from Google's update server on the operator's PC
++    // (2026-09-08). On macOS it is
++    // /Library/Application Support/Google/Chrome/External Extensions.
++    // A vendor that registered for Chrome did not register for this browser.
++    // Policy-forced extensions and the user's own installs stay.
+ #else
+     provider_list->push_back(std::make_unique<ExternalProviderImpl>(
+         service,
+@@ -903,8 +896,9 @@ void ExternalProviderImpl::CreateExternalProviders(
+         profile, ManifestLocation::kExternalPref,
+         ManifestLocation::kExternalPrefDownload,
+         bundled_extension_creation_flags));
+-
+-    // Define a per-user source of external extensions.
++#endif
++    // Stedding's own per-user folder, under its user-data directory, not
++    // Chrome's. Administrators can still drop an extension there.
+ #if BUILDFLAG(IS_MAC) || ((BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)) && \
+                           BUILDFLAG(CHROMIUM_BRANDING))
+     provider_list->push_back(std::make_unique<ExternalProviderImpl>(
+@@ -914,7 +908,6 @@ void ExternalProviderImpl::CreateExternalProviders(
+             nullptr),
+         profile, ManifestLocation::kExternalPref,
+         ManifestLocation::kExternalPrefDownload, Extension::NO_FLAGS));
+-#endif
+ #endif
+   }
+ 
+diff --git a/chrome/browser/ssl/https_first_mode_settings_tracker_unittest.cc b/chrome/browser/ssl/https_first_mode_settings_tracker_unittest.cc
+index 2e836cf6b192b..73948c8d039bf 100644
+--- a/chrome/browser/ssl/https_first_mode_settings_tracker_unittest.cc
++++ b/chrome/browser/ssl/https_first_mode_settings_tracker_unittest.cc
+@@ -1286,10 +1286,12 @@ TEST_F(HttpsFirstModeSettingsTrackerTest, BalancedModeEnabledForEsbUsers) {
+   EXPECT_TRUE(state->IsHttpAllowedForHost(
+       "example.com", profile()->GetDefaultStoragePartition()));
+ 
+-  // 2. Initially ESB is disabled. Balanced Mode should be disabled by default.
++  // 2. Initially ESB is disabled. Stedding's registered default is balanced
++  // mode on (privacy Q2); upstream expected it off until the auto-enable
++  // feature or ESB turned it on.
+   EXPECT_FALSE(
+       safe_browsing::IsEnhancedProtectionEnabled(*profile()->GetPrefs()));
+-  EXPECT_FALSE(IsBalancedModeEnabled(profile()->GetPrefs()));
++  EXPECT_TRUE(IsBalancedModeEnabled(profile()->GetPrefs()));
+   EXPECT_EQ(service->GetCurrentSetting(), HttpsFirstModeSetting::kDisabled);
+ 
+   // 3. Enable ESB. Balanced Mode should now be enabled by default.
+diff --git a/chrome/browser/ssl/https_upgrades_util.cc b/chrome/browser/ssl/https_upgrades_util.cc
+index fee0ab1c7d486..4ba9ad4eda5e2 100644
+--- a/chrome/browser/ssl/https_upgrades_util.cc
++++ b/chrome/browser/ssl/https_upgrades_util.cc
+@@ -150,8 +150,15 @@ bool IsBalancedModeEnabled(PrefService* prefs) {
+         safe_browsing::IsEnhancedProtectionEnabled(*prefs)) {
+       return true;
+     }
+-    return base::FeatureList::IsEnabled(
+-        features::kHttpsFirstBalancedModeAutoEnable);
++    if (base::FeatureList::IsEnabled(
++            features::kHttpsFirstBalancedModeAutoEnable)) {
++      return true;
++    }
++    // Stedding (privacy Q2): the registered default is on. Upstream treats a
++    // registered default as "the user has not chosen", so the auto-enable
++    // feature (off) left the Settings row reading on while upgrades stayed
++    // off. The pref value is the choice, including that default.
++    return prefs->GetBoolean(prefs::kHttpsFirstBalancedMode);
+   }
+   return prefs->GetBoolean(prefs::kHttpsFirstBalancedMode);
+ }
+diff --git a/chrome/browser/ui/spaces/space_model.cc b/chrome/browser/ui/spaces/space_model.cc
+index 6e3da6a8be2b5..6453e6fbf0f11 100644
+--- a/chrome/browser/ui/spaces/space_model.cc
++++ b/chrome/browser/ui/spaces/space_model.cc
+@@ -42,6 +42,7 @@
+ #include "chrome/browser/ui/stedding/tab_names.h"
+ #include "chrome/browser/ui/stedding/theme/page_theme_color_controller.h"
+ #include "chrome/browser/ui/stedding_ui_metrics.h"
++#include "chrome/browser/ui/tabs/stedding_folder_session.h"
+ #include "chrome/browser/ui/tabs/tab_enums.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model_delegate.h"
+@@ -144,8 +145,7 @@ SpaceModel::SpaceModel(BrowserWindowInterface& browser) : SpaceModel() {
+   // anything can ask which Space a tab is in.
+   {
+     BrowserWindowInterface* const browser_impl = &browser;
+-    session_service_ =
+-        SessionServiceFactory::GetForProfile(browser_impl->GetProfile());
++    profile_ = browser_impl->GetProfile();
+     session_id_ = browser_impl->GetSessionID();
+     if (const BrowserInitState* const init =
+             BrowserInitState::From(browser_impl)) {
+@@ -960,8 +960,19 @@ void SpaceModel::ClearUnpinnedTabs() {
+     if (tab->IsPinned() || !IsTabInActiveSpace(tab) || IsSpacePinned(tab)) {
+       continue;
+     }
++    // A folder is the user's filing. Clear closes loose tabs, not a folder.
++    if (!stedding::FolderPathForTab(tab).empty()) {
++      continue;
++    }
+     doomed.push_back(tab->GetContents());
+   }
++  // Closing every tab closes the window. Leave a new-tab row instead.
++  if (!doomed.empty() &&
++      static_cast<int>(doomed.size()) == tab_strip_model_->count() &&
++      tab_strip_model_->delegate()) {
++    tab_strip_model_->delegate()->AddTabAt(GURL(), /*index=*/-1,
++                                           /*foreground=*/true);
++  }
+   for (content::WebContents* contents : doomed) {
+     const int index = tab_strip_model_->GetIndexOfWebContents(contents);
+     if (index != TabStripModel::kNoTab) {
+@@ -1251,8 +1262,16 @@ SpaceId SpaceModel::SpaceIdForNewTab(tabs::TabInterface* tab) {
+   return active_id_;
+ }
+ 
++SessionService* SpaceModel::SessionServiceIfExisting() const {
++  if (!profile_) {
++    return nullptr;
++  }
++  return SessionServiceFactory::GetForProfileIfExisting(profile_);
++}
++
+ void SpaceModel::SaveTabToSession(tabs::TabInterface* tab, const SpaceId& id) {
+-  if (!session_service_ || !session_id_.is_valid()) {
++  SessionService* const session_service = SessionServiceIfExisting();
++  if (!session_service || !session_id_.is_valid()) {
+     return;
+   }
+   content::WebContents* const contents = tab->GetContents();
+@@ -1268,7 +1287,7 @@ void SpaceModel::SaveTabToSession(tabs::TabInterface* tab, const SpaceId& id) {
+   // before the restored tabs exist, so the pin SetSpacePinned wrote in the
+   // previous run was gone and nothing wrote it again (B9).
+   for (const auto& [key, value] : SessionExtraDataForTab(tab, id)) {
+-    session_service_->AddTabExtraData(session_id_, tab_id, key.c_str(), value);
++    session_service->AddTabExtraData(session_id_, tab_id, key.c_str(), value);
+   }
+ }
+ 
+@@ -1595,17 +1614,18 @@ void SpaceModel::SetSpacePinnedOnOneTab(tabs::TabInterface* tab,
+   // The sidebar draws the Clear line under the Space-pinned run, so a pin
+   // change is a layout change.
+   observers_.Notify(&Observer::OnTabSpaceChanged, tab);
+-  if (session_service_ && session_id_.is_valid()) {
++  if (SessionService* const session_service = SessionServiceIfExisting();
++      session_service && session_id_.is_valid()) {
+     if (content::WebContents* const contents = tab->GetContents()) {
+       const SessionID tab_id = sessions::SessionTabHelper::IdForTab(contents);
+       if (tab_id.is_valid()) {
+-        session_service_->AddTabExtraData(
++        session_service->AddTabExtraData(
+             session_id_, tab_id, kSessionTabSpacePinKey, pinned ? "1" : "0");
+         // The home rides along (pins H2); an unpin clears it.
+         const std::optional<GURL> home = HomeUrl(tab);
+-        session_service_->AddTabExtraData(session_id_, tab_id,
+-                                          kSessionTabHomeKey,
+-                                          home ? home->spec() : std::string());
++        session_service->AddTabExtraData(session_id_, tab_id,
++                                         kSessionTabHomeKey,
++                                         home ? home->spec() : std::string());
+       }
+     }
+   }
+@@ -1694,10 +1714,92 @@ void SpaceModel::RestoreFrom(const std::string& data) {
+ }
+ 
+ void SpaceModel::SaveToSession() {
+-  if (session_service_ && session_id_.is_valid()) {
+-    session_service_->AddWindowExtraData(session_id_, kSessionSpacesKey,
+-                                         Serialize());
++  if (SessionService* const session_service = SessionServiceIfExisting();
++      session_service && session_id_.is_valid()) {
++    session_service->AddWindowExtraData(session_id_, kSessionSpacesKey,
++                                        Serialize());
++  }
++}
++
++bool IsSpaceContextMenuCommand(int command_id) {
++  const int move_first =
++      static_cast<int>(TabStripModel::CommandSteddingMoveToSpaceFirst);
++  const int move_last =
++      static_cast<int>(TabStripModel::CommandSteddingMoveToSpaceLast);
++  const int route_first =
++      static_cast<int>(TabStripModel::CommandSteddingRouteToSpaceFirst);
++  const int route_last =
++      static_cast<int>(TabStripModel::CommandSteddingRouteToSpaceLast);
++  return (command_id >= move_first && command_id <= move_last) ||
++         (command_id >= route_first && command_id <= route_last);
++}
++
++bool IsSpaceContextMenuCommandEnabled(const SpaceModel* model,
++                                     const TabStripModel* tabs,
++                                     int index,
++                                     int command_id) {
++  if (!IsSpaceContextMenuCommand(command_id) || !model || !tabs ||
++      !tabs->ContainsIndex(index)) {
++    return false;
++  }
++  tabs::TabInterface* const tab = tabs->GetTabAtIndex(index);
++  return tab && !tab->IsPinned();
++}
++
++void ExecuteSpaceContextMenuCommand(SpaceModel* model,
++                                    const TabStripModel* tabs,
++                                    int index,
++                                    int command_id) {
++  if (!IsSpaceContextMenuCommandEnabled(model, tabs, index, command_id)) {
++    return;
++  }
++  const int route_first =
++      static_cast<int>(TabStripModel::CommandSteddingRouteToSpaceFirst);
++  const int route_last =
++      static_cast<int>(TabStripModel::CommandSteddingRouteToSpaceLast);
++  if (command_id >= route_first && command_id <= route_last) {
++    const size_t which = command_id - route_first;
++    if (which >= model->size()) {
++      return;
++    }
++    const SpaceId target = model->spaces()[which]->id();
++    for (tabs::TabInterface* each : tabs->GetTabsForContextMenuCommand(index)) {
++      content::WebContents* const contents = each->GetContents();
++      if (each->IsPinned() || !contents) {
++        continue;
++      }
++      const GURL url = contents->GetLastCommittedURL();
++      if (!url.SchemeIsHTTPOrHTTPS()) {
++        continue;
++      }
++      BrowserWindowInterface* const browser = each->GetBrowserWindowInterface();
++      if (!browser || !browser->GetProfile()) {
++        continue;
++      }
++      AddRoute(browser->GetProfile()->GetPrefs(),
++               SiteRouteFor(url, target.ToString()));
++      model->RouteTab(each, url, /*foreground=*/true, /*external=*/false);
++    }
++    return;
++  }
++  std::vector<SpaceId> others;
++  for (const std::unique_ptr<Space>& space : model->spaces()) {
++    if (space->id() != model->active_id()) {
++      others.push_back(space->id());
++    }
++  }
++  const size_t which =
++      command_id -
++      static_cast<int>(TabStripModel::CommandSteddingMoveToSpaceFirst);
++  if (which >= others.size()) {
++    return;
++  }
++  for (tabs::TabInterface* each : tabs->GetTabsForContextMenuCommand(index)) {
++    if (!each->IsPinned()) {
++      model->SetSpaceForTab(each, others[which]);
++    }
+   }
++  model->SetActiveSpace(others[which]);
+ }
+ 
+ }  // namespace spaces
+diff --git a/chrome/browser/ui/spaces/space_model.h b/chrome/browser/ui/spaces/space_model.h
+index 98f753a33066f..403abcd52b91d 100644
+--- a/chrome/browser/ui/spaces/space_model.h
++++ b/chrome/browser/ui/spaces/space_model.h
+@@ -36,6 +36,7 @@
+ 
+ class BrowserWindowInterface;
+ class BrowserWindowInterface;
++class Profile;
+ class SessionService;
+ class TabStripModel;
+ 
+@@ -431,7 +432,10 @@ class SpaceModel : public TabStripModelObserver,
+   PrefChangeRegistrar pref_registrar_;
+   raw_ptr<TabStripModel> tab_strip_model_ = nullptr;
+   bool wrote_window_state_ = false;
+-  raw_ptr<SessionService> session_service_ = nullptr;
++  // The profile outlives a SessionService that ShutdownForProfile destroys
++  // while the window is still up. The service is fetched at each write.
++  raw_ptr<Profile> profile_ = nullptr;
++  SessionService* SessionServiceIfExisting() const;
+   SessionID session_id_ = SessionID::InvalidValue();
+   std::optional<ui::ScopedUnownedUserData<SpaceModel>> scoped_user_data_;
+   // toolbar T8: the window's address-row controller, owned here for the
+@@ -464,6 +468,20 @@ class SpaceModel : public TabStripModelObserver,
+   base::WeakPtrFactory<SpaceModel> weak_factory_{this};
+ };
+ 
++// Move-to-Space and Always-Open ids are a numeric range (First through Last),
++// not one enumerator each. The horizontal tab strip's menu sends them to
++// TabStripModel, whose switch does not name the values in between and used
++// to hit NOTREACHED. Both strips go through these.
++bool IsSpaceContextMenuCommand(int command_id);
++bool IsSpaceContextMenuCommandEnabled(const SpaceModel* model,
++                                     const TabStripModel* tabs,
++                                     int index,
++                                     int command_id);
++void ExecuteSpaceContextMenuCommand(SpaceModel* model,
++                                    const TabStripModel* tabs,
++                                    int index,
++                                    int command_id);
++
+ }  // namespace spaces
+ 
+ #endif  // CHROME_BROWSER_UI_SPACES_SPACE_MODEL_H_
+diff --git a/chrome/browser/ui/stedding/privacy_defaults_unittest.cc b/chrome/browser/ui/stedding/privacy_defaults_unittest.cc
+index 2b084efb8f902..a3b9eabf4580f 100644
+--- a/chrome/browser/ui/stedding/privacy_defaults_unittest.cc
++++ b/chrome/browser/ui/stedding/privacy_defaults_unittest.cc
+@@ -8,6 +8,7 @@
+ #include "base/command_line.h"
+ #include "chrome/browser/ui/browser.h"
+ #include "chrome/browser/ui/stedding/stedding_prefs.h"
++#include "chrome/browser/ssl/https_upgrades_util.h"
+ #include "chrome/common/pref_names.h"
+ #include "chrome/test/base/browser_with_test_window_test.h"
+ #include "components/content_settings/core/browser/cookie_settings.h"
+@@ -31,6 +32,7 @@ TEST_F(PrivacyDefaultsWindowTest, EveryDefaultIsTheProtectiveOne) {
+       prefs->GetInteger(::prefs::kCookieControlsMode))
+       << "Q1";
+   EXPECT_TRUE(prefs->GetBoolean(::prefs::kHttpsFirstBalancedMode)) << "Q2";
++  EXPECT_TRUE(IsBalancedModeEnabled(profile()->GetPrefs())) << "Q2 effective";
+   EXPECT_FALSE(prefs->GetBoolean(embedder_support::kAlternateErrorPagesEnabled))
+       << "Q3";
+   EXPECT_TRUE(prefs->GetBoolean(::prefs::kEnableQuietNotificationPermissionUi))
+diff --git a/chrome/browser/ui/stedding/sleep_tabs.cc b/chrome/browser/ui/stedding/sleep_tabs.cc
+index 9092a0c556dcc..f626eac78c06d 100644
+--- a/chrome/browser/ui/stedding/sleep_tabs.cc
++++ b/chrome/browser/ui/stedding/sleep_tabs.cc
+@@ -8,6 +8,7 @@
+ 
+ #include "chrome/browser/resource_coordinator/lifecycle_unit_state.mojom.h"
+ #include "chrome/browser/resource_coordinator/tab_lifecycle_unit_external.h"
++#include "chrome/browser/tab_contents/form_interaction_tab_helper.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "components/tabs/public/split_tab_data.h"
+@@ -21,12 +22,53 @@ namespace {
+ // `allow_active`: Sleep Tab on the row the menu was opened on -- a
+ // right-click activates the row first, so the verb would otherwise never
+ // apply to it; SleepTabs activates a neighbour before the discard.
++// The on-screen half of the active split is not the active tab, and it is
++// not hidden. Sleeping it drops the call or the video the user is watching.
++bool OnScreenSplitPeer(tabs::TabInterface* tab) {
++  if (!tab || !tab->IsSplit()) {
++    return false;
++  }
++  BrowserWindowInterface* const browser = tab->GetBrowserWindowInterface();
++  TabStripModel* const strip = browser ? browser->GetTabStripModel() : nullptr;
++  tabs::TabInterface* const active = strip ? strip->GetActiveTab() : nullptr;
++  if (!active || active == tab || !active->IsSplit()) {
++    return false;
++  }
++  return active->GetSplit() == tab->GetSplit();
++}
++
++// Audio, capture, picture-in-picture, a fullscreen video, a beforeunload
++// handler and a form the user has typed in are not discarded. Bluetooth and
++// USB stay on performance_manager's policy; those signals are not on the UI
++// thread.
++bool IneligibleToSleep(tabs::TabInterface* tab) {
++  content::WebContents* const contents = tab ? tab->GetContents() : nullptr;
++  if (!contents) {
++    return true;
++  }
++  if (contents->IsCurrentlyAudible() || contents->IsBeingCaptured() ||
++      contents->IsBeingVisiblyCaptured() ||
++      contents->HasPictureInPictureVideo() ||
++      contents->HasPictureInPictureDocument() ||
++      contents->HasActiveEffectivelyFullscreenVideo() ||
++      contents->NeedToFireBeforeUnloadOrUnloadEvents() ||
++      OnScreenSplitPeer(tab)) {
++    return true;
++  }
++  if (FormInteractionTabHelper* const forms =
++          FormInteractionTabHelper::From(tab);
++      forms && forms->had_form_interaction()) {
++    return true;
++  }
++  return false;
++}
++
+ bool CanSleep(TabStripModel* tabs, tabs::TabInterface* tab, bool allow_active) {
+   if (!tab || (tab->IsActivated() && !allow_active) || tab->IsPinned()) {
+     return false;
+   }
+   content::WebContents* const contents = tab->GetContents();
+-  if (!contents || contents->WasDiscarded()) {
++  if (!contents || contents->WasDiscarded() || IneligibleToSleep(tab)) {
+     return false;
+   }
+   const int index = tabs->GetIndexOfTab(tab);
+@@ -123,7 +165,8 @@ void SleepTabList(const std::vector<tabs::TabInterface*>& tabs) {
+   for (tabs::TabInterface* doomed : tabs) {
+     content::WebContents* const contents =
+         doomed ? doomed->GetContents() : nullptr;
+-    if (!contents || doomed->IsActivated() || contents->WasDiscarded()) {
++    if (!contents || doomed->IsActivated() || contents->WasDiscarded() ||
++        IneligibleToSleep(doomed)) {
+       continue;
+     }
+     resource_coordinator::TabLifecycleUnitExternal* const unit =
+diff --git a/chrome/browser/ui/stedding/stedding_prefs.cc b/chrome/browser/ui/stedding/stedding_prefs.cc
+index c215947c3c70a..2ee3ec287339b 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs.cc
++++ b/chrome/browser/ui/stedding/stedding_prefs.cc
+@@ -12,7 +12,8 @@ namespace stedding::prefs {
+ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
+   registry->RegisterBooleanPref(kNewTabShowHint, true);
+   registry->RegisterBooleanPref(kNewTabShowShortcuts, true);
+-  registry->RegisterBooleanPref(kPeekEnabled, true);
++  // Peek's host does not show a page yet. Off until that is rebuilt.
++  registry->RegisterBooleanPref(kPeekEnabled, false);
+   registry->RegisterIntegerPref(kArchiveIdleHours, 12);
+   registry->RegisterIntegerPref(kArchiveKeepDays, 30);
+   registry->RegisterBooleanPref(kToolbarHideWithSidebar, true);
+@@ -24,7 +25,9 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
+   registry->RegisterBooleanPref(kCopyStripTracking, true);
+   registry->RegisterBooleanPref(kUiAnimate, true);
+   registry->RegisterBooleanPref(kPinsCloseSleeps, true);
+-  registry->RegisterIntegerPref(kSpaceSleepMinutes, 15);
++  // Never, until sleep refuses audible, capturing, picture-in-picture and
++  // form tabs. A 15-minute default discarded those.
++  registry->RegisterIntegerPref(kSpaceSleepMinutes, 0);
+   registry->RegisterIntegerPref(kSidebarHoverDelayMs, 2000);
+   registry->RegisterBooleanPref(kMenusShort, true);
+   registry->RegisterBooleanPref(kHoldCmdNumbers, true);
+diff --git a/chrome/browser/ui/stedding/stedding_prefs_unittest.cc b/chrome/browser/ui/stedding/stedding_prefs_unittest.cc
+index 778040ba85802..4a2b6d890bc97 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs_unittest.cc
++++ b/chrome/browser/ui/stedding/stedding_prefs_unittest.cc
+@@ -17,14 +17,17 @@ TEST(SteddingPrefsTest, EveryPreferenceRegistersAndDefaultsToOn) {
+   sync_preferences::TestingPrefServiceSyncable service;
+   RegisterProfilePrefs(service.registry());
+   for (const char* name :
+-       {kNewTabShowHint, kNewTabShowShortcuts, kPeekEnabled, kCopyStripTracking,
+-        kUiAnimate, kPinsCloseSleeps, kMenusShort, kHoldCmdNumbers,
++       {kNewTabShowHint, kNewTabShowShortcuts, kCopyStripTracking, kUiAnimate,
++        kPinsCloseSleeps, kMenusShort, kHoldCmdNumbers,
+         kToolbarHideWithSidebar, kLittleEnabled}) {
+     ASSERT_TRUE(service.FindPreference(name)) << name;
+     EXPECT_TRUE(service.GetBoolean(name)) << name;
+   }
+-  // tabs R8: a Space sleeps a quarter of an hour after the user leaves it.
+-  EXPECT_EQ(15, service.GetInteger(kSpaceSleepMinutes));
++  // Peek is off until its host shows a page.
++  ASSERT_TRUE(service.FindPreference(kPeekEnabled));
++  EXPECT_FALSE(service.GetBoolean(kPeekEnabled));
++  // The Space sleep timer stays at Never until sleep is gated.
++  EXPECT_EQ(0, service.GetInteger(kSpaceSleepMinutes));
+ }
+ 
+ }  // namespace
+diff --git a/chrome/browser/ui/tabs/stedding_folder_session.cc b/chrome/browser/ui/tabs/stedding_folder_session.cc
+index 7565149f72bfe..29f71a5bc2408 100644
+--- a/chrome/browser/ui/tabs/stedding_folder_session.cc
++++ b/chrome/browser/ui/tabs/stedding_folder_session.cc
+@@ -19,6 +19,7 @@
+ #include "base/json/json_writer.h"
+ #include "base/token.h"
+ #include "base/values.h"
++#include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/sessions/session_restore.h"
+ #include "chrome/browser/sessions/session_service.h"
+ #include "chrome/browser/sessions/session_service_factory.h"
+@@ -103,7 +104,6 @@ FolderSessionService::FolderSessionService(BrowserWindowInterface& browser)
+   }();
+   std::ignore = registered;
+ 
+-  session_service_ = SessionServiceFactory::GetForProfile(browser.GetProfile());
+   session_id_ = browser.GetSessionID();
+   browser.GetTabStripModel()->AddObserver(this);
+   session_restored_subscription_ =
+@@ -154,8 +154,17 @@ void FolderSessionService::AppendRebuildCommands(
+   }
+ }
+ 
++SessionService* FolderSessionService::SessionServiceIfExisting() const {
++  Profile* const profile = browser_->GetProfile();
++  if (!profile) {
++    return nullptr;
++  }
++  return SessionServiceFactory::GetForProfileIfExisting(profile);
++}
++
+ void FolderSessionService::PersistAllPaths() {
+-  if (!session_service_ || !session_id_.is_valid()) {
++  SessionService* const session_service = SessionServiceIfExisting();
++  if (!session_service || !session_id_.is_valid()) {
+     return;
+   }
+   TabStripModel* const tabs = browser_->GetTabStripModel();
+@@ -174,8 +183,8 @@ void FolderSessionService::PersistAllPaths() {
+     if (!tab_id.is_valid()) {
+       continue;
+     }
+-    session_service_->AddTabExtraData(session_id_, tab_id,
+-                                      kSessionTabFolderPathKey, path);
++    session_service->AddTabExtraData(session_id_, tab_id,
++                                     kSessionTabFolderPathKey, path);
+     written_[tab->GetHandle()] = path;
+   }
+ }
+diff --git a/chrome/browser/ui/tabs/stedding_folder_session.h b/chrome/browser/ui/tabs/stedding_folder_session.h
+index f9ad62f0c9105..a6ce97b09c683 100644
+--- a/chrome/browser/ui/tabs/stedding_folder_session.h
++++ b/chrome/browser/ui/tabs/stedding_folder_session.h
+@@ -71,8 +71,12 @@ class FolderSessionService : public TabStripModelObserver {
+  private:
+   std::string PathForTab(const tabs::TabInterface* tab) const;
+ 
++  // Fetched at each write. A cached pointer dangles after
++  // SessionServiceFactory::ShutdownForProfile, which "Close all windows"
++  // then Stay does while this window is still alive.
++  SessionService* SessionServiceIfExisting() const;
++
+   const raw_ref<BrowserWindowInterface> browser_;
+-  raw_ptr<SessionService> session_service_ = nullptr;
+   SessionID session_id_ = SessionID::InvalidValue();
+   // Last written path per tab, so unchanged tabs are not rewritten on every
+   // model notification.
+diff --git a/chrome/browser/ui/tabs/tab_strip_model.cc b/chrome/browser/ui/tabs/tab_strip_model.cc
+index 4a37d546398cf..70be02dacf426 100644
+--- a/chrome/browser/ui/tabs/tab_strip_model.cc
++++ b/chrome/browser/ui/tabs/tab_strip_model.cc
+@@ -55,6 +55,7 @@
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+ #include "chrome/browser/ui/send_tab_to_self/send_tab_to_self_bubble.h"
++#include "chrome/browser/ui/spaces/space_model.h"
+ #include "chrome/browser/ui/tab_ui_helper.h"
+ #include "chrome/browser/ui/tabs/features.h"
+ #include "chrome/browser/ui/tabs/split_tab_metrics.h"
+@@ -2618,6 +2619,15 @@ bool TabStripModel::IsContextMenuCommandEnabled(
+     return false;
+   }
+ 
++  // The values between First and Last are not switch cases. The horizontal
++  // strip asks the model; the vertical strip's controller handles them
++  // itself and does not reach here.
++  if (spaces::IsSpaceContextMenuCommand(command_id)) {
++    return spaces::IsSpaceContextMenuCommandEnabled(
++        spaces::SpaceModel::From(delegate()->GetBrowserWindowInterface()), this,
++        context_index, command_id);
++  }
++
+   switch (command_id) {
+     // Enabled state for the per-Space pin pair comes from the collection
+     // controller; from the model alone they are disabled.
+@@ -2749,6 +2759,12 @@ void TabStripModel::ExecuteContextMenuCommand(int context_index,
+   if (!ContainsIndex(context_index)) {
+     return;
+   }
++  if (spaces::IsSpaceContextMenuCommand(command_id)) {
++    spaces::ExecuteSpaceContextMenuCommand(
++        spaces::SpaceModel::From(delegate()->GetBrowserWindowInterface()), this,
++        context_index, command_id);
++    return;
++  }
+   switch (command_id) {
+     // Stedding's per-Space pin pair is handled by the tab strip collection
+     // controller, which owns the SpaceModel; nothing to do here.
+diff --git a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+index 725a1cc7fb623..b440c97e9e0ea 100644
+--- a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
++++ b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+@@ -1241,6 +1241,12 @@ TabDragTarget* VerticalTabStripRegionView::GetTabDragTarget(
+ }
+ 
+ void VerticalTabStripRegionView::OnTabStripViewWillClear() {
++  // The strip view is about to be freed (switching to horizontal tabs, or
++  // the region rebuilding it). These two still point at it; the next tab
++  // insert or Space switch would use the freed view. OnTabStripViewSet
++  // builds them again with the new strip.
++  space_tab_visibility_.reset();
++  folder_drag_target_.reset();
+   on_animation_update_subscription_.reset();
+   expand_on_hover_enabled_changed_subscription_.reset();
+   omnibox_tab_helper_observation_.Reset();
+diff --git a/chrome/browser/ui/views/tabs/common/tab_link_drop_handler.cc b/chrome/browser/ui/views/tabs/common/tab_link_drop_handler.cc
+index f3f7c930110c2..7d5e07c5154d4 100644
+--- a/chrome/browser/ui/views/tabs/common/tab_link_drop_handler.cc
++++ b/chrome/browser/ui/views/tabs/common/tab_link_drop_handler.cc
+@@ -4,10 +4,11 @@
+ 
+ #include "chrome/browser/ui/views/tabs/common/tab_link_drop_handler.h"
+ 
+-#include "base/notreached.h"
+ #include "chrome/browser/ui/tabs/tab_group_model.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "chrome/browser/ui/views/tabs/common/tab_collection_node.h"
++#include "components/tabs/public/folder_tab_collection.h"
++#include "components/tabs/public/tab_collection.h"
+ #include "components/tabs/public/tab_collection_types.h"
+ #include "components/tabs/public/tab_group_tab_collection.h"
+ #include "components/tabs/public/tab_interface.h"
+@@ -46,9 +47,14 @@ TabLinkDropHandler::GetDropIndexForNode(
+       return GetDropIndexForPinned();
+     case TabCollectionNode::Type::UNPINNED:
+       return GetDropIndexForUnpinned();
+-    default:
+-      NOTREACHED();
++    case TabCollectionNode::Type::FOLDER:
++      return GetDropIndexForFolder(node, position_hint);
++    case TabCollectionNode::Type::TABSTRIP:
++      return std::nullopt;
+   }
++  // A collection type this handler does not know is not a place to crash
++  // mid-drag. The drop is refused.
++  return std::nullopt;
+ }
+ 
+ std::optional<BrowserRootView::DropIndex>
+@@ -167,3 +173,34 @@ TabLinkDropHandler::GetDropIndexForUnpinned() const {
+       .relative_to_index =
+           BrowserRootView::DropIndex::RelativeToIndex::kInsertBeforeIndex};
+ }
++
++std::optional<BrowserRootView::DropIndex>
++TabLinkDropHandler::GetDropIndexForFolder(
++    const TabCollectionNode& node,
++    std::optional<DragPositionHint> position_hint) const {
++  const auto* collection = static_cast<const tabs::FolderTabCollection*>(
++      std::get<tabs::ConstDanglingUntriagedTabCollection>(node.GetNodeData()));
++  if (!collection) {
++    return std::nullopt;
++  }
++  const std::vector<tabs::TabInterface*> tabs = collection->GetTabsRecursive();
++  if (tabs.empty()) {
++    // An empty folder has no tab index. Refuse rather than guess.
++    return std::nullopt;
++  }
++  const bool after = position_hint == DragPositionHint::kAfter;
++  tabs::TabInterface* const edge = after ? tabs.back() : tabs.front();
++  int index = tab_strip_model_->GetIndexOfTab(edge);
++  if (index == TabStripModel::kNoTab) {
++    return std::nullopt;
++  }
++  if (after) {
++    ++index;
++  }
++  return BrowserRootView::DropIndex{
++      .index = index,
++      .relative_to_index =
++          BrowserRootView::DropIndex::RelativeToIndex::kInsertBeforeIndex,
++      .group_inclusion =
++          BrowserRootView::DropIndex::GroupInclusion::kDontIncludeInGroup};
++}
+diff --git a/chrome/browser/ui/views/tabs/common/tab_link_drop_handler.h b/chrome/browser/ui/views/tabs/common/tab_link_drop_handler.h
+index 77bc7c93051b5..f1a39137d84f8 100644
+--- a/chrome/browser/ui/views/tabs/common/tab_link_drop_handler.h
++++ b/chrome/browser/ui/views/tabs/common/tab_link_drop_handler.h
+@@ -44,6 +44,9 @@ class TabLinkDropHandler {
+       std::optional<DragPositionHint> position_hint) const;
+   std::optional<BrowserRootView::DropIndex> GetDropIndexForPinned() const;
+   std::optional<BrowserRootView::DropIndex> GetDropIndexForUnpinned() const;
++  std::optional<BrowserRootView::DropIndex> GetDropIndexForFolder(
++      const TabCollectionNode& node,
++      std::optional<DragPositionHint> position_hint) const;
+ 
+   const raw_ref<TabStripModel> tab_strip_model_;
+ };
+diff --git a/chrome/browser/ui/views/tabs/common/tab_view.cc b/chrome/browser/ui/views/tabs/common/tab_view.cc
+index 4e527e819df7f..28ce3e0dce7fa 100644
+--- a/chrome/browser/ui/views/tabs/common/tab_view.cc
++++ b/chrome/browser/ui/views/tabs/common/tab_view.cc
+@@ -722,28 +722,34 @@ void TabView::OnMouseReleased(const ui::MouseEvent& event) {
+ 
+   auto* controller = collection_node_->GetController();
+   base::WeakPtr<TabView> self = weak_ptr_factory_.GetWeakPtr();
++  const bool shift_on_press = shift_pressed_on_mouse_down_;
++  // End the drag before any click action. The reset branch used to return
++  // first, which left a TabDragController running: the window would not
++  // close, and fullscreen and multi-select stayed dead until another press.
++  controller->GetDragHandler().EndDrag(EndDragReason::kCancel);
++  shift_pressed_on_mouse_down_ = false;
++  if (!self) {
++    return;
++  }
+   if (event.IsOnlyMiddleMouseButton()) {
+     if (HitTestPoint(event.location())) {
+       controller->CloseTab(GetTabInterface(), CloseTabSource::kFromMouse);
+     }
+   } else if (event.IsOnlyLeftMouseButton() &&
+-             !(event.IsShiftDown() || shift_pressed_on_mouse_down_) &&
++             !(event.IsShiftDown() || shift_on_press) &&
+              !IsSelectionModifierDown(event)) {
+     // Stedding (tabs R14): a double-click on the title renames in place.
+     if (event.GetClickCount() >= 2 && !pinned_ && title_->GetVisible() &&
+         title_->bounds().Contains(event.location()) &&
+         base::FeatureList::IsEnabled(stedding::kArcStyleWindow)) {
+-      controller->GetDragHandler().EndDrag(EndDragReason::kCancel);
+       BeginRename();
+       return;
+     }
+-    // Stedding (pins H5, H10): on a pinned row the favicon is the reset
+-    // control when the pin has drifted, or with Option held; an essentials
+-    // card takes Option-click only, a plain click activates it (D8).
++    // Stedding (pins H5): a plain click selects. Reset is Option-click on
++    // the favicon, or the essentials card's hover badge. The rail has no
++    // badge; Option-click still resets.
+     const bool on_favicon = icon_ && icon_->bounds().Contains(event.location());
+-    const bool reset =
+-        on_favicon && !pinned_ && (HasDriftedFromHome() || event.IsAltDown());
+-    // pins H10: the card's reset control, visible only once it drifted.
++    const bool reset = on_favicon && !pinned_ && event.IsAltDown();
+     const bool on_reset_badge =
+         reset_badge_ && reset_badge_->GetVisible() &&
+         reset_badge_->bounds().Contains(event.location());
+@@ -761,14 +767,6 @@ void TabView::OnMouseReleased(const ui::MouseEvent& event) {
+     }
+     controller->SelectTab(GetTabInterface(), GetGestureDetail(event));
+   }
+-  // Cancel the initialized drag (noop if not started). This is considered
+-  // a cancel because the drag handler assumes mouse capture when the drag
+-  // loop starts.
+-  controller->GetDragHandler().EndDrag(EndDragReason::kCancel);
+-  if (!self) {
+-    return;
+-  }
+-  shift_pressed_on_mouse_down_ = false;
+ }
+ 
+ void TabView::OnMouseMoved(const ui::MouseEvent& event) {
+@@ -1263,7 +1261,7 @@ void TabView::UpdateTabData(const tabs::TabData& data) {
+   // row; a row with a title shows the slash instead, placed by the layout.
+   stedding::TabRowState drift_row;
+   drift_row.pinned = pinned_;
+-  drift_row.narrow = collapsed_;
++  drift_row.narrow = IsRailRow(width());
+   const bool drifted = HasDriftedFromHome();
+   icon_->SetAttention(TabIcon::AttentionType::kNavigatedAwayFromHome,
+                       stedding::ShowsDriftDot(drift_row, drifted));
+@@ -1304,7 +1302,8 @@ void TabView::UpdateResetBadge() {
+   if (!reset_badge_) {
+     return;
+   }
+-  const bool show = pinned_ && hovered_ && HasDriftedFromHome() &&
++  const bool show = pinned_ && hovered_ && !IsRailRow(width()) &&
++                    HasDriftedFromHome() &&
+                     base::FeatureList::IsEnabled(stedding::kArcStyleWindow);
+   if (show != reset_badge_->GetVisible()) {
+     reset_badge_->SetVisible(show);
+@@ -1546,6 +1545,10 @@ bool TabView::IsInExpandOnHover(int width) const {
+   return collapsed_ && width > CollapsedWidth();
+ }
+ 
++bool TabView::IsRailRow(int width) const {
++  return collapsed_ && !IsInExpandOnHover(width);
++}
++
+ const tabs::TabInterface* TabView::GetTabInterface() const {
+   if (!collection_node_) {
+     return nullptr;
+diff --git a/chrome/browser/ui/views/tabs/common/tab_view.h b/chrome/browser/ui/views/tabs/common/tab_view.h
+index a1a2e1b300882..29cff8c5dd044 100644
+--- a/chrome/browser/ui/views/tabs/common/tab_view.h
++++ b/chrome/browser/ui/views/tabs/common/tab_view.h
+@@ -231,6 +231,11 @@ class TabView : public views::View,
+ 
+   bool IsInExpandOnHover(int width) const;
+ 
++  // A row in the collapsed rail, before hover-expand has widened it. The
++  // rail is 44 DIP, just above the 42 DIP "narrow" threshold, so width alone
++  // does not describe it.
++  bool IsRailRow(int width) const;
++
+   SkScalar GetCornerRadius() const;
+ 
+   // Applies rounded corners to the view's layer.
+diff --git a/chrome/browser/ui/views/tabs/common/tab_view_vertical_layout.cc b/chrome/browser/ui/views/tabs/common/tab_view_vertical_layout.cc
+index 50aadd824adf0..229a35ed91384 100644
+--- a/chrome/browser/ui/views/tabs/common/tab_view_vertical_layout.cc
++++ b/chrome/browser/ui/views/tabs/common/tab_view_vertical_layout.cc
+@@ -203,8 +203,12 @@ stedding::TabRowState TabViewVerticalLayout::RowState(int width) const {
+   constexpr int kUncollapsedMinWidthThreshold = 3;
+   stedding::TabRowState row;
+   row.pinned = TabView().pinned_;
+-  row.narrow =
+-      width < TabView().UncollapsedMinWidth() - kUncollapsedMinWidthThreshold;
++  // The rail is wider than the narrow threshold, so a hovered rail row would
++  // otherwise centre the close button where the favicon is. A rail row is
++  // narrow until hover-expand gives it room.
++  row.narrow = TabView().IsRailRow(width) ||
++               width < TabView().UncollapsedMinWidth() -
++                           kUncollapsedMinWidthThreshold;
+   row.active = TabView().active_;
+   row.hovered_or_focused =
+       TabView().hovered_ || TabView().HasFocus() ||
+diff --git a/chrome/common/chrome_paths_mac.mm b/chrome/common/chrome_paths_mac.mm
+index ea55704c70fd7..60bd197f763ca 100644
+--- a/chrome/common/chrome_paths_mac.mm
++++ b/chrome/common/chrome_paths_mac.mm
+@@ -14,7 +14,9 @@
+ #include "base/base_paths.h"
+ #include "base/check_op.h"
+ #include "base/compiler_specific.h"
++#include "base/files/file_enumerator.h"
+ #include "base/files/file_util.h"
++#include "base/files/scoped_temp_dir.h"
+ #include "base/json/json_reader.h"
+ #include "base/memory/free_deleter.h"
+ #include "base/path_service.h"
+@@ -93,9 +95,63 @@ bool GetDefaultUserDataDirectory(base::FilePath* result) {
+   return GetDefaultUserDataDirectoryForProduct(ProductDirName(), result);
+ }
+ 
++namespace {
++
++// Written into the migrated folder so the keychain copy (patch 0038) knows
++// this profile's secrets were encrypted under "Chromium Safe Storage".
++constexpr char kKeyMigrationMarker[] = ".stedding-key-from-chromium";
++
++bool DirectoryHasProfile(const base::FilePath& dir) {
++  return base::PathExists(dir.Append("Default").Append("Preferences"));
++}
++
++// True when `dir` is missing, or holds only what the crash reporter creates
++// before the browser migrates (a Crashpad directory and singleton sockets).
++// A real profile is never replaced.
++bool TargetIsSafeToReplace(const base::FilePath& dir) {
++  if (!base::PathExists(dir)) {
++    return true;
++  }
++  if (DirectoryHasProfile(dir)) {
++    return false;
++  }
++  base::FileEnumerator it(dir, /*recursive=*/false,
++                          base::FileEnumerator::FILES |
++                              base::FileEnumerator::DIRECTORIES);
++  for (base::FilePath child = it.Next(); !child.empty(); child = it.Next()) {
++    const std::string name = child.BaseName().value();
++    if (name == "Crashpad" || name == "SingletonLock" ||
++        name == "SingletonSocket" || name == "SingletonCookie" ||
++        name == kKeyMigrationMarker) {
++      continue;
++    }
++    return false;
++  }
++  return true;
++}
++
++bool CloneOrCopyTree(const base::FilePath& legacy, const base::FilePath& target) {
++  // A clone on APFS costs no space and leaves Chromium's folder as it was, so
++  // a Chromium that shared it keeps working. Elsewhere a copy, made beside the
++  // target and moved in whole, so a failure leaves no half profile behind.
++  if (clonefile(legacy.value().c_str(), target.value().c_str(), 0) == 0) {
++    return true;
++  }
++  const base::FilePath staging = target.AddExtension("migrating");
++  base::DeletePathRecursively(staging);
++  if (!base::CopyDirectory(legacy, staging, /*recursive=*/true) ||
++      !base::Move(staging, target)) {
++    base::DeletePathRecursively(staging);
++    return false;
++  }
++  return true;
++}
++
++}  // namespace
++
+ bool MigrateLegacyUserDataDirectory(const base::FilePath& legacy,
+                                     const base::FilePath& target) {
+-  if (base::PathExists(target) || !base::DirectoryExists(legacy)) {
++  if (!base::DirectoryExists(legacy) || legacy == target) {
+     return false;
+   }
+   // Only a folder Stedding has run in. Every profile names the product that
+@@ -122,23 +178,45 @@ bool MigrateLegacyUserDataDirectory(const base::FilePath& legacy,
+   if (!created_by_stedding && !dict->FindDict("stedding")) {
+     return false;
+   }
+-  // A clone on APFS costs no space and leaves Chromium's folder as it was, so
+-  // a Chromium that shared it keeps working. Elsewhere a copy, made beside the
+-  // target and moved in whole, so a failure leaves no half profile behind.
+-  if (clonefile(legacy.value().c_str(), target.value().c_str(), 0) != 0) {
+-    const base::FilePath staging = target.AddExtension("migrating");
+-    base::DeletePathRecursively(staging);
+-    if (!base::CopyDirectory(legacy, staging, /*recursive=*/true) ||
+-        !base::Move(staging, target)) {
+-      base::DeletePathRecursively(staging);
++  // Crashpad's database path is the default user-data directory plus
++  // "Crashpad", and PathService creates that directory (parents included)
++  // before this migration used to run. An empty Stedding folder, or one that
++  // holds only Crashpad, is not a profile and must not block the move.
++  if (!TargetIsSafeToReplace(target)) {
++    return false;
++  }
++  base::FilePath parked_crashpad;
++  base::ScopedTempDir park;
++  const base::FilePath crashpad = target.Append("Crashpad");
++  if (base::DirectoryExists(crashpad)) {
++    if (!park.CreateUniqueTempDir()) {
+       return false;
+     }
++    parked_crashpad = park.GetPath().Append("Crashpad");
++    if (!base::Move(crashpad, parked_crashpad)) {
++      return false;
++    }
++  }
++  if (base::PathExists(target)) {
++    base::DeletePathRecursively(target);
++  }
++  if (!CloneOrCopyTree(legacy, target)) {
++    if (!parked_crashpad.empty()) {
++      base::CreateDirectory(target);
++      base::Move(parked_crashpad, target.Append("Crashpad"));
++    }
++    return false;
++  }
++  if (!parked_crashpad.empty()) {
++    base::DeletePathRecursively(target.Append("Crashpad"));
++    base::Move(parked_crashpad, target.Append("Crashpad"));
+   }
+   // The copied process-singleton links name the old folder's last process.
+   for (const char* name : {"SingletonLock", "SingletonSocket",
+                            "SingletonCookie"}) {
+     base::DeleteFile(target.Append(name));
+   }
++  base::WriteFile(target.Append(kKeyMigrationMarker), "1");
+   return true;
+ }
+ 
+diff --git a/chrome/common/chrome_paths_unittest.cc b/chrome/common/chrome_paths_unittest.cc
+index 0bfaa400599a4..95471981130c1 100644
+--- a/chrome/common/chrome_paths_unittest.cc
++++ b/chrome/common/chrome_paths_unittest.cc
+@@ -244,6 +244,8 @@ TEST(ChromePaths, MovesASteddingProfileOutOfChromiumsFolder) {
+ 
+   EXPECT_TRUE(MigrateLegacyUserDataDirectory(legacy, target));
+   EXPECT_TRUE(base::PathExists(target.Append(prefs)));
++  EXPECT_TRUE(base::PathExists(
++      target.Append(".stedding-key-from-chromium")));
+   EXPECT_FALSE(base::IsLink(target.Append("SingletonLock")));
+   EXPECT_TRUE(base::PathExists(legacy.Append(prefs)));
+   EXPECT_TRUE(base::IsLink(legacy.Append("SingletonLock")));
+@@ -272,6 +274,32 @@ TEST(ChromePaths, MovesAProfileSteddingCreatedWithNoSteddingSettings) {
+       base::PathExists(target.Append("Default").Append("Preferences")));
+ }
+ 
++// The crash reporter creates ~/Library/Application Support/Stedding/Crashpad
++// before the browser used to migrate, which made PathExists(target) true and
++// skipped the move. A Crashpad-only folder is not a profile.
++TEST(ChromePaths, MigratesWhenCrashpadCreatedTheFolderFirst) {
++  base::ScopedTempDir temp;
++  ASSERT_TRUE(temp.CreateUniqueTempDir());
++  const base::FilePath legacy = temp.GetPath().Append("Chromium");
++  const base::FilePath target = temp.GetPath().Append("Stedding");
++  ASSERT_TRUE(base::CreateDirectory(legacy.Append("Default")));
++  ASSERT_TRUE(base::WriteFile(
++      legacy.Append("Default").Append("Preferences"),
++      R"({"stedding":{"sidebar":true}})"));
++  ASSERT_TRUE(base::CreateDirectory(target.Append("Crashpad")));
++  ASSERT_TRUE(base::WriteFile(target.Append("Crashpad").Append("settings"),
++                              "db"));
++
++  EXPECT_TRUE(MigrateLegacyUserDataDirectory(legacy, target));
++  EXPECT_TRUE(
++      base::PathExists(target.Append("Default").Append("Preferences")));
++  EXPECT_TRUE(base::PathExists(target.Append("Crashpad").Append("settings")));
++  std::string crashpad_settings;
++  ASSERT_TRUE(base::ReadFileToString(
++      target.Append("Crashpad").Append("settings"), &crashpad_settings));
++  EXPECT_EQ("db", crashpad_settings);
++}
++
+ // Patch 0050: Chromium's own profile, with no Stedding preferences, stays
+ // where it is and Stedding starts a fresh one.
+ TEST(ChromePaths, LeavesChromiumsOwnProfileAlone) {
+diff --git a/components/os_crypt/common/keychain_password_mac.mm b/components/os_crypt/common/keychain_password_mac.mm
+index 1b88bb4a59fdf..17ea6595f24d1 100644
+--- a/components/os_crypt/common/keychain_password_mac.mm
++++ b/components/os_crypt/common/keychain_password_mac.mm
+@@ -9,11 +9,15 @@
+ #include "base/apple/osstatus_logging.h"
+ #include "base/apple/scoped_cftyperef.h"
+ #include "base/base64.h"
++#include "base/base_paths.h"
+ #include "base/containers/span.h"
++#include "base/files/file_util.h"
+ #include "base/metrics/histogram_functions.h"
+ #include "base/no_destructor.h"
++#include "base/path_service.h"
+ #include "base/rand_util.h"
+ #include "base/strings/string_view_util.h"
++#include "base/time/time.h"
+ #include "build/branding_buildflags.h"
+ #include "crypto/apple/keychain_v2.h"
+ #include "third_party/abseil-cpp/absl/cleanup/cleanup.h"
+@@ -75,6 +79,28 @@ std::string AddRandomPasswordToKeychain(KeychainV2& keychain,
+   return password;
+ }
+ 
++#if !BUILDFLAG(GOOGLE_CHROME_BRANDING)
++// Copy the Chromium item only for a profile that already stored secrets
++// under it: the migration marker, or a Preferences file older than this
++// launch. A fresh profile on a machine that also has Chromium gets its own
++// key instead of adopting Chromium's.
++bool ShouldCopyLegacyKey() {
++  base::FilePath app_data;
++  if (!base::PathService::Get(base::DIR_APP_DATA, &app_data)) {
++    return false;
++  }
++  const base::FilePath root = app_data.Append("Stedding");
++  if (base::PathExists(root.Append(".stedding-key-from-chromium"))) {
++    return true;
++  }
++  base::File::Info info;
++  if (!base::GetFileInfo(root.Append("Default").Append("Preferences"),
++                         &info)) {
++    return false;
++  }
++  return base::Time::Now() - info.creation_time > base::Hours(1);
++}
++#endif
+ 
+ }  // namespace
+ 
+@@ -113,16 +139,33 @@ std::string KeychainPassword::GetPassword() const {
+   if (password.error() == errSecItemNotFound) {
+     uma_result = FindGenericPasswordResult::kPasswordNotFound;
+ #if !BUILDFLAG(GOOGLE_CHROME_BRANDING)
+-    // Stedding: a profile encrypted under the Chromium name (an earlier beta)
+-    // keeps its passwords -- the old item is the key, and nothing is written
+-    // back, so both names go on working.
++    // Stedding: an earlier beta encrypted with "Chromium Safe Storage" and
++    // never copied that secret. A denied or failed read must not mint a new
++    // key over data that can no longer be decrypted. A fresh profile does not
++    // adopt Chromium's key; an existing one copies it once under our name.
+     if (GetServiceName() == kDefaultServiceName &&
+         GetAccountName() == kDefaultAccountName) {
+-      auto legacy =
+-          keychain_->FindGenericPassword(kLegacyServiceName, kLegacyAccountName);
++      auto legacy = keychain_->FindGenericPassword(kLegacyServiceName,
++                                                   kLegacyAccountName);
+       if (legacy.has_value()) {
+         uma_result = FindGenericPasswordResult::kPasswordFound;
+-        return std::string(base::as_string_view(*legacy));
++        const std::string legacy_password(base::as_string_view(*legacy));
++        if (!ShouldCopyLegacyKey()) {
++          return AddRandomPasswordToKeychain(*keychain_, GetServiceName(),
++                                             GetAccountName());
++        }
++        const OSStatus added = keychain_->AddGenericPassword(
++            GetServiceName(), GetAccountName(),
++            base::as_byte_span(legacy_password));
++        if (added != noErr && added != errSecDuplicateItem) {
++          // This launch still decrypts. The next one retries the copy.
++          return legacy_password;
++        }
++        return legacy_password;
++      }
++      if (legacy.error() != errSecItemNotFound) {
++        uma_result = FindGenericPasswordResult::kErrorOccurred;
++        return std::string();
+       }
+     }
+ #endif
+diff --git a/components/os_crypt/common/keychain_password_mac_unittest.mm b/components/os_crypt/common/keychain_password_mac_unittest.mm
+index dbdb306da20ed..899727db46175 100644
+--- a/components/os_crypt/common/keychain_password_mac_unittest.mm
++++ b/components/os_crypt/common/keychain_password_mac_unittest.mm
+@@ -97,9 +97,10 @@ TEST(KeychainPasswordTest, PasswordsDiffer) {
+ }
+ 
+ // Stedding (import I24): the item is the product's own -- macOS shows the name
+-// to the user -- and a profile written by an earlier beta still decrypts,
+-// because a missing item falls back to the Chromium one before a new key is
+-// made.
++// to the user. A missing item consults "Chromium Safe Storage" before a new
++// key is made. This fake returns the same status for every lookup, so neither
++// item is present and a fresh key is written under our name. A found legacy
++// item is copied only for a profile that already used it.
+ TEST(KeychainPasswordTest, SteddingNamesTheItemAndFallsBackToChromium) {
+   KeychainPasswordEnvironment found(noErr);
+   EXPECT_FALSE(found.GetPassword().empty());
+diff --git a/components/search_engines/template_url_prepopulate_data.cc b/components/search_engines/template_url_prepopulate_data.cc
+index 51d798955c1c0..0a7431ab93659 100644
+--- a/components/search_engines/template_url_prepopulate_data.cc
++++ b/components/search_engines/template_url_prepopulate_data.cc
+@@ -317,11 +317,23 @@ std::unique_ptr<TemplateURLData> GetPrepopulatedFallbackSearch(
+     PrefService& prefs,
+     const std::vector<raw_ptr<const PrepopulatedEngine>>&
+         regional_prepopulated_engines) {
+-  // Stedding: a fresh profile searches with DuckDuckGo, not Google. This is
+-  // also what keeps the new tab page local (a non-Google default routes
+-  // chrome://newtab to the third-party page) and keeps Google's AI Mode entry
+-  // points out of the omnibox. docs/PRIVACY.md wants a first-run chooser; until
+-  // it exists, this is the default it would preselect.
++  // Stedding: a fresh profile searches with DuckDuckGo, not Google, in every
++  // region. The regional list omits DuckDuckGo in some countries and for an
++  // unknown country, and the old fallback then returned that list's first
++  // engine (Google included). This is also what keeps the new tab page local
++  // (a non-Google default routes chrome://newtab to the third-party page) and
++  // keeps Google's AI Mode entry points out of the omnibox.
++  if (std::unique_ptr<TemplateURLData> regional =
++          FindPrepopulatedEngineInternal(prefs, regional_prepopulated_engines,
++                                        duckduckgo.id,
++                                        /*use_first_as_fallback=*/false)) {
++    return regional;
++  }
++  if (const PrepopulatedEngine* engine = GetPrepopulatedEngineFromBuiltInData(
++          duckduckgo.id, /*regional_prepopulated_engines=*/{},
++          /*regional_variants=*/{})) {
++    return PrepopulatedEngineToTemplateURLData(engine);
++  }
+   return FindPrepopulatedEngineInternal(prefs, regional_prepopulated_engines,
+                                         duckduckgo.id,
+                                         /*use_first_as_fallback=*/true);

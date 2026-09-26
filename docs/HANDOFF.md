@@ -616,14 +616,17 @@ variables name the machine's paths, so none is in the repo: `STEDDING_CHROMIUM_S
 
 ## Open items
 
-`BACKLOG.md` is the list; do not keep one here. Beta 8 is the Mac image of pin
-153.0.8010.53 (2026-09-18); beta 6 remains the current Windows preview until a
-Windows image joins a tag. Next: the operator's look at beta 7 and 8
-(`docs/ARC-ROUND2.md` gets a round 10 table when it comes), `S-17` (the Developer
-ID certificate and the notary profile, then a signed re-release), `S-56` (the
-Windows port proper: the beta 8 installer, little windows, signing, updates, CI),
-`S-58` (the disk, before any milestone bump) and `S-48` (the Arc data import run
-once on a real Arc profile).
+`PLAN.md` sets the order until Phase 1 is done. `BACKLOG.md` keeps its ids.
+The owner answered section 2 on 2026-09-26 (the decisions are at the top of
+`PLAN.md`): horizontal tabs stay and must not crash, Peek starts off, the
+Space sleep timer starts at Never, the listed cuts are approved, ⌘9 is the
+last row, collapsing the active tab's folder keeps that tab, deleting the
+active Space switches to a neighbour, Chrome/Brave/Edge import is documented
+honestly now and built in Phase 2, little windows get no Space commands.
+Beta 8 is the Mac image of pin 153.0.8010.53 (2026-09-18); beta 6 remains
+the current Windows preview until a Windows image joins a tag. `S-17` (signed
+re-release), `S-56` (the Windows port) and `S-58` (disk) stay. Do not publish
+a build of a series whose profile migration can open an empty window.
 
 ## Release channel
 

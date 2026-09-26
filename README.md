@@ -143,9 +143,9 @@ buttons and Arc's keyboard mapped to Ctrl and Alt.
 - One sidebar for every window; ⌥⇧⌘N opens a blank window with Spaces of its own.
 
 **Peek and little windows**
-- A link that leaves a pinned site opens as a **peek** over the window instead of
-  navigating the pin away. Escape dismisses it; ⌘O turns it into a tab, ⇧⌘O into a
-  split.
+- Peek is off until you turn it on in Settings → Stedding. When it is on, a link
+  that leaves a pinned site opens over the window instead of navigating the pin
+  away. Escape dismisses it; ⌘O turns it into a tab, ⇧⌘O into a split.
 - Links from other apps open in a small window of their own.
 
 **The address row and the page**
@@ -157,8 +157,10 @@ buttons and Arc's keyboard mapped to Ctrl and Alt.
 
 **Import, backups and export**
 - Everything from Arc in one click (see [Moving from Arc](#moving-from-arc)).
-- Bookmarks become pinned tabs and folders. Chromium's importer for Chrome, Firefox
-  and Safari is on the same welcome step.
+- Bookmarks become pinned tabs and folders. On macOS the welcome step also imports
+  from Safari and Firefox, and from a bookmarks HTML file. Chrome, Brave and Edge
+  are not imported on macOS yet. On Windows that step lists Edge, Internet Explorer
+  and Firefox.
 - Sidebar backups every hour, export a Space as a file, restore from a snapshot: the
   answer to sync without an account.
 
@@ -214,8 +216,10 @@ tabs, browsing history and saved passwords. Each is a checkbox, all checked by d
 
 ![The welcome flow's import step: everything from Arc in one click](docs/images/readme/welcome-import.png)
 
-Coming from Chrome, Firefox or Safari? The same step runs Chromium's importer, and
-bookmarks become pinned tabs and folders in your first Space.
+Coming from Safari or Firefox on a Mac, or from Edge, Internet Explorer or Firefox
+on Windows? The same step runs Chromium's importer, and bookmarks become pinned tabs
+and folders in your first Space. Chrome, Brave and Edge on macOS are not imported
+yet.
 
 ## Privacy
 

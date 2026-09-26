@@ -101,9 +101,10 @@ Built, with tests or measured captures:
   points; chrome://settings has no Google or AI sections and carries the
   Stedding mark. Mac updater stubbed
   (no Keystone) pointing at GitHub Releases.
-- **Peek**: a link leaving a pinned tab's site opens over the window instead
-  of navigating the tab; Escape or a click outside dismisses it, ⌘O moves the
-  same page into a tab (`docs/features/peek.md`).
+- **Peek**: off by default. When it is on, a link leaving a pinned tab's site
+  opens over the window instead of navigating the tab; Escape or a click
+  outside dismisses it, ⌘O moves the same page into a tab
+  (`docs/features/peek.md`).
 - **Settings**: a "Stedding" section first in chrome://settings, one control
   per Stedding preference, plus the window's Spaces to rename or delete
   (`docs/features/settings.md`).
@@ -258,7 +259,7 @@ Windows-only preview. Signing: the Developer ID certificate and the notary profi
 exist since 2026-09-23, and the signer works end to end (`S-17`, patch 0051).
 The pin is 155.0.8059.12 (2026-09-24, `S-64`: Google's early-stable build of M155,
 taken straight from M153 because the owner wants the newest stable-channel build,
-ADR 0007); the series is 52 patches on it. `v0.2.0-beta.8` is the Mac image of the
+ADR 0007); the series is 53 patches on it. `v0.2.0-beta.8` is the Mac image of the
 previous pin, 153.0.8010.53, and `v0.2.0-beta.7` (153.0.8010.48) the one before. Outstanding:
 `BACKLOG.md`. First vanilla perf comparison is in
 `docs/perf/README.md`: on the deterministic page list every QUALITY budget is
@@ -317,8 +318,11 @@ independent sessions, and `v0.2.0-beta.8` (2026-09-18) the Mac image of
 153.0.8010.53 with the audit's fixes; the Windows installer for a current tag is
 still to join it (`S-56`).
 
-**Whoever picks this up next** (state as of 2026-09-18): read `docs/HANDOFF.md`
-first — the loop, the dev parameters and the traps, including `tooling/capture-state`
+**Whoever picks this up next** (state as of 2026-09-26): read `docs/HANDOFF.md`
+first, then `PLAN.md`. The owner's answers to that plan's section 2 are at the
+top of `PLAN.md` and they override its earlier recommendations, including
+"remove horizontal tab mode". The loop, the dev parameters and the traps,
+including `tooling/capture-state`
 (a capture that needs neither the keyboard nor the pointer, trap 29), the rule that a
 release sweep runs Chromium's own suites around what the series touches, not only
 the Stedding filters (trap 31), and what a vanished checkout costs and how it comes

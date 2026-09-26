@@ -4,8 +4,9 @@ Status: **E2–E5 built, E1 partial** (round 6, `docs/ROUND6-PLAN.md` R6-30).
 Owner docs: `docs/PRODUCT.md` §5. Patch: 0035.
 
 A link from another application opens small: a popup-type window with a thin bar
-(back, forward, reload, the host, "Open in ▸ Space", Pin) and no sidebar, the way Little
-Arc does. ⌘O moves the page into the last-active window's active Space; Escape closes it.
+(back, forward, reload, the host, Pin) and no sidebar, the way Little Arc does.
+⌘O moves the page into the last-active window. A little window has no Space
+commands. Escape closes it.
 A route (routing D1) wins over the little window, and the setting off opens such links as
 ordinary tabs.
 
@@ -13,8 +14,8 @@ ordinary tabs.
 
 | Id | Behaviour | Test | State |
 |---|---|---|---|
-| E1 | A link from another application opens a `stedding::LittleWindow`, a TYPE_POPUP browser (no Spaces) with a thin bar: back/forward/reload, the centred host, "Open in ▸ <Space>" from the last-active normal window's Space model, and Pin; unless a route matches (routing D3: the route wins). | `LittleWindowTest.ExternalUrlOpensLittleWindow`, `LittleWindowTest.MatchingRouteSkipsIt`; live: `w4_little` (`open -a Stedding` with the setting on) | partial · the window, its size and place, and the route rule are built; its bar is Chromium's popup bar (back, forward, reload, the address), with "Open in <Space>" in ⌘T and Pin through the verbs, not a thin bar of its own |
-| E2 | ⌘O moves the WebContents into the last-active window's active Space (insert, then membership, no reload); ⇧⌘O into a split with its active tab; Escape closes; ⌃1–9 inside it send the page to Space N. The verbs mirror the peek's promotions. | `LittleWindowTest.PromoteMovesContentsIntoSpace`, `LittleWindowTest.CtrlDigitSendsToSpaceN`; live: ⌘O in `w4_little_promoted` | built |
+| E1 | A link from another application opens a `stedding::LittleWindow`, a TYPE_POPUP browser (no Spaces) with a thin bar: back/forward/reload, the centred host, and Pin; unless a route matches (routing D3: the route wins). ⌘T offers "Open in main window" and no Space rows. | `LittleWindowTest.ExternalUrlOpensLittleWindow`, `LittleWindowTest.MatchingRouteSkipsIt`; live: `w4_little` (`open -a Stedding` with the setting on) | partial · the window, its size and place, and the route rule are built; its bar is Chromium's popup bar (back, forward, reload, the address), with "Open in main window" in ⌘T, not a thin bar of its own |
+| E2 | ⌘O moves the WebContents into the last-active window's active Space (insert, then membership, no reload); ⇧⌘O into a split with its active tab; Escape closes. A little window has no Space commands: ⌃1–9 do nothing there, and there is no "Open in <Space>" row. | `LittleWindowTest.PromoteMovesContentsIntoSpace`; live: ⌘O in `w4_little_promoted` | built |
 | E3 | The archiver gets a per-window threshold: little windows archive at 6 hours (`stedding.little.idle_hours`) against 12 for tabs. | `TabArchiverTest.LittleWindowUsesItsOwnThreshold` | built |
 | E4 | The setting off (`stedding.little.enabled`) opens external links as ordinary tabs in the Space for links from other apps (routing D3). | `LittleWindowTest.SettingOffOpensATab`; the toggle: `w4_little_settings` | built |
 | E5 | No chord opens one in this cut; ⌥⌘N stays the split (welcome W6 advertises it) and the divergence from Arc's ⌥⌘N is a row in the shortcut reference. | `docs/features/shortcuts.md` (the note); the reference lists ⇧⌘O and Escape inside a little window | built |

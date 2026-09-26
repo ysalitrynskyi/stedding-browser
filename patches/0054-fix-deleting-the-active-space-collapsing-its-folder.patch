@@ -1,0 +1,443 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Sat, 26 Sep 2026 18:02:00 -0400
+Subject: fix: deleting the active Space, collapsing its folder, and little
+ windows
+
+Deleting the active Space switches to the next Space, or the previous one
+if it was last, and then moves the tabs there. Only the last Space stays.
+Another window that was showing the deleted Space lands on that same
+neighbour.
+
+Collapsing a folder keeps the active tab under the header and does not
+switch tabs. The visibility pass uses the same rule, so a later Space
+change does not bring the hidden rows back.
+
+Badge 9 is the last visible row, which is the row Command-9 selects.
+A little window no longer offers Space commands: Control-1 through 9 do
+nothing there, and the command bar has one row, Open in main window.
+
+Why: those four behaviours are what the owner decided, and the previous
+patch left each of them as it was.
+Removable when: Spaces, folders and little windows are withdrawn.
+---
+ .../browser/ui/browser_command_controller.cc  | 14 +----
+ chrome/browser/ui/spaces/space_model.cc       | 57 +++++++++++++++++--
+ .../browser/ui/spaces/space_model_unittest.cc | 16 ++++--
+ chrome/browser/ui/stedding/little_window.h    |  6 +-
+ .../ui/stedding/little_window_unittest.cc     |  6 +-
+ chrome/browser/ui/stedding/tab_numbers.cc     | 12 +++-
+ .../ui/stedding/tab_numbers_unittest.cc       | 11 +++-
+ chrome/browser/ui/tabs/tab_strip_model.cc     | 17 ++++--
+ .../ui/views/commandbar/command_bar_view.cc   | 28 ++++-----
+ .../spaces/space_tab_visibility_controller.cc |  8 ++-
+ .../ui/views/tabs/common/folder_view.cc       | 49 ++++++++++++++--
+ .../ui/views/tabs/common/folder_view.h        |  4 ++
+ 12 files changed, 168 insertions(+), 60 deletions(-)
+
+diff --git a/chrome/browser/ui/browser_command_controller.cc b/chrome/browser/ui/browser_command_controller.cc
+index bbec8f912f084..953b338570c38 100644
+--- a/chrome/browser/ui/browser_command_controller.cc
++++ b/chrome/browser/ui/browser_command_controller.cc
+@@ -962,19 +962,9 @@ void BrowserCommandController::HandleCommandWithDisposition(
+     case IDC_STEDDING_SPACE_7:
+     case IDC_STEDDING_SPACE_8:
+     case IDC_STEDDING_SPACE_9:
+-      // Stedding little E2: ctrl-N inside a little window sends the page to
+-      // Space N of the last-active window.
++      // A little window has no Space commands. ⌘O opens the page in the
++      // main window; ⌃1–9 do not send it to a Space.
+       if (stedding::IsLittleWindow(browser_)) {
+-        BrowserWindowInterface* const target =
+-            stedding::LastActiveNormalWindow(browser_->GetProfile());
+-        spaces::SpaceModel* const model =
+-            target ? spaces::SpaceModel::From(target) : nullptr;
+-        const size_t which = static_cast<size_t>(id - IDC_STEDDING_SPACE_1);
+-        if (model && which < model->size()) {
+-          stedding::PromoteLittleWindow(browser_, target,
+-                                        model->spaces()[which]->id(),
+-                                        /*split=*/false);
+-        }
+         break;
+       }
+       spaces::ActivateSpaceAt(browser_, id - IDC_STEDDING_SPACE_1);
+diff --git a/chrome/browser/ui/spaces/space_model.cc b/chrome/browser/ui/spaces/space_model.cc
+index 6453e6fbf0f11..f4a787344332d 100644
+--- a/chrome/browser/ui/spaces/space_model.cc
++++ b/chrome/browser/ui/spaces/space_model.cc
+@@ -295,6 +295,11 @@ void SpaceModel::SyncWithRegistry(bool seed) {
+   }
+   // Then the window is the registry: kept objects updated, new ones made,
+   // gone ones dropped with their tabs moved, all in the registry's order.
++  std::vector<SpaceId> old_order;
++  old_order.reserve(spaces_.size());
++  for (const std::unique_ptr<Space>& space : spaces_) {
++    old_order.push_back(space->id());
++  }
+   std::vector<std::unique_ptr<Space>> old = std::move(spaces_);
+   spaces_.clear();
+   std::vector<SpaceId> added;
+@@ -336,7 +341,37 @@ void SpaceModel::SyncWithRegistry(bool seed) {
+     }
+   }
+   if (!GetSpace(active_id_)) {
+-    active_id_ = spaces_.front()->id();
++    // Another window deleted the Space this one was showing. Land on its
++    // neighbour in the old order: the next Space that is still here, or the
++    // previous one.
++    const SpaceId removed_active = active_id_;
++    bool found = false;
++    for (size_t i = 0; i < old_order.size(); ++i) {
++      if (old_order[i] != removed_active) {
++        continue;
++      }
++      for (size_t j = i + 1; j < old_order.size(); ++j) {
++        if (GetSpace(old_order[j])) {
++          active_id_ = old_order[j];
++          found = true;
++          break;
++        }
++      }
++      if (!found) {
++        for (size_t j = i; j-- > 0;) {
++          if (GetSpace(old_order[j])) {
++            active_id_ = old_order[j];
++            found = true;
++            break;
++          }
++        }
++      }
++      break;
++    }
++    if (!found) {
++      active_id_ = spaces_.front()->id();
++    }
++    EnsureActiveSpaceHasAVisibleTab();
+   }
+   std::map<SpaceId, std::string> doomed_jars;
+   for (const SpaceId& id : removed) {
+@@ -430,15 +465,27 @@ bool SpaceModel::RemoveSpace(const SpaceId& id) {
+ }
+ 
+ bool SpaceModel::RemoveSpace(const SpaceId& id, base::OnceClosure wipe_done) {
+-  // A window must always have somewhere for its tabs to live, and removing the
+-  // active Space would orphan the tabs currently in the tab strip. Both are
+-  // refused rather than half-handled.
+-  if (spaces_.size() <= 1u || id == active_id_) {
++  // The last Space stays: a window must have somewhere for its tabs. Deleting
++  // the active Space switches to its neighbour first (the next one, or the
++  // previous if it was last), then the tabs move there.
++  if (spaces_.size() <= 1u || !GetSpace(id)) {
+     if (wipe_done) {
+       std::move(wipe_done).Run();
+     }
+     return false;
+   }
++  if (id == active_id_) {
++    for (size_t i = 0; i < spaces_.size(); ++i) {
++      if (spaces_[i]->id() != id) {
++        continue;
++      }
++      const SpaceId neighbour = i + 1 < spaces_.size()
++                                    ? spaces_[i + 1]->id()
++                                    : spaces_[i - 1]->id();
++      SetActiveSpace(neighbour);
++      break;
++    }
++  }
+   std::string jar;
+   if (const auto it = isolated_jars_.find(id); it != isolated_jars_.end()) {
+     jar = it->second;
+diff --git a/chrome/browser/ui/spaces/space_model_unittest.cc b/chrome/browser/ui/spaces/space_model_unittest.cc
+index b71d049673589..d31cf9142453c 100644
+--- a/chrome/browser/ui/spaces/space_model_unittest.cc
++++ b/chrome/browser/ui/spaces/space_model_unittest.cc
+@@ -57,11 +57,19 @@ TEST(SpaceModelTest, RefusesToRemoveTheLastSpace) {
+   EXPECT_EQ(1u, model.size());
+ }
+ 
+-TEST(SpaceModelTest, RefusesToRemoveTheActiveSpace) {
++TEST(SpaceModelTest, DeletingTheActiveSpaceSwitchesToItsNeighbour) {
+   SpaceModel model;
+-  model.AddSpace("Other", kBlue);
+-  EXPECT_FALSE(model.RemoveSpace(model.active_id()));
+-  EXPECT_EQ(2u, model.size());
++  const SpaceId original = model.active_id();
++  Space* const next = model.AddSpace("Next", kBlue);
++  Space* const last = model.AddSpace("Last", kRed);
++  EXPECT_TRUE(model.RemoveSpace(original));
++  EXPECT_EQ(next->id(), model.active_id());
++  EXPECT_FALSE(model.GetSpace(original));
++
++  model.SetActiveSpace(last->id());
++  EXPECT_TRUE(model.RemoveSpace(last->id()));
++  EXPECT_EQ(next->id(), model.active_id());
++  EXPECT_EQ(1u, model.size());
+ }
+ 
+ TEST(SpaceModelTest, RemovesAnInactiveSpace) {
+diff --git a/chrome/browser/ui/stedding/little_window.h b/chrome/browser/ui/stedding/little_window.h
+index 936db0c8c3cfb..f95eec277b435 100644
+--- a/chrome/browser/ui/stedding/little_window.h
++++ b/chrome/browser/ui/stedding/little_window.h
+@@ -17,9 +17,9 @@ class Profile;
+ namespace stedding {
+ 
+ // docs/features/little.md: a link from another application opens small, in
+-// a popup-type window marked as Stedding's little window; cmd-O sends the
+-// page into the last-active normal window's active Space, shift-cmd-O into
+-// a split, ctrl-1..9 into Space N, Escape closes it.
++// a popup-type window marked as Stedding's little window. Cmd-O sends the
++// page into the last-active normal window. A little window has no Space
++// commands. Escape closes it.
+ 
+ // E1, E4: whether `url` opens little -- the setting on, and no route naming
+ // a Space (routing D3: a route wins).
+diff --git a/chrome/browser/ui/stedding/little_window_unittest.cc b/chrome/browser/ui/stedding/little_window_unittest.cc
+index 3e84fca422bda..864abaf4a786b 100644
+--- a/chrome/browser/ui/stedding/little_window_unittest.cc
++++ b/chrome/browser/ui/stedding/little_window_unittest.cc
+@@ -83,8 +83,10 @@ TEST_F(LittleWindowTest, PromoteMovesContentsIntoSpace) {
+       << "only a little window promotes";
+ }
+ 
+-// E2: ctrl-N sends the page to Space N.
+-TEST_F(LittleWindowTest, CtrlDigitSendsToSpaceN) {
++// The helper can still place the page in a named Space. No little-window
++// command calls it that way: ⌃1–9 do nothing there, and ⌘T has one row,
++// "Open in main window".
++TEST_F(LittleWindowTest, PromoteCanTargetASpace) {
+   spaces::Space* const work = model().AddSpace("Work", SK_ColorBLUE);
+   std::unique_ptr<BrowserWindowInterface> little = MakeLittle("https://little.example/");
+   EXPECT_TRUE(PromoteLittleWindow(little.get(), browser(), work->id(),
+diff --git a/chrome/browser/ui/stedding/tab_numbers.cc b/chrome/browser/ui/stedding/tab_numbers.cc
+index 6e3a27e078633..dee8fabfc2c17 100644
+--- a/chrome/browser/ui/stedding/tab_numbers.cc
++++ b/chrome/browser/ui/stedding/tab_numbers.cc
+@@ -14,11 +14,19 @@ std::vector<tabs::TabInterface*> NumberedTabs(TabStripModel* tabs) {
+   if (!tabs) {
+     return out;
+   }
+-  for (int i = 0; i < tabs->count() && out.size() < 9u; ++i) {
++  std::vector<tabs::TabInterface*> visible;
++  for (int i = 0; i < tabs->count(); ++i) {
+     if (!tabs->IsTabHidden(i)) {
+-      out.push_back(tabs->GetTabAtIndex(i));
++      visible.push_back(tabs->GetTabAtIndex(i));
+     }
+   }
++  // ⌘9 is the last visible row. With more than nine rows, badges 1–8 are the
++  // first eight and badge 9 is that last row.
++  if (visible.size() <= 9u) {
++    return visible;
++  }
++  out.assign(visible.begin(), visible.begin() + 8);
++  out.push_back(visible.back());
+   return out;
+ }
+ 
+diff --git a/chrome/browser/ui/stedding/tab_numbers_unittest.cc b/chrome/browser/ui/stedding/tab_numbers_unittest.cc
+index 9b19e7cb174db..499c9826b59f3 100644
+--- a/chrome/browser/ui/stedding/tab_numbers_unittest.cc
++++ b/chrome/browser/ui/stedding/tab_numbers_unittest.cc
+@@ -52,7 +52,16 @@ TEST_F(TabNumbersTest, NumbersFollowTheVisibleRowsAndStopAtNine) {
+   for (int i = 0; i < 10; ++i) {
+     AddTab(browser(), GURL("https://example.com/"));
+   }
+-  EXPECT_EQ(9u, NumberedTabs(&tabs()).size());
++  const std::vector<tabs::TabInterface*> numbered = NumberedTabs(&tabs());
++  ASSERT_EQ(9u, numbered.size());
++  tabs::TabInterface* last_visible = nullptr;
++  for (int i = tabs().count() - 1; i >= 0; --i) {
++    if (!tabs().IsTabHidden(i)) {
++      last_visible = tabs().GetTabAtIndex(i);
++      break;
++    }
++  }
++  EXPECT_EQ(last_visible, numbered.back());
+   EXPECT_TRUE(NumberedTabs(nullptr).empty());
+ }
+ 
+diff --git a/chrome/browser/ui/tabs/tab_strip_model.cc b/chrome/browser/ui/tabs/tab_strip_model.cc
+index 70be02dacf426..75feae922d1e2 100644
+--- a/chrome/browser/ui/tabs/tab_strip_model.cc
++++ b/chrome/browser/ui/tabs/tab_strip_model.cc
+@@ -1537,17 +1537,24 @@ bool TabStripModel::IsTabHidden(int index) const {
+   if (IsTabCollapsed(index)) {
+     return true;
+   }
+-  // A collapsed folder hides everything inside it, nested folders included --
+-  // the same contract collapsed groups have.
+-  for (const tabs::TabCollection* collection =
+-           GetTabAtIndex(index)->GetParentCollection();
++  // A collapsed folder hides everything inside it, nested folders included,
++  // except the active tab. Collapsing the folder that holds the page the
++  // user is looking at keeps that row under the header and does not switch
++  // tabs.
++  tabs::TabInterface* const tab = GetTabAtIndex(index);
++  bool collapsed_folder = false;
++  for (const tabs::TabCollection* collection = tab->GetParentCollection();
+        collection; collection = collection->GetParentCollection()) {
+     if (collection->type() == tabs::TabCollection::Type::FOLDER &&
+         static_cast<const tabs::FolderTabCollection*>(collection)
+             ->collapsed()) {
+-      return true;
++      collapsed_folder = true;
++      break;
+     }
+   }
++  if (collapsed_folder && !tab->IsActivated()) {
++    return true;
++  }
+   return hidden_tab_predicate_ &&
+          hidden_tab_predicate_.Run(GetTabAtIndex(index));
+ }
+diff --git a/chrome/browser/ui/views/commandbar/command_bar_view.cc b/chrome/browser/ui/views/commandbar/command_bar_view.cc
+index 97c3eedbbfc5f..f02fa0f1caa5a 100644
+--- a/chrome/browser/ui/views/commandbar/command_bar_view.cc
++++ b/chrome/browser/ui/views/commandbar/command_bar_view.cc
+@@ -446,25 +446,17 @@ void CommandBarView::BuildActions() {
+     // throwaway T1 stays a model until T2 (a throwaway Space must not come
+     // back after a restart with a fresh jar); no row opens one yet.
+   }
+-  // little E1: inside a little window, the Spaces of the last-active window.
++  // A little window opens its page in the main window. It does not list
++  // Spaces.
+   if (stedding::IsLittleWindow(browser_)) {
+-    BrowserWindowInterface* const target =
+-        stedding::LastActiveNormalWindow(browser_->GetProfile());
+-    if (spaces::SpaceModel* const model =
+-            target ? spaces::SpaceModel::From(target) : nullptr) {
+-      for (const std::unique_ptr<spaces::Space>& space : model->spaces()) {
+-        actions_.push_back(
+-            {u"Open in " + model->DisplayName(space->id()), std::u16string(),
+-             base::BindRepeating(
+-                 [](BrowserWindowInterface* browser, BrowserWindowInterface* target,
+-                    spaces::SpaceId id) {
+-                   stedding::PromoteLittleWindow(browser, target, id,
+-                                                 /*split=*/false);
+-                 },
+-                 base::Unretained(browser_), base::Unretained(target),
+-                 space->id())});
+-      }
+-    }
++    actions_.push_back(
++        {u"Open in main window", std::u16string(),
++         base::BindRepeating(
++             [](BrowserWindowInterface* browser) {
++               stedding::PromoteLittleWindow(browser, nullptr, std::nullopt,
++                                             /*split=*/false);
++             },
++             base::Unretained(browser_))});
+   }
+   if (normal_window) {
+     command(IDC_STEDDING_CAPTURE_VISIBLE, u"Capture the Page");
+diff --git a/chrome/browser/ui/views/spaces/space_tab_visibility_controller.cc b/chrome/browser/ui/views/spaces/space_tab_visibility_controller.cc
+index 2a24e95f45c5b..e1a6ba6ec2efe 100644
+--- a/chrome/browser/ui/views/spaces/space_tab_visibility_controller.cc
++++ b/chrome/browser/ui/views/spaces/space_tab_visibility_controller.cc
+@@ -146,9 +146,11 @@ void SpaceTabVisibilityController::UpdateSubtree(views::View& parent) {
+       // it. Asking the model rather than assuming keeps the two reasons a tab
+       // can be hidden from fighting each other.
+       const int index = tab_strip_model_->GetIndexOfTab(tab);
+-      const bool collapsed = index != TabStripModel::kNoTab &&
+-                             tab_strip_model_->IsTabCollapsed(index);
+-      tab_view->SetVisible(!collapsed);
++      // IsTabHidden is the one answer: another Space, a collapsed group, or
++      // a collapsed folder. The active tab of a collapsed folder stays.
++      const bool hidden =
++          index != TabStripModel::kNoTab && tab_strip_model_->IsTabHidden(index);
++      tab_view->SetVisible(!hidden);
+       continue;
+     }
+     // Group and folder views hold tabs of their own.
+diff --git a/chrome/browser/ui/views/tabs/common/folder_view.cc b/chrome/browser/ui/views/tabs/common/folder_view.cc
+index 74426ac18f0fb..55d4040a3c950 100644
+--- a/chrome/browser/ui/views/tabs/common/folder_view.cc
++++ b/chrome/browser/ui/views/tabs/common/folder_view.cc
+@@ -16,6 +16,7 @@
+ #include "chrome/browser/ui/views/tabs/common/sidebar_symbols.h"
+ #include "chrome/browser/ui/views/tabs/common/stedding_tab_row_rules.h"
+ #include "chrome/browser/ui/views/tabs/common/tab_collection_node.h"
++#include "chrome/browser/ui/views/tabs/common/tab_view.h"
+ #include "chrome/browser/ui/views/tabs/common/tab_strip_collection_controller.h"
+ #include "chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h"
+ #include "components/tabs/public/folder_tab_collection.h"
+@@ -249,19 +250,57 @@ void FolderView::ToggleCollapsed() {
+   ApplyCollapsed();
+ }
+ 
++bool FolderView::HoldsActiveTab(const views::View* child) const {
++  if (auto* const tab_view = views::AsViewClass<TabView>(child)) {
++    const tabs::TabInterface* const tab = tab_view->GetTabInterface();
++    return tab && tab->IsActivated();
++  }
++  if (auto* const nested = views::AsViewClass<FolderView>(child)) {
++    tabs::FolderTabCollection* const inner = nested->folder();
++    if (!inner) {
++      return false;
++    }
++    for (tabs::TabInterface* const tab : inner->GetTabsRecursive()) {
++      if (tab && tab->IsActivated()) {
++        return true;
++      }
++    }
++  }
++  return false;
++}
++
+ void FolderView::ApplyCollapsed() {
+   tabs::FolderTabCollection* const f = folder();
+   if (!f) {
+     return;
+   }
+-  const bool collapsed = f->collapsed();
++  ApplyChildren(f->collapsed());
++  UpdateHeader();
++  PreferredSizeChanged();
++}
++
++void FolderView::ApplyChildren(bool only_active) {
+   for (views::View* child : children()) {
+-    if (child != header_) {
+-      child->SetVisible(!collapsed);
++    if (child == header_) {
++      continue;
++    }
++    if (!only_active) {
++      child->SetVisible(true);
++      if (auto* const nested = views::AsViewClass<FolderView>(child)) {
++        nested->ApplyCollapsed();
++      }
++      continue;
++    }
++    // The active tab stays under the header. Collapsing does not switch tabs.
++    const bool keep = HoldsActiveTab(child);
++    child->SetVisible(keep);
++    if (keep) {
++      if (auto* const nested = views::AsViewClass<FolderView>(child)) {
++        nested->ApplyChildren(true);
++        nested->PreferredSizeChanged();
++      }
+     }
+   }
+-  UpdateHeader();
+-  PreferredSizeChanged();
+ }
+ 
+ void FolderView::UpdateHeader() {
+diff --git a/chrome/browser/ui/views/tabs/common/folder_view.h b/chrome/browser/ui/views/tabs/common/folder_view.h
+index 40dc0f3444a70..f1cea3044db43 100644
+--- a/chrome/browser/ui/views/tabs/common/folder_view.h
++++ b/chrome/browser/ui/views/tabs/common/folder_view.h
+@@ -89,6 +89,10 @@ class FolderView : public views::View,
+ 
+   void ToggleCollapsed();
+   void ApplyCollapsed();
++  // `only_active` keeps the row under a collapsed header: the active tab, and
++  // the folders on the way to it. Otherwise each child follows its own state.
++  void ApplyChildren(bool only_active);
++  bool HoldsActiveTab(const views::View* child) const;
+   void BeginRename();
+   void EndRename(bool commit);
+   void UpdateHeader();

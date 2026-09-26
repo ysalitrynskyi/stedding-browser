@@ -13,7 +13,7 @@ folder's membership cannot be overwritten by an outer group (ADR 0013).
 |---|---|---|---|
 | F1 | "Move Tab to New Folder" on a tab's context menu wraps it in a new folder. No tab is lost. | `TabStripModelTest.AddToNewFolderKeepsTabsAndNests` | built |
 | F2 | The same command on a tab already in a folder nests a new folder inside it. The outer folder still counts the nested tab. | `TabStripModelTest.AddToNewFolderKeepsTabsAndNests` | built |
-| F3 | A collapsed folder hides its tabs, nested folders included, from the sidebar and from tab traversal. | `TabStripModelTest.*Hidden*` via `IsTabHidden`; capture | built |
+| F3 | A collapsed folder hides its tabs, nested folders included, from the sidebar and from tab traversal. The active tab stays visible under the header, and collapsing does not switch to another tab. | `TabStripModelTest.*Hidden*` via `IsTabHidden`; capture | built |
 | F4 | Double-clicking a folder header renames it in place; Enter commits, Escape cancels. | capture (`folder_tabs/2`) | built |
 | F5 | Folder tree (ids, titles, collapse state, nesting) survives session restore through per-tab extra data, and survives the session log being rebuilt from scratch. | `FolderSessionTest.RebuildsNestedFoldersFromParkedPaths`, `FolderSessionTest.RebuildReemitsFolderPaths` | built |
 | F6 | Closing a window with folders does not crash (the last tab leaves its folder before the folder is peeled). | `FolderSessionTest.FoldersSurviveBrowserFixtureTeardown` | built |

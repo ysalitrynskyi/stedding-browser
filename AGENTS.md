@@ -259,7 +259,7 @@ Windows-only preview. Signing: the Developer ID certificate and the notary profi
 exist since 2026-09-23, and the signer works end to end (`S-17`, patch 0051).
 The pin is 155.0.8059.12 (2026-09-24, `S-64`: Google's early-stable build of M155,
 taken straight from M153 because the owner wants the newest stable-channel build,
-ADR 0007); the series is 53 patches on it. `v0.2.0-beta.8` is the Mac image of the
+ADR 0007); the series is 54 patches on it. `v0.2.0-beta.8` is the Mac image of the
 previous pin, 153.0.8010.53, and `v0.2.0-beta.7` (153.0.8010.48) the one before. Outstanding:
 `BACKLOG.md`. First vanilla perf comparison is in
 `docs/perf/README.md`: on the deterministic page list every QUALITY budget is

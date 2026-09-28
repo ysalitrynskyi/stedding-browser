@@ -45,8 +45,9 @@ Three designs were weighed.
   profile path and not the Space's runtime id.
 - Isolation is **opt-in per Space**. Essentials stay on the default partition
   (they are in every Space, B6). Private windows have no Spaces. A Blank
-  Window's in-memory registry can isolate; its partitions are in-memory too,
-  so nothing is written to disk.
+  Window has no Space registry, so its Spaces cannot be isolated (amended
+  2026-09-28: the in-memory partitions this bullet described were cut in patch
+  0055, and the isolation toggle still shows there, PLAN.md SPC-32).
 - New files under `chrome/browser/ui/spaces/` own the helper. The one
   upstream hunk is `CreateTargetContents` in `browser_navigator.cc`, which
   already chooses the `SiteInstance`. No `content/`, `blink/` or `net/`

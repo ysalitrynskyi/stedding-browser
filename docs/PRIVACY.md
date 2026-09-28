@@ -67,11 +67,12 @@ Disabling it is one switch in settings.
 First run shows a search engine chooser. The list order is randomized, no engine
 is preselected, and no engine has paid for placement — no search deal exists, and
 if that ever changes it will be disclosed in this document and in release notes
-before shipping. Until the user chooses, no search query leaves the machine.
-Search suggestions (sending keystrokes to the chosen engine) are off by default
-and can be enabled in settings.
+before shipping. Until the user chooses, the default is DuckDuckGo, in every
+region: a query typed before a choice -- the welcome's search step skipped, say --
+goes to DuckDuckGo and nowhere else. Search suggestions (sending keystrokes to the
+chosen engine) are off by default and can be enabled in settings.
 
-### Safe Browsing — on by default, documented honestly
+### Safe Browsing — not yet known to work in these builds
 
 The trade-off: Safe Browsing protects against phishing and malware, but the
 standard implementation checks URLs against Google-operated lists. The standard
@@ -79,16 +80,50 @@ standard implementation checks URLs against Google-operated lists. The standard
 the server for hash-prefix matches — Google does not receive your browsing
 history, but does receive occasional partial-hash queries and your IP.
 
-Our stance:
+Where it stands (2026-09-28): the setting is on, but Stedding's builds carry no
+Google API key, and Chromium's list updates need one. Read from the code (not yet
+confirmed on a running build, PLAN.md WEB-5): without a key each list update goes to
+Google with a placeholder key, which Google should refuse, so the local lists stay
+empty and no listed site gets a warning page -- while the requests themselves still
+reach Google, with your IP address. Only the local warnings for dangerous file
+types remain. Do not count on Safe Browsing to protect you in Stedding.
 
-- **Shipped by default:** standard, hash-prefix Safe Browsing, because shipping a
-  browser to non-hypothetical users with phishing protection off is not a
-  defensible default. Whether list traffic can be proxied through Stedding
+Our stance, once it is settled:
+
+- **By default:** standard, hash-prefix Safe Browsing that is proven to work,
+  because shipping a browser to non-hypothetical users with phishing protection off
+  is not a defensible default. Whether list traffic can be proxied through Stedding
   infrastructure so Google never sees user IPs is an open implementation question
   — tracked in ARCHITECTURE.md, TBD.
 - **Available by choice:** turning it off entirely, one switch, clearly explained.
-- **Never:** "Enhanced" Safe Browsing modes that send full URLs or page content in
-  real time. Not shipped at all.
+- **Never by default:** "Enhanced" Safe Browsing modes that send full URLs or page
+  content in real time. Stedding never turns it on, but Chromium's Security page
+  still offers it as a choice; taking the option out is open (PLAN.md WEB-5).
+
+### Data earlier betas left on disk
+
+Betas up to 8 wrote a snapshot of the sidebar every hour into a `Sidebar Backups`
+folder inside the profile: every tab's address and title, in plain JSON. Later
+builds no longer write it, and Clear browsing data does not remove it. Delete the
+folder by hand if you do not want to keep it, or import one of its files with
+**Import sidebar…** in Settings → Stedding.
+
+### A Space's own cookies and Delete browsing data
+
+A Space with an independent session keeps its cookies, cache and site data in a
+jar of its own on this disk (`features/sessions.md`). In every beta up to 8,
+**Delete browsing data** did not reach those jars: the dialog reported the data
+gone while each such Space stayed signed in, and so did the jar a Space keeps
+while its independent session is switched off. The same was true of
+`chrome.browsingData` and of deleting one site's data. The fix makes every removal
+that names no jar again for each Space's jar, with the same time range and the same
+sites (sessions S24, PLAN.md SPC-11). It is written, not yet confirmed on a running
+build. Until a build carries it, use **Clear Independent Session** on the Space, or
+delete the Space.
+
+Chromium also clears out unused storage after an extension or app is removed, and
+that clean-up could delete the jar of a Space with no tab open, cookies and all
+(sessions S25, PLAN.md SPC-10). The same builds keep the jars.
 
 ### Google account sync — not available
 
@@ -138,9 +173,9 @@ consequences we will not hide:
 | Crash reporting | Off | Opt in |
 | Update checks | On (no identifiers) | — (required for a safe product) |
 | Search engine | User chooses at first run | Change anytime |
-| Cookies per Space | Off: every Space shares the profile's jar | Independent session on a Space keeps its own cookies, cache and site data on this disk; Clear Independent Session empties it; deleting the Space deletes it (`features/sessions.md`) |
+| Cookies per Space | Off: every Space shares the profile's jar | Independent session on a Space keeps its own cookies, cache and site data on this disk; Clear Independent Session empties it; deleting the Space deletes it; Delete browsing data reaches it only from the build that carries sessions S24 (see above) (`features/sessions.md`) |
 | Search suggestions | Off | Opt in |
-| Safe Browsing | On (hash-prefix only) | Turn off |
+| Safe Browsing | The setting is on (hash-prefix only); whether it protects in these builds is unmeasured (see above) | Turn off |
 | Google sync | Not available | — |
 | WebRTC local IPs | Hidden (mDNS) | Stricter VPN-safe policies |
 | Global Privacy Control | On | Turn off |

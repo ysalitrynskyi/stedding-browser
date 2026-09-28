@@ -125,7 +125,7 @@ buttons and Arc's keyboard mapped to Ctrl and Alt.
 - Vertical tabs at Arc's proportions: an essentials row above every Space, the Space's
   pinned sites, a Clear line, then the tabs. Three density presets and a text size.
 - Rename a tab in place, select several and act on them together, hold ⌘ to number
-  the first nine rows and jump with ⌘1–⌘9.
+  the rows and jump with ⌘1–⌘8 (⌘9 is the last row).
 - Sleeping tabs: ⌘W puts a pinned tab to sleep instead of losing it; ⌃⇥ walks the
   Space's most recent tabs.
 - Auto-archive: unpinned tabs nobody has looked at for 12 hours (a setting) move to an
@@ -142,11 +142,10 @@ buttons and Arc's keyboard mapped to Ctrl and Alt.
 - Routing: a site opens in the Space it belongs to, with a toast that undoes it.
 - One sidebar for every window; ⌥⇧⌘N opens a blank window with Spaces of its own.
 
-**Peek and little windows**
-- Peek is off until you turn it on in Settings → Stedding. When it is on, a link
-  that leaves a pinned site opens over the window instead of navigating the pin
-  away. Escape dismisses it; ⌘O turns it into a tab, ⇧⌘O into a split.
+**Little windows**
 - Links from other apps open in a small window of their own.
+- Peek, a link from a pinned site opening over the window, is switched off while
+  it is rebuilt.
 
 **The address row and the page**
 - The page floats on a card; the address row is the top edge of the card in the page's
@@ -155,13 +154,14 @@ buttons and Arc's keyboard mapped to Ctrl and Alt.
 - Screenshots: ⇧⌘2 the visible page, ⌥⇧⌘2 a region, ⇧⌘1 the whole document; PNG to
   Downloads and the clipboard.
 
-**Import, backups and export**
+**Import and export**
 - Everything from Arc in one click (see [Moving from Arc](#moving-from-arc)).
-- On macOS the welcome step lists Safari, Firefox, a bookmarks HTML file, and
-  Chrome, Brave, Edge, Vivaldi or Chromium when that browser's profile is on the
-  machine. An import brings bookmarks, history and saved passwords. Bookmarks stay
-  bookmarks. On Windows the step also lists Edge, Internet Explorer and Firefox.
-- Export a Space as a file, and import a sidebar file. There is no scheduled backup.
+- Chromium's importer for the other browsers it knows: on macOS, Safari's bookmarks
+  and Firefox's bookmarks and history; on Windows, Firefox (with passwords),
+  Internet Explorer and the old Edge. Chrome, Brave and the new Edge are not
+  supported yet. Imported bookmarks stay bookmarks; ⌘T → Turn Bookmarks into
+  Pinned Tabs makes them pins.
+- Export a Space as a file, and import a sidebar file. There is no automatic backup.
 
 **Settings and shortcuts**
 - A **Stedding** section first in Settings, one switch per feature, the window's
@@ -188,7 +188,7 @@ The most used ones. The complete list, for both platforms, is in
 | Jump to Space 1–9 | ⌃1–⌃9 | Alt+1–9 |
 | Next / previous Space | ⌥⌘→ / ⌥⌘← | Ctrl+Alt+→ / ← |
 | Move the tab to the next / previous Space | ⌥⇧⌘→ / ⌥⇧⌘← | Ctrl+Alt+Shift+→ / ← |
-| Jump to one of the first nine rows | ⌘1–⌘9 | Ctrl+1–9 |
+| Jump to one of the first eight rows, or the last with 9 | ⌘1–⌘9 | Ctrl+1–9 |
 | Most recent tab of the Space | ⌃⇥ | Ctrl+Tab |
 | Clear the Space's unpinned tabs | ⇧⌘K | Ctrl+Shift+K |
 | Split the tab with a new one | ⌥⌘N | Alt+Shift+N |
@@ -215,10 +215,9 @@ tabs, browsing history and saved passwords. Each is a checkbox, all checked by d
 
 ![The welcome flow's import step: everything from Arc in one click](docs/images/readme/welcome-import.png)
 
-Coming from Safari or Firefox on a Mac, or from Edge, Internet Explorer or Firefox
-on Windows? The same step imports bookmarks, history and saved passwords, and the
-bookmarks stay bookmarks. On a Mac it also offers Chrome, Brave, Edge, Vivaldi and
-Chromium when those profiles are on the machine.
+Coming from Safari or Firefox? The same step runs Chromium's own importer (what
+each browser brings is under [Features](#features)). Chrome, Brave and the new Edge
+are not supported yet.
 
 ## Privacy
 
@@ -239,18 +238,20 @@ about. Updates are not automatic yet: new versions appear on the Releases page.
 
 ## Status and roadmap
 
-Stedding is a **beta**. The features above work and are tested, and the maintainer uses
-it against Arc every day. What is out and what comes next:
+Stedding is an early **beta**. A review of the whole code in September 2026 found many
+defects, some of them in the basics (selecting a tab, the collapsed sidebar, restoring a
+session); they are being fixed, and the next release waits for that work. What is out
+and what comes next:
 
 | | State |
 |---|---|
 | macOS (Apple silicon) | Beta releases since 2026-09-01; the current one is beta 8 |
 | Windows x64 | Preview installer since beta 5: the full interface, Arc's keys for Windows, a per-user install |
-| Code signing and notarisation | Next: the Apple developer account exists; the Developer ID certificate follows (`S-17` in [BACKLOG.md](BACKLOG.md)) |
+| Code signing and notarisation | The Developer ID certificate exists and the signing pipeline works; the first signed release follows the repair work (`S-17` in [BACKLOG.md](BACKLOG.md)) |
 | Automatic updates | After signing; checks go to GitHub Releases, with no identifier (ADR 0014) |
 | Windows: little windows, signing, updates | Open (`S-56`) |
 | Linux | After Windows (milestone M9 in [docs/ROADMAP.md](docs/ROADMAP.md)) |
-| Sync between machines | Not planned as a service; export, backup and restore files instead |
+| Sync between machines | Not planned as a service; export a Space as a file and import it on the other machine |
 
 Known limits in the current builds: the first launch needs one Terminal command (unsigned);
 ⌃1–⌃9 collide with macOS Mission Control once you have a second desktop (the Spaces
@@ -283,7 +284,7 @@ or update an extension. The complete list of connections is in
 
 **Where is my data?** In your profile folder, on your machine: on macOS under
 `~/Library/Application Support/Stedding`, on Windows under `%LOCALAPPDATA%\Stedding`.
-Sidebar backups are written there every hour; you can also export a Space as a file.
+You can also export a Space as a file.
 
 **Will it update itself?** Not yet. New versions appear on the Releases page; the
 in-app updater lands with signing.

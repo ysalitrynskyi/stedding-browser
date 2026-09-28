@@ -11,7 +11,8 @@ into something a machine can fail on:
   patches  the patch series is contiguous, numbered, and each patch has a header
   version  the Chromium pin is well formed and referenced from exactly one place
   traps    HANDOFF's traps are numbered contiguously and every citation resolves
-  tests    every test a 'built' behaviour row names exists in the patch series
+  tests    every test a 'built' behaviour row names exists in the patch series, and
+           every test a spec row or BACKLOG cites is in a tooling/dev filter
   wiring   every source the series adds is in a GN sources list, so it compiles
   truth    docs carry no known-stale phrases, feature specs are well formed, and
            every backlog id cited anywhere exists in BACKLOG.md
@@ -22,6 +23,7 @@ Exit status is the number of failures, capped at 125.
 
 from __future__ import annotations
 
+import fnmatch
 import re
 import subprocess
 import sys
@@ -134,6 +136,9 @@ FORBIDDEN = [
     # occurs. The placeholder form is what a document is allowed to write, and it is
     # why this comment does not trip its own check.
     (re.compile(r"[Cc]:\\{1,2}[Uu]sers\\{1,2}[A-Za-z]"), "absolute Windows home path"),
+    # The owner's own layout of their machine; a document names a placeholder.
+    # Split so this line does not match itself.
+    (re.compile(r"~/" + r"work\b"), "machine-specific path (the owner's work folder)"),
     (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"), "private key"),
     (re.compile(r"\bgh[pousr]_[A-Za-z0-9]{16,}"), "GitHub token"),
     (re.compile(r"\bAKIA[0-9A-Z]{16}\b"), "AWS access key id"),
@@ -312,7 +317,9 @@ STALE_PHRASES = [
 # A behaviour row is | <letter><n> | text | test | state |. The letter is the spec's
 # series (B for spaces, Z for shortcuts, ...); "planned" is a row from docs/ROUND6-PLAN.md
 # whose test is named but not yet green.
-BEHAVIOUR_ROW = re.compile(r"^\| ([A-Z]\d+) \| (.+?) \| (.+?) \| (built|partial|gap|planned)(?: · [^|]+)? \|$")
+# Ids are a capital and a number (T3), or a capital, a small letter and a
+# number (Cf1) in the specs that share a first letter with another.
+BEHAVIOUR_ROW = re.compile(r"^\| ([A-Z][a-z]?\d+) \| (.+?) \| (.+?) \| (built|partial|gap|planned|withdrawn)(?: · [^|]+)? \|$")
 BACKLOG_ID = re.compile(r"\bS-(\d+)\b")
 
 
@@ -332,11 +339,11 @@ def check_truth() -> None:
     for spec in sorted((ROOT / "docs" / "features").glob("*.md")):
         seen: set[str] = set()
         for n, line in enumerate(spec.read_text(encoding="utf-8").splitlines(), 1):
-            if not re.match(r"^\| [A-Z]\d+ \|", line):
+            if not re.match(r"^\| [A-Z][a-z]?\d+ \|", line):
                 continue
             m = BEHAVIOUR_ROW.match(line)
             if not m:
-                fail(f"{spec.relative_to(ROOT)}:{n}", "behaviour row must be | <letter><n> | text | test | built|partial|gap|planned |")
+                fail(f"{spec.relative_to(ROOT)}:{n}", "behaviour row must be | <id> | text | test | built|partial|gap|planned|withdrawn |")
                 continue
             bid, _, test, state = m.groups()
             if bid in seen:
@@ -348,6 +355,9 @@ def check_truth() -> None:
                 fail(f"{spec.relative_to(ROOT)}:{n}", f"{bid} is 'gap' but names a test")
             if state == "planned" and test.strip().lower().startswith("none"):
                 fail(f"{spec.relative_to(ROOT)}:{n}", f"{bid} is 'planned' with no test named")
+            # A cut behaviour has no test; naming one reads as proof of it.
+            if state == "withdrawn" and not test.strip().lower().startswith("none"):
+                fail(f"{spec.relative_to(ROOT)}:{n}", f"{bid} is 'withdrawn' but names a test")
 
     # Backlog ids cited anywhere must exist.
     backlog = (ROOT / "BACKLOG.md").read_text(encoding="utf-8")
@@ -438,38 +448,105 @@ def check_eol() -> None:
 # TEST(Suite, Name) and the wrapped TEST_F(Suite,\n    Name) form clang-format
 # produces once the line is too long. Both are added lines in the patch series, which
 # is the only place this repository holds code.
-TEST_MACRO = r"(?:TEST|TEST_F|TEST_P|IN_PROC_BROWSER_TEST_F|IN_PROC_BROWSER_TEST_P)"
-TEST_ONE_LINE = re.compile(r"^\+" + TEST_MACRO + r"\(\s*([A-Za-z_]\w*)\s*,\s*([A-Za-z_]\w*)\s*\)")
-TEST_OPEN = re.compile(r"^\+" + TEST_MACRO + r"\(\s*([A-Za-z_]\w*)\s*,\s*$")
-TEST_CONT = re.compile(r"^\+\s*([A-Za-z_]\w*)\s*\)")
+TEST_MACRO = r"(TEST|TEST_F|TEST_P|IN_PROC_BROWSER_TEST_F|IN_PROC_BROWSER_TEST_P)"
+TEST_ONE_LINE = re.compile(r"^([+-])" + TEST_MACRO + r"\(\s*([A-Za-z_]\w*)\s*,\s*([A-Za-z_]\w*)\s*\)")
+TEST_OPEN = re.compile(r"^([+-])" + TEST_MACRO + r"\(\s*([A-Za-z_]\w*)\s*,\s*$")
+TEST_CONT = re.compile(r"^[+-]\s*([A-Za-z_]\w*)\s*\)")
 # gtest's own filter syntax, which is what these citations are meant to be pasted into.
-TEST_REF = re.compile(r"\b([A-Z][A-Za-z0-9_]*(?:Test|Tests))\.([A-Za-z_]\w*\*?|\*)")
+TEST_REF = re.compile(r"\b([A-Z][A-Za-z0-9_]*(?:Test|Tests))\.([A-Za-z_*][\w*]*)")
 
 
-def tests_in_series() -> dict[str, set[str]]:
-    suites: dict[str, set[str]] = {}
+def test_definitions() -> dict[tuple[str, str], tuple[str, str]]:
+    """(suite, name) -> (macro, file) for every test the whole series defines. A
+    later patch that deletes a test takes it out again, so a spec cannot cite a
+    test that no longer exists; one that moves it records its new file."""
+    if _DEFINITIONS:
+        return _DEFINITIONS[0]
+    defs: dict[tuple[str, str], tuple[str, str]] = {}
     for patch in sorted((ROOT / "patches").glob("*.patch")):
+        added: list[tuple[str, str, str, str]] = []
+        removed: list[tuple[str, str]] = []
         pending = None
+        path = ""
         for raw in patch.read_text(encoding="utf-8", errors="replace").splitlines():
+            if raw.startswith("diff --git "):
+                path = raw.split(" b/", 1)[-1]
+                pending = None
+                continue
             m = TEST_ONE_LINE.match(raw)
             if m:
-                suites.setdefault(m.group(1), set()).add(m.group(2))
+                if m.group(1) == "+":
+                    added.append((m.group(3), m.group(4), m.group(2), path))
+                else:
+                    removed.append((m.group(3), m.group(4)))
                 pending = None
                 continue
             m = TEST_OPEN.match(raw)
             if m:
-                pending = m.group(1)
+                pending = (m.group(1), m.group(2), m.group(3), path)
                 continue
             if pending:
                 cont = TEST_CONT.match(raw)
                 if cont:
-                    suites.setdefault(pending, set()).add(cont.group(1))
+                    sign, macro, suite, where = pending
+                    if sign == "+":
+                        added.append((suite, cont.group(1), macro, where))
+                    else:
+                        removed.append((suite, cont.group(1)))
                 pending = None
+        for suite, name in removed:
+            defs.pop((suite, name), None)
+        for suite, name, macro, where in added:
+            defs[(suite, name)] = (macro, where)
+    _DEFINITIONS.append(defs)
+    return defs
+
+
+_DEFINITIONS: list[dict[tuple[str, str], tuple[str, str]]] = []
+
+
+def tests_in_series() -> dict[str, set[str]]:
+    """Suite -> test names, for every test the whole series defines."""
+    suites: dict[str, set[str]] = {}
+    for suite, name in test_definitions():
+        suites.setdefault(suite, set()).add(name)
     return suites
 
 
+def gtest_pattern(pattern: str) -> re.Pattern[str]:
+    """gtest's filter syntax: * is any run of characters, ? one; nothing else."""
+    return re.compile(re.escape(pattern).replace(r"\*", ".*").replace(r"\?", "."))
+
+
+# tooling/dev's name:filter tables: unit_tests, and components_unittests.
+DEV_FILTER_TABLE = re.compile(r"^(FEATURE_FILTERS|COMPONENT_FILTERS)='\n(.*?)^'", re.S | re.M)
+# Stedding's own browser tests; `tooling/dev test browser` runs all of them.
+BROWSER_TEST_DIR = "chrome/test/stedding/"
+
+
+def dev_filter_parts() -> list[str] | None:
+    """Every part that selects tests in tooling/dev's filters, or None when the
+    tables cannot be found."""
+    dev = ROOT / "tooling" / "dev"
+    if not dev.is_file():
+        return None
+    tables = {m.group(1): m.group(2)
+              for m in DEV_FILTER_TABLE.finditer(dev.read_text(encoding="utf-8"))}
+    if "FEATURE_FILTERS" not in tables:
+        return None
+    parts: list[str] = []
+    for table in tables.values():
+        for line in table.splitlines():
+            _, sep, flt = line.strip().partition(":")
+            if sep:
+                # "A:B-C:D" selects A and B; C and D only exclude.
+                parts += [p for p in flt.split("-", 1)[0].split(":") if p]
+    return parts
+
+
 def check_tests() -> None:
-    """A 'built' row must name a test that exists.
+    """A 'built' row must name a test that exists, and every test a spec row or
+    BACKLOG cites must be one a sweep runs.
 
     AGENTS.md: a behaviour is shipped when its test in docs/features/<feature>.md is
     green. A row that names a test which is not in the series reads as shipped and
@@ -478,8 +555,18 @@ def check_tests() -> None:
     right test under the wrong suite after it moved, the rest naming a test that was
     renamed or never written.
 
-    Only 'built' is checked. A 'planned' row names the test that will prove it, which
-    is the point of the state, and check_truth already requires it to name one.
+    Only 'built' is checked for existence. A 'planned' row names the test that will
+    prove it, which is the point of the state, and check_truth already requires it
+    to name one.
+
+    Existing is not enough: six tests that 'built' rows cite as proof were in no
+    tooling/dev filter, so no sweep ever ran them (PLAN.md REPO-2). So every test
+    the series defines that a spec row (any state) or BACKLOG cites must match a
+    part of a tooling/dev filter, or be one of Stedding's browser tests in
+    chrome/test/stedding, which `tooling/dev test browser` runs whole. A citation
+    of a test the series does not define is left to the existence rule above.
+    Which binary holds a test is checked when it runs: `tooling/dev test` lists
+    each filter part first and stops when one matches nothing.
     """
     specs = sorted((ROOT / "docs" / "features").glob("*.md"))
     if not specs:
@@ -489,28 +576,61 @@ def check_tests() -> None:
         fail("patches", "no tests found in the series; the spec check cannot mean anything")
         return
 
+    citations: list[tuple[str, int, str, str, str]] = []  # (file, line, id, suite, name)
     for spec in specs:
         rel = spec.relative_to(ROOT).as_posix()
         for line_no, line in enumerate(spec.read_text(encoding="utf-8").splitlines(), 1):
             m = BEHAVIOUR_ROW.match(line)
-            if not m or m.group(4) != "built":
+            if not m:
                 continue
-            bid, _, test_column, _ = m.groups()
+            bid, _, test_column, state = m.groups()
             for suite, name in sorted(set(TEST_REF.findall(test_column))):
+                citations.append((rel, line_no, bid, suite, name))
+                if state != "built":
+                    continue
                 known = suites.get(suite, set())
-                if name.endswith("*"):
-                    prefix = name[:-1]
-                    if any(n.startswith(prefix) for n in known):
-                        continue
-                else:
-                    if name in known:
-                        continue
-                bare = name.rstrip("*")
+                if any(fnmatch.fnmatchcase(n, name) for n in known):
+                    continue
+                bare = name.strip("*")
                 elsewhere = sorted(s for s, names in suites.items() if bare in names)
                 hint = f"; it is {elsewhere[0]}.{bare}" if elsewhere else ""
                 fail(f"{rel}:{line_no}",
                      f"{bid} is 'built' and names {suite}.{name}, "
                      f"which the series does not define{hint}")
+    backlog = ROOT / "BACKLOG.md"
+    if backlog.is_file():
+        for line_no, line in enumerate(backlog.read_text(encoding="utf-8").splitlines(), 1):
+            row = re.match(r"^\| (S-\d+) \|", line)
+            for suite, name in sorted(set(TEST_REF.findall(line))):
+                citations.append(("BACKLOG.md", line_no, row.group(1) if row else "this line",
+                                  suite, name))
+
+    parts = dev_filter_parts()
+    if parts is None:
+        fail("tooling/dev", "no FEATURE_FILTERS table found; cannot check that cited tests run")
+        return
+    selectors = [gtest_pattern(p) for p in dict.fromkeys(parts)]
+    definitions = sorted(test_definitions().items())
+    reported: set[tuple[str, int, str]] = set()
+    for rel, line_no, bid, suite, name in citations:
+        cited = gtest_pattern(f"{suite}.{name}")
+        for (def_suite, def_name), (macro, path) in definitions:
+            full = f"{def_suite}.{def_name}"
+            if not cited.fullmatch(full) or (rel, line_no, full) in reported:
+                continue
+            if path.startswith(BROWSER_TEST_DIR):
+                continue
+            if macro.startswith("IN_PROC_BROWSER_TEST"):
+                problem = (f"is a browser test outside {BROWSER_TEST_DIR} ({path}), "
+                           "which no tooling/dev leg runs")
+            elif any(s.fullmatch(full) for s in selectors):
+                continue
+            else:
+                problem = ("matches no filter in tooling/dev, so no sweep runs it; add it to "
+                           "its feature's line (COMPONENT_FILTERS if it lives in "
+                           "components_unittests)")
+            reported.add((rel, line_no, full))
+            fail(f"{rel}:{line_no}", f"{bid} cites {full}, which {problem}")
 
 
 # ------------------------------------------------------------------------- wiring

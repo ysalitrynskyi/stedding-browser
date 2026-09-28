@@ -6,7 +6,7 @@ in one contributor's head. Read both.
 
 ## Where things live
 
-- This repo (`~/work/stedding-browser` on the original machine): docs, tooling,
+- This repo: docs, tooling,
   the patch series in `patches/`, branding. Public; never commit secrets or
   machine paths.
 - The Chromium checkout: `/Users/Shared/chromium/src`, pinned to
@@ -17,7 +17,7 @@ in one contributor's head. Read both.
 - Build output: `out/release` (proprietary codecs on). `out/official` exists
   for performance baselines (never quote numbers from `release`;
   `docs/QUALITY.md`).
-- The website: `~/work/stedding.dev` (`ysalitrynskyi/stedding.dev`, private), live
+- The website: `ysalitrynskyi/stedding.dev` (private), live
   at https://stedding.dev since 2026-09-16. Astro, static, Cloudflare Pages from
   `main`; it reads the latest release from the GitHub Releases API at build time and
   rebuilds itself every 6 hours through a deploy hook, so a published release reaches
@@ -68,7 +68,8 @@ about before assuming a check has to wait for a build:
   exactly this on every change to `patches/` or the pin, cached under the pin.
 - **The window's geometry.** `tooling/check-geometry` re-measures the card's gutters
   and corner radius in `docs/images/*.png` against `tooling/probes/geometry.json`. It
-  needs Pillow and the committed captures, so it runs wherever CI runs. Two traps in
+  needs Pillow and the committed captures; it is no longer a CI check (cut on
+  2026-09-26), so run it by hand after a recapture. Two traps in
   measuring this way: read a gutter as a band of window ground across the whole card
   rather than as one probed pixel, or the page's own content answers instead; and fit
   a corner radius across the whole arc, because the inset of the edge one scanline
@@ -116,8 +117,8 @@ into the fresh profile.
    focus; CLICKS and DRAGS need the window key (activate the process via
    System Events first, then post HID-tap mouse events; a tab drag needs a few
    slow moves past the threshold before the long move). Never drive the
-   user's real pointer while they are at the machine. `tooling/capture-window.py`
-   captures one window by id — never the screen. `tooling/drive` is the tool:
+   user's real pointer while they are at the machine. `tooling/capture-windows
+   --largest` captures one window by id — never the screen. `tooling/drive` is the tool:
    its header lists the traps (a created key event inherits the last chord's
    modifiers, so clear them; a Cmd+Q keystroke does not quit, the AppleEvent
    does).
@@ -307,11 +308,14 @@ into the fresh profile.
     (`folder_tabs/N` does exist, whatever trap 25 says; `pin_tabs/N`,
     `extra_spaces/N`, `space_pin_tabs/N`, `drift_tabs/N`; the collapsed rail is
     a profile preference, `vertical_tabs.collapsed_state`, seeded into a fresh
-    profile's `Default/Preferences`), and `osascript -e 'tell application "…/Stedding.app" to
-    quit'` for a clean quit — which is also how the folder quit crash was
-    reproduced under `lldb --batch -o run -k "bt 40"` with a symbolised stack
-    (the release build keeps its symbol table; `symbol_level=0` drops only the
-    line tables). Drives wait for an empty chair.
+    profile's `Default/Preferences`), and `tooling/window_by_pid.py --quit <pid>`
+    for a clean quit of the one browser a tool launched. An `osascript` quit
+    addressed to the app bundle reaches the owner's own Stedding too; the folder
+    quit crash was once reproduced that way under `lldb --batch -o run -k "bt 40"`
+    with a symbolised stack (the release build keeps its symbol table;
+    `symbol_level=0` drops only the line tables). Drives wait for an empty chair,
+    and `drive-window.py` refuses any input unless the launched pid is frontmost
+    and, for the mouse, its window is the topmost one at the point.
 
 28. **An apply script's anchors die at the first clang-format.** The pipeline
     formats after applying, so a re-run fails on any anchor or guard that
@@ -325,7 +329,10 @@ into the fresh profile.
     at the machine -- what `tooling/drive` must never do (trap 3). The state comes
     from feature params, not from input: `space_pin_tabs/N`, `drift_tabs/N`,
     `folder_tabs/N`, `pin_tabs/N`, `extra_spaces/N`, `open_command_bar/true`,
-    `--stedding-welcome=<step>`, `--seed collapsed`.
+    `--stedding-welcome=<step>`, `--seed collapsed`. Since 2026-09-28 it, like
+    `tooling/drive`, launches in the background (`open -g -n`), refuses to start
+    while another Stedding with the same bundle id runs (quit the installed one
+    first), and quits by pid and deletes its profile on any exit.
 
 30. **A window capture carries the window's shadow.** An absolute y read off one
     is not a window coordinate; compare two things inside the same capture --
@@ -340,10 +347,12 @@ into the fresh profile.
     the discard ring -- both of which this fork changes on purpose. Before a
     release, run the suites around what the series touches, not only ours.
     Since 2026-09-10 that set is one command, `tooling/dev test upstream`
-    (`TabTest`, `TabStripModelTest`, `LocationBarViewTest`,
-    `VerticalTabStripStateControllerTest`, `BrowserViewTest`, the accelerator,
-    command, toolbar, menu, theme and search suites), and `tooling/dev test all`
-    is the release sweep. The Mac pass on beta 6 found eight red cases there,
+    (`TabTest`, `TabStripModelTest`, `VerticalTabStripStateControllerTest`,
+    the accelerator, menu and theme suites; since 2026-09-28 the suites that
+    live in other test programs -- `ToolbarViewTest` and `AppMenuModelTest` in
+    Chromium's browser tests -- are listed in `tooling/dev` but not run until
+    that leg exists, and every filter part must match a test or the sweep
+    stops), and `tooling/dev test all` is the release sweep. The Mac pass on beta 6 found eight red cases there,
     none a product bug: five read Chromium's horizontal tab, its icons and its
     group colours under the 2026 refresh that patch 0042 turns on in code
     (unit tests never see the field-trial config, so upstream's tests had never
@@ -461,7 +470,7 @@ into the fresh profile.
     minutes from 109 GB free (the git-cache bundle 7 min, the tag fetch 19 min,
     `gclient sync` and the hooks 17 min): src 43 GB, the cache 26 GB, 53 GB together
     on disk since the two share objects, 48 GB free after. `tooling/apply-patches`
-    replayed the series; the caches the disk runbook allows (`~/work/AGENTS.md`)
+    replayed the series; the caches the machine's disk runbook allows
     were worth about 20 GB and nothing else on the machine is an agent's to delete.
     Three rules from it. `STEDDING_SYNC_MIN_FREE_GB` lowers the sync's 150 GB floor
     for a run that has done the arithmetic (65 for the checkout, 9.3 for a release
@@ -587,6 +596,30 @@ into the fresh profile.
     A correction a later patch's context blocks goes into the last patch that
     touches the file. The snapshot is what makes this safe: the squash is done
     when the tree is identical, not when the rebase says so.
+51. **Chromium's search suites assert a Google default and an EEA-only choice.**
+    Stedding changed both on purpose: DuckDuckGo is the fallback engine in
+    every region, and the search engine choice program runs in every country
+    (`docs/PRIVACY.md`; PLAN.md WEB-4). The cases that are about those two
+    hunks assert Stedding's behaviour now and run in `tooling/dev test
+    search`: `TemplateURLPrepopulateDataTest.DuckDuckGoIsTheFallbackInEveryRegion`
+    (every `regional_settings` entry and an unknown country), and the
+    regional-capabilities cases `IsInEeaCountry`,
+    `IsInSearchEngineChoiceScreenRegion` and `ClientIsInSearchEngineChoiceScreenRegionTest.*`.
+    31 other upstream cases in `components_unittests` still assert the
+    upstream defaults and are not in any leg (2026-09-28, run from a
+    components-only binary): `DefaultSearchManagerTest` (3, the default is
+    DuckDuckGo), `SearchEngineChoiceServiceTest` (5) and
+    `SearchEngineChoiceServiceDisplayStateRecordTest` (1, a Google default and
+    the region), `SearchEngineChoiceEligibilityTest` (6) and
+    `SearchEngineChoiceEligibilityOnRestoreTest` (2, eligibility outside the
+    EEA), `RegionalCapabilitiesServiceProgramDeterminationTest` (4) and
+    `RegionalCapabilitiesServiceTest.GetCountryAndProgramCommandLineOverride`
+    (the program outside the EEA), `TemplateURLPrepopulateDataTest` (3, a
+    Google fallback and the EEA list sizes applied to every country), and
+    the `LoadedTemplateURLServiceUnitTestBase` fixture's six users (its
+    setup counts the regional list, which DuckDuckGo joins where it was not
+    in it). Rewriting them to Stedding's defaults is open; a change to either
+    hunk is checked against this list by running those suites.
 
 ## The Windows build
 
@@ -622,7 +655,9 @@ The owner answered section 2 on 2026-09-26 (the decisions are at the top of
 Space sleep timer starts at Never, the listed cuts are approved, ⌘9 is the
 last row, collapsing the active tab's folder keeps that tab, deleting the
 active Space switches to a neighbour, Chrome/Brave/Edge import is documented
-honestly now and built in Phase 2, little windows get no Space commands.
+honestly now and built in Phase 2 (a first attempt landed early in patch 0055 and
+was withdrawn on 2026-09-28: it read the source browser's live databases and its
+keychain item regardless of the choices made), little windows get no Space commands.
 Beta 8 is the Mac image of pin 153.0.8010.53 (2026-09-18); beta 6 remains
 the current Windows preview until a Windows image joins a tag. `S-17` (signed
 re-release), `S-56` (the Windows port) and `S-58` (disk) stay. Do not publish

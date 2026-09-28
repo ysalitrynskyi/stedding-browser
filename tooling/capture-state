@@ -7,13 +7,17 @@
 #                         [--size WxH] [--url URL] [--build DIR]
 #                         [chromium args and URLs...]
 #
-# Launches the built app on a fresh profile (a seeded preference if asked),
-# waits for the first paint, and captures every window owned by that pid or
-# a child (tooling/capture-windows: <prefix>.png, then <prefix>-2.png for a
-# dialog). It quits that pid so session files flush, and reports an abort
-# from the browser log (<prefix>.log). No synthetic input and no focus
-# change, so it is safe while someone is at the machine (docs/HANDOFF.md,
-# trap 22). tooling/capture-ui execs this script.
+# Refuses to start while any other process with the app's bundle id runs
+# (your own Stedding, or one a crashed run left). Launches the built app on a
+# fresh profile (a seeded preference if asked) in the background through
+# LaunchServices, waits for the first paint, and captures every window owned
+# by that pid or a child (tooling/capture-windows: <prefix>.png, then
+# <prefix>-2.png for a dialog). It quits that pid so session files flush, and
+# reports an abort from the browser log (<prefix>.log). No synthetic input and
+# no focus change -- if the browser makes itself the frontmost app, the run
+# stops and captures nothing -- so it is safe while someone is at the machine
+# (docs/HANDOFF.md, trap 29). Any exit, Ctrl-C or kill quits the launched pid
+# and deletes the profile. tooling/capture-ui execs this script.
 #
 # --out path.png is the image file. Any other --out is a prefix, and the
 # image is <prefix>.png. --size accepts 1400x880 or 1400,880. --build is
@@ -30,6 +34,18 @@
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=./lib.sh
 . "$(cd "$(dirname "$0")" && pwd)/lib.sh"
+
+CAPTURE_PROFILE=""
+# Quits the launched pid (then kills it), and only then deletes the profile it
+# was writing to.
+capture_cleanup() {
+  stop_launched_app 10
+  if [ -n "$CAPTURE_PROFILE" ]; then
+    # A helper can still be closing a file for a moment after the browser goes.
+    rm -rf "$CAPTURE_PROFILE" 2>/dev/null || { sleep 1; rm -rf "$CAPTURE_PROFILE" || true; }
+    CAPTURE_PROFILE=""
+  fi
+}
 
 main() {
   local out="" seed="" settle=18 features="" disable_features="" size="1400,880"
@@ -49,7 +65,7 @@ main() {
       --size)     size="$(printf '%s' "$2" | tr 'xX' ',,')"; shift 2 ;;
       --url)      url="$2"; shift 2 ;;
       --build)    build="$2"; shift 2 ;;
-      -h|--help)  sed -n '2,28p' "$0"; exit 0 ;;
+      -h|--help)  sed -n '2,32p' "$0"; exit 0 ;;
       *)          break ;;
     esac
   done
@@ -63,54 +79,60 @@ main() {
   [ -n "$prefix" ] || die "--out <prefix> is required"
   [ -n "$url" ] && set -- "$@" "$url"
 
+  case "$seed" in
+    ""|collapsed) ;;
+    *) die "unknown seed: $seed (known: collapsed)" ;;
+  esac
+  require_pyobjc
+
   local app
   app="$(find_app_bundle "$CHROMIUM_SRC/out/$build" || true)"
   [ -n "$app" ] && [ -d "$app" ] || die "no app bundle in out/$build -- tooling/dev build"
-  local bin
-  bin="$app/Contents/MacOS/$(basename "$app" .app)"
+  require_no_other_instance "$app"
 
   local profile
   profile="$(mktemp -d "${TMPDIR:-/tmp}/stedding-state.XXXXXX")"
+  # From here on, any exit -- an error, Ctrl-C, a kill -- quits the browser this
+  # run launched and deletes this profile.
+  CAPTURE_PROFILE="$profile"
+  trap capture_cleanup EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
   mkdir -p "$profile/Default"
-  case "$seed" in
-    "") ;;
-    collapsed) printf '{"vertical_tabs":{"collapsed_state":true}}' > "$profile/Default/Preferences" ;;
-    *) die "unknown seed: $seed (known: collapsed)" ;;
-  esac
+  if [ "$seed" = collapsed ]; then
+    printf '{"vertical_tabs":{"collapsed_state":true}}' > "$profile/Default/Preferences"
+  fi
 
-  local log_file="$prefix.log"
-  set -- --user-data-dir="$profile" --no-first-run --no-default-browser-check \
+  # LaunchServices starts the app in /, so the log path must be absolute.
+  local log_file
+  log_file="$(absolute_path "$prefix.log")"
+  # The browser starts behind whatever is in front, and a covered page would
+  # otherwise stop painting and capture blank.
+  set -- --user-data-dir="$profile" --use-mock-keychain --no-first-run --no-default-browser-check \
+         --disable-backgrounding-occluded-windows \
          --window-size="$size" --window-position=0,0 --enable-logging=stderr "$@"
   [ -n "$disable_features" ] && set -- --disable-features="$disable_features" "$@"
   [ -n "$features" ] && set -- --enable-features="$features" "$@"
 
-  "$bin" "$@" >/dev/null 2>"$log_file" &
-  local pid=$!
-  [ -n "$pid" ] || die "browser pid is missing; refusing to capture"
-  log "launched $(basename "$app") pid $pid for $prefix.png"
-  # No signal to wait on from outside the process: a plain wait for the paint.
-  sleep "$settle"
+  local front_before
+  front_before="$(frontmost_pid)"
+  launch_in_background "$app" "$log_file" "$@"
+  local pid="$LAUNCHED_PID"
+  log "launched $(basename "$app") pid $pid in the background for $prefix.png"
+  # No signal to wait on from outside the process: a plain wait for the paint,
+  # watching that the browser never takes the focus from whoever is at the machine.
+  local stolen="the launched browser (pid $pid) made itself the frontmost app in place of pid ${front_before:-unknown}, so keys typed meanwhile went to it"
+  wait_unfocused "$pid" "$settle" stop || die "$stolen; nothing was captured"
 
   local cap_status=0
   python3 "$STEDDING_ROOT/tooling/capture-windows" "$pid" "$prefix" || cap_status=$?
+  [ "$(frontmost_pid)" != "$pid" ] || die "$stolen, during the capture"
 
   # Quit this pid, not every app whose name contains Stedding.
-  if ! python3 "$STEDDING_ROOT/tooling/window_by_pid.py" --quit "$pid"; then
-    warn "could not ask pid $pid to quit"
-  fi
-  local _
-  for _ in $(seq 1 40); do
-    kill -0 "$pid" 2>/dev/null || break
-    sleep 0.5
-  done
-  if kill -0 "$pid" 2>/dev/null; then
-    warn "browser did not quit in 20 s; killing (session files may be stale)"
-    kill -9 "$pid" 2>/dev/null || true
-  fi
+  stop_launched_app 40
   if grep -i -m3 "bad_variant\|received signal\|check failed\|fatal" "$log_file"; then
-    warn "the browser aborted; see $log_file"
+    die "the browser aborted; see $log_file"
   fi
-  rm -rf "$profile"
   if [ "$cap_status" -ne 0 ] || [ ! -f "$prefix.png" ]; then
     die "capture wrote no $prefix.png (is the screen locked? does this python have Quartz? see $log_file)"
   fi

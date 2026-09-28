@@ -432,10 +432,12 @@ features that users expect from a real product just to make a purity claim.
   pings: removed or disabled.** Features are controlled by build flags and our own
   defaults, never by server-side experiments. Opt-in crash reporting to *our*
   infrastructure may come later (per `PRIVACY.md`).
-- **Safe Browsing: kept, hash-prefix variant.** Dropping it silently makes users
-  less safe; keeping Google's real-time endpoints leaks browsing signals. The
-  decision is recorded in `PRIVACY.md`: standard hash-prefix Safe Browsing on by
-  default, real-time "Enhanced" modes never shipped.
+- **Safe Browsing: meant to be kept, hash-prefix variant -- not working yet.**
+  Dropping it silently makes users less safe; keeping Google's real-time endpoints
+  leaks browsing signals. The intent is recorded in `PRIVACY.md`: standard
+  hash-prefix Safe Browsing on by default, real-time "Enhanced" never turned on.
+  Today the builds carry no Google API key, which list updates need, so by the
+  code the lists stay empty (PLAN.md WEB-5, to be confirmed on a running build).
 - **Component updater: kept, pointed at infrastructure we control where feasible.**
   Some components matter for security and site compatibility (certificate revocation
   lists, Widevine for DRM playback). Each shipped component is enumerated in

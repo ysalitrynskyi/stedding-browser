@@ -1,6 +1,9 @@
 # Feature: Peek
 
-Status: **P1–P10 built and tested**.
+Status: **switched off and hidden.** The peek's card lays its page out 0 px tall, so no
+one sees a page in it, and the review in PLAN.md (CMD-9, CMD-10) found security holes in
+how a peek is opened. Peek is off by default and its setting is hidden until the host is
+rebuilt. P1–P9 describe the intended behaviour; none of them works today.
 Owner docs: `docs/PRODUCT.md` ("Peek": what makes pinned tabs behave like apps). Patch: `0009`.
 
 A link from a pinned tab that would leave the pinned site opens in a peek: a page over the
@@ -19,13 +22,13 @@ and hands it to the tab strip on promotion.
 
 | Id | Behaviour | Test | State |
 |---|---|---|---|
-| P1 | A link click from a pinned tab to a different site (eTLD+1) opens a peek instead of navigating the tab. | `ShouldPeekTest.LinkToAnotherSiteFromAPinnedTab`; live: `tooling/drive` pins a page with a cross-site link, clicks it, the peek appears and the tab's URL is unchanged | built |
-| P2 | Links that stay on the pinned site (other paths, subdomains, http→https) navigate the tab as always. | `ShouldPeekTest.StayingOnTheSiteNavigatesTheTab`, `PeekThrottleTest.PinnedTabStaysOnItsSite` | built |
-| P3 | Unpinned tabs are never throttled; the throttle is not even registered for them. | `ShouldPeekTest.UnpinnedTabsFollowLinks`, `PeekThrottleTest.UnpinnedTabIsNotThrottled` | built |
-| P4 | Typed URLs, script redirects (sign-in bounces) and form posts navigate the pinned tab; only a user's link click peeks. | `ShouldPeekTest.TypedUrlsScriptRedirectsAndPostsNavigateTheTab`, `PeekThrottleTest.ScriptRedirectFromPinnedTabProceeds` | built |
-| P5 | Only http(s) pages peek; chrome://, file: and blank pages never do. | `ShouldPeekTest.OnlyHttpPagesPeek` | built |
-| P6 | A peek owns a page of its own at the link's URL; the window's tabs are untouched while it is open. | `PeekViewTest.PeekLoadsItsOwnPage` | built |
-| P7 | Promoting (⌘O, the button) moves the very same page into a new active tab and closes the peek. | `PeekViewTest.PromotingMovesThePageIntoANewActiveTab`; live: ⌘O in the peek | built |
-| P8 | Links from a pinned tab that open a new tab (`target=_blank`, `window.open`, ⌘-click) also peek when they leave the site, as in Arc; a renderer-created page is adopted by the peek. | `PeekNewTabTest.NewTabLinkFromPinnedTabPeeks`, `PeekNewTabTest.OtherNewTabLinksOpenTabs`; live: `target=_blank` link from the pinned page | built |
-| P9 | ⇧⌘O (or the button) promotes the peek into a split with the tab it came from, using Chromium's split view; a source already in a split gets a plain tab. | `PeekViewTest.PromotingIntoASplitPairsWithTheSourceTab`; live: ⇧⌘O in a peek from the pinned page, both pages side by side | built |
-| P10 | Peek is off on a fresh profile. The chrome://settings "Stedding" switch turns it on; with it off, pinned tabs follow links like any other. | `SteddingPrefsTest` (default off), `ShouldPeekTest.SettingOffFollowsLinks`; settings T3 | built |
+| P1 | A link click from a pinned tab to a different site (eTLD+1) opens a peek instead of navigating the tab. | `ShouldPeekTest.LinkToAnotherSiteFromAPinnedTab`; live: `tooling/drive` pins a page with a cross-site link, clicks it, the peek appears and the tab's URL is unchanged | partial · the peek shows no page; Peek is off (PLAN.md CMD-9) |
+| P2 | Links that stay on the pinned site (other paths, subdomains, http→https) navigate the tab as always. | `ShouldPeekTest.StayingOnTheSiteNavigatesTheTab`, `PeekThrottleTest.PinnedTabStaysOnItsSite` | partial · the peek shows no page; Peek is off (PLAN.md CMD-9) |
+| P3 | Unpinned tabs are never throttled; the throttle is not even registered for them. | `ShouldPeekTest.UnpinnedTabsFollowLinks`, `PeekThrottleTest.UnpinnedTabIsNotThrottled` | partial · the peek shows no page; Peek is off (PLAN.md CMD-9) |
+| P4 | Typed URLs, script redirects (sign-in bounces) and form posts navigate the pinned tab; only a user's link click peeks. | `ShouldPeekTest.TypedUrlsScriptRedirectsAndPostsNavigateTheTab`, `PeekThrottleTest.ScriptRedirectFromPinnedTabProceeds` | partial · the peek shows no page; Peek is off (PLAN.md CMD-9) |
+| P5 | Only http(s) pages peek; chrome://, file: and blank pages never do. | `ShouldPeekTest.OnlyHttpPagesPeek` | partial · the peek shows no page; Peek is off (PLAN.md CMD-9) |
+| P6 | A peek owns a page of its own at the link's URL; the window's tabs are untouched while it is open. | `PeekViewTest.PeekLoadsItsOwnPage` | partial · the peek shows no page; Peek is off (PLAN.md CMD-9) |
+| P7 | Promoting (⌘O, the button) moves the very same page into a new active tab and closes the peek. | `PeekViewTest.PromotingMovesThePageIntoANewActiveTab`; live: ⌘O in the peek | partial · the peek shows no page; Peek is off (PLAN.md CMD-9) |
+| P8 | Links from a pinned tab that open a new tab (`target=_blank`, `window.open`, ⌘-click) also peek when they leave the site, as in Arc; a renderer-created page is adopted by the peek. | `PeekNewTabTest.NewTabLinkFromPinnedTabPeeks`, `PeekNewTabTest.OtherNewTabLinksOpenTabs`; live: `target=_blank` link from the pinned page | partial · the peek shows no page; Peek is off (PLAN.md CMD-9) |
+| P9 | ⇧⌘O (or the button) promotes the peek into a split with the tab it came from, using Chromium's split view; a source already in a split gets a plain tab. | `PeekViewTest.PromotingIntoASplitPairsWithTheSourceTab`; live: ⇧⌘O in a peek from the pinned page, both pages side by side | partial · the peek shows no page; Peek is off (PLAN.md CMD-9) |
+| P10 | Peek is off on a fresh profile, and nothing in the product turns it on; with it off, pinned tabs follow links like any other. | `SteddingPrefsTest.EveryPreferenceRegistersWithItsDefault` (default off), `ShouldPeekTest.SettingOffFollowsLinks` | built |

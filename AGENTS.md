@@ -5,12 +5,6 @@ context. Read it before doing anything else. It is model-agnostic and tool-agnos
 everything you need is in this repo, nothing depends on a particular assistant, session,
 or machine.
 
-## Machine context (this host)
-
-Walk-up: `~/work/AGENTS.md`. Runbooks: `~/work/_runbooks/README.md`.
-**SSH:** never without operator yes naming the exact host — `ssh-and-hosts.md`.
-**Azure Foundry ON** (images via `azure_image`). Old resource banned. `azure-enabled.md`.
-
 ## What this project is
 
 **Stedding Browser** — a fully open-source, Chromium-based desktop browser with an
@@ -74,15 +68,14 @@ builds. The patch series sits on the pin; unsigned beta pre-releases go to
 GitHub Releases. `tooling/dev status` prints the real counts (patches, tests
 per feature, pin); do not type them here.
 
-What "working" means here: **a behaviour is shipped when its test in
-`docs/features/<feature>.md` is green.** Captures prove pixels only. This rule
-exists because the Spaces feature shipped with its switcher, colours and
-persistence all verified by capture while a new tab did not actually join the
-active Space and switching Spaces did not change the active tab
-(`docs/features/spaces.md` B1–B5, found 2026-09-01). The procedure that
-prevents a repeat is `docs/AGENT-LOOP.md`.
+What "working" means here: **a behaviour is done when its "Done when" check passes
+on a real build** (`PLAN.md` §2). A green unit test alone proves nothing about what a
+user sees, and captures prove pixels only: the old rule ("shipped when its test is
+green") let broken basics ship, such as rows that would not select on click. The
+September 2026 audit of the whole series is `PLAN.md`; it lists what is broken in
+each feature below and the order of repair.
 
-Built, with tests or measured captures:
+Built, by the old measure (each has open findings in `PLAN.md`):
 
 - Arc-proportioned sidebar: essentials row, per-Space pins, Clear line,
   44 px rows, 18 px favicons; floating content card; centred bare-host URL;
@@ -101,10 +94,8 @@ Built, with tests or measured captures:
   points; chrome://settings has no Google or AI sections and carries the
   Stedding mark. Mac updater stubbed
   (no Keystone) pointing at GitHub Releases.
-- **Peek**: off by default. When it is on, a link leaving a pinned tab's site
-  opens over the window instead of navigating the tab; Escape or a click
-  outside dismisses it, ⌘O moves the same page into a tab
-  (`docs/features/peek.md`).
+- **Peek**: switched off, and its setting hidden, while its host is rebuilt
+  (`PLAN.md` CMD-9, CMD-10; `docs/features/peek.md`).
 - **Settings**: a "Stedding" section first in chrome://settings, one control
   per Stedding preference, plus the window's Spaces to rename or delete
   (`docs/features/settings.md`).
@@ -139,8 +130,8 @@ Built, with tests or measured captures:
   ⌘W sleeps, the drifted dot, the favicon reset, the menu rows, peek reads
   the stored site); the switcher's overflow dots and Move Left / Move Right;
   download progress on the sidebar button; the command bar's actions mode
-  (⇥, a leading ">", ⇧⌘P: every command with its chord, ⌘L with the URL
-  selected); ⌃⇥ through the Space's most recent tabs with a hold-to-see
+  (⇥, a leading ">", ⇧⌘P: Stedding's own commands with their chords, ⌘L
+  with the URL selected); ⌃⇥ through the Space's most recent tabs with a hold-to-see
   strip, ⌥⇧⌘↑/↓ moving the row folder-aware; the page and app menus without
   Google's rows, Import, Screenshot and Spaces in the app menu, a menu per
   row kind and for the folder header, Move to Space; a chip drag reorders
@@ -161,8 +152,9 @@ Built, with tests or measured captures:
   (`docs/features/toolbar.md` T8–T12); the tracker-free defaults and the
   Privacy block (`docs/features/privacy.md`, ADR 0017); sidebar density
   presets and a text size (`docs/features/sidebar.md`); imported bookmarks
-  become pins, and sidebar backups, export and restore in the importer's
-  format (`docs/features/import.md` I13–I20).
+  become pins on demand from ⌘T, and a Space exports to a file in the importer's
+  format and imports back (`docs/features/import.md` I13–I20; the hourly backups
+  were cut in patch 0055).
 - **Round 7** (2026-09-05, `docs/ARC-ROUND2.md`; patches 0037 and 0038, with a
   second pass the same evening on the operator's replies): the row is the page's
   colour exactly, square under it, the address centred on the row in a field with
@@ -235,10 +227,10 @@ Built, with tests or measured captures:
   the shared jar, a moved tab rebound with its history and name (asleep stays
   asleep), Clear Independent Session on the chip menu, the jar wiped when the
   Space goes, and off-then-on reattaching the same jar. With it: keyword search
-  and `@Space` in ⌘T, a split that restores as a pair and renames as one, host
-  and host-suffix routes, Focus and Hide Other Spaces. The 2026-09-18 audit of
-  those two patches (HANDOFF trap 46) found seven helpers with tests and no
-  surface; their spec rows say `model only` and `S-61` lists them.
+  and `@Space` in ⌘T, a split that renames as one (Chromium itself restores the
+  pair), host and host-suffix routes, Focus and Hide Other Spaces. The 2026-09-18
+  audit of those two patches (HANDOFF trap 46) found seven helpers with tests and
+  no surface; patch 0055 cut them.
 
 Read `docs/HANDOFF.md` before touching anything — it carries the working loop,
 every dev parameter, and the traps already paid for, numbered contiguously and cited
@@ -259,7 +251,7 @@ Windows-only preview. Signing: the Developer ID certificate and the notary profi
 exist since 2026-09-23, and the signer works end to end (`S-17`, patch 0051).
 The pin is 155.0.8059.12 (2026-09-24, `S-64`: Google's early-stable build of M155,
 taken straight from M153 because the owner wants the newest stable-channel build,
-ADR 0007); the series is 56 patches on it. `v0.2.0-beta.8` is the Mac image of the
+ADR 0007); the series is 57 patches on it. `v0.2.0-beta.8` is the Mac image of the
 previous pin, 153.0.8010.53, and `v0.2.0-beta.7` (153.0.8010.48) the one before. Outstanding:
 `BACKLOG.md`. First vanilla perf comparison is in
 `docs/perf/README.md`: on the deterministic page list every QUALITY budget is
@@ -318,32 +310,21 @@ independent sessions, and `v0.2.0-beta.8` (2026-09-18) the Mac image of
 153.0.8010.53 with the audit's fixes; the Windows installer for a current tag is
 still to join it (`S-56`).
 
-**Whoever picks this up next** (state as of 2026-09-26): read `docs/HANDOFF.md`
-first, then `PLAN.md`. The owner's answers to that plan's section 2 are at the
-top of `PLAN.md` and they override its earlier recommendations, including
-"remove horizontal tab mode". The loop, the dev parameters and the traps,
-including `tooling/capture-state`
-(a capture that needs neither the keyboard nor the pointer, trap 29), the rule that a
-release sweep runs Chromium's own suites around what the series touches, not only
-the Stedding filters (trap 31), and what a vanished checkout costs and how it comes
-back (trap 44). `tooling/dev status` says whether the checkout and `unit_tests`
-exist before anything is planned; `tooling/check-pin` says how far behind stable
-the pin is. The order of work:
-
-1. The operator's look at beta 8 — round 10 in `docs/ARC-ROUND2.md`, one row per
-   finding with its fix. Its first three (the "damaged" dialog, the full-screen crash,
-   the profile in Chromium's folder: patch 0050) are fixed in the series and wait on
-   the next release. Ask for the rest; the findings, not the backlog, decide the
-   features. Independent sessions have not been tried on a real site by anyone yet.
-2. `S-17` when the Developer ID certificate exists (the steps are in the row): a
-   signed, notarised re-release, then the updater (ADR 0014) behind its settings
-   entry.
-3. Then the rest by backlog order: `S-61` (the keep-pile's `model only` rows: wire
-   or withdraw, trap 46), `S-56` (Windows: the beta 8 installer, little windows,
-   signing, updates, CI), `S-48` (the Arc data import on a real profile), `S-51`,
-   `S-57`, `S-47`, `S-54`, `S-55`, `S-50`, `S-49`. `S-58` before any milestone
-   bump: M154 is stable and the Mac has no room for a re-sync. Every feature spec
-   names its own `gap` rows.
+**Whoever picks this up next** (state as of 2026-09-28): read `docs/HANDOFF.md`
+first, then `PLAN.md`, which sets the order of work until its Phase 1 is done. The
+owner's decisions on it are at the top of `PLAN.md` and override its earlier
+recommendations (horizontal tab mode stays, and must work). The loop, the dev
+parameters and the traps are in HANDOFF, including `tooling/capture-state` (a
+capture that needs neither the keyboard nor the pointer, trap 29), the rule that a
+release sweep runs Chromium's own suites around what the series touches (trap 31),
+and what a vanished checkout costs (trap 44). `tooling/dev status` says whether the
+checkout and the test binaries exist; `tooling/check-pin` says how far behind
+stable the pin is. Stedding's own browser tests, which click real rows in a real
+window, are `stedding_browser_tests` (`chrome/test/stedding/` in the checkout).
+Patch 0057 finished Phase 0's code and proved each item it could on a real build
+(the status block at the top of `PLAN.md` lists what each item still waits on).
+Nothing is released until `PLAN.md`'s Phase 0 is done: the profile migration and
+the keychain copy must be proven on a real beta-8 profile first.
 
 The website is finished and live (see *Site* above); what remains there is one
 dashboard step for the owner, the www redirect (`S-59`). Keep README, `docs/INSTALL.md`,

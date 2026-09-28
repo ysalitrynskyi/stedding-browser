@@ -152,6 +152,9 @@ def base_flags(profile: Path) -> list[str]:
     """
     return [
         f"--user-data-dir={profile}",
+        # A throwaway profile has no secrets; the real keychain would prompt
+        # during an unattended run.
+        "--use-mock-keychain",
         "--no-first-run",
         "--no-default-browser-check",
         # Suppress the "restore pages?" bubble, which otherwise steals focus and

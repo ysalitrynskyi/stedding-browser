@@ -159,3 +159,185 @@ require_macos_arm64() {
   [ "$(uname -s)" = "Darwin" ] || die "this script currently supports macOS only (got $(uname -s))"
   [ "$(uname -m)" = "arm64" ]  || die "this script currently supports arm64 only (got $(uname -m))"
 }
+
+# --------------------------------------------------------------------------
+# Launching the built browser from a tool (tooling/capture-state, tooling/drive).
+#
+# A tool must never touch the Stedding someone is using. So it refuses to start
+# while any other process with the app's bundle id runs, it launches the build
+# through LaunchServices in the background (open -g) instead of executing the
+# binary, it watches that the browser never becomes the frontmost app, and it
+# stops only the pid it launched. Everything here is stock macOS: plutil,
+# lsappinfo, open and ps. No PyObjC is needed except for the polite quit, and
+# without it the stop falls back to SIGKILL.
+
+# A path made absolute against the current directory. An app launched through
+# LaunchServices starts in /, so a relative profile or log path would land there.
+absolute_path() {
+  case "$1" in
+    /*) printf '%s' "$1" ;;
+    *) printf '%s/%s' "$(pwd)" "$1" ;;
+  esac
+}
+
+# The CFBundleIdentifier of an app bundle.
+app_bundle_id() {
+  plutil -extract CFBundleIdentifier raw -o - "$1/Contents/Info.plist" 2>/dev/null
+}
+
+# The bundle's main executable, with symlinks in the path resolved, since that is
+# the path ps reports for the running process.
+app_executable() {
+  local name dir
+  name="$(plutil -extract CFBundleExecutable raw -o - "$1/Contents/Info.plist" 2>/dev/null)" || return 1
+  [ -n "$name" ] || return 1
+  dir="$(cd "$1" 2>/dev/null && pwd -P)" || return 1
+  printf '%s/Contents/MacOS/%s' "$dir" "$name"
+}
+
+# Pids of processes whose executable is exactly $1, one per line.
+pids_running_executable() {
+  ps -axww -o pid=,comm= 2>/dev/null |
+    awk -v exe="$1" '{ pid = $1; sub(/^[ \t]*[0-9]+[ \t]+/, ""); if ($0 == exe) print pid }' || true
+}
+
+# Pids of every running instance of an app: what LaunchServices lists under its
+# bundle id (an installed copy, a build a crashed run left behind), plus anything
+# running this bundle's own executable. One per line, sorted.
+app_instance_pids() {
+  local app="$1" id exe asn
+  id="$(app_bundle_id "$app")" || return 1
+  exe="$(app_executable "$app")" || return 1
+  {
+    lsappinfo find bundleid="$id" 2>/dev/null | while IFS= read -r asn; do
+      [ -n "$asn" ] || continue
+      lsappinfo info -only pid "$asn" 2>/dev/null | sed -n 's/^"pid"=\([0-9][0-9]*\)$/\1/p'
+    done || true
+    pids_running_executable "$exe"
+  } | sort -un
+}
+
+# Refuses to go on while another instance of the app runs. The owner's own
+# Stedding shares the bundle id with every build, and a tool that starts beside
+# it could photograph it or type into it (PLAN.md PLT-3).
+require_no_other_instance() {
+  local app="$1" id pids
+  id="$(app_bundle_id "$app")" || die "no CFBundleIdentifier in $app/Contents/Info.plist"
+  pids="$(app_instance_pids "$app" | paste -sd' ' -)"
+  [ -z "$pids" ] || die "another app with bundle id $id is running (pid $pids): yours, or one a
+     crashed run left behind. This tool refuses to run beside it, so it can never
+     capture or type into the wrong browser. Quit that one first."
+}
+
+# The window captures, the drive and the polite quit talk to the window server
+# through PyObjC. Checked before a launch, so a missing module does not leave a
+# browser starting for nothing.
+require_pyobjc() {
+  python3 -c 'import Quartz, AppKit' 2>/dev/null ||
+    die "$(command -v python3 || echo python3) cannot import Quartz and AppKit (PyObjC); install pyobjc for it, or put a python3 that has it first on PATH"
+}
+
+# The pid of the frontmost app, or nothing when LaunchServices does not say.
+frontmost_pid() {
+  local asn
+  asn="$(lsappinfo front 2>/dev/null || true)"
+  [ -n "$asn" ] || return 0
+  lsappinfo info -only pid "$asn" 2>/dev/null | sed -n 's/^"pid"=\([0-9][0-9]*\)$/\1/p' || true
+}
+
+# Starts an app bundle as a new instance through LaunchServices without bringing
+# it forward (open -g -n), stdout discarded and stderr in $2, and sets
+# LAUNCHED_PID. The pid is the one process running this bundle's executable,
+# which is unambiguous because callers refuse to start beside another instance.
+# LAUNCHING_EXE stays set until the pid is known, so an interrupted launch can
+# still be stopped (stop_launched_app).
+LAUNCHED_PID=""
+LAUNCHING_EXE=""
+launch_in_background() {
+  local app="$1" log="$2" exe pid="" _
+  shift 2
+  exe="$(app_executable "$app")" || die "no executable in $app"
+  # open appends to the file; a log is this run's alone, or an earlier run's
+  # abort would fail this one.
+  : > "$log" || die "cannot write the log $log"
+  LAUNCHED_PID=""
+  LAUNCHING_EXE="$exe"
+  open -g -n -a "$app" --stdout /dev/null --stderr "$log" --args "$@" ||
+    die "open could not launch $app"
+  for _ in $(seq 1 40); do
+    pid="$(pids_running_executable "$exe")"
+    [ -n "$pid" ] && break
+    sleep 0.25
+  done
+  case "$pid" in
+    '') die "launched $app, but no process runs $exe after 10 s; see $log" ;;
+    *[!0-9]*)
+      # Another run started the same build at the same moment. Stopping either
+      # could stop someone else's, so neither is touched.
+      LAUNCHING_EXE=""
+      die "more than one process runs $exe ($(printf '%s' "$pid" | paste -sd' ' -)); not guessing which one is ours, and not stopping either" ;;
+  esac
+  LAUNCHED_PID="$pid"
+  LAUNCHING_EXE=""
+}
+
+# Waits $2 seconds (a fraction is fine) while pid $1 runs, watching the
+# frontmost app, and returns 1 if that pid was ever it: from that moment the keys
+# of whoever is at the machine went to it. With $3 = stop, returns 1 at that
+# moment instead of finishing the wait. Stops waiting early if the pid exits.
+wait_unfocused() {
+  local pid="$1" seconds="$2" mode="${3:-}" ticks i=0 took=0
+  case "$seconds" in
+    ''|*[!0-9.]*|*.*.*) die "a wait needs a number of seconds, got '$seconds'" ;;
+  esac
+  ticks="$(awk -v s="$seconds" 'BEGIN { t = int(s * 4 + 0.5); print (t < 1 ? 1 : t) }')"
+  while [ "$i" -lt "$ticks" ]; do
+    if [ "$(frontmost_pid)" = "$pid" ]; then
+      took=1
+      [ "$mode" != stop ] || return 1
+    fi
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 0.25
+    i=$((i + 1))
+  done
+  [ "$(frontmost_pid)" != "$pid" ] || took=1
+  [ "$took" -eq 0 ]
+}
+
+# Quits one app by pid: the AppleEvent first, which flushes Chromium's session
+# files (docs/HANDOFF.md, trap 4), then SIGKILL if it is still up after $2 half
+# seconds (default 20). Never by name or bundle id, so another Stedding on the
+# Mac is untouched.
+stop_app_pid() {
+  local pid="$1" tries="${2:-20}" _
+  kill -0 "$pid" 2>/dev/null || return 0
+  if ! python3 "$STEDDING_ROOT/tooling/window_by_pid.py" --quit "$pid"; then
+    warn "could not ask pid $pid to quit"
+  fi
+  for _ in $(seq 1 "$tries"); do
+    kill -0 "$pid" 2>/dev/null || return 0
+    sleep 0.5
+  done
+  warn "pid $pid did not quit; killing it (session files may be stale)"
+  kill -9 "$pid" 2>/dev/null || true
+}
+
+# Stops what launch_in_background started, including a launch interrupted before
+# its pid was known: then the one process running the build's executable is
+# ours, since the launch was refused if any ran before it. Safe to call twice;
+# for EXIT traps.
+stop_launched_app() {
+  local tries="${1:-20}" pid
+  if [ -n "$LAUNCHED_PID" ]; then
+    stop_app_pid "$LAUNCHED_PID" "$tries"
+  elif [ -n "$LAUNCHING_EXE" ]; then
+    pid="$(pids_running_executable "$LAUNCHING_EXE")"
+    case "$pid" in
+      '') ;;
+      *[!0-9]*) warn "more than one process runs $LAUNCHING_EXE ($(printf '%s' "$pid" | paste -sd' ' -)); stopping none" ;;
+      *) stop_app_pid "$pid" "$tries" ;;
+    esac
+  fi
+  LAUNCHED_PID=""
+  LAUNCHING_EXE=""
+}

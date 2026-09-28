@@ -28,7 +28,7 @@ Keys: ⌘ Command, ⌥ Option, ⇧ Shift, ⌃ Control, ⇥ Tab.
 | Open the bar: search, a URL, or any open tab | ⌘T | Ctrl+T |
 | Open the bar in actions mode (⇥ in an empty bar does the same) | ⇧⌘P | Ctrl+Shift+P |
 | Select the address with the URL selected | ⌘L | Ctrl+L |
-| Jump to one of the first nine rows you can see (hold ⌘ / Ctrl a moment to see the numbers) | ⌘1 – ⌘9 | Ctrl+1 – Ctrl+9 |
+| Jump to one of the first eight rows you can see, or to the last one with 9 (hold ⌘ / Ctrl a moment to see the numbers) | ⌘1 – ⌘9 | Ctrl+1 – Ctrl+9 |
 | Next tab / previous tab | ⇧⌘] / ⇧⌘[ | Ctrl+PgDn / Ctrl+PgUp |
 | Next tab down the sidebar / previous tab up the sidebar | ⌥⌘↓ / ⌥⌘↑ | Ctrl+Alt+↓ / Ctrl+Alt+↑ |
 | Most recent tab of the Space (hold ⌃ / Ctrl to see the five most recent) | ⌃⇥ | Ctrl+Tab |
@@ -36,7 +36,6 @@ Keys: ⌘ Command, ⌥ Option, ⇧ Shift, ⌃ Control, ⇥ Tab.
 | Move the row down / up (a folder beside it is one row) | ⌥⇧⌘↓ / ⌥⇧⌘↑ | Ctrl+Alt+Shift+↓ / ↑ |
 | Split the current tab with a new one | ⌥⌘N | Alt+Shift+N |
 | Put a pinned tab to sleep (instead of closing it) | ⌘W | Ctrl+W |
-| Turn a peek into a tab / into a split | ⌘O / ⇧⌘O | — |
 
 ## Page
 

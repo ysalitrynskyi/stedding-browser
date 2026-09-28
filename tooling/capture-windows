@@ -1,15 +1,24 @@
 #!/usr/bin/env python3
-"""Capture every on-screen window a pid owns, each by window id.
+"""Capture the windows a pid owns, each by window id.
 
     tooling/capture-windows PID PREFIX
+    tooling/capture-windows --largest PID OUTPUT.png
 
-Writes PREFIX.png for the largest window and PREFIX-2.png, PREFIX-3.png ...
-for the rest, largest first. A dialog that is its own window (the welcome
-flow, a bubble that became a window) is a second file; tooling/capture-window.py
-would miss it. Like that script it captures by window id, never the screen, so
-the browser need not be frontmost and nothing else on the display is
-photographed. PID is the launched browser, or any process it started.
+The first form writes PREFIX.png for the largest on-screen window and
+PREFIX-2.png, PREFIX-3.png ... for the rest, largest first. A dialog that is
+its own window (the welcome flow, a bubble that became a window) is a second
+file; tooling/capture-state uses this form.
+
+--largest writes the largest window only, to OUTPUT.png, even when it is on
+another macOS Space or behind other windows; tooling/drive's `shot` step uses it.
+
+Both capture by window id, never the screen, so the browser need not be
+frontmost and nothing else on the display is photographed. PID is the
+launched browser, or any process it started; the windows come from
+window_by_pid.py, which matches by pid and never by name.
 """
+
+from __future__ import annotations
 
 import os
 import subprocess
@@ -23,6 +32,8 @@ from window_by_pid import parse_pid, windows_for_pid
 # menu-bar-height windows are already dropped by window_by_pid.py.
 MIN_WIDTH = 200
 MIN_HEIGHT = 100
+# --largest: below this area a window is not the browser window.
+MIN_WINDOW_AREA = 100_000
 
 
 def windows_for(pid: int) -> list[tuple[int, int, dict]]:
@@ -42,25 +53,55 @@ def windows_for(pid: int) -> list[tuple[int, int, dict]]:
     return found
 
 
+def largest_window_for(pid: int) -> int | None:
+    """The id of the largest window the pid owns, on screen or not."""
+    best_id, best_area = None, 0
+    for window in windows_for_pid(pid):
+        bounds = window.get("kCGWindowBounds", {})
+        area = bounds.get("Width", 0) * bounds.get("Height", 0)
+        if area >= MIN_WINDOW_AREA and area > best_area:
+            best_id, best_area = int(window["kCGWindowNumber"]), area
+    return best_id
+
+
+def capture(window_id: int, out: str) -> bool:
+    # -x: no capture sound. -o: no window shadow, so the image is the window.
+    result = subprocess.run(["screencapture", "-x", "-o", "-l", str(window_id), out])
+    if result.returncode != 0:
+        print(f"screencapture of window {window_id} to {out} failed "
+              f"(exit {result.returncode})", file=sys.stderr)
+        return False
+    return True
+
+
 def main(argv: list[str]) -> int:
-    if len(argv) != 3:
-        print(f"usage: {argv[0]} PID PREFIX", file=sys.stderr)
+    largest = len(argv) == 4 and argv[1] == "--largest"
+    if not largest and len(argv) != 3:
+        print(f"usage: {argv[0]} PID PREFIX | {argv[0]} --largest PID OUTPUT.png",
+              file=sys.stderr)
         return 2
+    pid_arg, target = (argv[2], argv[3]) if largest else (argv[1], argv[2])
     try:
-        pid = parse_pid(argv[1])
+        pid = parse_pid(pid_arg)
     except ValueError as exc:
         print(exc, file=sys.stderr)
         return 2
-    prefix = argv[2]
+
+    if largest:
+        window_id = largest_window_for(pid)
+        if window_id is None:
+            print(f"no window owned by pid {pid}", file=sys.stderr)
+            return 1
+        return 0 if capture(window_id, target) else 1
+
     windows = windows_for(pid)
     if not windows:
         print(f"no window owned by pid {pid}", file=sys.stderr)
         return 1
     for index, (_, window_id, bounds) in enumerate(windows):
-        out = f"{prefix}.png" if index == 0 else f"{prefix}-{index + 1}.png"
-        # -x: no capture sound. -o: no window shadow, so the image is the window.
-        subprocess.run(["screencapture", "-x", "-o", "-l", str(window_id), out],
-                       check=True)
+        out = f"{target}.png" if index == 0 else f"{target}-{index + 1}.png"
+        if not capture(window_id, out):
+            return 1
         print(f"{out}: window {window_id} at {int(bounds['X'])},{int(bounds['Y'])} "
               f"{int(bounds['Width'])}x{int(bounds['Height'])}")
     return 0

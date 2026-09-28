@@ -67,8 +67,8 @@ Space icons, the Library, and a `+` control.
 - **Rename tab** **[1.0]** — double-click.
 - **Drag tab out → Blank Window** **[1.0]** — a genuinely separate window, distinct
   from a Space-synced one.
-- **Sidebar backups** **[1.0]** — restore prior sidebar states: 10 for today, 1/day for
-  10 days, 1/week for a month, 1/month for a year. Distinct from the tab Archive. Built: `docs/features/import.md` I17–I20 (round 6).
+- **Sidebar export** **[1.0]** — a Space exports to a file and imports back
+  (`docs/features/import.md` I18, I20). Scheduled backups were cut on 2026-09-26.
 - **Copy URL, and copy as Markdown** **[1.0]** — `⌘⇧C`.
 - **Reopen closed tab** **[1.0]** — `⌘⇧T`.
 

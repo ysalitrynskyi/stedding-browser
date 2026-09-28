@@ -65,9 +65,9 @@ files on your disk. Passwords need one macOS keychain prompt. You can run it aga
 later from Settings → Stedding → Import from Arc…; nothing is duplicated.
 
 **Where did the bookmark bar go?**
-Stedding has no bookmark bar; pinned tabs are the bookmarks. Bookmarks you import
-become pinned tabs and folders in your first Space, and an existing bookmark tree can
-be converted at any time from the command bar ("Turn Bookmarks into Pinned Tabs").
+Pinned tabs play its part. Bookmarks you import stay bookmarks, in the bookmark
+manager; the command bar's "Turn Bookmarks into Pinned Tabs" makes them pinned tabs
+and folders in your first Space whenever you want.
 
 **What happens to tabs I do not close?**
 Unpinned tabs nobody has looked at for 12 hours (a setting) move to the Archived view
@@ -75,9 +75,9 @@ at the bottom of the sidebar, grouped by day and Space; restore any of them with
 click. Pinned tabs never archive; ⌘W puts a pinned tab to sleep instead of closing it.
 
 **Is there sync?**
-No service, by design: there is no account anywhere in the product. Instead the
-sidebar is backed up to a file every hour, a Space can be exported as a file and
-imported on another machine, and a snapshot can be restored.
+No service, by design: there is no account anywhere in the product. Instead a Space
+can be exported as a file (Settings → Stedding → Export Space…) and imported on
+another machine.
 
 **Do my extensions work?**
 Yes. It is Chromium; extensions install from the Chrome Web Store as in Chrome.

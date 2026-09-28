@@ -47,14 +47,15 @@ Your profile — tabs, Spaces, history, passwords, extensions — lives in
 `~/Library/Application Support/Stedding`. Mac builds up to beta 8 kept it in
 `~/Library/Application Support/Chromium` by mistake, a folder any Chromium on the
 same Mac also uses. The first launch of a later build copies that profile into
-Stedding's own folder and leaves the old one as it was; once you have checked that
-your tabs and Spaces came across, and if you run no Chromium yourself, you can delete
-the old folder. Sidebar snapshots are written into the
-profile every hour (**Settings → Stedding → Restore sidebar…** lists them), and
-**Export Space…** writes a Space to a file you can keep or move to another machine.
+Stedding's own folder, if that folder holds no profile yet, and leaves the old one as
+it was. Keep the old folder until that build has been released and you have checked
+that your tabs and Spaces came across. **Export Space…** in Settings → Stedding writes a
+Space to a file you can keep or move to another machine.
 
 Saved passwords are encrypted with a key kept in the macOS keychain under the name
-"Stedding Safe Storage".
+"Stedding Safe Storage". Builds up to beta 8 used the item "Chromium Safe Storage"; a
+later build copies that key under Stedding's name once, so macOS may ask one time for
+access to the Chromium item.
 
 ### Updating
 
@@ -88,8 +89,7 @@ The number must match the one in the release notes.
 
 ### Where your data is
 
-The profile is under `%LOCALAPPDATA%\Stedding\User Data`. Backups and export work as on
-macOS.
+The profile is under `%LOCALAPPDATA%\Stedding\User Data`. Export works as on macOS.
 
 ### Updating and uninstalling
 
@@ -104,13 +104,12 @@ from other apps, signing, and automatic updates (`S-56`).
 
 ## First start
 
-The first window opens the welcome flow: choose a search engine, import from Arc, or
-from Safari or Firefox on macOS, and from Chrome, Brave, Edge, Vivaldi or Chromium
-when that profile is on the machine. On Windows the step lists Edge, Internet
-Explorer and Firefox, and the same Chromium-family profiles when they are present.
-Pick a Space colour,
-set Stedding as the default browser if you want, and see the keyboard shortcuts.
-Everything on it can be changed later in **Settings → Stedding**.
+The first window opens the welcome flow: choose a search engine; import from Arc, or
+through Chromium's importer from Safari (bookmarks) or Firefox (bookmarks and history)
+on macOS, and from Firefox, Internet Explorer or the old Edge on Windows; pick a Space
+colour; set Stedding as the default browser if you want; and see the keyboard
+shortcuts. Chrome, Brave and the new Edge cannot be imported yet. Each choice can be
+changed later in Settings.
 
 ## Linux
 

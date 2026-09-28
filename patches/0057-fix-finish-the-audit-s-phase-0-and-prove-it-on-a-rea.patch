@@ -31,7 +31,8 @@ page opened without an opener is made again in its Space's jar; a typed
 address in a fresh tab moves the tab to the routed jar first; routes
 apply only to tabs Stedding made, and searches skip "contains" rules
 (SPC-12, CMD-8). A page with unsaved changes keeps its jar until it is
-left; the new tab page and settings live in the profile's jar and the
+left, and a form it sends goes in the session it was filled in; the new
+tab page and settings live in the profile's jar and the
 first web page a tab leaves them for is made in its Space's jar; a
 change of isolation asks first, with the number of pages it reloads
 (SPC-9). Contents replaced by a sleep keep the name and the jar
@@ -106,8 +107,8 @@ into the feature patches they belong to.
  chrome/browser/ui/spaces/space_commands.cc    |  24 +-
  chrome/browser/ui/spaces/space_commands.h     |   1 +
  .../ui/spaces/space_commands_unittest.cc      |  24 +
- .../spaces/space_jar_navigation_throttle.cc   | 112 +++
- .../ui/spaces/space_jar_navigation_throttle.h |  43 ++
+ .../spaces/space_jar_navigation_throttle.cc   | 119 +++
+ .../ui/spaces/space_jar_navigation_throttle.h |  45 ++
  chrome/browser/ui/spaces/space_model.cc       | 715 ++++++++++++------
  chrome/browser/ui/spaces/space_model.h        | 104 ++-
  .../browser/ui/spaces/space_model_unittest.cc |   1 +
@@ -244,12 +245,12 @@ into the feature patches they belong to.
  .../test/stedding/screenshot_browsertest.cc   | 122 +++
  .../stedding/search_default_browsertest.cc    |  52 ++
  .../stedding/settings_spaces_browsertest.cc   |  87 +++
- .../stedding/sidebar_click_browsertest.cc     | 386 ++++++++++
+ .../stedding/sidebar_click_browsertest.cc     | 460 +++++++++++
  .../test/stedding/sidebar_rail_browsertest.cc | 144 ++++
  chrome/test/stedding/sidebar_test_util.cc     |  82 ++
  chrome/test/stedding/sidebar_test_util.h      |  39 +
- .../test/stedding/sleep_gate_browsertest.cc   | 121 +++
- chrome/test/stedding/space_jar_browsertest.cc | 399 ++++++++++
+ .../test/stedding/sleep_gate_browsertest.cc   | 137 ++++
+ chrome/test/stedding/space_jar_browsertest.cc | 486 ++++++++++++
  .../test/stedding/space_switch_browsertest.cc | 266 +++++++
  chrome/utility/importer/importer_creator.cc   |   3 -
  components/os_crypt/common/BUILD.gn           |   1 +
@@ -270,7 +271,7 @@ into the feature patches they belong to.
  .../user_data_importer/common/importer_type.h |   3 -
  crypto/apple/fake_keychain_v2.h               |  11 -
  crypto/apple/fake_keychain_v2.mm              |   2 -
- 216 files changed, 13504 insertions(+), 3524 deletions(-)
+ 216 files changed, 13690 insertions(+), 3524 deletions(-)
  delete mode 100644 chrome/browser/ui/spaces/chromium_profile_import.cc
  delete mode 100644 chrome/browser/ui/spaces/chromium_profile_import.h
  delete mode 100644 chrome/browser/ui/spaces/chromium_profile_import_unittest.cc
@@ -3786,7 +3787,7 @@ index 0000000000000..ecb14ed06c5ec
 +#endif  // CHROME_BROWSER_UI_SPACES_NEW_TAB_SPACE_H_
 diff --git a/chrome/browser/ui/spaces/pin_home_import_unittest.cc b/chrome/browser/ui/spaces/pin_home_import_unittest.cc
 new file mode 100644
-index 0000000000000..89866bb17c4fa
+index 0000000000000..80dfb20f64146
 --- /dev/null
 +++ b/chrome/browser/ui/spaces/pin_home_import_unittest.cc
 @@ -0,0 +1,136 @@
@@ -3846,7 +3847,7 @@ index 0000000000000..89866bb17c4fa
 +            "savedTitle": "Bookmarklet"}}},
 +        "tab-file", {"id": "tab-file", "parentID": "cont-pinned",
 +          "childrenIds": [], "title": "", "data": {"tab": {
-+            "savedURL": "file:///Users/someone/notes.html",
++            "savedURL": "file:///tmp/notes.html",
 +            "savedTitle": "Notes"}}},
 +        "tab-js2", {"id": "tab-js2", "parentID": "cont-unpinned",
 +          "childrenIds": [], "title": "", "data": {"tab": {
@@ -3860,7 +3861,7 @@ index 0000000000000..89866bb17c4fa
 +  ]}
 +})json";
 +
-+constexpr char kNotes[] = "file:///Users/someone/notes.html";
++constexpr char kNotes[] = "file:///tmp/notes.html";
 +
 +// A bookmarklet is no page: it never comes in, pinned, loose or as an
 +// essential. A local file is a page, and does.
@@ -4522,10 +4523,10 @@ index c342add7a62a9..41ac1db4764a0 100644
  }  // namespace spaces
 diff --git a/chrome/browser/ui/spaces/space_jar_navigation_throttle.cc b/chrome/browser/ui/spaces/space_jar_navigation_throttle.cc
 new file mode 100644
-index 0000000000000..95e7deab445c8
+index 0000000000000..9cb917131b6fe
 --- /dev/null
 +++ b/chrome/browser/ui/spaces/space_jar_navigation_throttle.cc
-@@ -0,0 +1,112 @@
+@@ -0,0 +1,119 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -4606,6 +4607,13 @@ index 0000000000000..95e7deab445c8
 +                               *space, tab->IsPinned())) {
 +    return PROCEED;
 +  }
++  // A form a web page sends goes with the session the page was filled in:
++  // made again in the other jar it could arrive signed out, and what was
++  // typed would be lost. The tab moves at its next navigation instead.
++  if (handle->IsPost() &&
++      PageBelongsInSpaceJar(contents->GetLastCommittedURL())) {
++    return PROCEED;
++  }
 +  std::unique_ptr<content::NavigationController::LoadURLParams> load;
 +  // A step back or forward keeps its offset; a new page's is 1, which is not
 +  // a step anywhere.
@@ -4640,10 +4648,10 @@ index 0000000000000..95e7deab445c8
 +}  // namespace spaces
 diff --git a/chrome/browser/ui/spaces/space_jar_navigation_throttle.h b/chrome/browser/ui/spaces/space_jar_navigation_throttle.h
 new file mode 100644
-index 0000000000000..080bbbb0559d7
+index 0000000000000..173186a3ec46e
 --- /dev/null
 +++ b/chrome/browser/ui/spaces/space_jar_navigation_throttle.h
-@@ -0,0 +1,43 @@
+@@ -0,0 +1,45 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -4667,7 +4675,9 @@ index 0000000000000..080bbbb0559d7
 +// profile's jar. Such a tab's next navigation -- a link, a reload, a typed
 +// address, a step back -- is stopped before its request and made again in
 +// the right jar, with the tab's history. The page's own "Leave site?" has
-+// already run, as it does for any navigation.
++// already run, as it does for any navigation. A form a web page sends is the
++// exception: it goes in the session the page was filled in, and the tab
++// moves at the navigation after it.
 +class SpaceJarNavigationThrottle : public content::NavigationThrottle {
 + public:
 +  static void MaybeCreateAndAdd(content::NavigationThrottleRegistry& registry);
@@ -7839,7 +7849,7 @@ index ff9bf6b18b294..6a0f25cbf36de 100644
  
  }  // namespace stedding
 diff --git a/chrome/browser/ui/stedding/pin_lifecycle_unittest.cc b/chrome/browser/ui/stedding/pin_lifecycle_unittest.cc
-index d8f1a0b823d52..6016456c4109f 100644
+index d8f1a0b823d52..2f69782d79e4c 100644
 --- a/chrome/browser/ui/stedding/pin_lifecycle_unittest.cc
 +++ b/chrome/browser/ui/stedding/pin_lifecycle_unittest.cc
 @@ -4,6 +4,15 @@
@@ -7903,7 +7913,7 @@ index d8f1a0b823d52..6016456c4109f 100644
 +  spaces::SpaceModel* const model = spaces::SpaceModel::From(browser());
 +  ASSERT_TRUE(model);
 +  model->SetSpacePinned(pin, true);
-+  const GURL file_home("file:///Users/someone/notes.html");
++  const GURL file_home("file:///tmp/notes.html");
 +  // The model may already refuse it; either way nothing may load it.
 +  model->SetHomeUrl(pin, file_home);
 +
@@ -21728,10 +21738,10 @@ index 0000000000000..139fc8e3f9564
 +}  // namespace
 diff --git a/chrome/test/stedding/sidebar_click_browsertest.cc b/chrome/test/stedding/sidebar_click_browsertest.cc
 new file mode 100644
-index 0000000000000..5a5e8e9efc214
+index 0000000000000..48d9cb955ddb7
 --- /dev/null
 +++ b/chrome/test/stedding/sidebar_click_browsertest.cc
-@@ -0,0 +1,386 @@
+@@ -0,0 +1,460 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -21784,7 +21794,9 @@ index 0000000000000..5a5e8e9efc214
 +#include "net/dns/mock_host_resolver.h"
 +#include "net/test/embedded_test_server/embedded_test_server.h"
 +#include "ui/base/hit_test.h"
++#include "ui/events/event.h"
 +#include "ui/events/event_constants.h"
++#include "ui/events/keycodes/keyboard_codes.h"
 +#include "ui/events/test/event_generator.h"
 +#include "ui/views/controls/textfield/textfield.h"
 +#include "ui/views/test/views_test_utils.h"
@@ -22096,6 +22108,78 @@ index 0000000000000..5a5e8e9efc214
 +  ExpectActive(1);
 +}
 +
++// TAB-4: collapsing the sidebar mid-rename ends the rename, keeping what was
++// typed, and a click on the row in the rail then selects it.
++IN_PROC_BROWSER_TEST_F(SidebarClickTest, CollapsingTheSidebarEndsARename) {
++  AppendTab();
++  AppendTab();
++  views::test::RunScheduledLayout(browser_view()->GetWidget());
++  TabView* const row = RowFor(1);
++  ASSERT_TRUE(row);
++  row->BeginRename();
++  ASSERT_TRUE(row->IsRenaming());
++  row->rename_field_for_testing()->SetText(u"Notes");
++
++  CollapseSidebar();
++  ASSERT_TRUE(base::test::RunUntil([&]() { return !row->IsRenaming(); }));
++  EXPECT_EQ(u"Notes",
++            stedding::TabName(tab_strip_model()->GetWebContentsAt(1)));
++  ClickEachRow({1});
++}
++
++// TAB-4: Enter on a name nobody changed leaves the row following its page
++// title; Enter on a new name keeps it, and the page's own title gives the
++// title back.
++IN_PROC_BROWSER_TEST_F(SidebarClickTest, EnterOnAnUntouchedNameNamesNothing) {
++  AppendTab();
++  views::test::RunScheduledLayout(browser_view()->GetWidget());
++  TabView* const row = RowFor(1);
++  ASSERT_TRUE(row);
++  content::WebContents* const contents = tab_strip_model()->GetWebContentsAt(1);
++  const ui::KeyEvent enter(ui::EventType::kKeyPressed, ui::VKEY_RETURN,
++                           ui::EF_NONE);
++
++  row->BeginRename();
++  row->HandleKeyEvent(row->rename_field_for_testing(), enter);
++  EXPECT_FALSE(row->IsRenaming());
++  EXPECT_TRUE(stedding::TabName(contents).empty()) << "an untouched field";
++
++  row->BeginRename();
++  row->rename_field_for_testing()->SetText(u"  Reading  ");
++  row->HandleKeyEvent(row->rename_field_for_testing(), enter);
++  EXPECT_EQ(u"Reading", stedding::TabName(contents)) << "trimmed";
++
++  row->BeginRename();
++  row->rename_field_for_testing()->SetText(contents->GetTitle());
++  row->HandleKeyEvent(row->rename_field_for_testing(), enter);
++  EXPECT_TRUE(stedding::TabName(contents).empty())
++      << "the page's own title follows the page again";
++}
++
++// TAB-4: renaming one pane of a split names the split: both panes carry the
++// name at once.
++IN_PROC_BROWSER_TEST_F(SidebarClickTest, RenamingOnePaneNamesTheSplit) {
++  AppendTab();
++  AppendTab();
++  tab_strip_model()->ActivateTabAt(1);
++  tab_strip_model()->AddToNewSplit(
++      {2}, split_tabs::SplitTabVisualData(),
++      split_tabs::SplitTabCreatedSource::kTabContextMenu);
++  ASSERT_TRUE(tab_strip_model()->GetTabAtIndex(1)->IsSplit());
++  WaitForRowsToSettle();
++  TabView* const row = RowFor(1);
++  ASSERT_TRUE(row);
++  row->BeginRename();
++  row->rename_field_for_testing()->SetText(u"Research");
++  row->HandleKeyEvent(
++      row->rename_field_for_testing(),
++      ui::KeyEvent(ui::EventType::kKeyPressed, ui::VKEY_RETURN, ui::EF_NONE));
++  EXPECT_EQ(u"Research",
++            stedding::TabName(tab_strip_model()->GetWebContentsAt(1)));
++  EXPECT_EQ(u"Research",
++            stedding::TabName(tab_strip_model()->GetWebContentsAt(2)));
++}
++
 +// TAB-1: a Space rename hides every Space chip while it is open; a click
 +// elsewhere ends it and the chips come back.
 +IN_PROC_BROWSER_TEST_F(SidebarClickTest, ASpaceRenameLeftOpenEndsOnAClick) {
@@ -22403,10 +22487,10 @@ index 0000000000000..ffce516d0424f
 +#endif  // CHROME_TEST_STEDDING_SIDEBAR_TEST_UTIL_H_
 diff --git a/chrome/test/stedding/sleep_gate_browsertest.cc b/chrome/test/stedding/sleep_gate_browsertest.cc
 new file mode 100644
-index 0000000000000..f05beb10336f2
+index 0000000000000..42e41544a0581
 --- /dev/null
 +++ b/chrome/test/stedding/sleep_gate_browsertest.cc
-@@ -0,0 +1,121 @@
+@@ -0,0 +1,137 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -22518,6 +22602,22 @@ index 0000000000000..f05beb10336f2
 +  EXPECT_TRUE(base::test::RunUntil([&]() { return Slept(tab); }));
 +}
 +
++// A tab playing sound is in use (tabs R5): a sleep would stop it.
++IN_PROC_BROWSER_TEST_F(SleepGateTest, APlayingPageIsKeptAwake) {
++  tabs::TabInterface* const tab = PageInTheBackground(
++      "window.context = new AudioContext();"
++      "const tone = window.context.createOscillator();"
++      "tone.connect(window.context.destination); tone.start();"
++      "window.context.resume();",
++      /*gesture=*/true);
++  ASSERT_TRUE(base::test::RunUntil(
++      [&]() { return tab->GetContents()->IsCurrentlyAudible(); }));
++  SleepAndSettle(tab);
++  EXPECT_FALSE(Slept(tab)) << "a sleep would stop the sound";
++  EXPECT_TRUE(stedding::TabIsInUse(tab));
++  ASSERT_TRUE(content::ExecJs(tab->GetContents(), "window.context.close();"));
++}
++
 +// The tab on screen never sleeps, whatever asks.
 +IN_PROC_BROWSER_TEST_F(SleepGateTest, TheTabOnScreenStaysAwake) {
 +  ASSERT_TRUE(ui_test_utils::NavigateToURL(
@@ -22530,10 +22630,10 @@ index 0000000000000..f05beb10336f2
 +}  // namespace
 diff --git a/chrome/test/stedding/space_jar_browsertest.cc b/chrome/test/stedding/space_jar_browsertest.cc
 new file mode 100644
-index 0000000000000..a6aafd79b57a5
+index 0000000000000..097bc40264469
 --- /dev/null
 +++ b/chrome/test/stedding/space_jar_browsertest.cc
-@@ -0,0 +1,399 @@
+@@ -0,0 +1,486 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -22580,6 +22680,7 @@ index 0000000000000..a6aafd79b57a5
 +#include "content/public/common/page_type.h"
 +#include "content/public/test/browser_test.h"
 +#include "content/public/test/browser_test_utils.h"
++#include "content/public/test/test_navigation_observer.h"
 +#include "net/dns/mock_host_resolver.h"
 +#include "net/test/embedded_test_server/embedded_test_server.h"
 +#include "net/test/embedded_test_server/http_request.h"
@@ -22830,16 +22931,102 @@ index 0000000000000..a6aafd79b57a5
 +  EXPECT_EQ(shared, JarOf(tab));
 +
 +  // The user leaves the page (the handler goes first, so no dialog waits).
-+  ASSERT_TRUE(content::ExecJs(
++  content::ExecuteScriptAsync(
 +      page, content::JsReplace(
 +                "window.removeEventListener('beforeunload', window.stay);"
 +                "location.href = $1;",
-+                Url("b.test", "/left"))));
++                Url("b.test", "/left")));
 +  EXPECT_EQ("jar=work", FirstCookieFor("/left"));
 +  EXPECT_TRUE(base::test::RunUntil([&]() {
 +    return tab->GetContents() != page &&
 +           spaces::IsSpaceStoragePartition(JarOf(tab));
 +  }));
++}
++
++// PLAN.md SPC-9: pinning such a page as an essential, which lives on the
++// profile's jar, keeps the page too, until it is left.
++IN_PROC_BROWSER_TEST_F(SpaceJarTest, AnEssentialWithChangesKeepsItsJarUntilLeft) {
++  ASSERT_TRUE(model_->SetActiveSpace(work_));
++  tabs::TabInterface* const tab = work_tab_.Get();
++  content::WebContents* const page = tab->GetContents();
++  ASSERT_TRUE(content::ExecJs(
++      page,
++      "window.stay = e => { e.preventDefault(); e.returnValue = ''; };"
++      "window.addEventListener('beforeunload', window.stay);"));
++  const content::StoragePartitionConfig work_jar = JarOf(tab);
++  ASSERT_TRUE(spaces::IsSpaceStoragePartition(work_jar));
++
++  tabs()->SetTabPinned(tabs()->GetIndexOfTab(tab), true);
++  base::RunLoop().RunUntilIdle();
++  EXPECT_EQ(page, tab->GetContents()) << "the page must not be replaced";
++  EXPECT_EQ(work_jar, JarOf(tab));
++
++  content::ExecuteScriptAsync(
++      page, content::JsReplace(
++                "window.removeEventListener('beforeunload', window.stay);"
++                "location.href = $1;",
++                Url("b.test", "/echo?left-as-essential")));
++  EXPECT_EQ("jar=shared", FirstCookieFor("/echo?left-as-essential"));
++}
++
++// PLAN.md SPC-9: turning the independent session off keeps such a page in
++// the jar it had until it is left; the Space's other pages move at once.
++IN_PROC_BROWSER_TEST_F(SpaceJarTest, TurningIsolationOffKeepsAPageWithChanges) {
++  ASSERT_TRUE(model_->SetActiveSpace(work_));
++  tabs::TabInterface* const tab = work_tab_.Get();
++  content::WebContents* const page = tab->GetContents();
++  ASSERT_TRUE(content::ExecJs(
++      page,
++      "window.stay = e => { e.preventDefault(); e.returnValue = ''; };"
++      "window.addEventListener('beforeunload', window.stay);"));
++  const content::StoragePartitionConfig work_jar = JarOf(tab);
++
++  model_->SetSpaceIsolated(work_, false);
++  base::RunLoop().RunUntilIdle();
++  EXPECT_EQ(page, tab->GetContents()) << "the page must not be replaced";
++  EXPECT_EQ(work_jar, JarOf(tab));
++
++  content::ExecuteScriptAsync(
++      page, content::JsReplace(
++                "window.removeEventListener('beforeunload', window.stay);"
++                "location.href = $1;",
++                Url("b.test", "/echo?left-after-isolation")));
++  EXPECT_EQ("jar=shared", FirstCookieFor("/echo?left-after-isolation"));
++  EXPECT_TRUE(base::test::RunUntil(
++      [&]() { return !spaces::IsSpaceStoragePartition(JarOf(tab)); }));
++}
++
++// PLAN.md SPC-9: the form such a page sends goes in the session it was
++// filled in -- made again in the other jar it could arrive signed out -- and
++// the tab moves at the navigation after it.
++IN_PROC_BROWSER_TEST_F(SpaceJarTest, AFormFromAPageWithChangesUsesItsSession) {
++  tabs::TabInterface* const tab = home_tab_.Get();
++  content::WebContents* const page = tab->GetContents();
++  ASSERT_TRUE(content::ExecJs(
++      page,
++      "window.stay = e => { e.preventDefault(); e.returnValue = ''; };"
++      "window.addEventListener('beforeunload', window.stay);"));
++  model_->SetSpaceForTab(tab, work_);
++  base::RunLoop().RunUntilIdle();
++  ASSERT_EQ(page, tab->GetContents());
++
++  content::TestNavigationObserver posted(page);
++  ASSERT_TRUE(content::ExecJs(
++      page, content::JsReplace(
++                "window.removeEventListener('beforeunload', window.stay);"
++                "document.body.innerHTML = '<form method=post action=' + $1 +"
++                "    '><input name=note value=typed></form>';"
++                "document.forms[0].submit();",
++                Url("b.test", "/echo?posted"))));
++  posted.Wait();
++  EXPECT_EQ("jar=shared", FirstCookieFor("/echo?posted"))
++      << "the form goes with the page's own session";
++  EXPECT_EQ(page, tab->GetContents());
++
++  content::ExecuteScriptAsync(
++      page, content::JsReplace("location.href = $1;",
++                               Url("b.test", "/echo?after-the-form")));
++  EXPECT_EQ("jar=work", FirstCookieFor("/echo?after-the-form"));
 +}
 +
 +// A page with nothing unsaved moves at once, reloaded in the new jar.
@@ -22885,9 +23072,9 @@ index 0000000000000..a6aafd79b57a5
 +IN_PROC_BROWSER_TEST_F(SpaceJarTest, ALinkFromTheNewTabPageUsesTheJar) {
 +  content::WebContents* const page = OpenNewTabInWork();
 +  tabs::TabInterface* const tab = tabs::TabInterface::GetFromContents(page);
-+  ASSERT_TRUE(content::ExecJs(
++  content::ExecuteScriptAsync(
 +      page, content::JsReplace("location.href = $1;",
-+                               Url("b.test", "/echo?from-new-tab-page"))));
++                               Url("b.test", "/echo?from-new-tab-page")));
 +  EXPECT_EQ("jar=work", FirstCookieFor("/echo?from-new-tab-page"));
 +  EXPECT_TRUE(base::test::RunUntil(
 +      [&]() { return spaces::IsSpaceStoragePartition(JarOf(tab)); }));

@@ -432,18 +432,21 @@ features that users expect from a real product just to make a purity claim.
   pings: removed or disabled.** Features are controlled by build flags and our own
   defaults, never by server-side experiments. Opt-in crash reporting to *our*
   infrastructure may come later (per `PRIVACY.md`).
-- **Safe Browsing: meant to be kept, hash-prefix variant -- not working yet.**
+- **Safe Browsing: meant to be kept, hash-prefix variant -- not working.**
   Dropping it silently makes users less safe; keeping Google's real-time endpoints
   leaks browsing signals. The intent is recorded in `PRIVACY.md`: standard
   hash-prefix Safe Browsing on by default, real-time "Enhanced" never turned on.
-  Today the builds carry no Google API key, which list updates need, so by the
-  code the lists stay empty (PLAN.md WEB-5, to be confirmed on a running build).
+  Today the builds carry no Google API key, which list updates need: on a
+  running build the first update was refused with HTTP 400 and the lists stay
+  empty (PLAN.md WEB-5, 2026-09-28; `PRIVACY.md`, the recorded run).
 - **Component updater: kept, pointed at infrastructure we control where feasible.**
   Some components matter for security and site compatibility (certificate revocation
   lists, Widevine for DRM playback). Each shipped component is enumerated in
   `PRIVACY.md` with its endpoint.
 - **Default search, suggestions, spellcheck, translate, DNS/preconnect defaults:**
-  privacy-preserving defaults per `PRIVACY.md`; nothing phones home out of the box.
+  privacy-preserving defaults per `PRIVACY.md`. Not yet true that nothing phones home
+  out of the box: a fresh profile checks Google's account list and registers with
+  Google's push service (`PRIVACY.md`, the recorded run; BACKLOG S-54, S-67).
 
 Ungoogled-Chromium is prior art we learn from, but our bar is different: it optimizes
 for maximal removal and accepts breakage; we optimize for a polished product with

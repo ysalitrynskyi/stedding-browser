@@ -52,6 +52,24 @@ bug. Report it through SECURITY.md.
 - No search or URL-bar keystrokes sent anywhere until the user submits (search
   suggestions are off by default; see below).
 
+### What a fresh profile contacted: a recorded run
+
+2026-09-28, the release build of 155.0.8059.12 (patch 0057), a new profile in a
+temporary folder, started headless with nothing opened, about four and a half
+minutes, from Chromium's own network log (BACKLOG S-50; the ten-minute run with a
+window is still to do):
+
+| Host | What | In the table above? |
+|---|---|---|
+| `update.googleapis.com`, `edgedl.me.gvt1.com` | Component updates and their downloads | Yes |
+| `safebrowsing.googleapis.com` | One Safe Browsing list update, refused (HTTP 400: no API key) | Yes |
+| `clients2.google.com/time/1/current` | Chromium's network time, used to judge certificate dates | **No** |
+| `android.clients.google.com/checkin`, `/c2dm/register3` | Google's push service: a device check-in and registrations | **No** (BACKLOG S-54) |
+| `accounts.google.com/ListAccounts` | The Google account check, with no account signed in | **No** (BACKLOG S-67) |
+
+The last three break principle 2 above until they are removed or listed: this
+document does not yet enumerate every connection.
+
 ## Concrete stances
 
 ### Crash reporting — opt-in only
@@ -72,7 +90,7 @@ region: a query typed before a choice -- the welcome's search step skipped, say 
 goes to DuckDuckGo and nowhere else. Search suggestions (sending keystrokes to the
 chosen engine) are off by default and can be enabled in settings.
 
-### Safe Browsing — not yet known to work in these builds
+### Safe Browsing — does not work in these builds
 
 The trade-off: Safe Browsing protects against phishing and malware, but the
 standard implementation checks URLs against Google-operated lists. The standard
@@ -81,12 +99,14 @@ the server for hash-prefix matches — Google does not receive your browsing
 history, but does receive occasional partial-hash queries and your IP.
 
 Where it stands (2026-09-28): the setting is on, but Stedding's builds carry no
-Google API key, and Chromium's list updates need one. Read from the code (not yet
-confirmed on a running build, PLAN.md WEB-5): without a key each list update goes to
-Google with a placeholder key, which Google should refuse, so the local lists stay
-empty and no listed site gets a warning page -- while the requests themselves still
-reach Google, with your IP address. Only the local warnings for dangerous file
-types remain. Do not count on Safe Browsing to protect you in Stedding.
+Google API key, and Chromium's list updates need one. Confirmed on a running build
+(PLAN.md WEB-5; the recorded run below): the first list update, about four minutes
+after start, went to `safebrowsing.googleapis.com` with no key and Google answered
+HTTP 400. So the local lists stay empty and no listed site gets a warning page --
+while the requests themselves still reach Google, with your IP address. Only the
+local warnings for dangerous file types remain. Do not count on Safe Browsing to
+protect you in Stedding. Whether to ship a key, proxy the lists, or turn it off and
+say so in Settings is the owner's decision (PLAN.md WEB-5).
 
 Our stance, once it is settled:
 
@@ -175,7 +195,7 @@ consequences we will not hide:
 | Search engine | User chooses at first run | Change anytime |
 | Cookies per Space | Off: every Space shares the profile's jar | Independent session on a Space keeps its own cookies, cache and site data on this disk; Clear Independent Session empties it; deleting the Space deletes it; Delete browsing data reaches it only from the build that carries sessions S24 (see above) (`features/sessions.md`) |
 | Search suggestions | Off | Opt in |
-| Safe Browsing | The setting is on (hash-prefix only); whether it protects in these builds is unmeasured (see above) | Turn off |
+| Safe Browsing | The setting is on (hash-prefix only), but it does not protect in these builds: the list updates are refused without an API key (see above) | Turn off |
 | Google sync | Not available | — |
 | WebRTC local IPs | Hidden (mDNS) | Stricter VPN-safe policies |
 | Global Privacy Control | On | Turn off |

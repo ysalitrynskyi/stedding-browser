@@ -1,13 +1,12 @@
 # Feature: Sidebar file
 
-Status: **Sf1, Sf5 model only**; **Sf2–Sf4 planned**. Owner: PRODUCT §10, import I17–I20. Patch: 0048.
+Status: **Sf1, Sf5 withdrawn**; **Sf2–Sf4 planned**. Owner: PRODUCT §10, import I17–I20. Patch: 0055.
 
-Spaces travel as a file. No Stedding account, no Stedding host. Isolation
-travels as a boolean; cookie jars do not.
+Spaces can be exported as a file. No Stedding account, no Stedding host.
 
-The **Export sidebar…** row that exists today writes the importer's backup format
-(import I17–I20, `sidebar_backup.cc`, version 1). The `stedding.sidebar` version 2
-writer and reader below exist with their tests; no menu row calls them yet.
+The **Export Space…** row writes the importer's backup format (import I20,
+`sidebar_backup.cc`). The `stedding.sidebar` version 2 module is not in the
+product.
 
 ## Behaviours
 

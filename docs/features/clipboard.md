@@ -1,13 +1,9 @@
 # Feature: Clipboard fence
 
-Status: **Cf1–Cf2 model only**; **Cf3 planned**. Owner: sessions S16 follow-on. Patch: 0048.
+Status: **Cf1–Cf2 withdrawn**; **Cf3 planned**. Owner: sessions S16 follow-on. Patch: 0055.
 
-In-browser paste does not silently cross isolated jars. The OS pasteboard is
-named as a hole. No model. No content inspection of the clipboard.
-
-The fence is two functions and their tests. No copy or paste path in the browser
-calls them yet, so nothing is fenced today; where the hook goes is the `content/`
-question Cf3 names.
+Copy and paste are not tagged with a Space. The clipboard fence is not in the
+product. The OS pasteboard is not fenced, which Cf3 still names.
 
 ## Behaviours
 

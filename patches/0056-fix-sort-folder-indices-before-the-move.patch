@@ -1,0 +1,118 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Mon, 28 Sep 2026 07:50:49 -0400
+Subject: fix: sort folder indices before the move
+
+Why: AddToNewFolder assumed ascending indices, so creating a folder from
+an unsorted pair aborted in GetMovePosition. The idle-exemption tests
+insert the second popup tab on the strip, because Navigate does not.
+The nine-row assertion no longer redeclares its list.
+
+Removable when: folder creation rejects an unsorted selection itself.
+---
+ .../ui/archive/tab_archiver_unittest.cc       | 23 +++++++++++++++----
+ .../ui/stedding/tab_numbers_unittest.cc       |  6 ++---
+ chrome/browser/ui/tabs/tab_strip_model.cc     |  7 +++++-
+ 3 files changed, 28 insertions(+), 8 deletions(-)
+
+diff --git a/chrome/browser/ui/archive/tab_archiver_unittest.cc b/chrome/browser/ui/archive/tab_archiver_unittest.cc
+index 5dd9fd1eb4548..e4ee13ae42c63 100644
+--- a/chrome/browser/ui/archive/tab_archiver_unittest.cc
++++ b/chrome/browser/ui/archive/tab_archiver_unittest.cc
+@@ -68,6 +68,16 @@ class TabArchiverTest : public BrowserWithTestWindowTest {
+   std::unique_ptr<TabArchiver> archiver_;
+ };
+ 
++// Navigate() from a popup does not add a second tab in that window, so the
++// idle cases insert a tab directly. One of the two is inactive; without the
++// exemption a long idle would close it.
++void AddSecondTab(BrowserWindowInterface* window) {
++  window->GetTabStripModel()->AppendWebContents(
++      content::WebContents::Create(
++          content::WebContents::CreateParams(window->GetProfile())),
++      /*foreground=*/false);
++}
++
+ // A little window and a popup are not closed for being idle.
+ TEST_F(TabArchiverTest, LittleWindowAndPopupAreNotArchived) {
+   std::unique_ptr<BrowserWindowInterface> little =
+@@ -77,16 +87,20 @@ TEST_F(TabArchiverTest, LittleWindowAndPopupAreNotArchived) {
+   prefs()->SetInteger(prefs::kLittleIdleHours, 1);
+   TabArchiver little_archiver(*little, *prefs());
+   little_archiver.set_tick_clock_for_testing(clock());
++  AddSecondTab(little.get());
++  ASSERT_EQ(2, little->GetTabStripModel()->count());
+   Idle(base::Hours(48));
+   little_archiver.Sweep();
+-  EXPECT_EQ(1, little->GetTabStripModel()->count());
++  EXPECT_EQ(2, little->GetTabStripModel()->count());
+ 
+   std::unique_ptr<BrowserWindowInterface> popup =
+       CreateBrowser(profile(), Browser::TYPE_POPUP, /*hosted_app=*/false);
+   AddTab(popup.get(), GURL("https://popup.example/"));
+-  AddTab(popup.get(), GURL("https://popup.example/b"));
+   TabArchiver popup_archiver(*popup, *prefs());
+   popup_archiver.set_tick_clock_for_testing(clock());
++  AddSecondTab(popup.get());
++  ASSERT_EQ(2, popup->GetTabStripModel()->count());
++  Idle(base::Hours(48));
+   popup_archiver.Sweep();
+   EXPECT_EQ(2, popup->GetTabStripModel()->count());
+   little->GetTabStripModel()->CloseAllTabs();
+@@ -161,8 +175,9 @@ TEST_F(TabArchiverTest, LittleWindowIsNotClosedForIdle) {
+   base::SimpleTestTickClock clock;
+   clock.SetNowTicks(base::TimeTicks::Now());
+   archiver.set_tick_clock_for_testing(&clock);
+-  AddTab(little.get(), GURL("https://other.example/"));
+-  clock.Advance(base::Hours(7));
++  AddSecondTab(little.get());
++  ASSERT_EQ(2, little->GetTabStripModel()->count());
++  clock.Advance(base::Hours(48));
+   archiver.Sweep();
+   EXPECT_EQ(2, little->GetTabStripModel()->count());
+   little->GetTabStripModel()->CloseAllTabs();
+diff --git a/chrome/browser/ui/stedding/tab_numbers_unittest.cc b/chrome/browser/ui/stedding/tab_numbers_unittest.cc
+index 499c9826b59f3..04ceb43a25e33 100644
+--- a/chrome/browser/ui/stedding/tab_numbers_unittest.cc
++++ b/chrome/browser/ui/stedding/tab_numbers_unittest.cc
+@@ -52,8 +52,8 @@ TEST_F(TabNumbersTest, NumbersFollowTheVisibleRowsAndStopAtNine) {
+   for (int i = 0; i < 10; ++i) {
+     AddTab(browser(), GURL("https://example.com/"));
+   }
+-  const std::vector<tabs::TabInterface*> numbered = NumberedTabs(&tabs());
+-  ASSERT_EQ(9u, numbered.size());
++  const std::vector<tabs::TabInterface*> capped = NumberedTabs(&tabs());
++  ASSERT_EQ(9u, capped.size());
+   tabs::TabInterface* last_visible = nullptr;
+   for (int i = tabs().count() - 1; i >= 0; --i) {
+     if (!tabs().IsTabHidden(i)) {
+@@ -61,7 +61,7 @@ TEST_F(TabNumbersTest, NumbersFollowTheVisibleRowsAndStopAtNine) {
+       break;
+     }
+   }
+-  EXPECT_EQ(last_visible, numbered.back());
++  EXPECT_EQ(last_visible, capped.back());
+   EXPECT_TRUE(NumberedTabs(nullptr).empty());
+ }
+ 
+diff --git a/chrome/browser/ui/tabs/tab_strip_model.cc b/chrome/browser/ui/tabs/tab_strip_model.cc
+index fa60e0a04106f..f305a0229275b 100644
+--- a/chrome/browser/ui/tabs/tab_strip_model.cc
++++ b/chrome/browser/ui/tabs/tab_strip_model.cc
+@@ -4871,10 +4871,15 @@ void TabStripModel::AddToExistingGroupImpl(const std::vector<int>& indices,
+ }
+ 
+ tabs::FolderTabCollection* TabStripModel::AddToNewFolder(
+-    const std::vector<int> indices,
++    std::vector<int> indices,
+     tabs::FolderTabCollection* parent_folder,
+     std::optional<tabs::FolderId> id) {
++  // Callers pass the selection in any order. The destination math below
++  // assumes ascending indices; an unsorted pair makes the move position
++  // miss and aborts.
+   CHECK(!indices.empty());
++  std::ranges::sort(indices);
++  indices.erase(std::ranges::unique(indices).begin(), indices.end());
+   for (const int index : indices) {
+     CHECK(ContainsIndex(index));
+   }

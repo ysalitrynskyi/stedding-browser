@@ -6,12 +6,12 @@
 #   tooling/drive <profile-dir> <steps-file> [chromium args and URLs...]
 #
 # Launches Stedding.app with the profile (kept between runs, so restart checks
-# work), waits for first paint, runs the steps, then quits through a real
-# AppleEvent quit so session files are flushed (docs/HANDOFF.md, trap 4).
+# work), waits for first paint, runs the steps against that pid, then asks
+# that pid to quit (Apple Event; docs/HANDOFF.md, trap 4).
 #
 # Steps, one per line, coordinates in window points (origin top-left of the
-# window; the window is found by owner name, so never raise it by hand):
-#   activate                      make the app frontmost (clicks and keys need it)
+# window owned by the launched pid, so never raise it by hand):
+#   activate                      make that pid frontmost (clicks and keys need it)
 #   click X Y [cmd|shift|alt] | rclick X Y | dblclick X Y | hover X Y | drag X1 Y1 X2 Y2
 #   dragstart X Y | dragmove X Y | dragend      the same drag in steps; "shot" between them
 #                                              captures the mid-drag state (drop highlights)
@@ -31,7 +31,7 @@
 . "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
 main() {
-  [ $# -ge 2 ] || { sed -n '2,25p' "$0"; exit 2; }
+  [ $# -ge 2 ] || { sed -n '2,27p' "$0"; exit 2; }
   local profile="$1" steps="$2"
   shift 2
   [ -f "$steps" ] || die "no steps file at $steps"
@@ -48,11 +48,17 @@ main() {
     --window-position=0,0 --window-size="${DRIVE_SIZE:-1400,880}" \
     --enable-logging=stderr "$@" >/dev/null 2>"$log" &
   local pid=$!
+  [ -n "$pid" ] || die "browser pid is missing; refusing to drive"
+  log "browser pid $pid"
   sleep "${DRIVE_SETTLE:-12}"
 
-  python3 "$STEDDING_ROOT/tooling/drive-window.py" "$steps"
+  local drive_status=0
+  python3 "$STEDDING_ROOT/tooling/drive-window.py" "$pid" "$steps" || drive_status=$?
 
-  osascript -e "tell application \"$app\" to quit" 2>/dev/null || true
+  # Quit this pid, not every app whose name contains Stedding.
+  if ! python3 "$STEDDING_ROOT/tooling/window_by_pid.py" --quit "$pid"; then
+    warn "could not ask pid $pid to quit"
+  fi
 
   for _ in $(seq 1 20); do
     kill -0 "$pid" 2>/dev/null || break
@@ -64,6 +70,7 @@ main() {
   fi
   grep -i "fatal\|check failed" "$log" | head -5 || true
   log "log: $log"
+  [ "$drive_status" -eq 0 ] || exit "$drive_status"
 }
 
 main "$@"

@@ -1,23 +1,48 @@
 #!/usr/bin/env python3
 """Drive the live Stedding window with synthetic input; used by tooling/drive.
 
-Usage: drive-window.py <steps-file>. Coordinates are window points; the window
-is found by owner name and never raised. See tooling/drive for the step grammar."""
+Usage: drive-window.py PID <steps-file>. Coordinates are window points; the
+window is the one owned by that pid (or a child) and is never raised. Keys are
+posted only when that pid is frontmost. See tooling/drive for the step grammar."""
 #   click X Y | rclick X Y | dblclick X Y | hover X Y | drag X1 Y1 X2 Y2
 #   dragstart X Y | dragmove X Y | dragend      a drag in steps, so a shot can land mid-drag
 #   key <name>[+cmd][+shift]   (names: t, l, w, enter, esc, tab, left, right, up, down, a-z, 0-9)
 #   type <text> | wait <sec> | shot <file.png> | activate
-import sys, time, subprocess, Quartz
-OWNER="Stedding"
-import os
-CAP=os.path.join(os.path.dirname(os.path.abspath(__file__)), "capture-window.py")
+import sys, time, subprocess, os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import Quartz
+from AppKit import NSApplicationActivateIgnoringOtherApps, NSRunningApplication, NSWorkspace
+from window_by_pid import parse_pid, pids_in_tree, windows_for_pid
+if len(sys.argv) != 3:
+    print("usage: drive-window.py PID steps-file", file=sys.stderr)
+    sys.exit(2)
+try:
+    PID = parse_pid(sys.argv[1])
+except ValueError as exc:
+    print(exc, file=sys.stderr)
+    sys.exit(2)
+STEPS = sys.argv[2]
+CAP = os.path.join(os.path.dirname(os.path.abspath(__file__)), "capture-window.py")
 def origin():
     best=None; area=0
-    for w in Quartz.CGWindowListCopyWindowInfo(Quartz.kCGWindowListOptionAll, Quartz.kCGNullWindowID):
-        if OWNER.lower() not in w.get("kCGWindowOwnerName","").lower(): continue
+    for w in windows_for_pid(PID):
         b=w.get("kCGWindowBounds",{}); a=b.get("Width",0)*b.get("Height",0)
         if a>area and a>100000: best=b; area=a
+    if not best:
+        sys.exit("no window owned by pid %s; not sending input" % PID)
     return best["X"], best["Y"]
+def front_pid():
+    app = NSWorkspace.sharedWorkspace().frontmostApplication()
+    if app is None:
+        return -1
+    return int(app.processIdentifier())
+def require_keys():
+    # HID key events go to whichever process is frontmost, not to a window id.
+    if not windows_for_pid(PID):
+        sys.exit("no window owned by pid %s; not sending keys" % PID)
+    front = front_pid()
+    if front not in pids_in_tree(PID):
+        sys.exit("frontmost pid %s is not %s; not sending keys" % (front, PID))
 MOUSE_MODS={'cmd':Quartz.kCGEventFlagMaskCommand,'shift':Quartz.kCGEventFlagMaskShift,
             'alt':Quartz.kCGEventFlagMaskAlternate}
 def mouse(kind, x, y, button=Quartz.kCGMouseButtonLeft, clicks=1, flags=0):
@@ -35,6 +60,7 @@ KEYS={'a':0,'s':1,'d':2,'f':3,'h':4,'g':5,'z':6,'x':7,'c':8,'v':9,'b':11,'q':12,
  'delete':117,'home':115,'end':119,'pageup':116,'pagedown':121}
 MOD_KEYS={'cmd':55,'shift':56,'alt':58,'ctrl':59}
 def key_hold(name, down):
+    require_keys()
     # A modifier held on its own (Cmd for the row numbers, tabs R11): one
     # flagsChanged-style event, the flag set while it is down.
     code=MOD_KEYS.get(name, KEYS.get(name))
@@ -54,6 +80,7 @@ def key(spec):
     if 'alt' in mods: flags|=Quartz.kCGEventFlagMaskAlternate
     code=KEYS[name]
     for down in (True, False):
+        require_keys()
         e=Quartz.CGEventCreateKeyboardEvent(None, code, down)
         Quartz.CGEventSetFlags(e, flags)
         Quartz.CGEventPost(Quartz.kCGHIDEventTap, e); time.sleep(0.05)
@@ -62,6 +89,7 @@ def type_text(text):
     # Real key codes where we have them (Chromium keys off the virtual code), the
     # unicode-string path only for characters outside the table.
     for ch in text:
+        require_keys()
         code=KEYS.get(ch.lower(), PUNCT.get(ch))
         for down in (True, False):
             if code is not None:
@@ -115,7 +143,7 @@ def drag(x1,y1,x2,y2):
     for i in range(1,41):
         t=i/40; mouse(Quartz.kCGEventLeftMouseDragged,sx1+(sx2-sx1)*t,sy1+(sy2-sy1)*t); time.sleep(0.06)
     time.sleep(0.8); mouse(Quartz.kCGEventLeftMouseUp,sx2,sy2)
-for raw in open(sys.argv[1]):
+for raw in open(STEPS):
     line=raw.strip()
     if not line or line.startswith('#'): continue
     op,*args=line.split(' ',1); arg=args[0] if args else ''
@@ -133,8 +161,16 @@ for raw in open(sys.argv[1]):
     elif op=='keyup': key_hold(arg, False)
     elif op=='type': type_text(arg)
     elif op=='wait': time.sleep(float(arg))
-    elif op=='shot': time.sleep(0.6); subprocess.run(['python3',CAP,OWNER,arg],check=False)
+    elif op=='shot':
+        time.sleep(0.6)
+        shot=subprocess.run([sys.executable, CAP, str(PID), arg])
+        if shot.returncode != 0:
+            sys.exit(shot.returncode or 1)
     elif op=='activate':
-        subprocess.run(['osascript','-e','tell application "System Events" to set frontmost of (first process whose name contains "Stedding") to true'],check=False); time.sleep(1.2)
+        app = NSRunningApplication.runningApplicationWithProcessIdentifier_(PID)
+        if app is None or not app.activateWithOptions_(NSApplicationActivateIgnoringOtherApps):
+            sys.exit("could not activate pid %s; not sending input" % PID)
+        time.sleep(1.2)
+        require_keys()
     else: print("unknown op", op)
     print("ok", line, flush=True)

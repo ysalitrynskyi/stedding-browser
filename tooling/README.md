@@ -15,8 +15,8 @@ its configuration from `chromium-version` — never from a value typed twice.
 | `assert-capture` | Checks a capture against a probe spec (points in DIPs with expected colour or luminance), optionally against a golden PNG. `--record` fills a spec from a capture you have inspected. `tooling/dev capture --assert <spec>` runs the spec's own capture command and checks it. |
 | `probes/` | Probe specs. `window.json` is the reference window: sidebar edge, content corner radius, toolbar height, essentials grid, no Chromium buttons, switcher at the bottom. `ntp.json` is a fresh profile's new tab page: theme ground, the hint line, no shortcut tile (`docs/features/new-tab.md`). Probes with `w`/`h` check a box, for text and icons. |
 | `drive` | Drives the built browser with synthetic clicks, drags and keys from a steps file, captures after steps, quits through a real AppleEvent so session files flush. The live half of every feature spec. Never on a machine someone is using. |
-| `capture-state` | Photographs a browser state without input: a fresh profile in the state the feature params and switches describe (`--features`, `--stedding-welcome=<step>`, `--seed collapsed`), every window by id, an AppleEvent quit, the abort check. Safe while someone is at the machine; how round 7 was verified. |
-| `capture-windows` | Captures every on-screen window an app owns, by window id, largest first — a dialog such as the welcome flow is the second file. Used by `capture-state`. |
+| `capture-state` | Photographs a browser state without input: a fresh profile in the state the feature params and switches describe (`--features`, `--stedding-welcome=<step>`, `--seed collapsed`), every window of the launched pid by id, a quit of that pid, the abort check. Safe while someone is at the machine; how round 7 was verified. |
+| `capture-windows` | Captures every on-screen window a pid owns, by window id, largest first — a dialog such as the welcome flow is the second file. Used by `capture-state`. |
 | `status` | Prints what the repo and checkout actually contain (pin, patch count, tests per feature, backlog). Docs quote this instead of typing numbers. |
 | `chromium-version` | The pinned upstream Chromium version. Single source of truth. Policy: [ADR 0007](../docs/decisions/0007-chromium-version-pin.md). |
 | `lib.sh` | Shared paths, logging, and preflight checks. Sourced, never executed. |
@@ -35,7 +35,7 @@ its configuration from `chromium-version` — never from a value typed twice.
 | `brand/generate.py` | Regenerates the whole brand system from one geometry file. |
 | `check-repo` | Repository hygiene: shell portability, links, ADRs, patch series, the pin, traps, LF line endings, nothing tracked that is ignored, no machine paths. |
 | `check-shell` | shellcheck at the pinned version over every script here, plus `bash -n`. CI calls this exact script. |
-| `check-geometry` | Re-measures the card's gutters and corner radius in `docs/images/*.png` against `probes/geometry.json`. Needs Pillow; runs anywhere, so CI can check this much of the product's appearance without a build. `--report` prints the measurements. |
+| `check-geometry` | Re-measures the card's gutters and corner radius in `docs/images/*.png` against `probes/geometry.json`. Needs Pillow; runs anywhere. `--report` prints the measurements. Not a CI check. |
 | `verify-build` | Runs a built browser and checks it renders, does WebGL, and decodes video. |
 | `measure/` | Performance harness and the fixed ten-site list for the QUALITY.md budgets. |
 | `args/` | `gn` argument files, one per build configuration, with the reasoning per flag. |
@@ -100,10 +100,9 @@ justify or delete is how a minimal patch set stops being minimal.
 
 ### `capture-ui`
 
-Screenshots the built browser's own window and nothing else, so UI changes can be
-compared against `docs/UI-SPEC.md` without photographing whatever else is on the
-screen. Works on a window that is behind others or on another macOS Space, so it
-never raises the window or takes focus.
+Execs `capture-state` with the same arguments, so older commands still run. It
+does not look up a window itself. With no `--out`, the image is `ui-capture.png`
+in the repo root; with no `--url`, the page is example.com.
 
 ```
 tooling/capture-ui --out /tmp/now.png --size 1400x880

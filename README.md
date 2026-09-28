@@ -157,12 +157,11 @@ buttons and Arc's keyboard mapped to Ctrl and Alt.
 
 **Import, backups and export**
 - Everything from Arc in one click (see [Moving from Arc](#moving-from-arc)).
-- Bookmarks become pinned tabs and folders. On macOS the welcome step also imports
-  from Safari and Firefox, and from a bookmarks HTML file. Chrome, Brave and Edge
-  are not imported on macOS yet. On Windows that step lists Edge, Internet Explorer
-  and Firefox.
-- Sidebar backups every hour, export a Space as a file, restore from a snapshot: the
-  answer to sync without an account.
+- On macOS the welcome step lists Safari, Firefox, a bookmarks HTML file, and
+  Chrome, Brave, Edge, Vivaldi or Chromium when that browser's profile is on the
+  machine. An import brings bookmarks, history and saved passwords. Bookmarks stay
+  bookmarks. On Windows the step also lists Edge, Internet Explorer and Firefox.
+- Export a Space as a file, and import a sidebar file. There is no scheduled backup.
 
 **Settings and shortcuts**
 - A **Stedding** section first in Settings, one switch per feature, the window's
@@ -217,9 +216,9 @@ tabs, browsing history and saved passwords. Each is a checkbox, all checked by d
 ![The welcome flow's import step: everything from Arc in one click](docs/images/readme/welcome-import.png)
 
 Coming from Safari or Firefox on a Mac, or from Edge, Internet Explorer or Firefox
-on Windows? The same step runs Chromium's importer, and bookmarks become pinned tabs
-and folders in your first Space. Chrome, Brave and Edge on macOS are not imported
-yet.
+on Windows? The same step imports bookmarks, history and saved passwords, and the
+bookmarks stay bookmarks. On a Mac it also offers Chrome, Brave, Edge, Vivaldi and
+Chromium when those profiles are on the machine.
 
 ## Privacy
 

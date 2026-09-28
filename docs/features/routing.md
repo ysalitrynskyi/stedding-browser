@@ -21,7 +21,7 @@ at once; a toast says where it went and undoes it.
 | D6 | Peek precedes routing: a link that leaves a pinned tab's site peeks and no tab is inserted, so no route runs; routing applies to new tabs only. | SpaceRouterTest.PeekPrecedesRoutes | built |
 | D7 | A `host` rule matches `url.host()` case-insensitively. `staging.example.com` does not match a `site` rule for `example.com` unless a `host` or `host-suffix` rule is listed first. | SpaceRouterTest.HostAndHostSuffix | built |
 | D8 | A `host-suffix` rule matches the host itself or a host that ends with `.` plus the pattern. `foo.staging.example.com` matches suffix `staging.example.com`; `example.com` does not. | SpaceRouterTest.HostAndHostSuffix | built |
-| D9 | `HostRouteFor` writes a `host` rule from the address's host, the way `SiteRouteFor` writes a `site` rule. | SpaceRouterTest.HostRouteForIsHostScoped | partial · model only, no menu or settings field writes a host rule; both write site rules (D5). A host rule typed into the pref matches (D7) |
+| D9 | A host rule would be written from the address's host. The menu and settings write site rules (D5). A host rule already in the pref still matches (D7). | `SpaceRouterTest.RuleFromTabIsSiteScoped` | planned · withdrawn, HostRouteFor is not in the product |
 | D10 | `host` and `host-suffix` round-trip through the pref (`match` names `host` and `host-suffix`). Unknown match names are still skipped. | SpaceRouterTest.PrefsRoundTrip | built |
 
 ## Notes

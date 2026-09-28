@@ -3,22 +3,27 @@
 #
 # Usage:
 #   tooling/capture-state --out <prefix> [--seed collapsed] [--settle <seconds>]
-#                         [--features <list>] [chromium args and URLs...]
+#                         [--features <list>] [--disable-features <list>]
+#                         [--size WxH] [--url URL] [--build DIR]
+#                         [chromium args and URLs...]
 #
 # Launches the built app on a fresh profile (a seeded preference if asked),
-# waits for the first paint, captures every window the process owns by window
-# id (tooling/capture-windows: <prefix>.png, and <prefix>-2.png for a dialog
-# such as the welcome flow), quits through the AppleEvent so session files
-# flush and the quit path runs, and reports any abort from the browser's log
-# (<prefix>.log). No synthetic input and no focus change, so it is safe while
-# someone is using the machine -- the case tooling/drive cannot cover
-# (docs/HANDOFF.md, trap 22).
+# waits for the first paint, and captures every window owned by that pid or
+# a child (tooling/capture-windows: <prefix>.png, then <prefix>-2.png for a
+# dialog). It quits that pid so session files flush, and reports an abort
+# from the browser log (<prefix>.log). No synthetic input and no focus
+# change, so it is safe while someone is at the machine (docs/HANDOFF.md,
+# trap 22). tooling/capture-ui execs this script.
+#
+# --out path.png is the image file. Any other --out is a prefix, and the
+# image is <prefix>.png. --size accepts 1400x880 or 1400,880. --build is
+# the directory under out/ (default release).
 #
 # The state comes from feature params on SteddingArcStyleWindow and switches:
 #   --features 'SteddingArcStyleWindow:extra_spaces/2/pin_tabs/1/folder_tabs/3'
-#   --features 'SteddingArcStyleWindow:space_pin_tabs/1/drift_tabs/1'  (a drifted pin)
+#   --features 'SteddingArcStyleWindow:space_pin_tabs/1/drift_tabs/1'
 #   --features 'SteddingArcStyleWindow:open_command_bar/true'
-#   --stedding-welcome=import          the welcome flow, opened on its import step
+#   --stedding-welcome=import          the welcome flow, on one step
 #   --seed collapsed                   the collapsed rail (a profile preference)
 # The list of params is in docs/HANDOFF.md.
 
@@ -27,23 +32,40 @@
 . "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
 main() {
-  local out="" seed="" settle=18 features="" size="1400,880"
+  local out="" seed="" settle=18 features="" disable_features="" size="1400,880"
+  local build="release" url=""
   while [ $# -gt 0 ]; do
+    case "$1" in
+      --out=*|--seed=*|--settle=*|--features=*|--size=*|--url=*|--disable-features=*|--build=*)
+        set -- "${1%%=*}" "${1#*=}" "${@:2}"
+        ;;
+    esac
     case "$1" in
       --out)      out="$2"; shift 2 ;;
       --seed)     seed="$2"; shift 2 ;;
       --settle)   settle="$2"; shift 2 ;;
       --features) features="$2"; shift 2 ;;
-      --size)     size="$2"; shift 2 ;;
-      -h|--help)  sed -n '2,24p' "$0"; exit 0 ;;
+      --disable-features) disable_features="$2"; shift 2 ;;
+      --size)     size="$(printf '%s' "$2" | tr 'xX' ',,')"; shift 2 ;;
+      --url)      url="$2"; shift 2 ;;
+      --build)    build="$2"; shift 2 ;;
+      -h|--help)  sed -n '2,28p' "$0"; exit 0 ;;
       *)          break ;;
     esac
   done
   [ -n "$out" ] || die "--out <prefix> is required"
+  [ -n "$build" ] || die "--build needs a directory name under out/"
+
+  local prefix="$out"
+  case "$prefix" in
+    *.png) prefix="${prefix%.png}" ;;
+  esac
+  [ -n "$prefix" ] || die "--out <prefix> is required"
+  [ -n "$url" ] && set -- "$@" "$url"
 
   local app
-  app="$(find_app_bundle "$CHROMIUM_SRC/out/release" || true)"
-  [ -n "$app" ] && [ -d "$app" ] || die "no app bundle in out/release -- tooling/dev build"
+  app="$(find_app_bundle "$CHROMIUM_SRC/out/$build" || true)"
+  [ -n "$app" ] && [ -d "$app" ] || die "no app bundle in out/$build -- tooling/dev build"
   local bin
   bin="$app/Contents/MacOS/$(basename "$app" .app)"
 
@@ -56,22 +78,26 @@ main() {
     *) die "unknown seed: $seed (known: collapsed)" ;;
   esac
 
-  local log_file="$out.log"
+  local log_file="$prefix.log"
   set -- --user-data-dir="$profile" --no-first-run --no-default-browser-check \
          --window-size="$size" --window-position=0,0 --enable-logging=stderr "$@"
+  [ -n "$disable_features" ] && set -- --disable-features="$disable_features" "$@"
   [ -n "$features" ] && set -- --enable-features="$features" "$@"
 
-  log "launching $(basename "$app") for $out"
   "$bin" "$@" >/dev/null 2>"$log_file" &
   local pid=$!
+  [ -n "$pid" ] || die "browser pid is missing; refusing to capture"
+  log "launched $(basename "$app") pid $pid for $prefix.png"
   # No signal to wait on from outside the process: a plain wait for the paint.
   sleep "$settle"
 
   local cap_status=0
-  python3 "$STEDDING_ROOT/tooling/capture-windows" "$(basename "$app" .app)" "$out" \
-    || cap_status=$?
+  python3 "$STEDDING_ROOT/tooling/capture-windows" "$pid" "$prefix" || cap_status=$?
 
-  osascript -e "tell application \"$app\" to quit" 2>/dev/null || true
+  # Quit this pid, not every app whose name contains Stedding.
+  if ! python3 "$STEDDING_ROOT/tooling/window_by_pid.py" --quit "$pid"; then
+    warn "could not ask pid $pid to quit"
+  fi
   local _
   for _ in $(seq 1 40); do
     kill -0 "$pid" 2>/dev/null || break
@@ -85,10 +111,10 @@ main() {
     warn "the browser aborted; see $log_file"
   fi
   rm -rf "$profile"
-  if [ "$cap_status" -ne 0 ] || [ ! -f "$out.png" ]; then
-    die "capture wrote no $out.png (is the screen locked? does this python have Quartz? see $log_file)"
+  if [ "$cap_status" -ne 0 ] || [ ! -f "$prefix.png" ]; then
+    die "capture wrote no $prefix.png (is the screen locked? does this python have Quartz? see $log_file)"
   fi
-  log "done: $out.png"
+  log "done: $prefix.png"
 }
 
 main "$@"

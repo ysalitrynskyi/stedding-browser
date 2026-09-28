@@ -10,7 +10,7 @@ A split is one row and one unit for every sidebar verb; the model is Chromium
 
 | Id | Behaviour | Test | State |
 |---|---|---|---|
-| J1 | A split is one unit for the sidebar's verbs: it Space-pins together (J4), a rename applies to every pane, and session extra_data writes `stedding.split` so both panes restore as a pair. | `SpaceWindowTest.SplitPinRenameAndRestoreKeepThePair` | built |
+| J1 | A split is one unit for the sidebar's verbs: it Space-pins together (J4) and a rename applies to every pane. Session extra data does not carry a split token, and the pair is not reassembled on restore. | `SpaceWindowTest.SplitDoesNotRestoreFromSessionExtraData` | partial |
 | J2 | ⌘1–9 (R6-13 R19) and the ⌃⇥ strip (R6-12 X3) count a split as one; activating it activates the pane that was last active. | SpaceWindowTest.RecentTabsCountASplitOnce (the recent list; the pane that was last active is the one recorded); SpaceWindowTest.NumberedTabCountsASplitOnce (⌘1–9, still planned) | partial · the ⌃⇥ half is built |
 | J3 | ⌘W on a split: TBD. Check first what Chromium 153 does to the other pane, then decide whether a pinned split's pane sleeps instead (R6-16 H3) and record it here before H3 is built. | TBD | planned · draft |
 | J4 | Move to Space, Sleep and ⌘D act on both panes together (the split is one selection under R6-20). | SpaceWindowTest.SplitPanesTakeVerbsTogether (Move to Space and ⌘D reach both panes through `SpaceModel::SplitPeers`; the selection carries both panes, so Sleep takes both). | built |

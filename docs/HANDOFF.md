@@ -620,6 +620,24 @@ into the fresh profile.
     setup counts the regional list, which DuckDuckGo joins where it was not
     in it). Rewriting them to Stedding's defaults is open; a change to either
     hunk is checked against this list by running those suites.
+52. **On the Mac, the event generator's drag runs past its target.**
+    `ui::test::EventGenerator::MoveMouseTo(point, count)` re-bases every step
+    on the point it has just sent, so the pointer mid-drag runs far beyond
+    `point` and only the release lands where asked; a test that looks at
+    anything during a drag, or at a small drag threshold, measures the
+    wrong thing and can still pass. The Stedding browser tests drag and
+    click the sidebar through `stedding::test::SendLeftMouse` and
+    `ClickLeftMouse` (`chrome/test/stedding/sidebar_test_util.h`), which hand
+    each event to the window's root view in even steps; a single
+    `MoveMouseTo(point)` followed by a click is fine. Two more traps in the
+    same tests: `WaitForRowsToSettle` before a click (a row still growing
+    covers its neighbours), and never open `chrome://settings/clearBrowserData`
+    to drive a deletion by message (the dialog's own start-up drops any
+    reply still pending; open `chrome://settings` and send
+    `initializeClearBrowsingData` first). Six browser tests running at once
+    on this Mac also make Chromium's own clearing of the network history,
+    part of a cache deletion, take longer than a test may wait; a test that
+    deletes data asks for cookies alone.
 
 ## The Windows build
 

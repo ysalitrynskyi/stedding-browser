@@ -2090,8 +2090,8 @@ The unit names are the audit's reading units. "Delete" means removing the test a
   - the suite runs in the sweep;
   - either it reproduces the owner's failure, or the owner's exact steps are added as a case until it does;
   - it is red before the fixes and green after;
-  - tabs R14 and pins H5/H10 cite it.
-- [ ] **TST-2** (P0) Hover and click in the collapsed rail.
+  - tabs R14 and pins H5/H10 cite it. **Status 2026-09-29, patch 0057:** in place, as browser_tests on real rows (the sweep runs `stedding_browser_tests`): `SidebarClickTest.EveryPartOfEveryRowSelects` clicks the favicon, the title and the empty end of the title's line of every kind of row -- plain, Space pin, essential card, folder, nested folder, both panes of a split -- in the open sidebar and in the rail, then drags a row and closes the window; `AClickOnAnotherRowEndsAnOpenRename`, `AClickOnThePageEndsARename` and the other rename cases repeat after an abandoned rename; `RowsSelectAfterAPinGoesHome` and `AfterAPinGoesHomeTheWindowCloses` after a favicon reset. Each fix was seen red by taking it out (the rename watcher, the drag ended first). Tabs R14 and pins H5 cite them. Open: the owner's own failure, which none of these reproduces: the owner's exact steps are needed as a case.
+- [x] **TST-2** (P0) Hover and click in the collapsed rail.
   - Write a views test with a real `Widget` and `EventGenerator`, plus one interactive case.
   - Collapse the sidebar and hover each row kind. Assert that the favicon stays and no close button is visible.
   - Click each row and assert it is selected, never closed.
@@ -2105,8 +2105,8 @@ The unit names are the audit's reading units. "Delete" means removing the test a
   - the drift dot clipped in the rail (H4);
   - any jitter in a rail chip drag moving that Space to the top (spaces B27).
 
-  Done when it is red on the current series and green after the fixes, and every rail and close-button row cites it.
-- [ ] **TST-3** (P0) Switch Space by every path a user has.
+  Done when it is red on the current series and green after the fixes, and every rail and close-button row cites it. **Proven 2026-09-29, patch 0057,** by browser_tests with a real window, dispatching through its widget: `SidebarClickTest.AHoveredRailRowShowsNoCloseButton` (every kind of row hovered in the rail: favicon in place, no close button; each click selects and closes nothing), `SidebarClickTest.ARailClickKeepsADriftedPinsPage` (a drifted Space pin's and essential's favicon click selects and keeps the page), `SpaceSwitchTest.AShakyClickOnAChipMovesNothing` (a two-pixel chip drag in the rail stack moves nothing). The fixes were in the series before these were written; with the rail rule taken out (`IsRailRow` false) the hover and dot cases go red. Tabs R3, pins H4, H5, sidebar Y8 and spaces B27 cite them; `TabRowRulesTest.PinnedAndCollapsedNeverShowClose` stays as the rule's unit test.
+- [x] **TST-3** (P0) Switch Space by every path a user has.
   - Write a browser test, with interactive cases for keys and the swipe. Switch through the chip, ⌃N, ⌥⌘←/→, the Spaces menu and a command-bar tab row.
   - Use the full fixture from the strategy above, and make the last-used tab a foreground-inserted tab that is not first in strip order.
   - Assert:
@@ -2124,7 +2124,7 @@ The unit names are the audit's reading units. "Delete" means removing the test a
   - folders F3: collapsed folders reopen;
   - the visibility controller's use-after-free in horizontal mode.
 
-  Done when it is red now and green after the fixes, and spaces B1–B4 and folders F3 cite it.
+  Done when it is red now and green after the fixes, and spaces B1–B4 and folders F3 cite it. **Proven 2026-09-29, patch 0057:** `SpaceSwitchTest.NoSwitchEverShowsAHiddenTab` switches by ⌃N (the Spaces menu runs the same commands), next and previous, a chip, a command-bar tab row and a two-finger swipe (scroll events through the window), with a folder collapsed in Two and Two's last-used tab opened in the foreground after the others; a watcher checks every notification of the strip and of the Spaces. It was red on the series: closing a Space's last tab left another Space's tab active for a turn (spaces B4), fixed the same day, and it fails again with the fix taken out. `SpaceKeysTest.EachChordRunsItsSpaceCommand` takes ⌃1-9 and ⌥⌘←/→ through the Mac's key path to their commands; `SpaceSwitchTest.SwitchingWithHorizontalTabs` switches with horizontal tabs. Spaces B1, B3, B4, B15, B18, B19 and folders F3 cite them.
 - [ ] **TST-4** (P0) Restart and restore, proven with `PRE_` browser tests.
   - Build a profile with:
     - three Spaces, one of them isolated;
@@ -2146,7 +2146,7 @@ The unit names are the audit's reading units. "Delete" means removing the test a
   - archive A8, sessions S12 and windows G4;
   - splits J1, which re-splits an unsplit pair.
 
-  Done when it is red on the current series and green after the fixes, and each of those rows cites the `PRE_` test.
+  Done when it is red on the current series and green after the fixes, and each of those rows cites the `PRE_` test. **Status 2026-09-29, patch 0057:** `RestoreTest.TheSidebarComesBack` and its three PRE_ steps restore three Spaces (Work isolated), an essential, Space pins with homes and a changed home, a nested folder tree with titles, a collapsed folder and folder ids, a split and a pair that was unsplit, a renamed tab and a renamed sleeping tab, and the jar's cookies; `ReopeningAClosedTabBringsItBackToItsSpace`, `ReopeningAClosedTabBringsItBackToItsFolder`, `AWindowFromHistoryHasItsFolders`, `ANameSurvivesASleepAndAWake`, `ReplacedContentsAreWrittenAgain` and the archive cases cover ⌘⇧T, a window from History, names and replaced contents. Open: a Blank Window coming back blank, and the rows this item names citing the PRE_ test (folders F5, spaces B2, B9, B10, B21, pins H2, H6, tabs R16, R17, archive A8, sessions S12, windows G4, splits J1).
 - [ ] **TST-5** (P0) Open, restore and insert tabs next to a tab inside a folder.
   - Write a browser test that ⌘-clicks and middle-clicks a link in a folder tab.
   - It then duplicates that tab, ⌘⇧T restores a tab that was in a folder, and inserts through the extensions API at an index inside a folder.
@@ -2157,7 +2157,7 @@ The unit names are the audit's reading units. "Delete" means removing the test a
   - the crash when a link is dragged over a folder;
   - `AddToNewFolder` accepting pinned tabs.
 
-  Done when each crash reproduces in the test before the fix and the test passes after, and folders.md has a row for it.
+  Done when each crash reproduces in the test before the fix and the test passes after, and folders.md has a row for it. **Status 2026-09-29, patch 0057:** every case has a browser_test: a link opened from a folder tab (`FolderTabsTest.ALinkFromAFolderTabOpensBesideIt`, `ALinkFromAFoldersLastTabJoinsIt`, `ABlankTargetLinkFromAFolderTabJoinsIt`), a duplicate (`DuplicatingAFolderTabKeepsItInside`), ⌘⇧T of a folder tab (`RestoreTest.ReopeningAClosedTabBringsItBackToItsFolder`, `FolderTabsTest.AMiddleTabReopenedComesBackInPlace`), the extensions API (`AnExtensionCreatesAndMovesIntoAFolder`), a link dragged over a folder header (`LinkDropTest.*`), a split inside a folder made a folder (`ASplitInsideAFolderNestsInPlace`); `TabStripModelTest.MoveTabsToFolderAppendsNestsAndRefusesPins` keeps pinned tabs out of folders. Open: seeing each crash in the test before its fix, which needs the fixes taken out one by one.
 - [ ] **TST-6** (P1) Write the core-loop acceptance script.
   - Write 10–15 steps in plain words: click rows in the open sidebar and in the rail; switch Space four ways; collapse a folder and switch away and back; quit and relaunch; use ⌘T then Enter and ⌘L then Enter.
   - Run it on an installed build of the current pin before every release, and record the date, the build and a pass or fail for each step in the specs.

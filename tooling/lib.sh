@@ -160,6 +160,37 @@ require_macos_arm64() {
   [ "$(uname -m)" = "arm64" ]  || die "this script currently supports arm64 only (got $(uname -m))"
 }
 
+# Git for Windows' bash, where the Windows port's tooling runs (docs/features/windows.md).
+is_windows() {
+  case "$(uname -s)" in
+    MINGW*|MSYS*) return 0 ;;
+    *)            return 1 ;;
+  esac
+}
+
+# macOS arm64, the release machine, or Git for Windows on x86_64, the Windows port.
+require_supported_host() {
+  if is_windows; then
+    [ "$(uname -m)" = "x86_64" ] || die "the Windows port builds on x86_64 only (got $(uname -m))"
+    return 0
+  fi
+  require_macos_arm64
+}
+
+# What gclient and the build need on Windows, as tooling/win/build.ps1 sets them for
+# a build: the installed Visual Studio and never Google's packaged toolchain, and a
+# short directory for vpython's venv, since a long %LOCALAPPDATA% blows past MAX_PATH
+# (docs/HANDOFF.md, trap 34). STEDDING_VPYTHON_ROOT is a Windows path, as it is there.
+windows_build_env() {
+  export DEPOT_TOOLS_WIN_TOOLCHAIN=0
+  if [ -n "${STEDDING_VPYTHON_ROOT:-}" ]; then
+    export VPYTHON_ROOT="$STEDDING_VPYTHON_ROOT"
+  fi
+  [ -n "${VPYTHON_ROOT:-}" ] ||
+    warn "VPYTHON_ROOT is not set: vpython's venv may pass MAX_PATH (trap 34); set STEDDING_VPYTHON_ROOT to a short directory"
+  return 0
+}
+
 # --------------------------------------------------------------------------
 # Launching the built browser from a tool (tooling/capture-state, tooling/drive).
 #

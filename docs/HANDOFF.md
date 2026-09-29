@@ -662,23 +662,54 @@ private window has.
     red -- leaves its objects behind: rebuild after putting the fix back,
     before any run that is to count.
 
+53. **`gclient sync --no-history` shallows a new clone, not an update.** An existing
+    shallow dependency is brought up with a plain `git fetch --prune --no-tags origin`
+    over every branch, which pulls each branch's whole history down to the shallow
+    boundary. The Windows checkout's move from 153.0.8010.12 to 155.0.8059.12
+    (2026-09-29, 18 minutes, `tooling/sync-chromium` in its Windows mode) took the
+    source tree from 26 GB to 46 GB -- `v8` alone was a 1.3 million object pack, and
+    `gclient` said "STALL DETECTED" while it was indexed -- and, while it ran, the
+    volume's free space fell 60 GB below the figure it settled at, in the packs being
+    received and the garbage collection after them. So budget a milestone on Windows
+    for the tree's full history, keep the Mac's 150 GB floor, and do not read the
+    free-space figure a minute in as the last one. The other way is to clone the
+    dependencies again from nothing, which costs a download and the dependencies'
+    working trees but keeps them shallow.
+
 ## The Windows build
 
 Git for Windows for the bash tooling, PowerShell for the rest, Visual Studio's own
 toolchain (`DEPOT_TOOLS_WIN_TOOLCHAIN=0`) and depot_tools on PATH. Three environment
 variables name the machine's paths, so none is in the repo: `STEDDING_CHROMIUM_SRC`
 (the checkout's `src`), `STEDDING_DEPOT_TOOLS` if it is not on PATH, and
-`STEDDING_VPYTHON_ROOT`, a short directory for vpython's venv (trap 34). Then:
+`STEDDING_VPYTHON_ROOT`, a short directory for vpython's venv (trap 34). The bash
+tooling takes the checkout as `CHROMIUM_ROOT`, the folder that holds `src`, as a POSIX
+path (`/c/...`). Then:
 
-1. `tooling/apply-branding` from Git for Windows: the BRANDING file, the logos, the
+1. `tooling/sync-chromium` moves the checkout to the pin and `tooling/apply-patches`
+   puts the series on it, in that order and both before the branding: the apply
+   refuses a tree with uncommitted changes, and the branding leaves about 200 tracked
+   files modified on purpose. There is no git cache on Windows: `src` is one commit of
+   the pinned tag fetched by name (the sequence the `series` workflow runs), the
+   dependencies are shallow clones (`gclient sync --no-history`), and `--all-tags` is
+   refused. The floor is the Mac's 150 GB. Trap 53 says what a milestone move really
+   costs there.
+2. `tooling/apply-branding` from Git for Windows: the BRANDING file, the logos, the
    Windows icons and the product-name rewrite over every locale's tables. Before
    `gn gen`, as on the Mac.
-2. `tooling\win\build.ps1` -- `win-release` (`tooling/args/win-release.gn`), the
+3. `tooling\win\build.ps1` -- `win-release` (`tooling/args/win-release.gn`), the
    args file copied into the output directory with `stedding_version` appended, then
-   `chrome` and `mini_installer`. A component build for iteration is the same
+   `chrome` and `mini_installer` (`-Targets` names others, `unit_tests` and
+   `stedding_browser_tests` among them). A component build for iteration is the same
    script with an args file of its own; the build is refused while a browser from
    that output directory runs (the link fails with "permission denied" otherwise).
-3. `tooling\win\capture.ps1` for captures that need neither focus nor input (trap
+   It keeps the Mac's rules: a 15-minute budget with a progress line every minute
+   (`-BudgetMinutes`, 0 for none; exit 2 means it stopped on the budget and a rerun
+   resumes), and `-KeepGoing` for one pass that lists every error (trap 50).
+4. `tooling/dev test all --no-build` (or one feature) runs the same filters against
+   `out/win-release/*.exe`; `tooling/dev test browser --no-build` runs
+   `stedding_browser_tests` with one job.
+5. `tooling\win\capture.ps1` for captures that need neither focus nor input (trap
    36); `tooling\win\cdp.ps1` for what a capture cannot reach -- JavaScript in a
    page over the DevTools websocket (the welcome flow's buttons pressed by name,
    a settings page scrolled to its Shortcuts block) and a screenshot of the page;

@@ -61,7 +61,8 @@ research  →  spec  →  failing test  →  implement  →  build  →  test  �
   says "none yet" is a `gap` and gets a backlog item.
 - **Nothing runs unattended for more than 15 minutes.** `tooling/dev build` and
   `tooling/dev test` carry a 15-minute budget with a progress line every minute and
-  stop themselves past it; a longer job (an official build, a vanilla comparison
+  stop themselves past it, and so does `tooling\win\build.ps1` on Windows
+  (`-BudgetMinutes`); a longer job (an official build, a vanilla comparison
   build) is a decision the operator makes, so ask, then pass `--budget <minutes>`.
   The same rule applies to any wait an agent writes by hand: a wait loop reports a
   progress metric (objects built, bytes written, tests run) at least every 15 minutes

@@ -101,7 +101,9 @@ perform; a param that recreates the state IS the test surface. Two switches do t
 same for windows: `--stedding-welcome[=<step>]` forces the welcome flow (on a named
 step: `search`, `import`, `appearance`, `default`, `keys`), and `tooling/capture-state
 --seed collapsed` writes the collapsed-rail preference (`vertical_tabs.collapsed_state`)
-into the fresh profile.
+into the fresh profile; `--seed grey-dark` writes dark mode with Customize Chrome's Grey
+(`browser.theme.color_scheme2` 2, `browser.theme.is_grayscale2`), the colour key a
+private window has.
 
 ## Traps this project already paid for (do not rediscover)
 
@@ -329,10 +331,17 @@ into the fresh profile.
     at the machine -- what `tooling/drive` must never do (trap 3). The state comes
     from feature params, not from input: `space_pin_tabs/N`, `drift_tabs/N`,
     `folder_tabs/N`, `pin_tabs/N`, `extra_spaces/N`, `open_command_bar/true`,
-    `--stedding-welcome=<step>`, `--seed collapsed`. Since 2026-09-28 it, like
-    `tooling/drive`, launches in the background (`open -g -n`), refuses to start
-    while another Stedding with the same bundle id runs (quit the installed one
-    first), and quits by pid and deletes its profile on any exit.
+    `--stedding-welcome=<step>`, `--seed collapsed`, `--seed grey-dark`. Since
+    2026-09-28 it, like `tooling/drive`, launches in the background (`open -g
+    -n`), refuses to start while another Stedding with the same bundle id runs
+    (quit the installed one first), and quits by pid and deletes its profile on
+    any exit. A background launch is not enough on its own: Chromium's Mac window
+    bridge activates the app when it shows a window, so every run stopped with
+    "made itself the frontmost app" and captured nothing. Since 2026-09-29
+    capture-state passes `--stedding-stay-in-background`, which skips that one
+    `activateIgnoringOtherApps:` call (patch 0057); the windows are ordered in
+    front but never take the focus or the keys. `tooling/drive` does not pass
+    it: it needs the focus, and waits for an empty chair.
 
 30. **A window capture carries the window's shadow.** An absolute y read off one
     is not a window coordinate; compare two things inside the same capture --

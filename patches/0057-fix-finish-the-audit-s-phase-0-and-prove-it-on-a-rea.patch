@@ -53,7 +53,9 @@ any path -- its header, the command bar, a session rebuild -- hides its
 rows at once: the rows used to follow only once a pass had reached that
 folder's view, so a folder made and collapsed at once kept them (SPC-5).
 The tab menu's Close row takes the plural with a selection, as its other
-rows do ("Close 2 Tabs"; TAB-10, tabs R21).
+rows do ("Close 2 Tabs"; TAB-10, tabs R21). The command bar no longer
+offers a switch that turns Peek on while Peek is withdrawn (CMD-4,
+decision 2).
 
 The rest. Little windows open in upstream's safe profile, refuse a
 profile that may not open a window, and give an untrusted launch an
@@ -179,7 +181,7 @@ into the feature patches they belong to.
  .../ui/tabs/tab_strip_model_unittest.cc       | 271 +++++++
  .../vertical_tab_strip_state_controller.cc    |   7 +
  chrome/browser/ui/views/commandbar/BUILD.gn   |   8 +
- .../ui/views/commandbar/command_bar_view.cc   | 601 +++++++-------
+ .../ui/views/commandbar/command_bar_view.cc   | 605 +++++++-------
  .../ui/views/commandbar/command_bar_view.h    | 143 ++--
  .../commandbar/command_bar_view_unittest.cc   | 390 +++++++--
  .../bubble/download_toolbar_ui_controller.cc  |  28 +-
@@ -261,7 +263,7 @@ into the feature patches they belong to.
  chrome/test/stedding/BUILD.gn                 | 114 +++
  .../stedding/archive_sweep_browsertest.cc     | 158 ++++
  .../test/stedding/clear_space_browsertest.cc  | 252 ++++++
- .../test/stedding/command_bar_browsertest.cc  |  94 +++
+ .../test/stedding/command_bar_browsertest.cc  | 465 +++++++++++
  chrome/test/stedding/copy_link_browsertest.cc |  65 ++
  chrome/test/stedding/defaults_browsertest.cc  | 140 ++++
  .../test/stedding/folder_tabs_browsertest.cc  | 454 +++++++++++
@@ -301,7 +303,7 @@ into the feature patches they belong to.
  .../user_data_importer/common/importer_type.h |   3 -
  crypto/apple/fake_keychain_v2.h               |  11 -
  crypto/apple/fake_keychain_v2.mm              |   2 -
- 230 files changed, 16478 insertions(+), 3583 deletions(-)
+ 230 files changed, 16851 insertions(+), 3585 deletions(-)
  delete mode 100644 chrome/browser/ui/spaces/chromium_profile_import.cc
  delete mode 100644 chrome/browser/ui/spaces/chromium_profile_import.h
  delete mode 100644 chrome/browser/ui/spaces/chromium_profile_import_unittest.cc
@@ -12287,7 +12289,7 @@ index 6af2ab5ec9fe9..44b1137063d0b 100644
    ]
  }
 diff --git a/chrome/browser/ui/views/commandbar/command_bar_view.cc b/chrome/browser/ui/views/commandbar/command_bar_view.cc
-index e5579946f7b51..45a9fb29fdd50 100644
+index e5579946f7b51..515737912c557 100644
 --- a/chrome/browser/ui/views/commandbar/command_bar_view.cc
 +++ b/chrome/browser/ui/views/commandbar/command_bar_view.cc
 @@ -35,8 +35,8 @@
@@ -12549,6 +12551,18 @@ index e5579946f7b51..45a9fb29fdd50 100644
      actions_.push_back({u"Show Keyboard Shortcuts", std::u16string(),
                          base::BindRepeating(
                              [](BrowserWindowInterface* browser) {
+@@ -447,9 +493,9 @@ void CommandBarView::BuildActions() {
+         const char* key;
+         const char16_t* label;
+       };
++      // Peek is withdrawn while it is rebuilt (PLAN.md CMD-4, CMD-9, decision
++      // 2): nothing offers to turn it on, here or in Settings (settings T3).
+       static constexpr BoolPref kBools[] = {
+-          {stedding::prefs::kPeekEnabled,
+-           u"Peek links that leave a pinned tab's site"},
+           {stedding::prefs::kUiAnimate, u"Animate the sidebar and overlays"},
+           {stedding::prefs::kCopyStripTracking,
+            u"Copy links without tracking parameters"},
 @@ -521,14 +567,15 @@ void CommandBarView::BuildActions() {
    }
  }
@@ -21496,10 +21510,10 @@ index 0000000000000..99051371b1045
 +}  // namespace
 diff --git a/chrome/test/stedding/command_bar_browsertest.cc b/chrome/test/stedding/command_bar_browsertest.cc
 new file mode 100644
-index 0000000000000..ef85e540bdbb8
+index 0000000000000..fac7f13959b9d
 --- /dev/null
 +++ b/chrome/test/stedding/command_bar_browsertest.cc
-@@ -0,0 +1,94 @@
+@@ -0,0 +1,465 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -21510,24 +21524,50 @@ index 0000000000000..ef85e540bdbb8
 +// empty query lists nothing of another Space -- no tab of it, no name of it,
 +// no row that moves a tab there -- so the window can be shown to someone.
 +
++#include <algorithm>
++#include <array>
 +#include <string>
++#include <vector>
 +
++#include "base/files/scoped_temp_dir.h"
++#include "base/run_loop.h"
 +#include "base/strings/utf_string_conversions.h"
++#include "base/test/run_until.h"
++#include "base/threading/thread_restrictions.h"
 +#include "chrome/app/chrome_command_ids.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/ui/archive/archived_tabs.h"
 +#include "chrome/browser/ui/browser_commands.h"
++#include "chrome/browser/ui/browser_tabstrip.h"
 +#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 +#include "chrome/browser/ui/spaces/space.h"
 +#include "chrome/browser/ui/spaces/space_model.h"
 +#include "chrome/browser/ui/tabs/tab_strip_model.h"
 +#include "chrome/browser/ui/views/commandbar/command_bar_view.h"
 +#include "chrome/browser/ui/views/frame/browser_view.h"
++#include "chrome/common/pref_names.h"
 +#include "chrome/test/base/in_process_browser_test.h"
 +#include "chrome/test/base/ui_test_utils.h"
++#include "components/prefs/pref_service.h"
++#include "components/sessions/core/session_id.h"
++#include "components/tabs/public/tab_interface.h"
++#include "content/public/browser/web_contents.h"
 +#include "content/public/test/browser_test.h"
 +#include "net/dns/mock_host_resolver.h"
 +#include "net/test/embedded_test_server/embedded_test_server.h"
 +#include "third_party/skia/include/core/SkColor.h"
++#include "ui/base/accelerators/accelerator.h"
++#include "ui/base/clipboard/clipboard.h"
++#include "ui/base/clipboard/test/test_clipboard.h"
 +#include "ui/base/window_open_disposition.h"
++#include "ui/events/event.h"
++#include "ui/events/event_constants.h"
++#include "ui/events/keycodes/keyboard_codes.h"
++#include "ui/gfx/geometry/rect.h"
++#include "ui/views/controls/scroll_view.h"
++#include "ui/views/controls/textfield/textfield.h"
++#include "ui/views/test/views_test_utils.h"
 +#include "url/gurl.h"
 +
 +namespace {
@@ -21589,6 +21629,351 @@ index 0000000000000..ef85e540bdbb8
 +    EXPECT_EQ(std::u16string::npos,
 +              bar->row_title_for_testing(i).find(u"Secret"))
 +        << base::UTF16ToUTF8(bar->row_title_for_testing(i));
++  }
++  bar->Close();
++}
++
++// Every row of actions mode in a real window (PLAN.md CMD-1; commandbar K9,
++// K15). Only the window commands on Stedding's own list are offered, each
++// only while it is enabled, and Enter on each runs it with the browser
++// alive. A few rows are not run, each for the reason beside it; "Close
++// Window" runs last. Captures and copies go to a temporary folder and a test
++// clipboard, never the machine's own.
++class CommandBarActionsTest : public CommandBarTest {
++ protected:
++  void SetUpOnMainThread() override {
++    CommandBarTest::SetUpOnMainThread();
++    base::ScopedAllowBlockingForTesting allow_blocking;
++    ASSERT_TRUE(downloads_.CreateUniqueTempDir());
++    ui::TestClipboard::CreateForCurrentThread();
++  }
++
++  void TearDownOnMainThread() override {
++    ui::Clipboard::DestroyClipboardForCurrentThread();
++    CommandBarTest::TearDownOnMainThread();
++  }
++
++  static stedding::CommandBarView* Palette(BrowserWindowInterface* window) {
++    chrome::ExecuteCommand(window, IDC_STEDDING_COMMAND_PALETTE);  // ⇧⌘P
++    return stedding::CommandBarView::GetOpenBar(
++        BrowserView::GetBrowserViewForBrowser(window));
++  }
++
++  // A key as the bar's field receives it.
++  static void Press(stedding::CommandBarView* bar, ui::KeyboardCode key) {
++    views::View* const field = bar->field_for_testing();
++    field->OnKeyPressed(
++        ui::KeyEvent(ui::EventType::kKeyPressed, key, ui::EF_NONE));
++  }
++
++  static void Type(stedding::CommandBarView* bar, const std::u16string& text) {
++    bar->field_for_testing()->SetText(text);
++    bar->ContentsChanged(bar->field_for_testing(), text);
++  }
++
++  static std::vector<std::u16string> Titles(stedding::CommandBarView* bar) {
++    std::vector<std::u16string> titles;
++    for (size_t i = 0; i < bar->row_count_for_testing(); ++i) {
++      titles.push_back(bar->row_title_for_testing(i));
++    }
++    return titles;
++  }
++
++  static bool IsOpen(BrowserWindowInterface* window) {
++    return std::ranges::contains(GetAllBrowserWindowInterfaces(), window);
++  }
++
++  // Types `title`, walks down to its row and presses Enter.
++  static void Run(BrowserWindowInterface* window, const std::u16string& title) {
++    stedding::CommandBarView* const bar = Palette(window);
++    ASSERT_TRUE(bar);
++    Type(bar, title);
++    const std::vector<std::u16string> titles = Titles(bar);
++    const auto it = std::ranges::find(titles, title);
++    ASSERT_NE(titles.end(), it) << "the row is gone";
++    const size_t index = static_cast<size_t>(it - titles.begin());
++    for (size_t i = 0; i < index; ++i) {
++      Press(bar, ui::VKEY_DOWN);
++    }
++    ASSERT_EQ(index, bar->selected_row_for_testing());
++    Press(bar, ui::VKEY_RETURN);
++    base::RunLoop().RunUntilIdle();
++    // A row that keeps the bar open (a choice, the sidebar) is closed here.
++    if (IsOpen(window)) {
++      if (stedding::CommandBarView* const open =
++              stedding::CommandBarView::GetOpenBar(
++                  BrowserView::GetBrowserViewForBrowser(window))) {
++        open->Close();
++        base::RunLoop().RunUntilIdle();
++      }
++    }
++  }
++
++  void RunEveryRow(BrowserWindowInterface* window) {
++    window->GetProfile()->GetPrefs()->SetFilePath(
++        prefs::kDownloadDefaultDirectory, downloads_.GetPath());
++    std::vector<std::u16string> titles;
++    {
++      stedding::CommandBarView* const bar = Palette(window);
++      ASSERT_TRUE(bar);
++      ASSERT_EQ(stedding::CommandBarView::Mode::kActions,
++                bar->mode_for_testing());
++      titles = Titles(bar);
++      bar->Close();
++      base::RunLoop().RunUntilIdle();
++    }
++    ASSERT_FALSE(titles.empty());
++    static constexpr auto kNotRun = std::to_array<const char16_t*>({
++        // The save panel, a native dialog a test cannot answer.
++        u"Save Page As",
++        // The print dialog, likewise.
++        u"Print",
++        // A macOS Space of its own, entered over seconds.
++        u"Enter or Exit Full Screen",
++        // Reads the Arc profile, and its passwords through the keychain, of
++        // whoever runs the test.
++        u"Import from Arc",
++        // Runs last, below.
++        u"Close Window",
++    });
++    for (const std::u16string& title : titles) {
++      if (std::ranges::contains(kNotRun, title)) {
++        continue;
++      }
++      SCOPED_TRACE(base::UTF16ToUTF8(title));
++      // Enough tabs that closing, moving or clearing one keeps the window.
++      while (window->GetTabStripModel()->count() < 3) {
++        chrome::AddTabAt(window, GURL("about:blank"), -1, true);
++      }
++      Run(window, title);
++      ASSERT_TRUE(IsOpen(window)) << "the window went away";
++    }
++    if (std::ranges::contains(titles, std::u16string(u"Close Window"))) {
++      Run(window, u"Close Window");
++      ASSERT_TRUE(base::test::RunUntil([&]() { return !IsOpen(window); }));
++    }
++  }
++
++  base::ScopedTempDir downloads_;
++};
++
++IN_PROC_BROWSER_TEST_F(CommandBarActionsTest, EveryRowRunsInANormalWindow) {
++  // Chromium's page actions came through its action registry and crashed
++  // here ("Ask", "Shopping"); the bar lists only Stedding's own rows.
++  stedding::CommandBarView* const bar = Palette(browser());
++  ASSERT_TRUE(bar);
++  for (const char16_t* query : {u"Ask", u"Shopping", u"Pin"}) {
++    Type(bar, query);
++    for (const std::u16string& title : Titles(bar)) {
++      EXPECT_EQ(std::u16string::npos, title.find(u"Google")) << title;
++      EXPECT_EQ(std::u16string::npos, title.find(u"Shopping")) << title;
++    }
++  }
++  // Peek is withdrawn (decision 2): no row offers to turn it on.
++  Type(bar, u"Peek");
++  EXPECT_EQ(0u, bar->row_count_for_testing());
++  bar->Close();
++  base::RunLoop().RunUntilIdle();
++  // A second window, so the process outlives the one under test.
++  CreateBrowser(browser()->GetProfile());
++  RunEveryRow(browser());
++}
++
++IN_PROC_BROWSER_TEST_F(CommandBarActionsTest, EveryRowRunsInAPrivateWindow) {
++  RunEveryRow(CreateIncognitoBrowser());
++}
++
++// The bar's keys in a real window (PLAN.md CMD-5; commandbar K2-K8, K14).
++// The tabs are data: pages, which history does not keep, so the rows for a
++// query are the typed text, the tabs and the archived tabs, and nothing else;
++// the omnibox's own row for the typed text duplicates the first and is
++// dropped.
++class CommandBarKeysTest : public CommandBarActionsTest {
++ protected:
++  // A tab titled `title`, on screen.
++  tabs::TabInterface* OpenTitled(const std::string& title) {
++    EXPECT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
++        browser(), GURL("data:text/html,<title>" + title + "</title>"),
++        WindowOpenDisposition::NEW_FOREGROUND_TAB,
++        ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
++    return browser()->GetTabStripModel()->GetActiveTab();
++  }
++
++  // ⌘T with two archived tabs in the list, and `query` typed.
++  stedding::CommandBarView* OpenWith(const std::u16string& query) {
++    chrome::ExecuteCommand(browser(), IDC_NEW_TAB);  // ⌘T
++    stedding::CommandBarView* const bar = stedding::CommandBarView::GetOpenBar(
++        BrowserView::GetBrowserViewForBrowser(browser()));
++    if (!bar) {
++      return nullptr;
++    }
++    bar->SetArchivedSourceForTesting(
++        base::BindRepeating([]() {
++          std::vector<stedding::ArchivedTab> archived(2);
++          archived[0].id = SessionID::FromSerializedValue(901);
++          archived[0].title = u"Zeta archived one";
++          archived[0].url = GURL("https://one.example/");
++          archived[1].id = SessionID::FromSerializedValue(902);
++          archived[1].title = u"Zeta archived two";
++          archived[1].url = GURL("https://two.example/");
++          return archived;
++        }),
++        base::BindRepeating(
++            [](SessionID* restored, SessionID id) { *restored = id; },
++            base::Unretained(&restored_)));
++    Type(bar, query);
++    return bar;
++  }
++
++  SessionID restored_ = SessionID::InvalidValue();
++};
++
++// Down n times and Enter runs the row drawn highlighted, for every n: the
++// typed text, each tab, each archived tab.
++IN_PROC_BROWSER_TEST_F(CommandBarKeysTest, TheHighlightedRowIsTheOneThatRuns) {
++  tabs::TabInterface* const one = OpenTitled("Zeta tab one");
++  tabs::TabInterface* const two = OpenTitled("Zeta tab two");
++  tabs::TabInterface* const home = OpenTitled("Home");
++  TabStripModel* const tabs = browser()->GetTabStripModel();
++
++  std::vector<std::u16string> titles;
++  {
++    stedding::CommandBarView* const bar = OpenWith(u"Zeta");
++    ASSERT_TRUE(bar);
++    titles = Titles(bar);
++    bar->Close();
++    base::RunLoop().RunUntilIdle();
++  }
++  // The typed text, two tabs and two archived tabs, each once.
++  ASSERT_EQ(5u, titles.size());
++  for (const char16_t* title : {u"Zeta tab one", u"Zeta tab two",
++                                u"Zeta archived one", u"Zeta archived two"}) {
++    EXPECT_EQ(1, std::ranges::count(titles, std::u16string(title))) << title;
++  }
++
++  for (size_t n = 0; n < titles.size(); ++n) {
++    SCOPED_TRACE(testing::Message()
++                 << "row " << n << ": " << base::UTF16ToUTF8(titles[n]));
++    tabs->ActivateTabAt(tabs->GetIndexOfTab(home));
++    restored_ = SessionID::InvalidValue();
++    const int count = tabs->count();
++    stedding::CommandBarView* const bar = OpenWith(u"Zeta");
++    ASSERT_TRUE(bar);
++    ASSERT_EQ(titles, Titles(bar));
++    for (size_t i = 0; i < n; ++i) {
++      Press(bar, ui::VKEY_DOWN);
++    }
++    ASSERT_EQ(n, bar->selected_row_for_testing());
++    Press(bar, ui::VKEY_RETURN);
++    base::RunLoop().RunUntilIdle();
++
++    if (titles[n] == u"Zeta tab one") {
++      EXPECT_EQ(one, tabs->GetActiveTab());
++    } else if (titles[n] == u"Zeta tab two") {
++      EXPECT_EQ(two, tabs->GetActiveTab());
++    } else if (titles[n] == u"Zeta archived one") {
++      EXPECT_EQ(SessionID::FromSerializedValue(901), restored_);
++    } else if (titles[n] == u"Zeta archived two") {
++      EXPECT_EQ(SessionID::FromSerializedValue(902), restored_);
++    } else {
++      // The typed text: a search for it, in a tab of its own.
++      EXPECT_FALSE(restored_.is_valid());
++      EXPECT_EQ(count + 1, tabs->count());
++      EXPECT_NE(
++          std::string::npos,
++          tabs->GetActiveWebContents()->GetVisibleURL().spec().find("Zeta"));
++      tabs->CloseWebContentsAt(tabs->active_index(), TabCloseTypes::CLOSE_NONE);
++    }
++  }
++}
++
++// Fifteen Downs in actions mode keep the highlighted row on screen.
++IN_PROC_BROWSER_TEST_F(CommandBarKeysTest, TheHighlightedRowStaysInView) {
++  stedding::CommandBarView* const bar = Palette(browser());
++  ASSERT_TRUE(bar);
++  ASSERT_GT(bar->row_count_for_testing(), 15u);
++  const gfx::Rect list = bar->list_for_testing()->GetBoundsInScreen();
++  for (size_t i = 1; i <= 15; ++i) {
++    Press(bar, ui::VKEY_DOWN);
++    ASSERT_EQ(i, bar->selected_row_for_testing());
++    views::test::RunScheduledLayout(bar);
++    const gfx::Rect row = bar->row_view_for_testing(i)->GetBoundsInScreen();
++    EXPECT_TRUE(list.Contains(row)) << "row " << i << " at " << row.ToString()
++                                    << ", list " << list.ToString();
++  }
++  bar->Close();
++}
++
++// A tab closed while the bar is open: Enter on its row does nothing, and
++// Enter on another tab's row still goes to that tab.
++IN_PROC_BROWSER_TEST_F(CommandBarKeysTest, ATabClosedUnderTheBar) {
++  tabs::TabInterface* const one = OpenTitled("Zeta tab one");
++  tabs::TabInterface* const two = OpenTitled("Zeta tab two");
++  tabs::TabInterface* const home = OpenTitled("Home");
++  TabStripModel* const tabs = browser()->GetTabStripModel();
++
++  stedding::CommandBarView* bar = OpenWith(u"Zeta tab");
++  ASSERT_TRUE(bar);
++  std::vector<std::u16string> titles = Titles(bar);
++  auto row_of = [&](const std::u16string& title) {
++    return static_cast<size_t>(std::ranges::find(titles, title) -
++                               titles.begin());
++  };
++  // The row of "one", then "one" closes under it.
++  for (size_t i = 0; i < row_of(u"Zeta tab one"); ++i) {
++    Press(bar, ui::VKEY_DOWN);
++  }
++  const int count = tabs->count();
++  tabs->CloseWebContentsAt(tabs->GetIndexOfTab(one), TabCloseTypes::CLOSE_NONE);
++  base::RunLoop().RunUntilIdle();
++  Press(bar, ui::VKEY_RETURN);
++  base::RunLoop().RunUntilIdle();
++  EXPECT_EQ(home, tabs->GetActiveTab()) << "nothing to go to";
++  EXPECT_EQ(count - 1, tabs->count()) << "and nothing opened instead";
++  EXPECT_FALSE(restored_.is_valid());
++
++  // "two"'s row, with a tab before it closed: the strip moved, the row did
++  // not.
++  if (stedding::CommandBarView* const open =
++          stedding::CommandBarView::GetOpenBar(
++              BrowserView::GetBrowserViewForBrowser(browser()))) {
++    open->Close();
++    base::RunLoop().RunUntilIdle();
++  }
++  tabs::TabInterface* const extra = OpenTitled("Before");
++  tabs->MoveWebContentsAt(tabs->GetIndexOfTab(extra), 0,
++                          /*select_after_move=*/false);
++  tabs->ActivateTabAt(tabs->GetIndexOfTab(home));
++  bar = OpenWith(u"Zeta tab");
++  ASSERT_TRUE(bar);
++  titles = Titles(bar);
++  for (size_t i = 0; i < row_of(u"Zeta tab two"); ++i) {
++    Press(bar, ui::VKEY_DOWN);
++  }
++  tabs->CloseWebContentsAt(tabs->GetIndexOfTab(extra),
++                           TabCloseTypes::CLOSE_NONE);
++  base::RunLoop().RunUntilIdle();
++  Press(bar, ui::VKEY_RETURN);
++  base::RunLoop().RunUntilIdle();
++  EXPECT_EQ(two, tabs->GetActiveTab());
++}
++
++// ⇧⌘P, "cap", Escape: back in tabs mode with the text kept, the rows are the
++// tabs that match it.
++IN_PROC_BROWSER_TEST_F(CommandBarKeysTest, EscapeFromActionsKeepsTheText) {
++  OpenTitled("Capybara facts");
++  OpenTitled("Home");
++  stedding::CommandBarView* const bar = Palette(browser());
++  ASSERT_TRUE(bar);
++  Type(bar, u"cap");
++  ASSERT_EQ(stedding::CommandBarView::Mode::kActions, bar->mode_for_testing());
++  views::View* const view = bar;
++  view->AcceleratorPressed(ui::Accelerator(ui::VKEY_ESCAPE, ui::EF_NONE));
++  ASSERT_EQ(stedding::CommandBarView::Mode::kTabs, bar->mode_for_testing());
++  EXPECT_TRUE(
++      std::ranges::contains(Titles(bar), std::u16string(u"Capybara facts")));
++  for (const std::u16string& title : Titles(bar)) {
++    EXPECT_EQ(std::u16string::npos, title.find(u"Capture")) << "an action row";
 +  }
 +  bar->Close();
 +}

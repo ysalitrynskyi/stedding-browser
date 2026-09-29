@@ -637,7 +637,12 @@ into the fresh profile.
     `initializeClearBrowsingData` first). Six browser tests running at once
     on this Mac also make Chromium's own clearing of the network history,
     part of a cache deletion, take longer than a test may wait; a test that
-    deletes data asks for cookies alone.
+    deletes data asks for cookies alone. Two more: a background tab's
+    renderer runs at a low priority on the Mac, so waiting for a background
+    tab to load can take half a minute (open it in the foreground, or do not
+    wait); and the rail expands on hover only in the active window, so the
+    suite runs with one job (`tooling/dev test browser` does), since with
+    several a test's window can lose focus to another's.
 
 ## The Windows build
 

@@ -37,7 +37,9 @@ tooling/dev capture --features 'SteddingArcStyleWindow:extra_spaces/2/pin_tabs/1
 # look at the capture. measure pixels, don't eyeball.
 # 3. commit in the checkout with Why:/Removable when: footers -- a fix to an existing
 #    feature is a fixup into that feature's commit (git commit --fixup=<sha>, then
-#    GIT_SEQUENCE_EDITOR=true git rebase --autosquash <pin>), not a new patch
+#    GIT_SEQUENCE_EDITOR=true git rebase --autosquash <pin>), not a new patch --
+#    or, to leave every other file's modification time alone and so rebuild
+#    nothing else (trap 44): tooling/fold-fix <sha> <files>, with the fix in the tree
 tooling/dev patch                     # update-patches + check-repo
 tooling/dev status                    # the numbers for any doc you touch
 # commit + push this repo

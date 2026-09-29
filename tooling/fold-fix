@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+# Fold working-tree fixes into an earlier commit of the series, without a checkout.
+#
+# Usage:
+#   tooling/fold-fix <commit> <file>...     on the work branch, with the fixes made in the tree
+#
+# The series is amended with `git commit --fixup=<sha>` and `git rebase --autosquash`
+# (docs/HANDOFF.md, "The loop that works"). That rebase checks out every commit from the
+# target to the tip, so every file those commits touch gets a new modification time and
+# siso rebuilds their objects although the content is the same (trap 44; on the M155
+# series on Windows a fixup into an early patch is most of a tree's worth of files).
+# This does the same fold with git plumbing alone and writes no file but the ones fixed,
+# so nothing else is rebuilt.
+#
+# What it does: the change of each file (the tip's blob to the working-tree file) is
+# applied, by a three-way merge, to that file's version in every commit from <commit> to
+# the tip, and the commits are rewritten on top of <commit>'s parent with their own
+# messages, authors and dates. A conflict in any of them stops the run before anything
+# moves. The branch moves only when the new tip's tree is exactly the old tip's tree plus
+# the fixed files, which is the tree-identity check of trap 50. The files are staged, so
+# the index matches the new tip and `git status` shows no change to them.
+#
+# It does not run tooling/update-patches; run that, then tooling/check-repo, as after a
+# rebase.
+
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=./lib.sh
+. "$(cd "$(dirname "$0")" && pwd)/lib.sh"
+
+main() {
+  [ "$#" -ge 2 ] || die "usage: tooling/fold-fix <commit> <file>..."
+  [ -d "$CHROMIUM_SRC/.git" ] || die "no checkout at $CHROMIUM_SRC"
+  cd "$CHROMIUM_SRC" || die "cannot enter $CHROMIUM_SRC"
+
+  local target files branch old_tip work idx prev count c f
+  target="$(git rev-parse --verify "$1^{commit}")" || die "no commit '$1'"
+  shift
+  files=("$@")
+  branch="$(git rev-parse --abbrev-ref HEAD)"
+  [ "$branch" != HEAD ] || die "HEAD is detached; run this on the work branch"
+  old_tip="$(git rev-parse HEAD)"
+  git merge-base --is-ancestor "$target" "$old_tip" || die "$1 is not below HEAD"
+
+  work="$(mktemp -d)"
+  # shellcheck disable=SC2064  # expand $work now, not at trap time
+  trap "rm -rf '$work'" EXIT
+  idx="$work/index"
+  for f in "${files[@]}"; do
+    mkdir -p "$work/base/$(dirname "$f")" "$work/fixed/$(dirname "$f")"
+    git show "HEAD:$f" > "$work/base/$f" || die "$f is not in HEAD"
+    cp "$f" "$work/fixed/$f" || die "cannot read $f"
+    if cmp -s "$work/base/$f" "$work/fixed/$f"; then
+      die "$f is unchanged against HEAD"
+    fi
+  done
+
+  prev="$(git rev-parse "$target^")"
+  count=0
+  for c in $(git rev-list --reverse "$target^..$old_tip"); do
+    GIT_INDEX_FILE="$idx" git read-tree "$c^{tree}"
+    for f in "${files[@]}"; do
+      if ! git cat-file -e "$c:$f" 2>/dev/null; then
+        log "$(git rev-parse --short=10 "$c"): $f is not there yet, left alone"
+        continue
+      fi
+      git cat-file blob "$c:$f" > "$work/cur"
+      if ! git merge-file -p "$work/cur" "$work/base/$f" "$work/fixed/$f" > "$work/merged"; then
+        die "the fix to $f conflicts in $(git rev-parse --short=10 "$c") ($(git log -1 --format=%s "$c")); nothing moved"
+      fi
+      GIT_INDEX_FILE="$idx" git update-index --cacheinfo \
+        "$(git ls-tree "$c" -- "$f" | awk '{print $1}'),$(git hash-object -w "$work/merged"),$f"
+    done
+    git cat-file commit "$c" | sed '1,/^$/d' > "$work/message"
+    prev="$(
+      GIT_AUTHOR_NAME="$(git log -1 --format=%an "$c")" \
+      GIT_AUTHOR_EMAIL="$(git log -1 --format=%ae "$c")" \
+      GIT_AUTHOR_DATE="$(git log -1 --format=%aI "$c")" \
+      GIT_COMMITTER_NAME="$(git log -1 --format=%cn "$c")" \
+      GIT_COMMITTER_EMAIL="$(git log -1 --format=%ce "$c")" \
+      GIT_COMMITTER_DATE="$(git log -1 --format=%cI "$c")" \
+      git commit-tree "$(GIT_INDEX_FILE="$idx" git write-tree)" -p "$prev" -F "$work/message"
+    )"
+    count=$((count + 1))
+  done
+
+  git add -- "${files[@]}"
+  if [ "$(git write-tree)" != "$(git rev-parse "$prev^{tree}")" ]; then
+    git reset -q -- "${files[@]}"
+    die "tree identity failed: the new tip is not the old tip plus the fix; nothing moved"
+  fi
+  git update-ref -m "fold a fix into $(git rev-parse --short=10 "$target")" \
+    "refs/heads/$branch" "$prev" "$old_tip"
+  log "folded into $(git log -1 --format='%h %s' "$target")"
+  log "rewrote $count commit(s): $branch $(git rev-parse --short=10 "$old_tip") -> $(git rev-parse --short=10 "$prev")"
+  log "next: tooling/update-patches, then tooling/check-repo"
+}
+
+main "$@"

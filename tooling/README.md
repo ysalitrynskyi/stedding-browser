@@ -28,6 +28,7 @@ its configuration from `chromium-version` — never from a value typed twice.
 | `apply-branding` | Copies `../branding/` assets over the checkout. Not a patch. |
 | `apply-patches` | Replays the patch series onto the pin as commits on `stedding-work`. `--check` answers whether it would apply without touching anything, needs only git (no depot_tools, no Mac, no build), and reports which patches would need a three-way merge. The `series` workflow runs it. |
 | `update-patches` | Turns those commits back into `../patches/`. |
+| `fold-fix` | Folds fixes made in the working tree into an earlier commit of the series with git plumbing, no checkout: the fixed files are the only ones whose modification time changes, so siso rebuilds nothing else (HANDOFF trap 44). A conflict stops it before anything moves, and the branch moves only when the new tip's tree is the old tip's plus the fix. Run `update-patches` and `check-repo` after it. |
 | `repair-checkout` | Rewrites git cache paths after a checkout is moved. |
 | `update-pin` | Moves the Chromium pin to the newest stable and checks the series still applies. |
 | `check-pin` | Is the pin current? Reports `current`, `behind` or `ahead` against stable on every desktop platform; `--self-test` runs the verdict on offline fixtures. The `upstream` workflow calls it. |

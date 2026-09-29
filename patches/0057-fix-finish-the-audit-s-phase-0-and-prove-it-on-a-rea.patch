@@ -15,7 +15,8 @@ at any depth, and chrome://tab-strip-internals shows folders (TAB-5).
 Folder interiors are addressable: a link from a folder tab joins it, a
 split nests whole and in place, Move Tabs Out keeps nested rows in the
 parent, an emptied chain leaves the tree (TAB-6). Folder drops and chip
-drops move tabs without detaching them (TAB-9, SPC-4). Range selection
+drops move tabs without detaching them, and a chip refuses a tab
+group's header as it refuses an essential (TAB-9, SPC-4). Range selection
 skips rows a collapsed folder hides (TAB-10). Folder title and collapse
 reach observers at once (TAB-11). Folders come back after three
 restarts, and after Cmd-Shift-T and a window reopened from History
@@ -212,9 +213,9 @@ into the feature patches they belong to.
  chrome/browser/ui/views/spaces/BUILD.gn       |   6 +-
  .../browser/ui/views/spaces/space_dialogs.cc  |  88 ++
  .../browser/ui/views/spaces/space_dialogs.h   |  34 +
- .../ui/views/spaces/space_drag_target.cc      |  71 +-
- .../ui/views/spaces/space_drag_target.h       |  20 +-
- .../spaces/space_drag_target_unittest.cc      |  56 +-
+ .../ui/views/spaces/space_drag_target.cc      |  76 +-
+ .../ui/views/spaces/space_drag_target.h       |  26 +-
+ .../spaces/space_drag_target_unittest.cc      |  74 +-
  .../ui/views/spaces/space_switcher_rules.cc   |  41 +
  .../ui/views/spaces/space_switcher_rules.h    |  17 +
  .../spaces/space_switcher_rules_unittest.cc   |  22 +
@@ -277,7 +278,7 @@ into the feature patches they belong to.
  chrome/common/stedding/space_partitions.cc    |  41 +
  chrome/common/stedding/space_partitions.h     |  49 +
  chrome/test/BUILD.gn                          |   1 +
- chrome/test/stedding/BUILD.gn                 | 126 +++
+ chrome/test/stedding/BUILD.gn                 | 127 +++
  .../stedding/archive_sweep_browsertest.cc     | 158 ++++
  .../test/stedding/clear_space_browsertest.cc  | 252 +++++
  .../test/stedding/command_bar_browsertest.cc  | 465 ++++++++++
@@ -304,6 +305,7 @@ into the feature patches they belong to.
  .../stedding/space_jar_restart_browsertest.cc | 131 +++
  .../test/stedding/space_keys_browsertest.mm   |  59 ++
  .../test/stedding/space_switch_browsertest.cc | 859 ++++++++++++++++++
+ chrome/test/stedding/tab_drop_browsertest.cc  | 348 +++++++
  chrome/utility/importer/importer_creator.cc   |   3 -
  components/os_crypt/common/BUILD.gn           |   1 +
  .../os_crypt/common/keychain_password_mac.h   |  14 +
@@ -324,7 +326,7 @@ into the feature patches they belong to.
  .../user_data_importer/common/importer_type.h |   3 -
  crypto/apple/fake_keychain_v2.h               |  11 -
  crypto/apple/fake_keychain_v2.mm              |   2 -
- 234 files changed, 18230 insertions(+), 3587 deletions(-)
+ 235 files changed, 18608 insertions(+), 3587 deletions(-)
  delete mode 100644 chrome/browser/ui/spaces/chromium_profile_import.cc
  delete mode 100644 chrome/browser/ui/spaces/chromium_profile_import.h
  delete mode 100644 chrome/browser/ui/spaces/chromium_profile_import_unittest.cc
@@ -381,6 +383,7 @@ into the feature patches they belong to.
  create mode 100644 chrome/test/stedding/space_jar_restart_browsertest.cc
  create mode 100644 chrome/test/stedding/space_keys_browsertest.mm
  create mode 100644 chrome/test/stedding/space_switch_browsertest.cc
+ create mode 100644 chrome/test/stedding/tab_drop_browsertest.cc
 
 diff --git a/BUILD.gn b/BUILD.gn
 index 5d49f9d915ff8..e8069a13657b3 100644
@@ -15009,7 +15012,7 @@ index 0000000000000..13eaaa9c8fd52
 +
 +#endif  // CHROME_BROWSER_UI_VIEWS_SPACES_SPACE_DIALOGS_H_
 diff --git a/chrome/browser/ui/views/spaces/space_drag_target.cc b/chrome/browser/ui/views/spaces/space_drag_target.cc
-index daf3f50b3a1ea..1b9668d4a84e5 100644
+index daf3f50b3a1ea..5556aa3dc8b50 100644
 --- a/chrome/browser/ui/views/spaces/space_drag_target.cc
 +++ b/chrome/browser/ui/views/spaces/space_drag_target.cc
 @@ -4,15 +4,17 @@
@@ -15032,7 +15035,7 @@ index daf3f50b3a1ea..1b9668d4a84e5 100644
  
  namespace spaces {
  
-@@ -36,8 +38,13 @@ TabDragContext* SpaceDragTarget::OnTabDragUpdated(
+@@ -36,8 +38,14 @@ TabDragContext* SpaceDragTarget::OnTabDragUpdated(
      const gfx::Point& point_in_screen) {
    SetHoveredSpace(switcher_ ? switcher_->SpaceAtScreenPoint(point_in_screen)
                              : std::nullopt);
@@ -15042,17 +15045,19 @@ index daf3f50b3a1ea..1b9668d4a84e5 100644
 +  dragged_pinned_ = std::ranges::any_of(
 +      session.tab_drag_data_,
 +      [](const TabDragData& data) { return data.contents && data.pinned; });
++  dragged_group_header_ = session.group_header_id().has_value();
 +  // Keep the tabs where they are. Returning no context here popped them out
 +  // into a window of their own as soon as the pointer reached the chips.
 +  return const_cast<TabDragContext*>(controller.GetAttachedContext());
  }
  
  void SpaceDragTarget::OnTabDragExited(const gfx::Point& point_in_screen) {
-@@ -46,40 +53,48 @@ void SpaceDragTarget::OnTabDragExited(const gfx::Point& point_in_screen) {
+@@ -46,40 +54,52 @@ void SpaceDragTarget::OnTabDragExited(const gfx::Point& point_in_screen) {
  
  void SpaceDragTarget::OnTabDragEnded() {
    SetHoveredSpace(std::nullopt);
 +  dragged_pinned_ = false;
++  dragged_group_header_ = false;
  }
  
  bool SpaceDragTarget::CanDropTab() {
@@ -15063,7 +15068,9 @@ index daf3f50b3a1ea..1b9668d4a84e5 100644
 -  // row and are in every Space already.
 -  return true;
 +  // Essentials are the row above every Space; there is nowhere to move one.
-+  return hovered_ && model_->GetSpace(*hovered_) && !dragged_pinned_;
++  // A tab group's header is refused as a whole.
++  return hovered_ && model_->GetSpace(*hovered_) && !dragged_pinned_ &&
++         !dragged_group_header_;
  }
  
  void SpaceDragTarget::HandleTabDrop(DragController& controller) {
@@ -15088,7 +15095,8 @@ index daf3f50b3a1ea..1b9668d4a84e5 100644
 +    const std::vector<content::WebContents*>& dragged) {
 +  const std::optional<SpaceId> target = hovered_;
 +  hovered_.reset();
-+  if (!target || !model_->GetSpace(*target) || dragged_pinned_) {
++  if (!target || !model_->GetSpace(*target) || dragged_pinned_ ||
++      dragged_group_header_) {
      return;
    }
 -
@@ -15122,7 +15130,7 @@ index daf3f50b3a1ea..1b9668d4a84e5 100644
  
  base::CallbackListSubscription SpaceDragTarget::RegisterWillDestroyCallback(
 diff --git a/chrome/browser/ui/views/spaces/space_drag_target.h b/chrome/browser/ui/views/spaces/space_drag_target.h
-index 599922bb068d4..41ec2eaa41600 100644
+index 599922bb068d4..5d1701568eaa5 100644
 --- a/chrome/browser/ui/views/spaces/space_drag_target.h
 +++ b/chrome/browser/ui/views/spaces/space_drag_target.h
 @@ -6,6 +6,7 @@
@@ -15159,7 +15167,7 @@ index 599922bb068d4..41ec2eaa41600 100644
  //
  // A Space's context menu does the same job for anyone who would rather not drag.
  class SpaceDragTarget : public TabDragTarget {
-@@ -43,6 +48,11 @@ class SpaceDragTarget : public TabDragTarget {
+@@ -43,6 +48,14 @@ class SpaceDragTarget : public TabDragTarget {
    // asks whether the drop can be taken.
    void SetHoveredSpace(std::optional<SpaceId> id);
  
@@ -15167,21 +15175,27 @@ index 599922bb068d4..41ec2eaa41600 100644
 +  // since a drag session needs real tab views.
 +  void DropContents(const std::vector<content::WebContents*>& dragged);
 +  void SetDraggedTabPinnedForTesting(bool pinned) { dragged_pinned_ = pinned; }
++  void SetDraggedGroupHeaderForTesting(bool header) {
++    dragged_group_header_ = header;
++  }
 +
    // TabDragTarget:
    void OnTabDragEntered() override;
    TabDragContext* OnTabDragUpdated(TabDragTarget::DragController& controller,
-@@ -59,6 +69,8 @@ class SpaceDragTarget : public TabDragTarget {
+@@ -59,6 +72,11 @@ class SpaceDragTarget : public TabDragTarget {
    const raw_ref<BrowserWindowInterface> browser_;
    const raw_ptr<SpaceSwitcherView> switcher_;
    std::optional<SpaceId> hovered_;
 +  // Whether an essential is among the dragged tabs; read on every update.
 +  bool dragged_pinned_ = false;
++  // Whether the drag started on a tab group's header: the group is a unit of
++  // the strip, and a chip does not take it (PLAN.md SPC-4).
++  bool dragged_group_header_ = false;
    base::OnceClosureList will_destroy_callbacks_;
  };
  
 diff --git a/chrome/browser/ui/views/spaces/space_drag_target_unittest.cc b/chrome/browser/ui/views/spaces/space_drag_target_unittest.cc
-index d9ba09eb2a4a7..27fa9aa4b9695 100644
+index d9ba09eb2a4a7..193e221ddbf01 100644
 --- a/chrome/browser/ui/views/spaces/space_drag_target_unittest.cc
 +++ b/chrome/browser/ui/views/spaces/space_drag_target_unittest.cc
 @@ -22,28 +22,16 @@ namespace {
@@ -15237,7 +15251,7 @@ index d9ba09eb2a4a7..27fa9aa4b9695 100644
    EXPECT_EQ(other->id(), model.active_id())
        << "the target Space should become active so the tab stays visible";
  }
-@@ -67,13 +54,30 @@ TEST_F(SpaceDragTargetTest, DroppingNowhereLeavesTheTabAlone) {
+@@ -67,13 +54,48 @@ TEST_F(SpaceDragTargetTest, DroppingNowhereLeavesTheTabAlone) {
    TabStripModel* const tabs = browser()->tab_strip_model();
  
    SpaceModel model;
@@ -15267,6 +15281,24 @@ index d9ba09eb2a4a7..27fa9aa4b9695 100644
 +  target.SetDraggedTabPinnedForTesting(true);
 +  EXPECT_FALSE(target.CanDropTab());
 +  target.DropContents({tabs->GetWebContentsAt(0)});
++  EXPECT_NE(other->id(), model.active_id()) << "nothing moved, nothing shown";
++}
++
++// A tab group's header is refused: the group's tabs stay where they are
++// (PLAN.md SPC-4).
++TEST_F(SpaceDragTargetTest, AGroupHeaderIsRefused) {
++  AddTab(browser(), GURL("https://example.com/"));
++  TabStripModel* const tabs = browser()->tab_strip_model();
++
++  SpaceModel model;
++  const SpaceId home = model.active_id();
++  Space* const other = model.AddSpace("Other", SK_ColorRED);
++  SpaceDragTarget target(model, *browser(), /*switcher=*/nullptr);
++  target.SetHoveredSpace(other->id());
++  target.SetDraggedGroupHeaderForTesting(true);
++  EXPECT_FALSE(target.CanDropTab());
++  target.DropContents({tabs->GetWebContentsAt(0)});
++  EXPECT_EQ(home, model.SpaceForTab(tabs->GetTabAtIndex(0)));
 +  EXPECT_NE(other->id(), model.active_id()) << "nothing moved, nothing shown";
  }
  
@@ -21147,10 +21179,10 @@ index 64ea8244f5f74..92d2c528b9d0a 100644
      "//chrome/browser/ui/hats",
 diff --git a/chrome/test/stedding/BUILD.gn b/chrome/test/stedding/BUILD.gn
 new file mode 100644
-index 0000000000000..d8f5fffba89eb
+index 0000000000000..af83ecf1d1963
 --- /dev/null
 +++ b/chrome/test/stedding/BUILD.gn
-@@ -0,0 +1,126 @@
+@@ -0,0 +1,127 @@
 +# Copyright 2026 The Stedding Authors
 +# Use of this source code is governed by a BSD-style license that can be
 +# found in the LICENSE file.
@@ -21194,6 +21226,7 @@ index 0000000000000..d8f5fffba89eb
 +    "space_jar_browsertest.cc",
 +    "space_jar_restart_browsertest.cc",
 +    "space_switch_browsertest.cc",
++    "tab_drop_browsertest.cc",
 +  ]
 +
 +  deps = [
@@ -28464,6 +28497,360 @@ index 0000000000000..9787ccec91f03
 +IN_PROC_BROWSER_TEST_F(SpaceSwitchRtlTest, AChipDraggedInTheRowMovesItsSpace) {
 +  MakeThreeSpaces();
 +  DragTheThirdChipSecond(/*along_y=*/false);
++}
++
++}  // namespace
+diff --git a/chrome/test/stedding/tab_drop_browsertest.cc b/chrome/test/stedding/tab_drop_browsertest.cc
+new file mode 100644
+index 0000000000000..51dab8835901e
+--- /dev/null
++++ b/chrome/test/stedding/tab_drop_browsertest.cc
+@@ -0,0 +1,348 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++// Tabs dragged onto a folder's header and onto a Space's chip (PLAN.md
++// TAB-9, SPC-4, TST-7). A real window's rows are pressed, dragged in steps
++// and released through the window's root view. The tabs move without leaving
++// the window: the same tab and page, with its pin, home, Space and place in
++// the Space's recent list. The drops used to detach the tabs and insert them
++// again -- routing them to another Space on the way, and tearing a window
++// off when the pointer left the list for the switcher.
++
++#include <memory>
++#include <optional>
++#include <string>
++#include <vector>
++
++#include "base/memory/raw_ptr.h"
++#include "base/run_loop.h"
++#include "base/test/run_until.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
++#include "chrome/browser/ui/spaces/space.h"
++#include "chrome/browser/ui/spaces/space_id.h"
++#include "chrome/browser/ui/spaces/space_model.h"
++#include "chrome/browser/ui/spaces/space_router.h"
++#include "chrome/browser/ui/stedding/pin_lifecycle.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "chrome/browser/ui/views/frame/browser_view.h"
++#include "chrome/browser/ui/views/spaces/space_switcher_view.h"
++#include "chrome/browser/ui/views/tabs/common/folder_view.h"
++#include "chrome/browser/ui/views/tabs/common/tab_group_header_view.h"
++#include "chrome/browser/ui/views/tabs/common/tab_view.h"
++#include "chrome/browser/ui/views/test/vertical_tabs_browser_test_mixin.h"
++#include "chrome/test/base/in_process_browser_test.h"
++#include "chrome/test/base/ui_test_utils.h"
++#include "chrome/test/stedding/sidebar_test_util.h"
++#include "components/prefs/pref_service.h"
++#include "components/tab_groups/tab_group_id.h"
++#include "components/tabs/public/folder_tab_collection.h"
++#include "components/tabs/public/tab_collection.h"
++#include "components/tabs/public/tab_interface.h"
++#include "content/public/browser/navigation_controller.h"
++#include "content/public/browser/web_contents.h"
++#include "content/public/test/browser_test.h"
++#include "net/dns/mock_host_resolver.h"
++#include "net/test/embedded_test_server/embedded_test_server.h"
++#include "third_party/skia/include/core/SkColor.h"
++#include "ui/base/window_open_disposition.h"
++#include "ui/events/types/event_type.h"
++#include "ui/gfx/geometry/point.h"
++#include "ui/views/test/views_test_utils.h"
++#include "ui/views/view.h"
++#include "ui/views/view_utils.h"
++#include "ui/views/widget/widget.h"
++#include "url/gurl.h"
++
++namespace {
++
++spaces::SpaceSwitcherView* FindDrawnSwitcher(views::View* view) {
++  if (auto* const switcher =
++          views::AsViewClass<spaces::SpaceSwitcherView>(view);
++      switcher && switcher->IsDrawn()) {
++    return switcher;
++  }
++  for (views::View* const child : view->children()) {
++    if (spaces::SpaceSwitcherView* const found = FindDrawnSwitcher(child)) {
++      return found;
++    }
++  }
++  return nullptr;
++}
++
++TabGroupHeaderView* FindDrawnGroupHeader(views::View* view) {
++  if (auto* const header = views::AsViewClass<TabGroupHeaderView>(view);
++      header && header->IsDrawn()) {
++    return header;
++  }
++  for (views::View* const child : view->children()) {
++    if (TabGroupHeaderView* const found = FindDrawnGroupHeader(child)) {
++      return found;
++    }
++  }
++  return nullptr;
++}
++
++// Whether `tab` sits in `folder`, directly or in a folder inside it.
++bool IsIn(const tabs::TabInterface* tab,
++          const tabs::FolderTabCollection* folder) {
++  for (const tabs::TabCollection* parent = tab->GetParentCollection(); parent;
++       parent = parent->GetParentCollection()) {
++    if (parent == folder) {
++      return true;
++    }
++  }
++  return false;
++}
++
++class TabDropTest : public VerticalTabsBrowserTestMixin<InProcessBrowserTest> {
++ protected:
++  void SetUpOnMainThread() override {
++    VerticalTabsBrowserTestMixin<InProcessBrowserTest>::SetUpOnMainThread();
++    host_resolver()->AddRule("*", "127.0.0.1");
++    ASSERT_TRUE(embedded_test_server()->Start());
++  }
++
++  BrowserView* browser_view() {
++    return BrowserView::GetBrowserViewForBrowser(browser());
++  }
++  spaces::SpaceModel* model() { return spaces::SpaceModel::From(browser()); }
++  views::Widget* widget() { return browser_view()->GetWidget(); }
++  views::View* root() { return widget()->GetRootView(); }
++  int Index(tabs::TabInterface* tab) {
++    return tab_strip_model()->GetIndexOfTab(tab);
++  }
++
++  GURL Url(const std::string& host) {
++    return embedded_test_server()->GetURL(host, "/title1.html");
++  }
++
++  // A new foreground tab showing `host`, loaded.
++  tabs::TabInterface* Open(const std::string& host) {
++    EXPECT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
++        browser(), Url(host), WindowOpenDisposition::NEW_FOREGROUND_TAB,
++        ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
++    return tab_strip_model()->GetActiveTab();
++  }
++
++  gfx::Point RowCentre(const tabs::TabInterface* tab) {
++    EXPECT_TRUE(stedding::test::WaitForRowsToSettle(widget()));
++    TabView* const row = stedding::test::FindDrawnRow(root(), tab);
++    CHECK(row);
++    return row->GetBoundsInScreen().CenterPoint();
++  }
++
++  gfx::Point HeaderCentre(const tabs::FolderTabCollection* folder) {
++    EXPECT_TRUE(stedding::test::WaitForRowsToSettle(widget()));
++    FolderView* const view = stedding::test::FindDrawnFolder(root(), folder);
++    CHECK(view);
++    return view->GetHeaderBoundsInScreen().CenterPoint();
++  }
++
++  std::optional<gfx::Point> ChipCentre(const spaces::SpaceId& id) {
++    views::test::RunScheduledLayout(widget());
++    spaces::SpaceSwitcherView* const switcher = FindDrawnSwitcher(root());
++    if (!switcher) {
++      return std::nullopt;
++    }
++    for (views::View* const chip :
++         switcher->icon_row_for_testing()->children()) {
++      if (!chip->IsDrawn()) {
++        continue;
++      }
++      const gfx::Point centre = chip->GetBoundsInScreen().CenterPoint();
++      if (switcher->SpaceAtScreenPoint(centre) == id) {
++        return centre;
++      }
++    }
++    return std::nullopt;
++  }
++
++  // Presses at `from`, moves to `to` in twelve even steps, releases: a
++  // person's drag, sent to the window's root view.
++  void Drag(const gfx::Point& from, const gfx::Point& to) {
++    stedding::test::SendLeftMouse(widget(), ui::EventType::kMousePressed, from);
++    for (int step = 1; step <= 12; ++step) {
++      stedding::test::SendLeftMouse(
++          widget(), ui::EventType::kMouseDragged,
++          gfx::Point(from.x() + (to.x() - from.x()) * step / 12,
++                     from.y() + (to.y() - from.y()) * step / 12));
++    }
++    stedding::test::SendLeftMouse(widget(), ui::EventType::kMouseReleased, to);
++    base::RunLoop().RunUntilIdle();
++  }
++
++  static size_t WindowCount() { return GetAllBrowserWindowInterfaces().size(); }
++
++  // What a move must keep of a tab.
++  struct Kept {
++    raw_ptr<content::WebContents> contents = nullptr;
++    int entries = 0;
++    GURL page;
++  };
++  static Kept KeptOf(tabs::TabInterface* tab) {
++    return {tab->GetContents(),
++            tab->GetContents()->GetController().GetEntryCount(),
++            tab->GetContents()->GetLastCommittedURL()};
++  }
++  static void ExpectKept(tabs::TabInterface* tab, const Kept& kept) {
++    EXPECT_EQ(kept.contents, tab->GetContents()) << "the tab was remade";
++    EXPECT_EQ(kept.entries,
++              tab->GetContents()->GetController().GetEntryCount());
++    EXPECT_EQ(kept.page, tab->GetContents()->GetLastCommittedURL());
++  }
++};
++
++// PLAN.md TAB-9: a Space pin, a routed tab and a three-tab selection
++// dropped on a folder's header join the folder as they are; a nested
++// folder's only tab dropped on its own header leaves everything standing.
++IN_PROC_BROWSER_TEST_F(TabDropTest, TabsDroppedOnAFolderHeaderJoinIt) {
++  spaces::SpaceModel* const m = model();
++  ASSERT_TRUE(m);
++  const spaces::SpaceId home = m->active_id();
++  const spaces::SpaceId work = m->AddSpace("Work", SK_ColorBLUE)->id();
++
++  tabs::TabInterface* const f1 = Open("f1.test");
++  tabs::TabInterface* const f2 = Open("f2.test");
++  tabs::FolderTabCollection* const folder =
++      tab_strip_model()->AddToNewFolder({Index(f1), Index(f2)});
++  ASSERT_TRUE(folder);
++  tabs::TabInterface* const pin = Open("pin.test");
++  m->SetSpacePinned(pin, true);
++  ASSERT_EQ(Url("pin.test"), m->HomeUrl(pin).value_or(GURL()));
++  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), Url("away.test")));
++  ASSERT_TRUE(stedding::HasDriftedFromHome(
++      Url("pin.test"), pin->GetContents()->GetLastCommittedURL()));
++  // A tab whose site is routed to Work, opened here before the route.
++  tabs::TabInterface* const routed = Open("routed.test");
++  spaces::Route route;
++  route.match = spaces::Route::Match::kHost;
++  route.pattern = "routed.test";
++  route.space = work.ToString();
++  spaces::AddRoute(browser()->GetProfile()->GetPrefs(), route);
++  tabs::TabInterface* const a = Open("a.test");
++  tabs::TabInterface* const b = Open("b.test");
++  tabs::TabInterface* const c = Open("c.test");
++  const std::vector<tabs::TabInterface*> recent = m->RecentTabs(home, 20);
++
++  // The pin: in the folder, still a drifted pin of Home with its home.
++  const Kept pin_kept = KeptOf(pin);
++  Drag(RowCentre(pin), HeaderCentre(folder));
++  ASSERT_TRUE(base::test::RunUntil([&]() { return IsIn(pin, folder); }))
++      << "the pin did not join the folder";
++  ExpectKept(pin, pin_kept);
++  EXPECT_TRUE(m->IsSpacePinned(pin));
++  EXPECT_EQ(Url("pin.test"), m->HomeUrl(pin).value_or(GURL()));
++  EXPECT_EQ(home, m->SpaceForTab(pin));
++  // The press made the pin the tab on screen; the rest keep their order.
++  std::vector<tabs::TabInterface*> expected_recent = recent;
++  std::erase(expected_recent, pin);
++  expected_recent.insert(expected_recent.begin(), pin);
++  EXPECT_EQ(expected_recent, m->RecentTabs(home, 20)) << "Ctrl-Tab's order";
++
++  // The routed tab stays in Home.
++  const Kept routed_kept = KeptOf(routed);
++  Drag(RowCentre(routed), HeaderCentre(folder));
++  ASSERT_TRUE(base::test::RunUntil([&]() { return IsIn(routed, folder); }));
++  ExpectKept(routed, routed_kept);
++  EXPECT_EQ(home, m->SpaceForTab(routed)) << "the drop routed the tab";
++
++  // Three selected tabs go together.
++  tab_strip_model()->ActivateTabAt(Index(a));
++  tab_strip_model()->SelectTabAt(Index(b));
++  tab_strip_model()->SelectTabAt(Index(c));
++  ASSERT_EQ(3u, tab_strip_model()->selection_model().size());
++  Drag(RowCentre(a), HeaderCentre(folder));
++  ASSERT_TRUE(base::test::RunUntil([&]() {
++    return IsIn(a, folder) && IsIn(b, folder) && IsIn(c, folder);
++  })) << "not all of the selection joined the folder";
++  EXPECT_EQ(1u, WindowCount()) << "a window tore off";
++
++  // A nested folder's only tab, on its own header: the folder can empty
++  // under the drag, and nothing may be left pointing at it.
++  tab_strip_model()->ActivateTabAt(Index(c));
++  ASSERT_EQ(1u, tab_strip_model()->selection_model().size());
++  tabs::FolderTabCollection* const nested =
++      tab_strip_model()->AddToNewFolder({Index(c)}, folder);
++  ASSERT_TRUE(nested);
++  Drag(RowCentre(c), HeaderCentre(nested));
++  EXPECT_NE(TabStripModel::kNoTab, Index(c));
++  EXPECT_TRUE(IsIn(a, folder));
++  EXPECT_EQ(1u, WindowCount());
++}
++
++// PLAN.md SPC-4, spaces B12: a plain tab, a Space pin and a two-tab
++// selection dropped on a Space's chip move to that Space where the drag left
++// them, keep their page, pin and home, and the window follows them there;
++// the window keeps every tab. An essential and a tab group's header are
++// refused.
++IN_PROC_BROWSER_TEST_F(TabDropTest, TabsDroppedOnAChipMoveToThatSpace) {
++  spaces::SpaceModel* const m = model();
++  ASSERT_TRUE(m);
++  const spaces::SpaceId home = m->active_id();
++  const spaces::SpaceId work = m->AddSpace("Work", SK_ColorBLUE)->id();
++
++  tabs::TabInterface* const essential = Open("essential.test");
++  tab_strip_model()->SetTabPinned(Index(essential), true);
++  tabs::TabInterface* const plain = Open("plain.test");
++  tabs::TabInterface* const pin = Open("pin.test");
++  m->SetSpacePinned(pin, true);
++  tabs::TabInterface* const b = Open("b.test");
++  tabs::TabInterface* const c = Open("c.test");
++  tabs::TabInterface* const grouped = Open("grouped.test");
++  tab_strip_model()->AddToNewGroup({Index(grouped)});
++  Open("stay.test");
++  ASSERT_TRUE(ChipCentre(work));
++
++  // A plain tab.
++  const Kept plain_kept = KeptOf(plain);
++  Drag(RowCentre(plain), *ChipCentre(work));
++  ASSERT_TRUE(base::test::RunUntil([&]() {
++    return m->SpaceForTab(plain) == work;
++  })) << "the tab did not move to Work";
++  ExpectKept(plain, plain_kept);
++  EXPECT_EQ(1u, WindowCount()) << "a window tore off";
++  EXPECT_EQ(work, m->active_id()) << "the window follows the tab";
++  ASSERT_TRUE(m->SetActiveSpace(home));
++
++  // A Space pin keeps its pin and its home.
++  const Kept pin_kept = KeptOf(pin);
++  Drag(RowCentre(pin), *ChipCentre(work));
++  ASSERT_TRUE(
++      base::test::RunUntil([&]() { return m->SpaceForTab(pin) == work; }));
++  ExpectKept(pin, pin_kept);
++  EXPECT_TRUE(m->IsSpacePinned(pin));
++  EXPECT_EQ(Url("pin.test"), m->HomeUrl(pin).value_or(GURL()));
++  ASSERT_TRUE(m->SetActiveSpace(home));
++
++  // Two selected tabs go together.
++  tab_strip_model()->ActivateTabAt(Index(b));
++  tab_strip_model()->SelectTabAt(Index(c));
++  ASSERT_EQ(2u, tab_strip_model()->selection_model().size());
++  Drag(RowCentre(b), *ChipCentre(work));
++  ASSERT_TRUE(base::test::RunUntil([&]() {
++    return m->SpaceForTab(b) == work && m->SpaceForTab(c) == work;
++  })) << "not all of the selection moved";
++  EXPECT_EQ(1u, WindowCount());
++  ASSERT_TRUE(m->SetActiveSpace(home));
++
++  // An essential belongs to every Space: refused.
++  tab_strip_model()->ActivateTabAt(Index(essential));
++  Drag(RowCentre(essential), *ChipCentre(work));
++  EXPECT_TRUE(essential->IsPinned()) << "the essential was unpinned";
++  EXPECT_EQ(1u, WindowCount());
++
++  // A tab group's header: refused, its tab stays in Home.
++  views::test::RunScheduledLayout(widget());
++  if (TabGroupHeaderView* const header = FindDrawnGroupHeader(root())) {
++    Drag(header->GetBoundsInScreen().CenterPoint(), *ChipCentre(work));
++    EXPECT_EQ(home, m->SpaceForTab(grouped)) << "a group header was taken";
++    EXPECT_EQ(1u, WindowCount());
++  } else {
++    ADD_FAILURE() << "no drawn header for the tab group";
++  }
 +}
 +
 +}  // namespace

@@ -251,7 +251,7 @@ Windows-only preview. Signing: the Developer ID certificate and the notary profi
 exist since 2026-09-23, and the signer works end to end (`S-17`, patch 0051).
 The pin is 155.0.8059.12 (2026-09-24, `S-64`: Google's early-stable build of M155,
 taken straight from M153 because the owner wants the newest stable-channel build,
-ADR 0007); the series is 57 patches on it. `v0.2.0-beta.8` is the Mac image of the
+ADR 0007); `tooling/dev status` counts the series on it. `v0.2.0-beta.8` is the Mac image of the
 previous pin, 153.0.8010.53, and `v0.2.0-beta.7` (153.0.8010.48) the one before. Outstanding:
 `BACKLOG.md`. First vanilla perf comparison is in
 `docs/perf/README.md`: on the deterministic page list every QUALITY budget is
@@ -297,7 +297,8 @@ met (cold +2.3%, warm −2.0%, memory +0.0% over vanilla).
 
 ## Current priorities (keep this list short and fresh)
 
-The order is `BACKLOG.md`. `v0.2.0-beta.4` is out (unsigned, 2026-09-05): rounds
+Until Phase 1 of `PLAN.md` is done, `PLAN.md` sets the order of work; after it,
+`BACKLOG.md` does. `v0.2.0-beta.4` is out (unsigned, 2026-09-05): rounds
 5, 6 and 7 — the Arc parity work, the Zen-mods plan in full
 (`docs/ROUND6-PLAN.md`, patches 0016–0036), the operator's six from beta 3, the
 Arc one-click import, and the second pass on the operator's replies the same

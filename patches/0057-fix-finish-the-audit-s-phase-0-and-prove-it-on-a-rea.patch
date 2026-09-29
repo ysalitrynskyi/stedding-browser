@@ -271,7 +271,7 @@ into the feature patches they belong to.
  chrome/test/stedding/import_browsertest.cc    | 154 ++++
  chrome/test/stedding/link_drop_browsertest.cc | 294 +++++++
  .../stedding/little_window_browsertest.cc     | 120 +++
- chrome/test/stedding/restore_browsertest.cc   | 619 +++++++++++++++
+ chrome/test/stedding/restore_browsertest.cc   | 729 +++++++++++++++++
  .../test/stedding/screenshot_browsertest.cc   | 143 ++++
  .../stedding/search_default_browsertest.cc    |  52 ++
  .../stedding/settings_spaces_browsertest.cc   |  87 ++
@@ -303,7 +303,7 @@ into the feature patches they belong to.
  .../user_data_importer/common/importer_type.h |   3 -
  crypto/apple/fake_keychain_v2.h               |  11 -
  crypto/apple/fake_keychain_v2.mm              |   2 -
- 230 files changed, 16851 insertions(+), 3585 deletions(-)
+ 230 files changed, 16961 insertions(+), 3585 deletions(-)
  delete mode 100644 chrome/browser/ui/spaces/chromium_profile_import.cc
  delete mode 100644 chrome/browser/ui/spaces/chromium_profile_import.h
  delete mode 100644 chrome/browser/ui/spaces/chromium_profile_import_unittest.cc
@@ -23398,10 +23398,10 @@ index 0000000000000..144652d8a1132
 +}  // namespace
 diff --git a/chrome/test/stedding/restore_browsertest.cc b/chrome/test/stedding/restore_browsertest.cc
 new file mode 100644
-index 0000000000000..fd9af9cecd030
+index 0000000000000..0bbe16de8eac5
 --- /dev/null
 +++ b/chrome/test/stedding/restore_browsertest.cc
-@@ -0,0 +1,619 @@
+@@ -0,0 +1,729 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -23420,11 +23420,13 @@ index 0000000000000..fd9af9cecd030
 +// saved pages keep the port of the run that saved them.
 +
 +#include <memory>
++#include <optional>
 +#include <string>
 +#include <vector>
 +
 +#include "base/files/file_path.h"
 +#include "base/files/file_util.h"
++#include "base/memory/raw_ptr.h"
 +#include "base/run_loop.h"
 +#include "base/strings/string_util.h"
 +#include "base/test/run_until.h"
@@ -23448,6 +23450,7 @@ index 0000000000000..fd9af9cecd030
 +#include "chrome/browser/ui/tabs/tab_model.h"
 +#include "chrome/browser/ui/tabs/tab_strip_model.h"
 +#include "chrome/browser/ui/tabs/vertical_tab_strip_state_controller.h"
++#include "chrome/browser/ui/views/commandbar/command_bar_view.h"
 +#include "chrome/browser/ui/views/frame/browser_view.h"
 +#include "chrome/browser/ui/views/tabs/common/folder_view.h"
 +#include "chrome/test/base/in_process_browser_test.h"
@@ -23468,7 +23471,11 @@ index 0000000000000..fd9af9cecd030
 +#include "net/test/embedded_test_server/embedded_test_server.h"
 +#include "third_party/skia/include/core/SkColor.h"
 +#include "ui/base/window_open_disposition.h"
++#include "ui/events/event.h"
++#include "ui/events/event_constants.h"
++#include "ui/events/keycodes/keyboard_codes.h"
 +#include "ui/views/controls/label.h"
++#include "ui/views/controls/textfield/textfield.h"
 +#include "ui/views/test/views_test_utils.h"
 +#include "ui/views/widget/widget.h"
 +#include "url/gurl.h"
@@ -23950,6 +23957,109 @@ index 0000000000000..fd9af9cecd030
 +  EXPECT_EQ("who=work",
 +            content::EvalJs(back->GetContents(), "document.body.innerText"))
 +      << "signed in as in the Space, and nothing from the shared jar";
++}
++
++// PLAN.md WEB-7, archive A8: the same through the two ways a person
++// restores. A tab signed in to a site, in a folder of an unnamed Space with
++// its own jar, closes; the Spaces are reordered; then the archive page's
++// Restore button, or ⌘T's archived row, brings it back into that Space and
++// folder, still signed in, with nothing from the shared jar.
++class ArchiveRestoreTest : public RestoreTest {
++ protected:
++  // Closes the signed-in tab and reorders the Spaces.
++  void CloseASignedInFolderTab() {
++    spaces::SpaceModel* const m = model();
++    ASSERT_TRUE(m);
++    home_ = m->active_id();
++    work_ = m->AddSpace(std::string(), SK_ColorBLUE)->id();
++    m->SetSpaceIsolated(work_, true);
++    ASSERT_TRUE(ui_test_utils::NavigateToURL(
++        browser(),
++        embedded_test_server()->GetURL("site.test", "/set-cookie?who=shared")));
++    ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), Url("home.test")));
++
++    ASSERT_TRUE(m->SetActiveSpace(work_));
++    tabs::TabInterface* const kept = Open("kept.test");
++    tabs::TabInterface* const closed = Open("site.test");
++    ASSERT_TRUE(content::NavigateToURL(
++        closed->GetContents(),
++        embedded_test_server()->GetURL("site.test", "/set-cookie?who=work")));
++    // A page with a title, still signed in.
++    ASSERT_TRUE(content::NavigateToURL(
++        closed->GetContents(),
++        embedded_test_server()->GetURL("site.test", "/title2.html")));
++    folder_ = tabs()->AddToNewFolder({Index(kept), Index(closed)});
++    ASSERT_TRUE(folder_);
++    tabs()->CloseWebContentsAt(Index(closed),
++                               TabCloseTypes::CLOSE_CREATE_HISTORICAL_TAB);
++    ASSERT_TRUE(m->SetActiveSpace(home_));
++    ASSERT_TRUE(m->MoveSpace(work_, -1));
++    ASSERT_EQ(work_, m->spaces()[0]->id()) << "the Spaces were reordered";
++  }
++
++  void ExpectItBackInItsSpaceFolderAndJar() {
++    ASSERT_TRUE(base::test::RunUntil([&]() { return Find("site.test"); }));
++    tabs::TabInterface* const back = Find("site.test");
++    EXPECT_EQ(work_, model()->SpaceForTab(back));
++    EXPECT_EQ(folder_, FolderOf(back)) << "back in its folder";
++    EXPECT_TRUE(spaces::IsSpaceStoragePartition(
++        spaces::StoragePartitionConfigForWebContents(back->GetContents())));
++    ASSERT_TRUE(content::NavigateToURL(
++        back->GetContents(),
++        embedded_test_server()->GetURL("site.test", "/echoheader?Cookie")));
++    EXPECT_EQ("who=work",
++              content::EvalJs(back->GetContents(), "document.body.innerText"))
++        << "signed in as in the Space, and nothing from the shared jar";
++  }
++
++  SpaceId home_ = SpaceId::GenerateNew();
++  SpaceId work_ = SpaceId::GenerateNew();
++  raw_ptr<const tabs::FolderTabCollection> folder_ = nullptr;
++};
++
++IN_PROC_BROWSER_TEST_F(ArchiveRestoreTest, TheArchivePageRestoresIt) {
++  CloseASignedInFolderTab();
++  ASSERT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
++      browser(), GURL("chrome://stedding-archive"),
++      WindowOpenDisposition::NEW_FOREGROUND_TAB,
++      ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
++  content::WebContents* const page = tabs()->GetActiveWebContents();
++  const std::string row =
++      "[...document.querySelectorAll('.row')].find(row =>"
++      "  row.querySelector('.title').textContent === 'Title Of Awesomeness')";
++  ASSERT_TRUE(base::test::RunUntil(
++      [&]() { return content::EvalJs(page, "!!" + row).ExtractBool(); }));
++  // The row's own Restore button, as a click on it.
++  ASSERT_TRUE(content::ExecJs(page, row + ".querySelector('button').click()"));
++  ExpectItBackInItsSpaceFolderAndJar();
++}
++
++IN_PROC_BROWSER_TEST_F(ArchiveRestoreTest, TheCommandBarRestoresIt) {
++  CloseASignedInFolderTab();
++  chrome::ExecuteCommand(browser(), IDC_NEW_TAB);  // ⌘T
++  stedding::CommandBarView* const bar = stedding::CommandBarView::GetOpenBar(
++      BrowserView::GetBrowserViewForBrowser(browser()));
++  ASSERT_TRUE(bar);
++  bar->field_for_testing()->SetText(u"Awesomeness");
++  bar->ContentsChanged(bar->field_for_testing(), u"Awesomeness");
++  std::optional<size_t> archived;
++  for (size_t i = 0; i < bar->row_count_for_testing(); ++i) {
++    if (bar->row_title_for_testing(i) == u"Title Of Awesomeness" &&
++        bar->row_detail_for_testing(i).starts_with(u"Archived")) {
++      archived = i;
++      break;
++    }
++  }
++  ASSERT_TRUE(archived.has_value()) << "the closed tab is listed";
++  views::View* const field = bar->field_for_testing();
++  for (size_t i = 0; i < *archived; ++i) {
++    field->OnKeyPressed(
++        ui::KeyEvent(ui::EventType::kKeyPressed, ui::VKEY_DOWN, ui::EF_NONE));
++  }
++  ASSERT_EQ(*archived, bar->selected_row_for_testing());
++  field->OnKeyPressed(
++      ui::KeyEvent(ui::EventType::kKeyPressed, ui::VKEY_RETURN, ui::EF_NONE));
++  ExpectItBackInItsSpaceFolderAndJar();
 +}
 +
 +// PLAN.md TAB-12: a window closed with its folders and reopened from History

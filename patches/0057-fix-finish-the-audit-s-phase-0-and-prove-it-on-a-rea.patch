@@ -289,7 +289,7 @@ into the feature patches they belong to.
  .../test/stedding/command_bar_browsertest.cc  | 465 ++++++++++
  chrome/test/stedding/copy_link_browsertest.cc |  65 ++
  chrome/test/stedding/defaults_browsertest.cc  | 140 +++
- .../external_extensions_browsertest.cc        | 123 +++
+ .../external_extensions_browsertest.cc        | 212 +++++
  .../test/stedding/folder_tabs_browsertest.cc  | 454 +++++++++
  .../test/stedding/https_first_browsertest.cc  | 148 +++
  chrome/test/stedding/import_browsertest.cc    | 154 +++
@@ -309,7 +309,7 @@ into the feature patches they belong to.
  chrome/test/stedding/space_jar_browsertest.cc | 748 +++++++++++++++
  .../stedding/space_jar_restart_browsertest.cc | 131 +++
  .../test/stedding/space_keys_browsertest.mm   |  59 ++
- .../test/stedding/space_switch_browsertest.cc | 859 +++++++++++++++++
+ .../test/stedding/space_switch_browsertest.cc | 860 +++++++++++++++++
  chrome/test/stedding/tab_drop_browsertest.cc  | 389 ++++++++
  chrome/utility/importer/importer_creator.cc   |   3 -
  components/os_crypt/common/BUILD.gn           |   1 +
@@ -331,7 +331,7 @@ into the feature patches they belong to.
  .../user_data_importer/common/importer_type.h |   3 -
  crypto/apple/fake_keychain_v2.h               |  11 -
  crypto/apple/fake_keychain_v2.mm              |   2 -
- 235 files changed, 18855 insertions(+), 3592 deletions(-)
+ 235 files changed, 18945 insertions(+), 3592 deletions(-)
  delete mode 100644 chrome/browser/ui/spaces/chromium_profile_import.cc
  delete mode 100644 chrome/browser/ui/spaces/chromium_profile_import.h
  delete mode 100644 chrome/browser/ui/spaces/chromium_profile_import_unittest.cc
@@ -22524,10 +22524,10 @@ index 0000000000000..1f6eb0eae410f
 +}  // namespace
 diff --git a/chrome/test/stedding/external_extensions_browsertest.cc b/chrome/test/stedding/external_extensions_browsertest.cc
 new file mode 100644
-index 0000000000000..166abb563ded8
+index 0000000000000..32492985e51eb
 --- /dev/null
 +++ b/chrome/test/stedding/external_extensions_browsertest.cc
-@@ -0,0 +1,123 @@
+@@ -0,0 +1,212 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -22537,7 +22537,11 @@ index 0000000000000..166abb563ded8
 +// /Library/Application Support/Google/Chrome/External Extensions, is not
 +// read; Stedding's own per-user folder, under its user-data directory, is.
 +// Each folder is given one extension, and the providers a profile gets are
-+// asked what they find.
++// asked what they find. On Windows the list Chrome's installers write is a
++// registry key, Software\Google\Chrome\Extensions in HKLM and HKCU, and
++// Stedding has no folder of its own there: the same providers are asked
++// about a key in each hive, and a loader made by hand shows that the key
++// is one a provider would read.
 +
 +#include <set>
 +#include <string>
@@ -22561,14 +22565,30 @@ index 0000000000000..166abb563ded8
 +#include "extensions/browser/external_install_info.h"
 +#include "extensions/browser/external_provider_interface.h"
 +
++#if BUILDFLAG(IS_WIN)
++#include <windows.h>
++
++#include "base/strings/utf_string_conversions.h"
++#include "base/test/test_reg_util_win.h"
++#include "base/win/registry.h"
++#include "chrome/browser/extensions/external_registry_loader_win.h"
++#include "extensions/common/extension.h"
++#include "extensions/common/mojom/manifest.mojom.h"
++#endif
++
 +namespace {
 +
 +// Two ids in the a-p alphabet extension ids use.
 +constexpr char kChromesExtension[] = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
++#if BUILDFLAG(IS_WIN)
++// The second one is registered machine-wide, the first for one user.
++constexpr char kChromesMachineExtension[] = "cccccccccccccccccccccccccccccccc";
++#else
 +constexpr char kSteddingsExtension[] = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 +// The entry a vendor's installer writes: an id's file names an update URL.
 +constexpr char kEntry[] =
 +    R"({"external_update_url": "https://update.invalid/"})";
++#endif
 +
 +// What the providers report, and how many of them have finished.
 +class Visitor : public extensions::ExternalProviderInterface::VisitorInterface {
@@ -22601,6 +22621,74 @@ index 0000000000000..166abb563ded8
 +
 +using ExternalExtensionsTest = InProcessBrowserTest;
 +
++#if BUILDFLAG(IS_WIN)
++// What an installer does to register an extension for Chrome: a key named for
++// its id under Software\Google\Chrome\Extensions, holding an update URL.
++void RegisterForChrome(HKEY hive, const char* id) {
++  const std::wstring key_path =
++      L"Software\\Google\\Chrome\\Extensions\\" + base::ASCIIToWide(id);
++  base::win::RegKey key;
++  ASSERT_EQ(ERROR_SUCCESS, key.Create(hive, key_path.c_str(), KEY_WRITE));
++  ASSERT_EQ(ERROR_SUCCESS,
++            key.WriteValue(L"update_url", L"https://update.invalid/"));
++}
++
++IN_PROC_BROWSER_TEST_F(ExternalExtensionsTest, ChromesRegistryKeyIsNotRead) {
++  base::ScopedAllowBlockingForTesting allow_blocking;
++  // Both hives point at scratch keys, so nothing real is read or written.
++  registry_util::RegistryOverrideManager overrides;
++  overrides.OverrideRegistry(HKEY_CURRENT_USER);
++  overrides.OverrideRegistry(HKEY_LOCAL_MACHINE);
++  RegisterForChrome(HKEY_CURRENT_USER, kChromesExtension);
++  RegisterForChrome(HKEY_LOCAL_MACHINE, kChromesMachineExtension);
++  ASSERT_FALSE(HasFatalFailure());
++
++  // A loader made by hand for Chrome's key finds both, so the two ids are
++  // ones a provider would report if the profile had such a provider.
++  {
++    Visitor control_visitor;
++    auto control = std::make_unique<extensions::ExternalProviderImpl>(
++        &control_visitor,
++        scoped_refptr<extensions::ExternalLoader>(
++            new extensions::ExternalRegistryLoader),
++        browser()->GetProfile(),
++        extensions::mojom::ManifestLocation::kExternalRegistry,
++        extensions::mojom::ManifestLocation::kExternalPrefDownload,
++        extensions::Extension::NO_FLAGS);
++    control->VisitRegisteredExtension();
++    ASSERT_TRUE(base::test::RunUntil(
++        [&]() { return control_visitor.ready.size() == 1u; }));
++    ASSERT_TRUE(control_visitor.found.contains(kChromesExtension))
++        << "the per-user key is one a registry provider reads";
++    ASSERT_TRUE(control_visitor.found.contains(kChromesMachineExtension))
++        << "the machine-wide key is one a registry provider reads";
++    control->ServiceShutdown();
++  }
++
++  // Tests start with the external providers off; a person's browser has
++  // them, so the list is made as it is for them.
++  base::CommandLine::ForCurrentProcess()->RemoveSwitch(
++      switches::kDisableDefaultApps);
++  Visitor visitor;
++  extensions::ProviderCollection providers;
++  extensions::ExternalProviderImpl::CreateExternalProviders(
++      &visitor, browser()->GetProfile(), &providers);
++  ASSERT_FALSE(providers.empty());
++  for (const auto& provider : providers) {
++    provider->VisitRegisteredExtension();
++  }
++  ASSERT_TRUE(base::test::RunUntil(
++      [&]() { return visitor.ready.size() == providers.size(); }));
++
++  EXPECT_FALSE(visitor.found.contains(kChromesExtension))
++      << "Chrome's per-user key is not read";
++  EXPECT_FALSE(visitor.found.contains(kChromesMachineExtension))
++      << "Chrome's machine-wide key is not";
++  for (const auto& provider : providers) {
++    provider->ServiceShutdown();
++  }
++}
++#else
 +IN_PROC_BROWSER_TEST_F(ExternalExtensionsTest, ChromesFolderIsNotRead) {
 +  base::ScopedAllowBlockingForTesting allow_blocking;
 +  base::ScopedTempDir chromes_folder;
@@ -22649,6 +22737,7 @@ index 0000000000000..166abb563ded8
 +    provider->ServiceShutdown();
 +  }
 +}
++#endif  // BUILDFLAG(IS_WIN)
 +
 +}  // namespace
 diff --git a/chrome/test/stedding/folder_tabs_browsertest.cc b/chrome/test/stedding/folder_tabs_browsertest.cc
@@ -27886,10 +27975,10 @@ index 0000000000000..9817d98b776b8
 +}  // namespace
 diff --git a/chrome/test/stedding/space_switch_browsertest.cc b/chrome/test/stedding/space_switch_browsertest.cc
 new file mode 100644
-index 0000000000000..9787ccec91f03
+index 0000000000000..676e56360c7b5
 --- /dev/null
 +++ b/chrome/test/stedding/space_switch_browsertest.cc
-@@ -0,0 +1,859 @@
+@@ -0,0 +1,860 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -28397,8 +28486,9 @@ index 0000000000000..9787ccec91f03
 +  Run(IDC_STEDDING_SPACE_3);
 +  ASSERT_TRUE(ui_test_utils::NavigateToURL(
 +      browser(), GURL("data:text/html,<title>Far away</title>")));
-+  tabs::TabInterface* const far = tab_strip_model()->GetActiveTab();
-+  ASSERT_EQ(ids_[2], model()->SpaceForTab(far));
++  // Not `far`: <windows.h> defines that word as nothing.
++  tabs::TabInterface* const far_tab = tab_strip_model()->GetActiveTab();
++  ASSERT_EQ(ids_[2], model()->SpaceForTab(far_tab));
 +  Run(IDC_STEDDING_SPACE_1);
 +
 +  HiddenActiveTabWatcher watcher(tab_strip_model(), model());
@@ -28421,7 +28511,7 @@ index 0000000000000..9787ccec91f03
 +  watcher.set_step("next and previous");
 +  Run(IDC_STEDDING_SPACE_NEXT);
 +  ExpectShowing(ids_[2]);
-+  EXPECT_EQ(far, tab_strip_model()->GetActiveTab());
++  EXPECT_EQ(far_tab, tab_strip_model()->GetActiveTab());
 +  EXPECT_FALSE(folder_shows());
 +  Run(IDC_STEDDING_SPACE_PREVIOUS);
 +  ExpectShowing(ids_[1]);
@@ -28469,7 +28559,7 @@ index 0000000000000..9787ccec91f03
 +  field->OnKeyPressed(
 +      ui::KeyEvent(ui::EventType::kKeyPressed, ui::VKEY_RETURN, ui::EF_NONE));
 +  ASSERT_TRUE(base::test::RunUntil(
-+      [&]() { return tab_strip_model()->GetActiveTab() == far; }));
++      [&]() { return tab_strip_model()->GetActiveTab() == far_tab; }));
 +  ExpectShowing(ids_[2]);
 +
 +  // A two-finger swipe across the sidebar: to the right is the Space before,
@@ -28500,7 +28590,7 @@ index 0000000000000..9787ccec91f03
 +  EXPECT_EQ(opened, tab_strip_model()->GetActiveTab());
 +  swipe(-100);
 +  ExpectShowing(ids_[2]);
-+  EXPECT_EQ(far, tab_strip_model()->GetActiveTab());
++  EXPECT_EQ(far_tab, tab_strip_model()->GetActiveTab());
 +
 +  // Closing Three's tabs, the active one each time -- from a row's close
 +  // button, then with Cmd-W, the strip's two ways in -- leaves a new tab in

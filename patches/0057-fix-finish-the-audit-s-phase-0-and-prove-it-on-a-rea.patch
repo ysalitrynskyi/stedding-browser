@@ -261,12 +261,13 @@ into the feature patches they belong to.
  chrome/common/stedding/space_partitions.cc    |  41 +
  chrome/common/stedding/space_partitions.h     |  49 ++
  chrome/test/BUILD.gn                          |   1 +
- chrome/test/stedding/BUILD.gn                 | 118 +++
+ chrome/test/stedding/BUILD.gn                 | 119 +++
  .../stedding/archive_sweep_browsertest.cc     | 158 ++++
  .../test/stedding/clear_space_browsertest.cc  | 252 ++++++
  .../test/stedding/command_bar_browsertest.cc  | 465 ++++++++++
  chrome/test/stedding/copy_link_browsertest.cc |  65 ++
  chrome/test/stedding/defaults_browsertest.cc  | 140 +++
+ .../external_extensions_browsertest.cc        | 123 +++
  .../test/stedding/folder_tabs_browsertest.cc  | 454 ++++++++++
  .../test/stedding/https_first_browsertest.cc  | 148 ++++
  chrome/test/stedding/import_browsertest.cc    | 154 ++++
@@ -304,7 +305,7 @@ into the feature patches they belong to.
  .../user_data_importer/common/importer_type.h |   3 -
  crypto/apple/fake_keychain_v2.h               |  11 -
  crypto/apple/fake_keychain_v2.mm              |   2 -
- 230 files changed, 17063 insertions(+), 3585 deletions(-)
+ 231 files changed, 17187 insertions(+), 3585 deletions(-)
  delete mode 100644 chrome/browser/ui/spaces/chromium_profile_import.cc
  delete mode 100644 chrome/browser/ui/spaces/chromium_profile_import.h
  delete mode 100644 chrome/browser/ui/spaces/chromium_profile_import_unittest.cc
@@ -340,6 +341,7 @@ into the feature patches they belong to.
  create mode 100644 chrome/test/stedding/command_bar_browsertest.cc
  create mode 100644 chrome/test/stedding/copy_link_browsertest.cc
  create mode 100644 chrome/test/stedding/defaults_browsertest.cc
+ create mode 100644 chrome/test/stedding/external_extensions_browsertest.cc
  create mode 100644 chrome/test/stedding/folder_tabs_browsertest.cc
  create mode 100644 chrome/test/stedding/https_first_browsertest.cc
  create mode 100644 chrome/test/stedding/import_browsertest.cc
@@ -20969,10 +20971,10 @@ index 64ea8244f5f74..92d2c528b9d0a 100644
      "//chrome/browser/ui/hats",
 diff --git a/chrome/test/stedding/BUILD.gn b/chrome/test/stedding/BUILD.gn
 new file mode 100644
-index 0000000000000..7ca0163c83d9c
+index 0000000000000..c3a77ab8f9d4e
 --- /dev/null
 +++ b/chrome/test/stedding/BUILD.gn
-@@ -0,0 +1,118 @@
+@@ -0,0 +1,119 @@
 +# Copyright 2026 The Stedding Authors
 +# Use of this source code is governed by a BSD-style license that can be
 +# found in the LICENSE file.
@@ -20996,6 +20998,7 @@ index 0000000000000..7ca0163c83d9c
 +    "command_bar_browsertest.cc",
 +    "copy_link_browsertest.cc",
 +    "defaults_browsertest.cc",
++    "external_extensions_browsertest.cc",
 +    "folder_tabs_browsertest.cc",
 +    "https_first_browsertest.cc",
 +    "import_browsertest.cc",
@@ -22198,6 +22201,135 @@ index 0000000000000..1f6eb0eae410f
 +  tabs()->ActivateTabAt(tabs()->GetIndexOfTab(asking_tab));
 +  ASSERT_TRUE(content::ExecJs(
 +      asking, "window.removeEventListener('beforeunload', window.stay);"));
++}
++
++}  // namespace
+diff --git a/chrome/test/stedding/external_extensions_browsertest.cc b/chrome/test/stedding/external_extensions_browsertest.cc
+new file mode 100644
+index 0000000000000..166abb563ded8
+--- /dev/null
++++ b/chrome/test/stedding/external_extensions_browsertest.cc
+@@ -0,0 +1,123 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++// Extensions a vendor registered for Google Chrome are not Stedding's
++// (PLAN.md WEB-3, privacy Q9). On the Mac, Chrome's machine-wide folder,
++// /Library/Application Support/Google/Chrome/External Extensions, is not
++// read; Stedding's own per-user folder, under its user-data directory, is.
++// Each folder is given one extension, and the providers a profile gets are
++// asked what they find.
++
++#include <set>
++#include <string>
++
++#include "base/command_line.h"
++#include "base/files/file_path.h"
++#include "base/files/file_util.h"
++#include "base/files/scoped_temp_dir.h"
++#include "base/path_service.h"
++#include "base/test/run_until.h"
++#include "base/test/scoped_path_override.h"
++#include "base/threading/thread_restrictions.h"
++#include "build/build_config.h"
++#include "chrome/browser/extensions/external_provider_impl.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/common/chrome_paths.h"
++#include "chrome/common/chrome_switches.h"
++#include "chrome/test/base/in_process_browser_test.h"
++#include "content/public/test/browser_test.h"
++#include "extensions/browser/external_install_info.h"
++#include "extensions/browser/external_provider_interface.h"
++
++namespace {
++
++// Two ids in the a-p alphabet extension ids use.
++constexpr char kChromesExtension[] = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
++constexpr char kSteddingsExtension[] = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
++// The entry a vendor's installer writes: an id's file names an update URL.
++constexpr char kEntry[] =
++    R"({"external_update_url": "https://update.invalid/"})";
++
++// What the providers report, and how many of them have finished.
++class Visitor : public extensions::ExternalProviderInterface::VisitorInterface {
++ public:
++  bool OnExternalExtensionFileFound(
++      const extensions::ExternalInstallInfoFile& info) override {
++    found.insert(info.extension_id);
++    return true;
++  }
++  bool OnExternalExtensionUpdateUrlFound(
++      const extensions::ExternalInstallInfoUpdateUrl& info,
++      bool force_update) override {
++    found.insert(info.extension_id);
++    return true;
++  }
++  void OnExternalProviderReady(
++      const extensions::ExternalProviderInterface* provider) override {
++    ready.insert(provider);
++  }
++  void OnExternalProviderUpdateComplete(
++      const extensions::ExternalProviderInterface* provider,
++      const std::vector<extensions::ExternalInstallInfoUpdateUrl>&
++          update_url_extensions,
++      const std::vector<extensions::ExternalInstallInfoFile>& file_extensions,
++      const std::set<std::string>& removed_extensions) override {}
++
++  std::set<std::string> found;
++  std::set<const extensions::ExternalProviderInterface*> ready;
++};
++
++using ExternalExtensionsTest = InProcessBrowserTest;
++
++IN_PROC_BROWSER_TEST_F(ExternalExtensionsTest, ChromesFolderIsNotRead) {
++  base::ScopedAllowBlockingForTesting allow_blocking;
++  base::ScopedTempDir chromes_folder;
++  ASSERT_TRUE(chromes_folder.CreateUniqueTempDir());
++  ASSERT_TRUE(base::WriteFile(chromes_folder.GetPath().AppendASCII(
++                                  std::string(kChromesExtension) + ".json"),
++                              kEntry));
++  // Wherever upstream would look for Chrome's folder, it finds this one.
++  base::ScopedPathOverride chromes_path(chrome::DIR_EXTERNAL_EXTENSIONS,
++                                        chromes_folder.GetPath());
++
++  base::FilePath own_folder;
++  ASSERT_TRUE(base::PathService::Get(chrome::DIR_USER_EXTERNAL_EXTENSIONS,
++                                     &own_folder));
++  base::FilePath user_data;
++  ASSERT_TRUE(base::PathService::Get(chrome::DIR_USER_DATA, &user_data));
++  ASSERT_TRUE(user_data.IsParent(own_folder))
++      << "Stedding's folder is its own, under its user-data directory";
++  ASSERT_TRUE(base::CreateDirectory(own_folder));
++  ASSERT_TRUE(base::WriteFile(
++      own_folder.AppendASCII(std::string(kSteddingsExtension) + ".json"),
++      kEntry));
++
++  // Tests start with the external providers off; a person's browser has
++  // them, so the list is made as it is for them.
++  base::CommandLine::ForCurrentProcess()->RemoveSwitch(
++      switches::kDisableDefaultApps);
++  Visitor visitor;
++  extensions::ProviderCollection providers;
++  extensions::ExternalProviderImpl::CreateExternalProviders(
++      &visitor, browser()->GetProfile(), &providers);
++  ASSERT_FALSE(providers.empty());
++  for (const auto& provider : providers) {
++    provider->VisitRegisteredExtension();
++  }
++  ASSERT_TRUE(base::test::RunUntil(
++      [&]() { return visitor.ready.size() == providers.size(); }));
++
++  EXPECT_TRUE(visitor.found.contains(kSteddingsExtension))
++      << "Stedding's own folder is read";
++#if BUILDFLAG(IS_MAC)
++  EXPECT_FALSE(visitor.found.contains(kChromesExtension))
++      << "Chrome's machine-wide folder is not";
++#endif
++  for (const auto& provider : providers) {
++    provider->ServiceShutdown();
++  }
 +}
 +
 +}  // namespace

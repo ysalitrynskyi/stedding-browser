@@ -8,6 +8,7 @@ Usage (PowerShell, from anywhere):
   tooling\win\build.ps1                          # win-release: chrome and mini_installer, 15 minutes
   tooling\win\build.ps1 -Config win-release -Targets chrome
   tooling\win\build.ps1 -Targets unit_tests,stedding_browser_tests -KeepGoing
+  tooling\win\build.ps1 -Jobs 20                 # at most 20 steps at a time
   tooling\win\build.ps1 -BudgetMinutes 45        # allow 45 minutes; 0 = unlimited
   tooling\win\build.ps1 -GenOnly                 # gn gen and stop
 
@@ -29,6 +30,12 @@ running: treat it as stuck, not slow); a build that fails exits 1.
 -KeepGoing passes -k 0 to autoninja, so one pass lists every error a batch of edits
 introduced (docs/HANDOFF.md, trap 50) instead of stopping at the first.
 
+-Jobs passes -j to autoninja. On a machine with 32 threads and 32 GB the default is
+too many: the first full build of the M155 tree ran out of commit (46 "LLVM ERROR: out
+of memory", MemoryError in Blink's Python binding generators, even the tool's own
+shell dying), so name a number the memory can carry -- the progress line shows the
+commit charge against its limit (docs/HANDOFF.md, trap 54).
+
 Two rules this script keeps for you: the Windows toolchain is the installed Visual
 Studio, never Google's (DEPOT_TOOLS_WIN_TOOLCHAIN=0), and a build is refused while a
 browser from the same output directory is running, because the link would fail with
@@ -41,6 +48,7 @@ param(
   [string]$Src = $env:STEDDING_CHROMIUM_SRC,
   [switch]$GenOnly,
   [switch]$KeepGoing,
+  [int]$Jobs = $(if ($env:STEDDING_BUILD_JOBS) { [int]$env:STEDDING_BUILD_JOBS } else { 0 }),
   [int]$BudgetMinutes = $(if ($env:STEDDING_BUILD_BUDGET_MIN) { [int]$env:STEDDING_BUILD_BUDGET_MIN } else { 15 })
 )
 $ErrorActionPreference = "Stop"
@@ -95,6 +103,7 @@ try {
 
   $ninjaArgs = @("-C", $out)
   if ($KeepGoing) { $ninjaArgs += @("-k", "0") }
+  if ($Jobs -gt 0) { $ninjaArgs += @("-j", "$Jobs") }
   $ninjaArgs += $Targets
   $budgetNote = if ($BudgetMinutes -eq 0) { "no budget: the operator said so" } else { "budget: $BudgetMinutes min; progress every minute" }
   Write-Host "autoninja $($ninjaArgs -join ' ')  ($budgetNote)"
@@ -114,7 +123,10 @@ try {
     $elapsed = (Get-Date) - $start
     $steps = Get-StepsDone (Join-Path (Get-Location).Path $out) $start
     $compilers = @(Get-Process clang-cl -ErrorAction SilentlyContinue).Count
-    Write-Host ("progress: {0} min, {1} steps done, {2} compilers" -f [int]$elapsed.TotalMinutes, $steps, $compilers)
+    $os = Get-CimInstance Win32_OperatingSystem
+    $commitGB = ($os.TotalVirtualMemorySize - $os.FreeVirtualMemory) / 1MB
+    $limitGB = $os.TotalVirtualMemorySize / 1MB
+    Write-Host ("progress: {0} min, {1} steps done, {2} compilers, commit {3:n0} of {4:n0} GB" -f [int]$elapsed.TotalMinutes, $steps, $compilers, $commitGB, $limitGB)
     if ($BudgetMinutes -gt 0 -and $elapsed.TotalMinutes -ge $BudgetMinutes) {
       Write-Warning "build budget of $BudgetMinutes min exceeded at $steps steps; stopping it."
       $stoppedByBudget = $true

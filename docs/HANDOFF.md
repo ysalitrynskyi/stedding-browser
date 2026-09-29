@@ -676,6 +676,22 @@ private window has.
     dependencies again from nothing, which costs a download and the dependencies'
     working trees but keeps them shallow.
 
+54. **A full Windows build at siso's default parallelism runs out of memory.** On a
+    32-thread machine with 32 GB (page file 16 GB growing to 48), the first build of
+    the M155 tree ran 32 steps at once and, five minutes in, failed in ways that read
+    like six different bugs: 46 "LLVM ERROR: out of memory" from clang-cl, `MemoryError`
+    and `OSError: [Errno 22]` from `pickle.load` in Blink's Python binding generators
+    (each process loads the whole Web IDL database), "the paging file is too small"
+    (WinError 1455), "Insufficient system resources" (1450), even the Go runtime under
+    siso unable to allocate -- and the shell the build was started from died with the
+    same error, which orphaned siso and its compilers past the budget. None of it is
+    the code. Cap the steps (`tooling\win\build.ps1 -Jobs 20`, whose progress line
+    shows the commit charge against its limit), run each budgeted chunk as its own
+    detached process rather than as a child of the tool that watches it, and stop an
+    orphaned tree with `taskkill /F /T /PID <siso>`. The page file also grew by 32 GB
+    on the way and keeps that space until the machine restarts, so free space after a
+    failed run is not free space after a clean one.
+
 ## The Windows build
 
 Git for Windows for the bash tooling, PowerShell for the rest, Visual Studio's own

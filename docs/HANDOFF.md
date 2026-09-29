@@ -712,6 +712,22 @@ private window has.
     reason beside it), and the platform without it gets a case of its own or a
     WIN- id in PLAN.md, not a skipped line.
 
+56. **A Windows test binary started straight from a bash script under an agent's tool
+    fails the tests that need a really active window.** On 2026-09-29
+    `tooling/dev test browser --no-build` failed the same four of 150 on every run --
+    `SidebarClickTest.EveryPartOfEveryRowSelects`, the three `TabDropTest` drags, and
+    sometimes `SleepInUseTest.ALeftSpaceKeepsItsTabsInUseAwake`, whose typed keys never
+    reached the page -- while the same binary with the same arguments passed all 150
+    whenever `timeout` was its parent (`timeout N exe`, `timeout --foreground N exe`),
+    when it was detached from the tool, and from a hidden `cmd`. Ruled out: the
+    flags, the working directory, `lib.sh`'s environment, the temp file, stdin, the
+    `--gtest_list_tests` pass, job membership (both are in the tool's job), the real
+    pointer (it does not move in either mode) and the process group. Why is not
+    understood. `tooling/dev` runs its binaries through `timeout` on Windows
+    (`STEDDING_TEST_BUDGET_S`, 900 by default, which is also the 15-minute cap), and
+    anything else that starts one from the tool's shell should do the same or start it
+    detached. A Windows run that fails exactly these tests is this, not a regression.
+
 ## The Windows build
 
 Git for Windows for the bash tooling, PowerShell for the rest, Visual Studio's own
@@ -744,7 +760,7 @@ path (`/c/...`). Then:
    resumes), and `-KeepGoing` for one pass that lists every error (trap 50).
 4. `tooling/dev test all --no-build` (or one feature) runs the same filters against
    `out/win-release/*.exe`; `tooling/dev test browser --no-build` runs
-   `stedding_browser_tests` with one job.
+   `stedding_browser_tests` with one job (both through `timeout`, trap 56).
 5. `tooling\win\capture.ps1` for captures that need neither focus nor input (trap
    36); `tooling\win\cdp.ps1` for what a capture cannot reach -- JavaScript in a
    page over the DevTools websocket (the welcome flow's buttons pressed by name,

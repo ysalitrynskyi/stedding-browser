@@ -20,11 +20,14 @@
 param(
   [string]$Exe = $env:STEDDING_WIN_EXE,
   [string]$ControlType = "TabItem",
-  [int[]]$At = @()
+  [string]$At = ""
 )
 $ErrorActionPreference = "Stop"
 if (-not $Exe) { throw "set STEDDING_WIN_EXE to the browser to probe, or pass -Exe" }
-if ($At.Count % 2 -ne 0) { throw "-At takes X,Y pairs" }
+# X,Y pairs in one string: `powershell -File` hands a comma list over as a single argument.
+$atPoints = @()
+if ($At) { $atPoints = @($At -split '[,\s]+' | Where-Object { $_ } | ForEach-Object { [int]$_ }) }
+if ($atPoints.Count % 2 -ne 0) { throw "-At takes X,Y pairs" }
 
 Add-Type @"
 using System;
@@ -105,8 +108,8 @@ foreach ($e in $root.FindAll([System.Windows.Automation.TreeScope]::Descendants,
     }
   } catch { }
 }
-for ($i = 0; $i -lt $At.Count; $i += 2) {
-  $points += [pscustomobject]@{ Name = "(point)"; X = $At[$i]; Y = $At[$i + 1] }
+for ($i = 0; $i -lt $atPoints.Count; $i += 2) {
+  $points += [pscustomobject]@{ Name = "(point)"; X = $atPoints[$i]; Y = $atPoints[$i + 1] }
 }
 if ($points.Count -eq 0) { throw "nothing to probe: no $ControlType elements and no -At points" }
 

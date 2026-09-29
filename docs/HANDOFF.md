@@ -692,6 +692,24 @@ private window has.
     on the way and keeps that space until the machine restarts, so free space after a
     failed run is not free space after a clean one.
 
+55. **Tests written on the Mac carry the Mac.** The first Windows run of the series
+    (2026-09-29) compiled everything but three test files and ran the unit sweep and
+    the browser tests; every one of the eight things it found was in a test, none in
+    the product. What to look for before the next port: `<windows.h>` defines `far`
+    and `near` as nothing, so a local of that name stops parsing; `FilePath::Append`
+    takes no narrow literal where a path is wide (`AppendASCII`, or
+    `FILE_PATH_LITERAL`); `FilePath::value()` joins with a backslash, so compare
+    through `NormalizePathSeparatorsTo('/')`, never to a slash literal;
+    `ui::EF_COMMAND_DOWN` is the Windows key, and the selection and chord modifier is
+    `ui::EF_PLATFORM_ACCELERATOR`; a chord's text is `⇧⌘K` on the Mac and
+    `Ctrl+Shift+K` elsewhere; `chrome::DIR_USER_EXTERNAL_EXTENSIONS` exists on the
+    Mac and Chromium Linux alone; the Space swipe is the Mac's until WIN-12; and a
+    tab found by its title is lost as soon as it loads its page, which on Windows is
+    at once (a tab a close makes active starts its page), so keep its handle. A test
+    that asserts one platform's behaviour says which (`#if BUILDFLAG(IS_MAC)` with the
+    reason beside it), and the platform without it gets a case of its own or a
+    WIN- id in PLAN.md, not a skipped line.
+
 ## The Windows build
 
 Git for Windows for the bash tooling, PowerShell for the rest, Visual Studio's own

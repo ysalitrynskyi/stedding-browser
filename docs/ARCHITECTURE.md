@@ -121,6 +121,13 @@ Policy for moving the pin: `decisions/0007-chromium-version-pin.md`.
   --point-release` (what `tooling/update-pin --apply` passes for a same-milestone
   bump) fetches the delta and the release's PGO profile and asks for 25 GB
   (`STEDDING_SYNC_POINT_RELEASE_MIN_FREE_GB`, never under 20; trap 45).
+  On Windows there is no git cache and the tree is shallow: about 26 GB of source when it
+  is cloned, 46 GB after a `gclient sync` has updated it (trap 53), and 17 GB for
+  `out\win-release` with `chrome`, `mini_installer`, `unit_tests` and
+  `stedding_browser_tests` in it (measured 2026-09-29, 155.0.8059.12). The same 150 GB
+  floor applies to the sync there, the page file can take another 32 GB on a failed
+  build (trap 54), and a second output directory for an ASan build is a decision for
+  the owner.
 - **No `node_modules` in any directory above the checkout.** Chromium's TypeScript
   build resolves modules the way node does — by walking up parent directories — so a
   stray `node_modules` in your home directory leaks its `@types` into the build. The

@@ -324,9 +324,12 @@ stable the pin is. Stedding's own browser tests, which click real rows in a real
 window, are `stedding_browser_tests` (`chrome/test/stedding/` in the checkout).
 Patch 0057 finished Phase 0's code and proved each item it could on a real build
 (the status block at the top of `PLAN.md` lists what each item still waits on).
-From 2026-09-29 the work continues on the Windows build machine: first the series
-on the pin there, then the Windows and ASan halves of Phase 0. The Mac-only items
-(the keychain and the profile migration on a beta 8 profile, VoiceOver, the
+From 2026-09-29 the work continues on the Windows build machine. The series is on
+the pin there, built, and its unit sweep and browser tests pass on Windows (PLAN.md,
+*Windows run*; `docs/HANDOFF.md`, "The Windows build" and traps 53-55). What is
+left there is the ASan and dangling-pointer runs, which need a second output
+directory the owner has to give, and a look at Win+V's own list. The Mac-only
+items (the keychain and the profile migration on a beta 8 profile, VoiceOver, the
 managed-policy Mac) wait for the Mac.
 Nothing is released until `PLAN.md`'s Phase 0 is done: the profile migration and
 the keychain copy must be proven on a real beta-8 profile first.

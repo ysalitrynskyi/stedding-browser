@@ -324,6 +324,10 @@ stable the pin is. Stedding's own browser tests, which click real rows in a real
 window, are `stedding_browser_tests` (`chrome/test/stedding/` in the checkout).
 Patch 0057 finished Phase 0's code and proved each item it could on a real build
 (the status block at the top of `PLAN.md` lists what each item still waits on).
+From 2026-09-29 the work continues on the Windows build machine: first the series
+on the pin there, then the Windows and ASan halves of Phase 0. The Mac-only items
+(the keychain and the profile migration on a beta 8 profile, VoiceOver, the
+managed-policy Mac) wait for the Mac.
 Nothing is released until `PLAN.md`'s Phase 0 is done: the profile migration and
 the keychain copy must be proven on a real beta-8 profile first.
 

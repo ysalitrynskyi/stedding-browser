@@ -283,8 +283,8 @@ into the feature patches they belong to.
  .../test/stedding/screenshot_browsertest.cc   | 143 +++
  .../stedding/search_default_browsertest.cc    |  52 ++
  .../stedding/settings_spaces_browsertest.cc   |  87 ++
- .../stedding/sidebar_click_browsertest.cc     | 582 ++++++++++++
- .../test/stedding/sidebar_rail_browsertest.cc | 144 +++
+ .../stedding/sidebar_click_browsertest.cc     | 676 ++++++++++++++
+ .../test/stedding/sidebar_rail_browsertest.cc | 308 +++++++
  chrome/test/stedding/sidebar_test_util.cc     | 117 +++
  chrome/test/stedding/sidebar_test_util.h      |  58 ++
  .../test/stedding/sleep_gate_browsertest.cc   | 137 +++
@@ -312,7 +312,7 @@ into the feature patches they belong to.
  .../user_data_importer/common/importer_type.h |   3 -
  crypto/apple/fake_keychain_v2.h               |  11 -
  crypto/apple/fake_keychain_v2.mm              |   2 -
- 233 files changed, 17306 insertions(+), 3586 deletions(-)
+ 233 files changed, 17564 insertions(+), 3586 deletions(-)
  delete mode 100644 chrome/browser/ui/spaces/chromium_profile_import.cc
  delete mode 100644 chrome/browser/ui/spaces/chromium_profile_import.h
  delete mode 100644 chrome/browser/ui/spaces/chromium_profile_import_unittest.cc
@@ -24794,10 +24794,10 @@ index 0000000000000..139fc8e3f9564
 +}  // namespace
 diff --git a/chrome/test/stedding/sidebar_click_browsertest.cc b/chrome/test/stedding/sidebar_click_browsertest.cc
 new file mode 100644
-index 0000000000000..13b87aee0e895
+index 0000000000000..b19547d422e7c
 --- /dev/null
 +++ b/chrome/test/stedding/sidebar_click_browsertest.cc
-@@ -0,0 +1,582 @@
+@@ -0,0 +1,676 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -25079,23 +25079,36 @@ index 0000000000000..13b87aee0e895
 +  ClickEachRow({0, 2, 1, 0});
 +}
 +
-+// TAB-2: a hovered rail row keeps its favicon and shows no close button, so
-+// a click in the middle of it selects the tab rather than closing it.
++// TAB-2: a hovered rail row keeps its favicon where it was and shows no close
++// button, whatever kind of row it is, so a click in the middle of it selects
++// the tab rather than closing it.
 +IN_PROC_BROWSER_TEST_F(SidebarClickTest, AHoveredRailRowShowsNoCloseButton) {
-+  AppendTab();
-+  AppendTab();
++  BuildEveryKindOfRow();
 +  CollapseSidebar();
-+  for (const int index : {0, 1, 2}) {
++  WaitForRowsToSettle();
++  const int count = tab_strip_model()->count();
++  int hovered = 0;
++  for (int index = 0; index < count; ++index) {
 +    SCOPED_TRACE(testing::Message() << "row " << index);
++    // An essential is a card, with no close button in any form.
++    if (tab_strip_model()->IsTabPinned(index)) {
++      continue;
++    }
 +    TabView* const row = RowFor(index);
 +    ASSERT_TRUE(row);
++    const gfx::Rect favicon = row->GetTabIconForTesting()->bounds();
 +    row->UpdateHovered(true);
 +    views::test::RunScheduledLayout(row);
 +    EXPECT_FALSE(row->close_button_for_testing()->GetVisible());
++    EXPECT_TRUE(row->GetTabIconForTesting()->GetVisible());
++    EXPECT_EQ(favicon, row->GetTabIconForTesting()->bounds())
++        << "the hover moved the favicon";
 +    row->UpdateHovered(false);
++    ++hovered;
 +  }
-+  ClickEachRow({1});
-+  EXPECT_EQ(3, tab_strip_model()->count()) << "a rail click closed a tab";
++  EXPECT_EQ(count - 1, hovered) << "every row but the essential";
++  ClickEveryRow();
++  EXPECT_EQ(count, tab_strip_model()->count()) << "a rail click closed a tab";
 +}
 +
 +// TST-1: every kind of row selects its tab on a click, in the sidebar and
@@ -25136,6 +25149,87 @@ index 0000000000000..13b87aee0e895
 +  EXPECT_EQ(home, pin->GetContents()->GetLastCommittedURL());
 +
 +  ClickEveryRow();
++}
++
++// TAB-3 (pins H5): in the rail a plain click on a drifted Space pin or a
++// drifted essential selects it and keeps the page it drifted to; nothing
++// sends it home.
++IN_PROC_BROWSER_TEST_F(SidebarClickTest, ARailClickKeepsADriftedPinsPage) {
++  const GURL home = embedded_test_server()->GetURL("home.test", "/title1.html");
++  const GURL away = embedded_test_server()->GetURL("away.test", "/title2.html");
++  spaces::SpaceModel* const model = spaces::SpaceModel::From(browser());
++  ASSERT_TRUE(model);
++  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), home));
++  tabs::TabInterface* const space_pin = tab_strip_model()->GetActiveTab();
++  model->SetSpacePinned(space_pin, true);
++  AppendTab();
++  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), home));
++  tabs::TabInterface* const essential = tab_strip_model()->GetActiveTab();
++  tab_strip_model()->SetTabPinned(tab_strip_model()->GetIndexOfTab(essential),
++                                  true);
++  for (tabs::TabInterface* const tab : {space_pin, essential}) {
++    tab_strip_model()->ActivateTabAt(tab_strip_model()->GetIndexOfTab(tab));
++    ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), away));
++    ASSERT_TRUE(stedding::HasDriftedFromHome(
++        model->HomeUrl(tab).value_or(GURL()),
++        tab->GetContents()->GetLastCommittedURL()));
++  }
++  AppendTab();
++  CollapseSidebar();
++
++  for (tabs::TabInterface* const tab : {space_pin, essential, space_pin}) {
++    SCOPED_TRACE(tab == space_pin ? "the Space pin" : "the essential");
++    const int index = tab_strip_model()->GetIndexOfTab(tab);
++    ClickEachRow({index});
++    content::WebContents* const contents = tab->GetContents();
++    EXPECT_EQ(away, contents->GetLastCommittedURL());
++    EXPECT_FALSE(contents->GetController().GetPendingEntry())
++        << "the click started a load of the pin's home";
++    // Back to a plain row, so the next click is a switch again.
++    ClickEachRow({tab_strip_model()->count() - 1});
++  }
++}
++
++// TAB-3: an Option-click that takes a pin home ends the press as a click,
++// so at once -- no other row clicked first -- a Cmd-click adds a row to the
++// selection and the window's close button closes the window. The reset used
++// to return before the drag ended, and the window refused to close.
++IN_PROC_BROWSER_TEST_F(SidebarClickTest, AfterAPinGoesHomeTheWindowCloses) {
++  const GURL home = embedded_test_server()->GetURL("home.test", "/title1.html");
++  const GURL away = embedded_test_server()->GetURL("away.test", "/title2.html");
++  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), home));
++  spaces::SpaceModel* const model = spaces::SpaceModel::From(browser());
++  tabs::TabInterface* const pin = tab_strip_model()->GetActiveTab();
++  model->SetSpacePinned(pin, true);
++  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), away));
++  AppendTab();
++  tab_strip_model()->ActivateTabAt(tab_strip_model()->GetIndexOfTab(pin));
++  WaitForRowsToSettle();
++
++  TabView* const row = RowFor(tab_strip_model()->GetIndexOfTab(pin));
++  ASSERT_TRUE(row);
++  content::TestNavigationObserver back_home(pin->GetContents());
++  ClickAt(row->GetTabIconForTesting()->GetBoundsInScreen().CenterPoint(),
++          ui::EF_ALT_DOWN);
++  back_home.Wait();
++  ASSERT_EQ(home, pin->GetContents()->GetLastCommittedURL());
++  EXPECT_TRUE(browser_view()->tab_strip_view()->IsTabStripCloseable())
++      << "a drag is still running";
++
++  const int other = tab_strip_model()->count() - 1;
++  WaitForRowsToSettle();
++  TabView* const other_row = RowFor(other);
++  ASSERT_TRUE(other_row);
++  ClickAt(other_row->GetBoundsInScreen().CenterPoint(), ui::EF_COMMAND_DOWN);
++  EXPECT_TRUE(tab_strip_model()->IsTabSelected(other));
++  EXPECT_TRUE(
++      tab_strip_model()->IsTabSelected(tab_strip_model()->GetIndexOfTab(pin)));
++  EXPECT_EQ(2u, tab_strip_model()->selection_model().size());
++
++  // What the close button does: the widget asks the window whether it may.
++  BrowserWindowInterface* const window = browser();
++  browser_view()->GetWidget()->Close();
++  ui_test_utils::WaitForBrowserToClose(window);
 +}
 +
 +// TAB-1: a click on another row ends a rename left open, and the renamed row
@@ -25382,10 +25476,10 @@ index 0000000000000..13b87aee0e895
 +}  // namespace
 diff --git a/chrome/test/stedding/sidebar_rail_browsertest.cc b/chrome/test/stedding/sidebar_rail_browsertest.cc
 new file mode 100644
-index 0000000000000..554d5c0e2b703
+index 0000000000000..f6092fa56784a
 --- /dev/null
 +++ b/chrome/test/stedding/sidebar_rail_browsertest.cc
-@@ -0,0 +1,144 @@
+@@ -0,0 +1,308 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -25393,7 +25487,9 @@ index 0000000000000..554d5c0e2b703
 +// The collapsed rail (PLAN.md WIN-3; sidebar Y8, Y11). The rows' form --
 +// labels, or glyphs alone -- follows the width being drawn at every step of
 +// a collapse and an expand, so no frame shows the wrong one; and hovering
-+// the rail again and again leaves one click handler, not one per hover.
++// the rail again and again leaves one click handler, not one per hover. In
++// the rail the New Tab and Archived rows are glyphs, and still have names.
++// A drifted pin wears the dot or the slash, never both (PLAN.md TAB-2).
 +
 +#include <cstddef>
 +
@@ -25401,25 +25497,68 @@ index 0000000000000..554d5c0e2b703
 +#include "chrome/browser/profiles/profile.h"
 +#include "chrome/browser/ui/animation/browser_animation_controller.h"
 +#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/spaces/space_model.h"
 +#include "chrome/browser/ui/stedding/stedding_prefs.h"
 +#include "chrome/browser/ui/tabs/tab_strip_model.h"
 +#include "chrome/browser/ui/tabs/vertical_tab_strip_state_controller.h"
 +#include "chrome/browser/ui/views/animations/tab_strip_animations.h"
 +#include "chrome/browser/ui/views/frame/browser_view.h"
 +#include "chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h"
++#include "chrome/browser/ui/views/tabs/common/tab_strip_view.h"
 +#include "chrome/browser/ui/views/tabs/common/tab_view.h"
++#include "chrome/browser/ui/views/tabs/tab/tab_icon.h"
 +#include "chrome/browser/ui/views/tabs/tab/tab_title.h"
 +#include "chrome/browser/ui/views/test/vertical_tabs_browser_test_mixin.h"
++#include "chrome/grit/generated_resources.h"
 +#include "chrome/test/base/in_process_browser_test.h"
++#include "chrome/test/base/ui_test_utils.h"
 +#include "chrome/test/stedding/sidebar_test_util.h"
 +#include "components/prefs/pref_service.h"
++#include "components/tabs/public/tab_interface.h"
 +#include "content/public/test/browser_test.h"
++#include "net/test/embedded_test_server/embedded_test_server.h"
++#include "ui/base/l10n/l10n_util.h"
++#include "ui/base/window_open_disposition.h"
 +#include "ui/events/event.h"
 +#include "ui/events/test/events_test_utils.h"
++#include "ui/views/accessibility/view_accessibility.h"
++#include "ui/views/controls/button/button.h"
++#include "ui/views/controls/button/label_button.h"
++#include "ui/views/controls/label.h"
 +#include "ui/views/test/views_test_utils.h"
++#include "ui/views/view_utils.h"
 +#include "ui/views/widget/widget.h"
 +
 +namespace {
++
++// The first view of class T at or under `view`.
++template <typename T>
++T* FindView(views::View* view) {
++  if (T* const found = views::AsViewClass<T>(view)) {
++    return found;
++  }
++  for (views::View* const child : view->children()) {
++    if (T* const found = FindView<T>(child)) {
++      return found;
++    }
++  }
++  return nullptr;
++}
++
++// The button at or under `view` whose tooltip is `tooltip`.
++views::Button* FindButtonWithTooltip(views::View* view,
++                                     const std::u16string& tooltip) {
++  if (auto* const button = views::AsViewClass<views::Button>(view);
++      button && button->GetTooltipText() == tooltip) {
++    return button;
++  }
++  for (views::View* const child : view->children()) {
++    if (views::Button* const found = FindButtonWithTooltip(child, tooltip)) {
++      return found;
++    }
++  }
++  return nullptr;
++}
 +
 +class SidebarRailTest
 +    : public VerticalTabsBrowserTestMixin<InProcessBrowserTest> {
@@ -25479,6 +25618,31 @@ index 0000000000000..554d5c0e2b703
 +    ExpectTheFormOfTheWidth();
 +  }
 +
++  // What a drifted pin's row wears: the dot on its favicon (pins H4), Arc's
++  // slash before its title (H12).
++  struct DriftMarks {
++    bool dot = false;
++    bool slash = false;
++  };
++  DriftMarks MarksOf(tabs::TabInterface* tab) {
++    views::test::RunScheduledLayout(browser_view()->GetWidget());
++    TabView* const row = stedding::test::FindDrawnRow(
++        browser_view()->GetWidget()->GetRootView(), tab);
++    DriftMarks marks;
++    if (!row) {
++      return marks;
++    }
++    marks.dot = row->GetTabIconForTesting()->GetShowingAttentionIndicator();
++    for (const views::View* const child : row->children()) {
++      if (const auto* const label =
++              views::AsViewClass<views::Label>(const_cast<views::View*>(child));
++          label && label->GetText() == u"/") {
++        marks.slash = label->GetVisible() && label->width() > 0;
++      }
++    }
++    return marks;
++  }
++
 +  ui::MouseEvent MouseEvent(ui::EventType type) {
 +    const gfx::Point centre = region()->GetLocalBounds().CenterPoint();
 +    return ui::MouseEvent(type, centre, centre, base::TimeTicks::Now(),
@@ -25527,6 +25691,100 @@ index 0000000000000..554d5c0e2b703
 +  }
 +  EXPECT_EQ(at_rest, handlers.GetPreTargetHandlers().size())
 +      << "no handler left behind";
++}
++
++// PLAN.md TAB-2 (pins H4, H12): a drifted Space pin wears the dot in the
++// rail and Arc's slash in a row with a title -- the hover-expanded rail's
++// rows have one -- and never both, at any step of a collapse or an expand.
++// A drifted essential is a card, with the dot in every form.
++IN_PROC_BROWSER_TEST_F(SidebarRailTest, ADriftedPinShowsTheDotOrTheSlash) {
++  ASSERT_TRUE(embedded_test_server()->Start());
++  const GURL home = embedded_test_server()->GetURL("/title1.html");
++  const GURL away = embedded_test_server()->GetURL("/title2.html");
++  spaces::SpaceModel* const model = spaces::SpaceModel::From(browser());
++  ASSERT_TRUE(model);
++  TabStripModel* const strip = tab_strip_model();
++  // A Space pin and an essential, each pinned at home and then taken away.
++  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), home));
++  tabs::TabInterface* const space_pin = strip->GetActiveTab();
++  model->SetSpacePinned(space_pin, true);
++  ASSERT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
++      browser(), home, WindowOpenDisposition::NEW_FOREGROUND_TAB,
++      ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
++  tabs::TabInterface* const essential = strip->GetActiveTab();
++  strip->SetTabPinned(strip->GetIndexOfTab(essential), true);
++  for (tabs::TabInterface* const tab : {space_pin, essential}) {
++    strip->ActivateTabAt(strip->GetIndexOfTab(tab));
++    ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), away));
++  }
++  AppendTab();
++
++  const auto never_both = [&]() {
++    for (tabs::TabInterface* const tab : {space_pin, essential}) {
++      const DriftMarks marks = MarksOf(tab);
++      EXPECT_FALSE(marks.dot && marks.slash)
++          << (tab == space_pin ? "the Space pin" : "the essential") << " at "
++          << region()->width() << " DIP";
++    }
++  };
++
++  // The open sidebar: the slash on the row, the dot on the card.
++  EXPECT_TRUE(MarksOf(space_pin).slash);
++  EXPECT_FALSE(MarksOf(space_pin).dot);
++  EXPECT_TRUE(MarksOf(essential).dot);
++  EXPECT_FALSE(MarksOf(essential).slash);
++
++  // The rail: the dot on both.
++  controller()->RequestCollapse(true);
++  ASSERT_TRUE(base::test::RunUntil([&]() {
++    never_both();
++    return !Animating();
++  }));
++  ASSERT_TRUE(controller()->IsCollapsed());
++  EXPECT_TRUE(MarksOf(space_pin).dot);
++  EXPECT_FALSE(MarksOf(space_pin).slash);
++  EXPECT_TRUE(MarksOf(essential).dot);
++
++  // The rail expanded by hover has rows with titles again: the slash.
++  browser()->GetProfile()->GetPrefs()->SetInteger(
++      stedding::prefs::kSidebarHoverDelayMs, 50);
++  controller()->SetExpandOnHoverEnabled(true);
++  region()->OnMouseEntered(MouseEvent(ui::EventType::kMouseEntered));
++  region()->OnMouseMoved(MouseEvent(ui::EventType::kMouseMoved));
++  ASSERT_TRUE(base::test::RunUntil([&]() {
++    never_both();
++    return region()->is_expanded_on_hover() && !Animating();
++  }));
++  EXPECT_TRUE(MarksOf(space_pin).slash);
++  EXPECT_FALSE(MarksOf(space_pin).dot);
++  EXPECT_TRUE(MarksOf(essential).dot);
++  EXPECT_FALSE(MarksOf(essential).slash);
++  region()->OnMouseExited(MouseEvent(ui::EventType::kMouseExited));
++  ASSERT_TRUE(base::test::RunUntil([&]() {
++    never_both();
++    return !region()->is_expanded_on_hover() && !Animating();
++  }));
++}
++
++// PLAN.md WIN-3: the rail's New Tab and Archived rows are glyphs alone, and
++// VoiceOver still reads them by name: they were unlabelled buttons.
++IN_PROC_BROWSER_TEST_F(SidebarRailTest, TheRailsRowsKeepTheirNames) {
++  controller()->RequestCollapse(true);
++  ASSERT_TRUE(base::test::RunUntil([&]() { return !Animating(); }));
++  ASSERT_TRUE(controller()->IsCollapsed());
++  views::test::RunScheduledLayout(browser_view()->GetWidget());
++
++  TabStripView* const strip = FindView<TabStripView>(region());
++  ASSERT_TRUE(strip);
++  views::LabelButton* const new_tab = strip->GetNewTabRow();
++  ASSERT_TRUE(new_tab);
++  EXPECT_EQ(l10n_util::GetStringUTF16(IDS_ACCNAME_NEWTAB),
++            new_tab->GetViewAccessibility().GetCachedName());
++
++  views::Button* const archived =
++      FindButtonWithTooltip(region(), u"Archived tabs");
++  ASSERT_TRUE(archived);
++  EXPECT_EQ(u"Archived tabs", archived->GetViewAccessibility().GetCachedName());
 +}
 +
 +}  // namespace

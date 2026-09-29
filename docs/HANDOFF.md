@@ -651,7 +651,16 @@ private window has.
     tab to load can take half a minute (open it in the foreground, or do not
     wait); and the rail expands on hover only in the active window, so the
     suite runs with one job (`tooling/dev test browser` does), since with
-    several a test's window can lose focus to another's.
+    several a test's window can lose focus to another's. And three found on
+    2026-09-29: the generator's click reaches the window's views but not a
+    page's content on the Mac, so a test cannot press a button inside a
+    page that way (use `content::SimulateMouseClickAt`, which skips the
+    window, or an interactive_ui_test); a row drag through `SendLeftMouse`
+    does work, and its press makes the dragged tab the active one, as a
+    person's does, so a test of what a drag keeps compares with that tab
+    first; and a negative check -- a fix taken out, built, the test seen
+    red -- leaves its objects behind: rebuild after putting the fix back,
+    before any run that is to count.
 
 ## The Windows build
 

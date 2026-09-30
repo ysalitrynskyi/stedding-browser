@@ -231,8 +231,14 @@ pin, upstream commits mixed in — is refused.
 | `release` | Day-to-day development | Optimised, no symbols, single binary. **Never quote performance numbers from this config.** |
 | `debug` | Debugging Chromium and our patches | Component build: one target relinks a small library, not the browser. |
 | `official` | Anything a user or benchmark sees | `is_official_build` — PGO with upstream's profile for the pin, plus ThinLTO. Slow, memory-hungry link. |
+| `win-release` | The Windows build and its installer | The Mac's `release` on the other platform: non-component, no symbols, no PGO (ADR 0018). |
+| `win-asan` | AddressSanitizer runs of the lifetime tests (PLAN.md TAB-7, TAB-8, TAB-9, SPC-1 to SPC-3, WIN-1, WEB-2) | `is_asan`, line-table symbols so a report names functions. Test targets only; the Mac has no counterpart. |
+| `win-checks` | The dangling-pointer detector with DCHECKs on (the same items, and WIN-2) | Release code with `dcheck_always_on` and BackupRefPtr; needs `--enable-features=PartitionAllocBackupRefPtr,PartitionAllocDanglingPtr` at run time. Test targets only. |
+| `win-debug` | A debug build for the checks PLAN.md asks of one (WIN-2) and for debugging on Windows | `debug` for the other platform: a component build. Test target only; the largest output this project asks a disk for. |
 
-The full args, with the reasoning for each, are in `tooling/args/`.
+The full args, with the reasoning for each, are in `tooling/args/`. The three sanitizer
+and check configurations are throwaway: build the test targets, run the tests, delete
+the output directory (trap 54 has the memory and disk costs of a build on this machine).
 
 `autoninja` selects Chromium's build executor. Which one it resolves to on this
 configuration, and whether `cc_wrapper=ccache` measurably helps on macOS, is recorded

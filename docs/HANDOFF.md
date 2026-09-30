@@ -439,7 +439,7 @@ private window has.
     styled for the rail -- centring, icon-only rows, the stacked switcher, the
     opaque ground -- keys on the width being laid out, or it dresses the hover
     overlay as a rail (round 8, three fixes in a row got this wrong first).
-34. **A Windows build from the Claude desktop app inherits an MSIX-redirected
+34. **A Windows build from an agent's MSIX-packaged desktop app inherits a redirected
     %LOCALAPPDATA%** some 60 characters longer than the real one, and vpython's
     venv then blows past MAX_PATH; point `VPYTHON_ROOT` at a short directory. And
     a driver that clicks must verify the browser is the foreground window first
@@ -489,9 +489,9 @@ private window has.
     everywhere, made chrome://settings/stedding a crash on Windows (windows
     N5). Every platform-gated handler needs a `loadTimeData` boolean the page
     checks before it sends.
-40. **Processes started from the Claude desktop app see a virtualised AppData
+40. **Processes started from an agent's MSIX-packaged desktop app see a virtualised AppData
     and HKCU.** The app is an MSIX package: an installer run from its tools
-    installs into `%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Local`, the
+    installs into `%LOCALAPPDATA%\Packages\<the app's package>\LocalCache\Local`, the
     registry entries land in the package hive, and the installed exe then fails
     with a side-by-side error because the Windows loader probes the real path.
     Tests of an installer, or of anything under AppData, run through a

@@ -22,20 +22,30 @@ Why: docs/features/privacy.md Q10.
 Removable when: upstream ships the refresh by default, or Stedding decides
 against a feature in S-57.
 ---
- .../browser/ui/color/stedding_color_mixer.cc  |  8 +++++
- .../ui/color/stedding_color_mixer_unittest.cc | 22 ++++++++++++++
- .../ui/tabs/tab_strip_model_unittest.cc       | 13 +++++---
- chrome/browser/ui/ui_features.cc              | 30 +++++++++++++++----
- chrome/browser/ui/views/tabs/tab_unittest.cc  | 28 +++++++++++++++++
- components/tab_groups/features.cc             |  6 +++-
- ui/base/ui_base_features.cc                   |  6 +++-
- 7 files changed, 102 insertions(+), 11 deletions(-)
+ .../browser/ui/color/stedding_color_mixer.cc  | 51 ++++++++++++++++++
+ .../ui/color/stedding_color_mixer_unittest.cc | 54 +++++++++++++++++++
+ .../ui/tabs/tab_strip_model_unittest.cc       | 13 +++--
+ chrome/browser/ui/tabs/tab_style.cc           | 18 +++++--
+ chrome/browser/ui/ui_features.cc              | 30 +++++++++--
+ chrome/browser/ui/views/tabs/tab_unittest.cc  | 28 ++++++++++
+ components/tab_groups/features.cc             |  6 ++-
+ ui/base/ui_base_features.cc                   |  6 ++-
+ 8 files changed, 191 insertions(+), 15 deletions(-)
 
 diff --git a/chrome/browser/ui/color/stedding_color_mixer.cc b/chrome/browser/ui/color/stedding_color_mixer.cc
-index 642f868d65241..1d47b56b4bc94 100644
+index 642f868d65241..721d614da08d4 100644
 --- a/chrome/browser/ui/color/stedding_color_mixer.cc
 +++ b/chrome/browser/ui/color/stedding_color_mixer.cc
-@@ -88,6 +88,14 @@ void AddSteddingColorMixer(ui::ColorProvider* provider,
+@@ -4,6 +4,8 @@
+ 
+ #include "chrome/browser/ui/color/stedding_color_mixer.h"
+ 
++#include <utility>
++
+ #include "base/feature_list.h"
+ #include "chrome/browser/ui/color/chrome_color_id.h"
+ #include "chrome/browser/ui/stedding_ui_metrics.h"
+@@ -88,6 +90,55 @@ void AddSteddingColorMixer(ui::ColorProvider* provider,
      mixer[kColorTabBackgroundActiveFrameInactive] =
          ui::SetAlpha(kColorTabForegroundActiveFrameActive, 0x24);
    }
@@ -47,25 +57,72 @@ index 642f868d65241..1d47b56b4bc94 100644
 +  // (privacy Q10) filled every row (the Mac pass, 2026-09-10).
 +  mixer[kColorTabBackgroundInactiveFrameActive] = {SK_ColorTRANSPARENT};
 +  mixer[kColorTabBackgroundInactiveFrameInactive] = {SK_ColorTRANSPARENT};
++  // A row's text is measured against the ground the rows sit on. Chromium
++  // measures it against the row's own fill (kTabFgToBgMap in
++  // tab_strip_color_mixer.cc), which is transparent for an inactive row here
++  // and a translucent tint for the active one in dark. BlendForMinContrast
++  // DCHECKs that its background is opaque and reads a transparent one as
++  // black: in light mode the inactive rows' text came out a pale grey on the
++  // sand ground (real use on Windows, 2026-09-30), and every build with
++  // DCHECKs on stopped at its first window. The ratios are Chromium's own.
++  {
++    const ui::ColorTransform ground = {window};
++    const ui::ColorTransform toolbar_text = {kColorToolbarText};
++    const auto on_ground = [&ground](ui::ColorTransform text, float contrast) {
++      return ui::BlendForMinContrast(std::move(text), ground,
++                                     ui::GetColorWithMaxContrast(ground),
++                                     contrast);
++    };
++    // Led by a colour, so the recipe is invariant: a recipe that is not is
++    // handed the "input" colour, the same id from the mixers below, which
++    // means Chromium's own recipe for it runs first, transparent fill and
++    // DCHECK included, only to be thrown away.
++    const auto define = [&mixer](ui::ColorId id, ui::ColorTransform text) {
++      ui::ColorRecipe recipe{ui::ColorTransform(SK_ColorTRANSPARENT)};
++      recipe += text;
++      mixer[id] = std::move(recipe);
++    };
++    const SkAlpha kFrameInactiveBlend = SkAlpha(0.75f * SK_AlphaOPAQUE);
++    define(kColorTabForegroundInactiveFrameActive,
++           on_ground(toolbar_text, 7.98f));
++    define(kColorTabForegroundInactiveFrameInactive,
++           on_ground(ui::AlphaBlend(toolbar_text, ground, kFrameInactiveBlend),
++                     4.5f));
++    if (dark) {
++      // The active row's fill is the tint above in dark; in light it is the
++      // card Chromium gives it, opaque, and its text is right already.
++      define(kColorTabForegroundActiveFrameActive,
++             on_ground(toolbar_text, 10.46f));
++      define(kColorTabForegroundActiveFrameInactive,
++             on_ground(ui::AlphaBlend(toolbar_text, ground, kFrameInactiveBlend),
++                       5.0f));
++    }
++  }
    mixer[kColorTabBackgroundInactiveHoverFrameActive] =
        ui::SetAlpha(kColorTabForegroundActiveFrameActive, 0x10);
    mixer[kColorTabBackgroundInactiveHoverFrameInactive] =
 diff --git a/chrome/browser/ui/color/stedding_color_mixer_unittest.cc b/chrome/browser/ui/color/stedding_color_mixer_unittest.cc
-index aa20595387829..fa15e53f7a682 100644
+index aa20595387829..100bd307670f0 100644
 --- a/chrome/browser/ui/color/stedding_color_mixer_unittest.cc
 +++ b/chrome/browser/ui/color/stedding_color_mixer_unittest.cc
-@@ -5,8 +5,10 @@
+@@ -5,11 +5,16 @@
  #include "chrome/browser/ui/color/stedding_color_mixer.h"
  
  #include "base/test/scoped_feature_list.h"
 +#include "chrome/browser/ui/color/chrome_color_id.h"
++#include "chrome/browser/ui/color/chrome_color_mixers.h"
  #include "chrome/browser/ui/stedding_ui_metrics.h"
  #include "testing/gtest/include/gtest/gtest.h"
 +#include "third_party/skia/include/core/SkColor.h"
  #include "ui/color/color_id.h"
  #include "ui/color/color_provider.h"
++#include "ui/color/color_mixers.h"
  #include "ui/color/color_provider_key.h"
-@@ -35,4 +37,24 @@ TEST(SteddingColorMixerTest, PrivateWindowsAreGraphite) {
++#include "ui/gfx/color_utils.h"
+ 
+ namespace {
+ 
+@@ -35,4 +40,53 @@ TEST(SteddingColorMixerTest, PrivateWindowsAreGraphite) {
    EXPECT_NE(kSteddingPrivateWindow, tinted.GetColor(ui::kColorFrameActive));
  }
  
@@ -86,6 +143,35 @@ index aa20595387829..fa15e53f7a682 100644
 +                      kColorTabBackgroundInactiveFrameActive)));
 +    EXPECT_EQ(0u, SkColorGetA(provider.GetColor(
 +                      kColorTabBackgroundInactiveFrameInactive)));
++  }
++}
++
++// A row's text is read against the ground the rows sit on, in both colour
++// modes and both frame states. Chromium measures it against the row's own
++// fill, which Stedding leaves transparent (inactive rows) or translucent (the
++// active one in dark): BlendForMinContrast read that as black, so in light
++// mode inactive rows came out a pale grey on the sand ground, and a build with
++// DCHECKs on stopped at its first window (real use on Windows, 2026-09-30).
++// The whole chain is built, Chromium's mixers under Stedding's.
++TEST(SteddingColorMixerTest, RowTextIsReadableOnTheGround) {
++  base::test::ScopedFeatureList features(stedding::kArcStyleWindow);
++  for (const auto mode : {ui::ColorProviderKey::ColorMode::kDark,
++                          ui::ColorProviderKey::ColorMode::kLight}) {
++    ui::ColorProviderKey key;
++    key.color_mode = mode;
++    ui::ColorProvider provider;
++    ui::AddColorMixers(&provider, key);
++    AddChromeColorMixers(&provider, key);
++    provider.GenerateColorMapForTesting();
++    const SkColor ground = provider.GetColor(ui::kColorFrameActive);
++    ASSERT_EQ(SK_AlphaOPAQUE, SkColorGetA(ground));
++    for (const ui::ColorId id : {kColorTabForegroundInactiveFrameActive,
++                                 kColorTabForegroundInactiveFrameInactive,
++                                 kColorTabForegroundActiveFrameInactive}) {
++      const SkColor text = provider.GetColor(id);
++      EXPECT_GE(color_utils::GetContrastRatio(text, ground), 4.5f)
++          << "mode " << static_cast<int>(mode) << ", colour id " << id;
++    }
 +  }
 +}
 +
@@ -128,6 +214,49 @@ index 40f78fe6afa52..154dca7339a2b 100644
  
    tabstrip()->CloseAllTabs();
  }
+diff --git a/chrome/browser/ui/tabs/tab_style.cc b/chrome/browser/ui/tabs/tab_style.cc
+index ae95d2dfc228b..d67150a2f035a 100644
+--- a/chrome/browser/ui/tabs/tab_style.cc
++++ b/chrome/browser/ui/tabs/tab_style.cc
+@@ -10,6 +10,7 @@
+ #include "chrome/browser/ui/tabs/features.h"
+ #include "chrome/browser/ui/ui_features.h"
+ #include "ui/base/ui_base_features.h"
++#include "ui/color/color_id.h"
+ #include "ui/color/color_provider.h"
+ #include "ui/gfx/color_utils.h"
+ #include "ui/gfx/favicon_size.h"
+@@ -133,17 +134,26 @@ int TabStyle::GetSeparatorCornerRadius() const {
+ std::tuple<float, float, float, SkColor> TabStyle::GetContrastRatioValues(
+     bool frame_active,
+     const ui::ColorProvider* color_provider) const {
+-  const SkColor inactive_bg =
++  // A tab's fill need not be opaque -- Stedding leaves an inactive row's
++  // transparent and the active one's translucent in dark -- and
++  // BlendForMinContrast needs an opaque background (it DCHECKs, and reads a
++  // transparent one as black). So the contrast is measured against what is
++  // really behind a tab's text: the tab over the frame.
++  const SkColor frame = color_provider->GetColor(
++      frame_active ? ui::kColorFrameActive : ui::kColorFrameInactive);
++  const SkColor inactive_bg = color_utils::GetResultingPaintColor(
+       GetTabBackgroundColor(TabStyle::TabSelectionState::kInactive,
+-                            /*hovered=*/false, frame_active, color_provider);
++                            /*hovered=*/false, frame_active, color_provider),
++      frame);
+   const auto get_blend = [inactive_bg](SkColor target, float contrast) {
+     return color_utils::BlendForMinContrast(inactive_bg, inactive_bg, target,
+                                             contrast);
+   };
+ 
+-  const SkColor active_bg =
++  const SkColor active_bg = color_utils::GetResultingPaintColor(
+       GetTabBackgroundColor(TabStyle::TabSelectionState::kActive,
+-                            /*hovered=*/false, frame_active, color_provider);
++                            /*hovered=*/false, frame_active, color_provider),
++      frame);
+   const auto get_hover_opacity = [active_bg, &get_blend](float contrast) {
+     return get_blend(active_bg, contrast).alpha / 255.0f;
+   };
 diff --git a/chrome/browser/ui/ui_features.cc b/chrome/browser/ui/ui_features.cc
 index 0114f94b2dc36..f1b2be57d189b 100644
 --- a/chrome/browser/ui/ui_features.cc

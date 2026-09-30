@@ -1,0 +1,265 @@
+# Project log -- what was built, in order, with the evidence
+
+History for orientation. Nothing here is needed to do a task: `AGENTS.md` carries what is
+true now, `PLAN.md` the order of work, `docs/ARC-ROUND2.md` the operator-feedback ledger.
+This file was the "State of the project" section of `AGENTS.md` until 2026-09-30, moved
+unchanged, and is where the dated record goes from now on: an agent opening the repo cold
+should not have to read four hundred lines of rounds to learn the rules.
+
+## 2026-09-29 to 2026-09-30 -- the Windows PC takes over
+
+The Windows build machine picked the work up from the Mac on 2026-09-29 (Ryzen 9 5900XT, 32 GB) with the pin at 155.0.8059.12 and 57 patches, and in two days did what the Mac's 2026-09-28 pass could not: built the series on Windows, ran it under sanitizers, and used the product with the real pointer and keyboard.
+
+- **2026-09-29.** `tooling/sync-chromium` got a Windows mode (18 minutes). The first full build died of memory at 32 jobs and finished at 20 to 26 (trap 54); the suites then passed after the tests that assumed the Mac were corrected (unit 798 of 798, browser 150 of 150; trap 55). `PLAN.md`, *Windows run*, has the detail.
+- **2026-09-30, sanitizers.** A DCHECK build with the dangling-pointer detector (3 h 20 min) and an ASan build (trap 57: its assembler never finished until `malloc_context_size=0`) found twelve defects in a tree whose suites were green (trap 60): a light-mode contrast bug, the quiet/adaptive permission defaults, a dangling Clear line and New Tab row after the switch to horizontal tabs, views without an accessible name, and the tests' own lifetimes. All are folded into patches 0030, 0042, 0043, 0047 and 0057. Final tree: release 800 of 800 unit, 151 of 151 browser; DCHECKs and the dangling-pointer detector the same; ASan: unit 800 of 800, browser 151 of 151.
+- **2026-09-30, real use.** With the owner's leave, `tooling\win\drive.ps1` drove a fresh profile with the real pointer and keyboard (trap 58): the Mac's words on Windows in the welcome flow, a tooltip and three command-bar rows (fixed); light-mode row text (fixed); three more faults logged as S-68 to S-70. Every click on every kind of row selected its tab (8 of 8 open, 7 of 7 in the rail).
+- **2026-09-30, the method.** The owner asked what the work did inefficiently. `AGENTS.md` and `docs/AGENT-LOOP.md` were rewritten around the answer (ask once, order of evidence, supervise long jobs, one pass that finds every failure), `docs/HANDOFF.md` gained the fast path and a trap index, and the machine-wide agent notes got a *Long jobs* section.
+
+## State of the project, up to 2026-09-28
+
+**Feature work is well past M1** — the milestone ladder in `docs/ROADMAP.md` is
+being executed out of order on purpose, chasing operator feedback on real
+builds. The patch series sits on the pin; unsigned beta pre-releases go to
+GitHub Releases. `tooling/dev status` prints the real counts (patches, tests
+per feature, pin); do not type them here.
+
+What "working" means here: **a behaviour is done when its "Done when" check passes
+on a real build** (`PLAN.md` §2). A green unit test alone proves nothing about what a
+user sees, and captures prove pixels only: the old rule ("shipped when its test is
+green") let broken basics ship, such as rows that would not select on click. The
+September 2026 audit of the whole series is `PLAN.md`; it lists what is broken in
+each feature below and the order of repair.
+
+Built, by the old measure (each has open findings in `PLAN.md`):
+
+- Arc-proportioned sidebar: essentials row, per-Space pins, Clear line,
+  44 px rows, 18 px favicons; floating content card; centred bare-host URL;
+  33 px toolbar.
+- **Spaces**: switcher with floating hover names, per-Space tint, context-menu
+  icon/rename/colour/delete, drag-tab-onto-Space, persistence (`decisions/0015`).
+  Core semantics — membership on open, active tab follows the switch, delete
+  moves tabs — landed as patch 0004 with `space_model_window_unittest.cc`.
+- **Folders with nesting**: create from tab context menu, drop a dragged tab
+  on a folder header (patch 0008), collapse, inline rename, session
+  persistence; the close-path use-after-free is fixed and regression-tested.
+- **⌘T command bar** across Spaces, also behind the sidebar's New Tab row.
+  Stedding colours (sand light, blue→plum gradient dark). Codecs verified.
+  Sign-in promo removed; DuckDuckGo default search; the new tab page is
+  local (hint line, no Web Store tile) and the omnibox has no Google entry
+  points; chrome://settings has no Google or AI sections and carries the
+  Stedding mark. Mac updater stubbed
+  (no Keystone) pointing at GitHub Releases.
+- **Peek**: switched off, and its setting hidden, while its host is rebuilt
+  (`PLAN.md` CMD-9, CMD-10; `docs/features/peek.md`).
+- **Settings**: a "Stedding" section first in chrome://settings, one control
+  per Stedding preference, plus the window's Spaces to rename or delete
+  (`docs/features/settings.md`).
+- **Auto-archive**: unpinned tabs outside folders that nobody has looked at
+  for 12 hours (a setting) close into the recently-closed list
+  (`docs/features/archive.md`).
+- **Round 5 Arc parity** (`docs/ARC-ROUND2.md`): the bar sits on the page and
+  takes its colour, the Space title heads the list with its pinned run and
+  the Clear line, ⌘S toggles the sidebar, ⌘T classifies and suggests,
+  downloads at the bottom-left, the sidebar edge drags, a swipe changes Space.
+- **Screenshots**: ⇧⌘2 the page, ⌥⇧⌘2 a region, ⇧⌘1 the full document; PNG
+  to Downloads and the clipboard (`docs/features/screenshot.md`).
+- **Welcome flow**: `chrome://stedding-welcome` over a profile's first window:
+  search engine, import, appearance, default browser, shortcuts
+  (`docs/features/welcome.md`).
+- **Round 6, wave 1** (`docs/ROUND6-PLAN.md`, patches 0016–0018): Arc's keys for
+  Spaces (⌃1–9, ⌥⌘←/→, ⌘D pins, ⇧⌘K clears, ⌥⇧⌘←/→ moves the tab) and a
+  Spaces menu in the menu bar; ⇧⌘C copies a clean link, ⌥⇧⌘C a Markdown one;
+  the close glyph only on hover, alerts as a corner badge on essentials; the
+  shortcut reference in chrome://settings/stedding; the status pill and the
+  find bar inside the card, no ring around split panes; the capture and
+  copy-link toasts; motion follows macOS Reduce Motion and a setting; the
+  About line reads "Stedding <VERSION> · Chromium <pin>"; Space swatches on
+  the welcome flow; the address row takes the page colour on either side of
+  the contrast line (toolbar T7) and sits in a 6 DIP gutter like the card's
+  other three sides.
+- **Round 6, wave 2** (patches 0019–0025): sleeping tabs with one dimmed look,
+  Sleep Tab / Sleep Others and a Space that sleeps after the user leaves it;
+  rename in place that survives restore; row numbers while ⌘ is held; verbs
+  that act on the selection with plural labels; Stedding's short tab menu
+  with Chromium's behind a setting; Arc's pinned-tab lifecycle (a home URL,
+  ⌘W sleeps, the drifted dot, the favicon reset, the menu rows, peek reads
+  the stored site); the switcher's overflow dots and Move Left / Move Right;
+  download progress on the sidebar button; the command bar's actions mode
+  (⇥, a leading ">", ⇧⌘P: Stedding's own commands with their chords, ⌘L
+  with the URL selected); ⌃⇥ through the Space's most recent tabs with a hold-to-see
+  strip, ⌥⇧⌘↑/↓ moving the row folder-aware; the page and app menus without
+  Google's rows, Import, Screenshot and Spaces in the app menu, a menu per
+  row kind and for the folder header, Move to Space; a chip drag reorders
+  the Spaces; a split's panes take a Space, a pin and a sleep together.
+- **Round 6, wave 4** (patches 0034–0036, complete): private windows wear a
+  different coat (`docs/features/private.md`); the little window for links
+  from other apps (`docs/features/little.md`); one sidebar for every window
+  through the SpaceRegistry (`docs/features/windows.md`, ADR 0016); ADR 0016 (the SpaceRegistry)
+  and the specs for the little window and one sidebar for every window
+  are written (`docs/features/little.md`, `docs/features/windows.md`).
+- **Round 6, wave 3** (patches 0026–0033, complete): Import from Arc — Spaces,
+  essentials, pins and folders from Arc's sidebar file, every tab unloaded
+  (`docs/features/import.md`); routing — a site opens in the Space it is
+  routed to, with a toast that undoes it (`docs/features/routing.md`); the
+  archived view — what auto-archive, Clear and a close left behind, by day
+  and Space, restorable (`docs/features/archive.md` A7–A11); the address
+  row hides with the sidebar, ⇧⌘D shows it on its own
+  (`docs/features/toolbar.md` T8–T12); the tracker-free defaults and the
+  Privacy block (`docs/features/privacy.md`, ADR 0017); sidebar density
+  presets and a text size (`docs/features/sidebar.md`); imported bookmarks
+  become pins on demand from ⌘T, and a Space exports to a file in the importer's
+  format and imports back (`docs/features/import.md` I13–I20; the hourly backups
+  were cut in patch 0055).
+- **Round 7** (2026-09-05, `docs/ARC-ROUND2.md`; patches 0037 and 0038, with a
+  second pass the same evening on the operator's replies): the row is the page's
+  colour exactly, square under it, the address centred on the row in a field with
+  no chrome around it, 560 DIP where the row has the room and shrinking when it
+  does not (toolbar T15–T18); the collapsed rail centred and the sidebar's toggle
+  on the traffic lights' own centre (sidebar Y6–Y7); Arc's folder row — macOS's
+  own folder symbol, the header, the New Tab row and the Space title on the tab
+  rows' column — and the drifted-pin row (folders F12, pins H12); the folder quit
+  crash; the keychain item under Stedding's own name (import I24); Arc's history
+  and passwords in one click from the welcome flow (import I6, I21–I23, welcome
+  W8). Two of Chromium's own suites had been red since patch 0002 because nothing
+  ran them: they now assert what this fork does (`docs/HANDOFF.md`, trap 31).
+
+- **Round 8** (2026-09-08, `docs/ARC-ROUND2.md`; patch 0039): the series built
+  and ran on Windows for the first time -- nine `FilePath` portability fixes, then
+  the operator's look at it, in four passes the same day. The address row under
+  Windows' caption buttons with their glyphs in its colour and the buttons on the
+  row's centre line; the focused bar and the dropdown in the page's colour; the
+  row's colour surviving a reload; the rail's rows 44 DIP squares, centred, the
+  switcher stacked, the hover overlay opaque. Three of them reach the Mac: a
+  profile killed while collapsed crashed on every launch (the crashed-session
+  bubble, toolbar T23), the address field could sit over the back button in a
+  narrow window (toolbar T18), and the rail itself. Chrome's registry key for
+  extensions is no longer read (privacy Q9). Verified on captures the tooling
+  took itself with no focus and no input (`tooling/win/capture.ps1`, trap 36);
+  the card measures the mac's geometry to the pixel. Not a port (M8, `S-56`):
+  branding and the macOS chrome are `is_mac`.
+- **M8, first slice** (2026-09-09; patches 0040–0041, ADR 0018): the collapsed
+  rail expands on hover after a pause the user sets, 2 s by default, a click in
+  the rail restarting it (sidebar Y11, settings T11); Windows knows the build as
+  Stedding -- the name, the icon, `%LOCALAPPDATA%\Stedding`, its own registry
+  keys, COM classes and sandbox prefix, so it lives beside a Chromium install
+  (windows N3–N4); `tooling/apply-branding` runs under Git for Windows and the
+  product-name rewrite reaches every locale; `tooling/win/build.ps1`,
+  `package-installer.ps1` and a `publish-release` that joins a release across
+  platforms make Chromium's `mini_installer` the Windows image, built, installed
+  and uninstalled on the build machine (windows N6) and published with beta 5 as
+  a preview. Chromium's field-trial testing config is off in every build from
+  now on and the 2026 refresh it carried is on by decision (privacy Q10, patch
+  0042). Still to come: little windows and links from other applications;
+  unsigned; no updates (`S-56`).
+
+- **Round 9** (2026-09-09, `docs/ARC-ROUND2.md`; patches 0043–0045): the
+  operator's first three minutes in the Windows preview. Arc's keyboard for
+  Windows -- ⌘ read as Ctrl, ⌥⌘ as Ctrl+Alt, Alt+1–9 for the Spaces (windows
+  N7) -- with the shortcut reference reading the platform's own table on every
+  platform (shortcuts Z6) and the settings and welcome strings in the
+  platform's words; the local new tab page for Google too (`S-45` closed), no
+  API-keys infobar (welcome W9), no Chromium theme picker (settings T12); the
+  rail's rows 6 DIP apart, the Space title its glyph alone, the switcher's
+  stack measuring itself so a Space added in the rail keeps the "+" on
+  screen, no floating name over the downloads button (sidebar Y12–Y14).
+  Published as beta 6 from Windows.
+
+- **The Mac pass on beta 6** (2026-09-10, `docs/ARC-ROUND2.md`, *The Mac pass*):
+  the checkout had been deleted for disk and was re-synced (HANDOFF trap 44); the
+  first macOS build of the Windows-written patches needed a guard on a Windows-only
+  colour id and a UTF-8 export file name (fixups into 0039); the first multi-tab
+  capture showed every inactive sidebar row filled -- Chromium's field-trial
+  testing config had been hiding that in every beta up to 4, and beta 5 was the
+  first build with it off (privacy Q10) -- so the mixer pins inactive rows
+  transparent (tabs R23, fixup into 0042); the release sweep grew
+  `tooling/dev test upstream` and seven of Chromium's own cases now assert what
+  this fork does. The macOS image joined beta 6 that day; the README's captures
+  are from it.
+- **Independent sessions and the keep-pile** (2026-09-16 to 18; patches 0046–0048,
+  ADR 0019, ADR 0020; `docs/features/sessions.md`): a Space can keep its own
+  cookies, cache and site data in a Chromium `StoragePartition` -- the chip menu's
+  check item, a toggle in Settings → Stedding, a row in ⌘T -- with essentials on
+  the shared jar, a moved tab rebound with its history and name (asleep stays
+  asleep), Clear Independent Session on the chip menu, the jar wiped when the
+  Space goes, and off-then-on reattaching the same jar. With it: keyword search
+  and `@Space` in ⌘T, a split that renames as one (Chromium itself restores the
+  pair), host and host-suffix routes, Focus and Hide Other Spaces. The 2026-09-18
+  audit of those two patches (HANDOFF trap 46) found seven helpers with tests and
+  no surface; patch 0055 cut them.
+
+Read `docs/HANDOFF.md` before touching anything — it carries the working loop,
+every dev parameter, and the traps already paid for, numbered contiguously and cited
+by number across the docs (`tooling/check-repo traps` keeps both true). `docs/ARC-ROUND2.md` is
+the operator-feedback ledger; `docs/UI-SPEC.md` the measured Arc match.
+
+Released: `v0.2.0-beta.4` (2026-09-05, published from this repo with
+`tooling/publish-release`), unsigned (M7 waits on Apple). It carries rounds 5,
+6 and 7, the round-7 second pass included. Published from Windows: `v0.2.0-beta.5`
+(2026-09-09, round 8 and M8's first slice, the Windows preview installer alone)
+and `v0.2.0-beta.6` (`docs/release-notes/v0.2.0-beta.6.md`, 2026-09-10, round 9:
+the Windows keyboard map, the first start, the rail); the DMG and its checksum in
+the notes were the Mac's to add to beta 6, and it did on 2026-09-10 -- after
+re-syncing a checkout that had been deleted for disk (`docs/HANDOFF.md`, trap 44),
+with two fixups into patch 0039 that the first macOS build of the Windows-written
+patches turned up (`docs/ARC-ROUND2.md`, *The Mac pass*). Beta 5 stays a
+Windows-only preview. Signing: the Developer ID certificate and the notary profile
+exist since 2026-09-23, and the signer works end to end (`S-17`, patch 0051).
+The pin is 155.0.8059.12 (2026-09-24, `S-64`: Google's early-stable build of M155,
+taken straight from M153 because the owner wants the newest stable-channel build,
+ADR 0007); `tooling/dev status` counts the series on it. `v0.2.0-beta.8` is the Mac image of the
+previous pin, 153.0.8010.53, and `v0.2.0-beta.7` (153.0.8010.48) the one before. Outstanding:
+`BACKLOG.md`. First vanilla perf comparison is in
+`docs/perf/README.md`: on the deterministic page list every QUALITY budget is
+met (cold +2.3%, warm −2.0%, memory +0.0% over vanilla).
+
+
+## The hand-over note of 2026-09-28 (as it stood)
+
+
+Until Phase 1 of `PLAN.md` is done, `PLAN.md` sets the order of work; after it,
+`BACKLOG.md` does. `v0.2.0-beta.4` is out (unsigned, 2026-09-05): rounds
+5, 6 and 7 — the Arc parity work, the Zen-mods plan in full
+(`docs/ROUND6-PLAN.md`, patches 0016–0036), the operator's six from beta 3, the
+Arc one-click import, and the second pass on the operator's replies the same
+evening (patches 0037–0038 and fixups into 0001, 0002). `v0.2.0-beta.5` is
+out with round 8 and M8's first slice as the Windows preview alone, and
+`v0.2.0-beta.6` is out on both platforms: from Windows with round 9 on
+2026-09-10, the macOS image added from the Mac the same day.
+`v0.2.0-beta.7` (2026-09-16) is the Mac image of pin 153.0.8010.48 with
+independent sessions, and `v0.2.0-beta.8` (2026-09-18) the Mac image of
+153.0.8010.53 with the audit's fixes; the Windows installer for a current tag is
+still to join it (`S-56`).
+
+**Whoever picks this up next** (state as of 2026-09-28): read `docs/HANDOFF.md`
+first, then `PLAN.md`, which sets the order of work until its Phase 1 is done. The
+owner's decisions on it are at the top of `PLAN.md` and override its earlier
+recommendations (horizontal tab mode stays, and must work). The loop, the dev
+parameters and the traps are in HANDOFF, including `tooling/capture-state` (a
+capture that needs neither the keyboard nor the pointer, trap 29), the rule that a
+release sweep runs Chromium's own suites around what the series touches (trap 31),
+and what a vanished checkout costs (trap 44). `tooling/dev status` says whether the
+checkout and the test binaries exist; `tooling/check-pin` says how far behind
+stable the pin is. Stedding's own browser tests, which click real rows in a real
+window, are `stedding_browser_tests` (`chrome/test/stedding/` in the checkout).
+Patch 0057 finished Phase 0's code and proved each item it could on a real build
+(the status block at the top of `PLAN.md` lists what each item still waits on).
+From 2026-09-29 the work continues on the Windows build machine. The series is on
+the pin there, built, and its unit sweep and browser tests pass on Windows (PLAN.md,
+*Windows run*; `docs/HANDOFF.md`, "The Windows build" and traps 53-55). What is
+left there is the ASan and dangling-pointer runs, which need a second output
+directory the owner has to give, and a look at Win+V's own list. The Mac-only
+items (the keychain and the profile migration on a beta 8 profile, VoiceOver, the
+managed-policy Mac) wait for the Mac.
+Nothing is released until `PLAN.md`'s Phase 0 is done: the profile migration and
+the keychain copy must be proven on a real beta-8 profile first.
+
+The website is finished and live (see *Site* above); what remains there is one
+dashboard step for the owner, the www redirect (`S-59`). Keep README, `docs/INSTALL.md`,
+`docs/SHORTCUTS.md` and `docs/FAQ.md` true after every release: they are the
+product's front door, written for people, and the site takes its facts from them.
+
+How to work here is `docs/HANDOFF.md`: the loop, the dev parameters that recreate
+any state for a capture, and the traps. Two rules that cost the most when broken:
+never edit the checkout while a build runs, and never inject input while someone
+is at the machine (`tooling/capture-state` needs neither the keyboard nor the
+pointer).

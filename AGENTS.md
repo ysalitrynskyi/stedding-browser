@@ -1,9 +1,10 @@
 # AGENTS.md — start here
 
-You are an AI agent (or a human) opening this repository cold. This file gives you full
-context. Read it before doing anything else. It is model-agnostic and tool-agnostic:
-everything you need is in this repo, nothing depends on a particular assistant, session,
-or machine.
+You are an AI agent (or a human) opening this repository cold. This file is the brief:
+what the project is, the rules, how to work, where to look. It is model-agnostic and
+tool-agnostic; everything you need is in this repo, nothing depends on a particular
+assistant, session or machine. What was built and when is `docs/PROJECT-LOG.md`; the order
+of work is `PLAN.md`; the procedure is `docs/AGENT-LOOP.md`; the traps are `docs/HANDOFF.md`.
 
 ## What this project is
 
@@ -60,202 +61,80 @@ Concretely (full detail in `docs/QUALITY.md`):
   performance), Firefox base (extension ecosystem, and Zen already owns that lane).
 - Target platforms in order: **macOS first, then Windows, then Linux.**
 
-## State of the project
+## Your first fifteen minutes
 
-**Feature work is well past M1** — the milestone ladder in `docs/ROADMAP.md` is
-being executed out of order on purpose, chasing operator feedback on real
-builds. The patch series sits on the pin; unsigned beta pre-releases go to
-GitHub Releases. `tooling/dev status` prints the real counts (patches, tests
-per feature, pin); do not type them here.
+1. `tooling/dev status`: the pin, the patch count, whether the checkout and the test
+   binaries exist. Every number in a doc comes from here or from a command, never from prose.
+2. `PLAN.md`: the owner's decisions and the status block at the top, then the work order
+   until its Phase 1 is done; `BACKLOG.md` after that.
+3. `docs/HANDOFF.md`: the "Fast path" and the trap index at its top. Read a trap when its
+   topic comes up; there are about sixty.
+4. Ask the operator **once**, in one message, for what you would otherwise find out hours in
+   (the list under "How to work", rule 2).
+5. Use the product before any long job: launch it, click it, look at it.
 
-What "working" means here: **a behaviour is done when its "Done when" check passes
-on a real build** (`PLAN.md` §2). A green unit test alone proves nothing about what a
-user sees, and captures prove pixels only: the old rule ("shipped when its test is
-green") let broken basics ship, such as rows that would not select on click. The
-September 2026 audit of the whole series is `PLAN.md`; it lists what is broken in
-each feature below and the order of repair.
+## How to work here
 
-Built, by the old measure (each has open findings in `PLAN.md`):
+The short form. `docs/AGENT-LOOP.md` has the detail and the numbers behind each rule; they
+come from the long run of 2026-09-29 to 30, in which the slowest parts were not the builds.
 
-- Arc-proportioned sidebar: essentials row, per-Space pins, Clear line,
-  44 px rows, 18 px favicons; floating content card; centred bare-host URL;
-  33 px toolbar.
-- **Spaces**: switcher with floating hover names, per-Space tint, context-menu
-  icon/rename/colour/delete, drag-tab-onto-Space, persistence (`decisions/0015`).
-  Core semantics — membership on open, active tab follows the switch, delete
-  moves tabs — landed as patch 0004 with `space_model_window_unittest.cc`.
-- **Folders with nesting**: create from tab context menu, drop a dragged tab
-  on a folder header (patch 0008), collapse, inline rename, session
-  persistence; the close-path use-after-free is fixed and regression-tested.
-- **⌘T command bar** across Spaces, also behind the sidebar's New Tab row.
-  Stedding colours (sand light, blue→plum gradient dark). Codecs verified.
-  Sign-in promo removed; DuckDuckGo default search; the new tab page is
-  local (hint line, no Web Store tile) and the omnibox has no Google entry
-  points; chrome://settings has no Google or AI sections and carries the
-  Stedding mark. Mac updater stubbed
-  (no Keystone) pointing at GitHub Releases.
-- **Peek**: switched off, and its setting hidden, while its host is rebuilt
-  (`PLAN.md` CMD-9, CMD-10; `docs/features/peek.md`).
-- **Settings**: a "Stedding" section first in chrome://settings, one control
-  per Stedding preference, plus the window's Spaces to rename or delete
-  (`docs/features/settings.md`).
-- **Auto-archive**: unpinned tabs outside folders that nobody has looked at
-  for 12 hours (a setting) close into the recently-closed list
-  (`docs/features/archive.md`).
-- **Round 5 Arc parity** (`docs/ARC-ROUND2.md`): the bar sits on the page and
-  takes its colour, the Space title heads the list with its pinned run and
-  the Clear line, ⌘S toggles the sidebar, ⌘T classifies and suggests,
-  downloads at the bottom-left, the sidebar edge drags, a swipe changes Space.
-- **Screenshots**: ⇧⌘2 the page, ⌥⇧⌘2 a region, ⇧⌘1 the full document; PNG
-  to Downloads and the clipboard (`docs/features/screenshot.md`).
-- **Welcome flow**: `chrome://stedding-welcome` over a profile's first window:
-  search engine, import, appearance, default browser, shortcuts
-  (`docs/features/welcome.md`).
-- **Round 6, wave 1** (`docs/ROUND6-PLAN.md`, patches 0016–0018): Arc's keys for
-  Spaces (⌃1–9, ⌥⌘←/→, ⌘D pins, ⇧⌘K clears, ⌥⇧⌘←/→ moves the tab) and a
-  Spaces menu in the menu bar; ⇧⌘C copies a clean link, ⌥⇧⌘C a Markdown one;
-  the close glyph only on hover, alerts as a corner badge on essentials; the
-  shortcut reference in chrome://settings/stedding; the status pill and the
-  find bar inside the card, no ring around split panes; the capture and
-  copy-link toasts; motion follows macOS Reduce Motion and a setting; the
-  About line reads "Stedding <VERSION> · Chromium <pin>"; Space swatches on
-  the welcome flow; the address row takes the page colour on either side of
-  the contrast line (toolbar T7) and sits in a 6 DIP gutter like the card's
-  other three sides.
-- **Round 6, wave 2** (patches 0019–0025): sleeping tabs with one dimmed look,
-  Sleep Tab / Sleep Others and a Space that sleeps after the user leaves it;
-  rename in place that survives restore; row numbers while ⌘ is held; verbs
-  that act on the selection with plural labels; Stedding's short tab menu
-  with Chromium's behind a setting; Arc's pinned-tab lifecycle (a home URL,
-  ⌘W sleeps, the drifted dot, the favicon reset, the menu rows, peek reads
-  the stored site); the switcher's overflow dots and Move Left / Move Right;
-  download progress on the sidebar button; the command bar's actions mode
-  (⇥, a leading ">", ⇧⌘P: Stedding's own commands with their chords, ⌘L
-  with the URL selected); ⌃⇥ through the Space's most recent tabs with a hold-to-see
-  strip, ⌥⇧⌘↑/↓ moving the row folder-aware; the page and app menus without
-  Google's rows, Import, Screenshot and Spaces in the app menu, a menu per
-  row kind and for the folder header, Move to Space; a chip drag reorders
-  the Spaces; a split's panes take a Space, a pin and a sleep together.
-- **Round 6, wave 4** (patches 0034–0036, complete): private windows wear a
-  different coat (`docs/features/private.md`); the little window for links
-  from other apps (`docs/features/little.md`); one sidebar for every window
-  through the SpaceRegistry (`docs/features/windows.md`, ADR 0016); ADR 0016 (the SpaceRegistry)
-  and the specs for the little window and one sidebar for every window
-  are written (`docs/features/little.md`, `docs/features/windows.md`).
-- **Round 6, wave 3** (patches 0026–0033, complete): Import from Arc — Spaces,
-  essentials, pins and folders from Arc's sidebar file, every tab unloaded
-  (`docs/features/import.md`); routing — a site opens in the Space it is
-  routed to, with a toast that undoes it (`docs/features/routing.md`); the
-  archived view — what auto-archive, Clear and a close left behind, by day
-  and Space, restorable (`docs/features/archive.md` A7–A11); the address
-  row hides with the sidebar, ⇧⌘D shows it on its own
-  (`docs/features/toolbar.md` T8–T12); the tracker-free defaults and the
-  Privacy block (`docs/features/privacy.md`, ADR 0017); sidebar density
-  presets and a text size (`docs/features/sidebar.md`); imported bookmarks
-  become pins on demand from ⌘T, and a Space exports to a file in the importer's
-  format and imports back (`docs/features/import.md` I13–I20; the hourly backups
-  were cut in patch 0055).
-- **Round 7** (2026-09-05, `docs/ARC-ROUND2.md`; patches 0037 and 0038, with a
-  second pass the same evening on the operator's replies): the row is the page's
-  colour exactly, square under it, the address centred on the row in a field with
-  no chrome around it, 560 DIP where the row has the room and shrinking when it
-  does not (toolbar T15–T18); the collapsed rail centred and the sidebar's toggle
-  on the traffic lights' own centre (sidebar Y6–Y7); Arc's folder row — macOS's
-  own folder symbol, the header, the New Tab row and the Space title on the tab
-  rows' column — and the drifted-pin row (folders F12, pins H12); the folder quit
-  crash; the keychain item under Stedding's own name (import I24); Arc's history
-  and passwords in one click from the welcome flow (import I6, I21–I23, welcome
-  W8). Two of Chromium's own suites had been red since patch 0002 because nothing
-  ran them: they now assert what this fork does (`docs/HANDOFF.md`, trap 31).
+1. **Cheapest evidence first.** Launch the build and use it. Half an hour of that, with the
+   real pointer and keyboard, found five faults (Mac wording on Windows, unreadable light-mode
+   text, a clipped command bar, an infobar left in full screen, doubled hover names) that
+   thousands of passing test runs had not, because the tests asked other questions. Then the
+   suites on the shipping configuration; then a build with DCHECKs and the dangling-pointer
+   detector (release speed; found twelve defects, eight in the product); then ASan (slow; found
+   one, in a test, and a hazard in `RemoveSpace`); a debug build only if a check needs one.
+2. **Ask once, up front.** May you drive the screen and keyboard. May you push, and release
+   when done (neither happens without a yes in chat, ever). Which output directories may you
+   delete. Is the machine yours for the night. Is there a setting only the operator may flip
+   (Windows clipboard history, for the Win+V check). A list asked at the start costs one
+   message; asked when blocked it cost hours.
+3. **Supervise long jobs; do not poll them.** A build or run past a few minutes is one
+   detached job that writes a status file and a last line (`tooling\win\build-until-done.ps1`,
+   `tooling/dev`), waited for by that line and never by the clock. Post one status line, with a
+   number in it, before any wait over ten minutes. The same steps killed at the end of three
+   chunks in a row are stuck, not slow: time one by hand (trap 57).
+4. **One pass should find everything.** A check that aborts at its first failure hides the
+   rest; every fix then costs a rebuild and a rerun to find the next. Collect every distinct
+   failure per run, read them through `tooling/digest-sanitizer` (five lines where the raw
+   output is sixty frames times the number of tests), fix in batches.
+5. **Every finding gets a test, and its fix goes into the patch that owns the code**
+   (`tooling/fold-fix`). Then use the product again: a fix is done when the thing you saw
+   has stopped happening on the real build.
+6. **Read and search cheaply.** `git grep` in the checkout (7 s for `chrome/`, 32 s for the
+   whole tree, where `grep -r` timed out four times); cap the output of any command you have
+   not run before; a script of more than three lines goes in a file, not a heredoc (seven round
+   trips lost to backslash quoting); crop screenshots to the window and look at text, not
+   pictures, where UI Automation or DevTools can give it.
+7. **Say what was and was not verified,** result first, in plain sentences, in the register
+   the operator's own agent instructions set (their "Response contract").
 
-- **Round 8** (2026-09-08, `docs/ARC-ROUND2.md`; patch 0039): the series built
-  and ran on Windows for the first time -- nine `FilePath` portability fixes, then
-  the operator's look at it, in four passes the same day. The address row under
-  Windows' caption buttons with their glyphs in its colour and the buttons on the
-  row's centre line; the focused bar and the dropdown in the page's colour; the
-  row's colour surviving a reload; the rail's rows 44 DIP squares, centred, the
-  switcher stacked, the hover overlay opaque. Three of them reach the Mac: a
-  profile killed while collapsed crashed on every launch (the crashed-session
-  bubble, toolbar T23), the address field could sit over the back button in a
-  narrow window (toolbar T18), and the rail itself. Chrome's registry key for
-  extensions is no longer read (privacy Q9). Verified on captures the tooling
-  took itself with no focus and no input (`tooling/win/capture.ps1`, trap 36);
-  the card measures the mac's geometry to the pixel. Not a port (M8, `S-56`):
-  branding and the macOS chrome are `is_mac`.
-- **M8, first slice** (2026-09-09; patches 0040–0041, ADR 0018): the collapsed
-  rail expands on hover after a pause the user sets, 2 s by default, a click in
-  the rail restarting it (sidebar Y11, settings T11); Windows knows the build as
-  Stedding -- the name, the icon, `%LOCALAPPDATA%\Stedding`, its own registry
-  keys, COM classes and sandbox prefix, so it lives beside a Chromium install
-  (windows N3–N4); `tooling/apply-branding` runs under Git for Windows and the
-  product-name rewrite reaches every locale; `tooling/win/build.ps1`,
-  `package-installer.ps1` and a `publish-release` that joins a release across
-  platforms make Chromium's `mini_installer` the Windows image, built, installed
-  and uninstalled on the build machine (windows N6) and published with beta 5 as
-  a preview. Chromium's field-trial testing config is off in every build from
-  now on and the 2026 refresh it carried is on by decision (privacy Q10, patch
-  0042). Still to come: little windows and links from other applications;
-  unsigned; no updates (`S-56`).
+## Red lines
 
-- **Round 9** (2026-09-09, `docs/ARC-ROUND2.md`; patches 0043–0045): the
-  operator's first three minutes in the Windows preview. Arc's keyboard for
-  Windows -- ⌘ read as Ctrl, ⌥⌘ as Ctrl+Alt, Alt+1–9 for the Spaces (windows
-  N7) -- with the shortcut reference reading the platform's own table on every
-  platform (shortcuts Z6) and the settings and welcome strings in the
-  platform's words; the local new tab page for Google too (`S-45` closed), no
-  API-keys infobar (welcome W9), no Chromium theme picker (settings T12); the
-  rail's rows 6 DIP apart, the Space title its glyph alone, the switcher's
-  stack measuring itself so a Space added in the rail keeps the "+" on
-  screen, no floating name over the downloads button (sidebar Y12–Y14).
-  Published as beta 6 from Windows.
+| | |
+|---|---|
+| Release, tag, publish, upload an installer | Only when the operator has said so in chat for this release. `tooling/publish-release` is the one way. A release is tried the way a user gets it (trap 47) |
+| Push | Only when asked. Never force. Stage only your own paths |
+| Attribution | No `Co-Authored-By`, no "Generated with", no mention of an AI assistant, anywhere: commits, PRs, notes, docs, comments |
+| Secrets, machine paths, personal data | Never committed: this repo is public |
+| Real input (pointer, keyboard) | Only with the operator's yes, and guarded: only into the window under test, only while the operator's hands are off. `tooling\win\drive.ps1` does both |
+| Deleting | Your own build output and scratch only. Ask before anything else |
+| System settings | Not yours to change, including the default browser and clipboard history: ask the operator to flip them |
+| A number or a claim you did not measure | `TBD`, never a guess (and never typed into a doc that `tooling/dev status` can derive) |
 
-- **The Mac pass on beta 6** (2026-09-10, `docs/ARC-ROUND2.md`, *The Mac pass*):
-  the checkout had been deleted for disk and was re-synced (HANDOFF trap 44); the
-  first macOS build of the Windows-written patches needed a guard on a Windows-only
-  colour id and a UTF-8 export file name (fixups into 0039); the first multi-tab
-  capture showed every inactive sidebar row filled -- Chromium's field-trial
-  testing config had been hiding that in every beta up to 4, and beta 5 was the
-  first build with it off (privacy Q10) -- so the mixer pins inactive rows
-  transparent (tabs R23, fixup into 0042); the release sweep grew
-  `tooling/dev test upstream` and seven of Chromium's own cases now assert what
-  this fork does. The macOS image joined beta 6 that day; the README's captures
-  are from it.
-- **Independent sessions and the keep-pile** (2026-09-16 to 18; patches 0046–0048,
-  ADR 0019, ADR 0020; `docs/features/sessions.md`): a Space can keep its own
-  cookies, cache and site data in a Chromium `StoragePartition` -- the chip menu's
-  check item, a toggle in Settings → Stedding, a row in ⌘T -- with essentials on
-  the shared jar, a moved tab rebound with its history and name (asleep stays
-  asleep), Clear Independent Session on the chip menu, the jar wiped when the
-  Space goes, and off-then-on reattaching the same jar. With it: keyword search
-  and `@Space` in ⌘T, a split that renames as one (Chromium itself restores the
-  pair), host and host-suffix routes, Focus and Hide Other Spaces. The 2026-09-18
-  audit of those two patches (HANDOFF trap 46) found seven helpers with tests and
-  no surface; patch 0055 cut them.
+## Where things stand
 
-Read `docs/HANDOFF.md` before touching anything — it carries the working loop,
-every dev parameter, and the traps already paid for, numbered contiguously and cited
-by number across the docs (`tooling/check-repo traps` keeps both true). `docs/ARC-ROUND2.md` is
-the operator-feedback ledger; `docs/UI-SPEC.md` the measured Arc match.
+Kept short on purpose: a paragraph that restates the state goes stale within a day, and
+`docs/PROJECT-LOG.md` exists for the record.
 
-Released: `v0.2.0-beta.4` (2026-09-05, published from this repo with
-`tooling/publish-release`), unsigned (M7 waits on Apple). It carries rounds 5,
-6 and 7, the round-7 second pass included. Published from Windows: `v0.2.0-beta.5`
-(2026-09-09, round 8 and M8's first slice, the Windows preview installer alone)
-and `v0.2.0-beta.6` (`docs/release-notes/v0.2.0-beta.6.md`, 2026-09-10, round 9:
-the Windows keyboard map, the first start, the rail); the DMG and its checksum in
-the notes were the Mac's to add to beta 6, and it did on 2026-09-10 -- after
-re-syncing a checkout that had been deleted for disk (`docs/HANDOFF.md`, trap 44),
-with two fixups into patch 0039 that the first macOS build of the Windows-written
-patches turned up (`docs/ARC-ROUND2.md`, *The Mac pass*). Beta 5 stays a
-Windows-only preview. Signing: the Developer ID certificate and the notary profile
-exist since 2026-09-23, and the signer works end to end (`S-17`, patch 0051).
-The pin is 155.0.8059.12 (2026-09-24, `S-64`: Google's early-stable build of M155,
-taken straight from M153 because the owner wants the newest stable-channel build,
-ADR 0007); `tooling/dev status` counts the series on it. `v0.2.0-beta.8` is the Mac image of the
-previous pin, 153.0.8010.53, and `v0.2.0-beta.7` (153.0.8010.48) the one before. Outstanding:
-`BACKLOG.md`. First vanilla perf comparison is in
-`docs/perf/README.md`: on the deterministic page list every QUALITY budget is
-met (cold +2.3%, warm −2.0%, memory +0.0% over vanilla).
+- The pin and the series: `tooling/dev status`. The Windows PC is the development machine
+  since 2026-09-29; the Mac holds the Mac-only checks (`PLAN.md` lists which).
+- The work order: `PLAN.md`. Phase 0 is the proof that what exists works; its status block
+  says what each item still waits on.
+- What is released: `docs/release-notes/` has one file per release; `gh release list` is
+  the truth. The site (`stedding.dev`) reads the same list.
+- What is open: `BACKLOG.md`, by id.
 
 ## Map of the docs
 
@@ -263,10 +142,11 @@ met (cold +2.3%, warm −2.0%, memory +0.0% over vanilla).
 |---|---|
 | `docs/README.md` | The index of everything under `docs/`, grouped by who it is for |
 | `docs/INSTALL.md`, `docs/SHORTCUTS.md`, `docs/FAQ.md` | The user-facing pages the README links: installing and verifying, every shortcut on both platforms, questions and answers. Plain language; keep them true when behaviour changes |
-| `docs/AGENT-LOOP.md` | **The working procedure**: research → spec → failing test → implement → build → test → capture → patch |
+| `docs/AGENT-LOOP.md` | **The working procedure**: order of evidence, ask once, supervise long jobs, one pass finds everything, then research → spec → test → implement → patch |
 | `docs/features/` | One spec per feature; numbered behaviours, each with its test id. The definition of done |
 | `BACKLOG.md` | The one list of open work, by id. Other docs cite ids |
-| `docs/HANDOFF.md` | Where things live, dev parameters, the traps already paid for |
+| `docs/HANDOFF.md` | Where things live, the fast path, dev parameters, the traps already paid for (with an index) |
+| `docs/PROJECT-LOG.md` | What was built, round by round, with the evidence. History, not instructions |
 | `docs/VISION.md` | Why this exists, values, explicit non-goals |
 | `docs/PRODUCT.md` | Full feature spec: sidebar, workspaces, split view, command bar, settings, import |
 | `docs/ARCHITECTURE.md` | Fork strategy, build system, patch management, updater, signing |
@@ -289,58 +169,9 @@ met (cold +2.3%, warm −2.0%, memory +0.0% over vanilla).
   This repo is public.
 - **Don't fabricate.** No invented benchmarks, dates, user counts, or claims. If a doc
   needs a number we don't have, mark it `TBD`.
-- **Keep this file true.** If you change direction (platforms, fork strategy, license),
-  update AGENTS.md and the relevant ADR in the same commit.
+- **Keep this file true, and short.** If you change direction (platforms, fork strategy,
+  license), update AGENTS.md and the relevant ADR in the same commit. Put history in
+  `docs/PROJECT-LOG.md`, status in `PLAN.md`, and nothing dated or counted here.
 - Commit messages: conventional, imperative, explain why when it isn't obvious.
 - When a task is ambiguous, the tiebreaker is the mandate above: what gets a polished,
   installable browser into users' hands sooner?
-
-## Current priorities (keep this list short and fresh)
-
-Until Phase 1 of `PLAN.md` is done, `PLAN.md` sets the order of work; after it,
-`BACKLOG.md` does. `v0.2.0-beta.4` is out (unsigned, 2026-09-05): rounds
-5, 6 and 7 — the Arc parity work, the Zen-mods plan in full
-(`docs/ROUND6-PLAN.md`, patches 0016–0036), the operator's six from beta 3, the
-Arc one-click import, and the second pass on the operator's replies the same
-evening (patches 0037–0038 and fixups into 0001, 0002). `v0.2.0-beta.5` is
-out with round 8 and M8's first slice as the Windows preview alone, and
-`v0.2.0-beta.6` is out on both platforms: from Windows with round 9 on
-2026-09-10, the macOS image added from the Mac the same day.
-`v0.2.0-beta.7` (2026-09-16) is the Mac image of pin 153.0.8010.48 with
-independent sessions, and `v0.2.0-beta.8` (2026-09-18) the Mac image of
-153.0.8010.53 with the audit's fixes; the Windows installer for a current tag is
-still to join it (`S-56`).
-
-**Whoever picks this up next** (state as of 2026-09-28): read `docs/HANDOFF.md`
-first, then `PLAN.md`, which sets the order of work until its Phase 1 is done. The
-owner's decisions on it are at the top of `PLAN.md` and override its earlier
-recommendations (horizontal tab mode stays, and must work). The loop, the dev
-parameters and the traps are in HANDOFF, including `tooling/capture-state` (a
-capture that needs neither the keyboard nor the pointer, trap 29), the rule that a
-release sweep runs Chromium's own suites around what the series touches (trap 31),
-and what a vanished checkout costs (trap 44). `tooling/dev status` says whether the
-checkout and the test binaries exist; `tooling/check-pin` says how far behind
-stable the pin is. Stedding's own browser tests, which click real rows in a real
-window, are `stedding_browser_tests` (`chrome/test/stedding/` in the checkout).
-Patch 0057 finished Phase 0's code and proved each item it could on a real build
-(the status block at the top of `PLAN.md` lists what each item still waits on).
-From 2026-09-29 the work continues on the Windows build machine. The series is on
-the pin there, built, and its unit sweep and browser tests pass on Windows (PLAN.md,
-*Windows run*; `docs/HANDOFF.md`, "The Windows build" and traps 53-55). What is
-left there is the ASan and dangling-pointer runs, which need a second output
-directory the owner has to give, and a look at Win+V's own list. The Mac-only
-items (the keychain and the profile migration on a beta 8 profile, VoiceOver, the
-managed-policy Mac) wait for the Mac.
-Nothing is released until `PLAN.md`'s Phase 0 is done: the profile migration and
-the keychain copy must be proven on a real beta-8 profile first.
-
-The website is finished and live (see *Site* above); what remains there is one
-dashboard step for the owner, the www redirect (`S-59`). Keep README, `docs/INSTALL.md`,
-`docs/SHORTCUTS.md` and `docs/FAQ.md` true after every release: they are the
-product's front door, written for people, and the site takes its facts from them.
-
-How to work here is `docs/HANDOFF.md`: the loop, the dev parameters that recreate
-any state for a capture, and the traps. Two rules that cost the most when broken:
-never edit the checkout while a build runs, and never inject input while someone
-is at the machine (`tooling/capture-state` needs neither the keyboard nor the
-pointer).

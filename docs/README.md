@@ -32,9 +32,10 @@ Everything under `docs/`, grouped by who it is for.
 
 | Document | Contents |
 |---|---|
-| [../AGENTS.md](../AGENTS.md) | Start here: the project in one file, state, conventions, priorities |
-| [HANDOFF.md](HANDOFF.md) | Where things live, the dev parameters, the traps already paid for |
-| [AGENT-LOOP.md](AGENT-LOOP.md) | The working procedure: research → spec → failing test → implement → build → test → capture → patch |
+| [../AGENTS.md](../AGENTS.md) | Start here: the project, the rules, how to work, the red lines |
+| [HANDOFF.md](HANDOFF.md) | The fast path, where things live, the dev parameters, the traps already paid for (with an index) |
+| [AGENT-LOOP.md](AGENT-LOOP.md) | The working procedure: ask once, order of evidence, supervise long jobs, one pass finds everything, then the loop for one change |
+| [PROJECT-LOG.md](PROJECT-LOG.md) | What was built, round by round, with the evidence: history, not instructions |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Fork strategy, the build, patch management, branding, updater, signing, measured numbers |
 | [features/](features/) | One specification per feature; each behaviour has a test. The definition of done |
 | [decisions/](decisions/) | Architecture decision records |

@@ -4,6 +4,49 @@ Written for the next agent (or human) continuing this work. AGENTS.md is the
 project context; this file is the operational knowledge that is otherwise only
 in one contributor's head. Read both.
 
+## Fast path (the first hour)
+
+The long form of each step is `docs/AGENT-LOOP.md`; the numbers behind it are from the run
+of 2026-09-29 to 30.
+
+1. **Orient, five minutes.** `tooling/dev status`; the top of `PLAN.md`; `BACKLOG.md`.
+2. **Ask the operator once** for the things you would find out hours in: may you drive the
+   screen and keyboard, may you push and release when done, what may you delete, is the
+   machine yours overnight, is there a setting only they may flip.
+3. **Use the product** before any long job: launch it on a fresh profile, click through the
+   first launch, light and dark, the gestures the specs name (`tooling\win\drive.ps1` on
+   Windows; `tooling/drive` on the Mac). Half an hour, and it finds what the suites do not.
+4. **Run the suites on the shipping configuration:** `tooling/dev test all --no-build`.
+5. **Sanitizer runs, cheapest first:** a DCHECK + dangling-pointer build (`win-checks`), then
+   ASan (`win-asan`). The same command on each: `STEDDING_TEST_OUT=win-checks tooling/dev test
+   all --no-build`. Read findings with `tooling/digest-sanitizer <log>`, not raw.
+6. **Fix loop:** edit the checkout (no build running), `tooling/fold-fix <commit> <files>`,
+   `tooling/update-patches`, `tooling/check-repo`, commit this repo.
+7. **Report** what was and was not verified, result first.
+
+| To do this | Run |
+|---|---|
+| Build on Windows, to the end | `tooling\win\build-until-done.ps1 -Config win-checks -Targets unit_tests,stedding_browser_tests` (detached; wait for `SUPERVISOR_EXIT=`) |
+| Build on the Mac | `tooling/dev build release chrome` |
+| Run a sanitizer suite | `STEDDING_TEST_OUT=win-asan tooling/dev test browser --no-build` (`STEDDING_TEST_BUDGET_S=2400`) |
+| Read a failing run | `tooling/digest-sanitizer <log>` |
+| Use the window | `. tooling\win\drive.ps1` |
+| Find a string in the tree | `git grep -n <pattern> -- <dir>` in the checkout |
+
+### Trap index
+
+Sixty-odd traps follow. Read the one for the topic in front of you, not the list.
+
+| Topic | Traps |
+|---|---|
+| Building, disk, rebuild cost | 1, 16, 19, 23, 44, 45, 53, 54, 57 |
+| The working loop and the series | 9, 13, 14, 17, 22, 28, 50, 51 |
+| Driving and capturing the window | 3, 10, 11, 12, 15, 18, 27, 29, 30, 36, 37, 52, 56, 59, 61 |
+| What a test can and cannot prove | 2, 31, 46, 48, 55, 58, 60 |
+| Windows | 32, 34, 36, 38, 40, 42, 53, 54, 55, 56, 57, 59 |
+| Release and signing | 44, 47, 49 |
+| Chromium's own behaviour to know | 6, 8, 20, 21, 25, 26, 35, 39, 41, 43, 60 |
+
 ## Where things live
 
 - This repo: docs, tooling,
@@ -154,11 +197,17 @@ private window has.
 
 9. **A sleep loop is not supervision.** A vanilla `official` build ran 3.5 h
    with an agent polling for an exit line and nothing else; the operator had to
-   ask whether it was stuck (it was at 95%, but nobody could tell). Rule, now
-   in code: `build-chromium` has a 15-minute budget, prints objects and active
-   compilers every minute, and kills the build past the budget; longer runs
-   are asked for and passed as `--budget <minutes>`. Hand-written waits follow
-   the same rule (`docs/AGENT-LOOP.md`).
+   ask whether it was stuck (it was at 95%, but nobody could tell). The rule, in
+   code: every build prints objects and active compilers each minute and has a
+   budget that kills it when it runs past (`build-chromium --budget`, `build.ps1
+   -BudgetMinutes`). The budget is a dead-man's switch and not a schedule: it kills
+   the steps in flight, so a hand-restarted 15-minute chunk wastes their minutes and
+   the idle gap before the next poll, which added up to hours across 40 chunks on
+   2026-09-30. `tooling\win\build-until-done.ps1` restarts what the budget stops with
+   no gap, writes a status file whose last line is `SUPERVISOR_EXIT=<n>`, and stops
+   with exit 4 naming any step killed at the end of three chunks in a row (trap 57).
+   The agent waits for that line in a background call and says where it stands, with a
+   number, before any wait over ten minutes (`docs/AGENT-LOOP.md`).
 
 10. **Synthetic mouse events inherit modifiers too.** After a `key f+ctrl+cmd`
     the harness's next plain click carried Ctrl, which macOS reads as a right-click:
@@ -320,6 +369,14 @@ private window has.
     `symbol_level=0` drops only the line tables). Drives wait for an empty chair,
     and `drive-window.py` refuses any input unless the launched pid is frontmost
     and, for the mouse, its window is the topmost one at the point.
+
+    The policy since 2026-09-30: real input is used with the operator's yes, asked once at
+    the start of a session ("you can use the screen any time", that night), and only through
+    a driver that keeps these two conditions. On Windows that is `tooling\win\drive.ps1`:
+    input goes only while the launched process's window is in front, and only while the
+    operator's own last input is more than six seconds old (`GetLastInputInfo`; its own
+    events are told apart by their time), and a screenshot is of the window's rectangle,
+    only while it is in front. Without the yes, the input-free tools.
 
 28. **An apply script's anchors die at the first clang-format.** The pipeline
     formats after applying, so a re-run fails on any anchor or guard that
@@ -728,6 +785,92 @@ private window has.
     anything else that starts one from the tool's shell should do the same or start it
     detached. A Windows run that fails exactly these tests is this, not a regression.
 
+57. **An ASan build's assembler never finishes three files, and every chunk ends with
+    "FAILED" steps that are not errors.** `nasm` is built with the same args as the
+    rest, so in `win-asan` it is ASan-built, and on Windows ASan records a stack for
+    every allocation with its slow unwinder. `tx_float.asm` (ffmpeg), `itx16_avx2`
+    (dav1d) and `highbd_sad4d_sse2` (libvpx) allocate millions of times: each passed 20
+    minutes of CPU without finishing, where the release assembler needs 37 seconds under
+    load. A 15-minute budget kills them, so the last chunks each ended with those steps
+    as the only `FAILED:` lines, and the build could not reach a link while they were
+    outstanding. Copying the release `nasm.exe` over the ASan one does not hold: siso
+    sees the output changed and relinks it.
+    `ASAN_OPTIONS=malloc_context_size=0` in the build's environment brings each to
+    about 3.5 minutes; `tooling\win\build.ps1` sets it for any args file with
+    `is_asan = true`. The test runs want the options the other way round, with a
+    symbolizer -- and ASan splits `ASAN_OPTIONS` at a `:` as well as at a space, so a
+    drive letter ends an option and the run dies with "expected '=' in ASAN_OPTIONS":
+    `handle_abort=1:detect_odr_violation=0:symbolize=1:external_symbolizer_path='C:/.../llvm-symbolizer.exe'`,
+    the path in single quotes. `STEDDING_TEST_OUT=win-asan` points `tooling/dev`'s
+    sweeps at that output directory.
+
+58. **Thousands of passing test runs had not used the product.** The first real use of the
+    Windows build -- a fresh profile, the pointer and the keyboard, light mode and dark --
+    found five faults in half an hour. The welcome flow, a tooltip and three command-bar
+    rows wrote the Mac's keys and prompts ("on this Mac", "macOS asks once to confirm",
+    "New Tab (⌘T)", "⌘W on a pinned tab puts it to sleep"); in light mode the inactive rows'
+    text was a pale grey on the sand ground, about 1.2:1 (a contrast recipe read a transparent
+    fill as black; the fix measures it against the ground, 6.5:1 on the rebuilt window);
+    the command bar runs past the window's right edge in a narrow window; the "Continue where
+    you left off" infobar and the card's 6 DIP gutter stay in full screen; a Space chip shows
+    two hover names. None of them could have failed a test that did not ask the question.
+    The same pass proved by hand what the suites proved by proxy: 8 of 8 clicks on rows in the
+    open sidebar and 7 of 7 in the rail selected their tab, a drag onto a folder header and
+    onto a Space chip landed, Alt+digit and Ctrl+Alt+arrows switch Spaces, the clean-link and
+    Markdown keys write the clipboard, the page screenshot key writes a PNG and an image on
+    the clipboard, a video's full-screen button works and Esc leaves it. The wording and the
+    light-mode text are fixed (patches 0057 and 0042); the other three are
+    in `BACKLOG.md` (S-68 to S-70). Rule: use the build before the long
+    runs, with `tooling\win\drive.ps1` (`docs/AGENT-LOOP.md`, "Order of evidence").
+
+59. **A disconnected remote-desktop session fails the tests that need an active window.** At
+    03:04 on 2026-09-30 the three `TabDropTest` drags failed in the release build and under
+    ASan alike, and `qwinsta` said the session was `Disc` and `GetForegroundWindow` returned
+    nothing. Reconnected, the same tests passed in every build. It looks like trap 56 (the
+    same tests, the same symptom) and is not: there the session was live and the launch
+    context decided it. Before calling one of these tests a regression, run `qwinsta` and
+    see `Active`. A run meant to go on overnight needs the session kept connected; a
+    window a test opens is, for the operator at the screen, a black rectangle for the few
+    seconds it lives, and a slow build (ASan) keeps it up longer.
+
+60. **A check that aborts at its first failure hides the rest, and a build with DCHECKs on
+    found twelve defects in a tree whose suites were green.** With `dcheck_always_on` and the
+    dangling-pointer detector, 145 of 150 browser tests crashed at the same line -- and after
+    that line was fixed, at the next, over a dozen rebuilds, before the method changed: print every
+    distinct failure per run (`--test-launcher-print-test-stdio=always`, or a local edit that
+    logs where the check would abort, reverted afterwards), read them through
+    `tooling/digest-sanitizer`, fix in batches. What it found, for the next person to look for:
+    (a) `BlendForMinContrast` needs an opaque background; Stedding's transparent row fill
+    and translucent active tint violated it in two places (the colour recipes, and
+    `TabStyle::GetContrastRatioValues` in the horizontal strip); (b) a recipe that is not
+    invariant is first handed the same id from the mixers below, so Chromium's own recipe for
+    it runs, DCHECK and all, only to be thrown away: lead an override with a plain colour
+    (`ColorRecipe::Invariant()`); (c) a `Label` on a layer that is not opaque must draw
+    grayscale text (`SetSubpixelRenderingEnabled(false)` with `SetSkipSubpixelRenderingOpacityCheck`),
+    or Label DCHECKs on paint; (d) every focusable view needs a role and an accessible name,
+    the Space title row and the Space rename field had none; (e) `raw_ptr` members of a test
+    fixture that point into the window must be cleared in `TearDownOnMainThread`, which runs
+    before the window closes, or the detector reports them when the fixture is destroyed;
+    (f) a container of `raw_ptr`s to child views is cleared before the views go, not after;
+    (g) when the unpinned container is destroyed on the switch to horizontal tabs, the Clear
+    line and the New Tab row it owned must be nulled in `TabStripView` (this was the real
+    dangling pointer, WIN-1 and SPC-3); (h) quiet permission prompts and adaptive (CPSS) ones
+    are one setting's two choices, and Stedding's "quiet by default" left both on, which the
+    settings page DCHECKs; (i) a renderer-initiated `NavigateParams` needs an
+    `initiator_origin`; (j) a destructor that deletes files (`ScopedTempDir`) blocks, so a
+    `ScopedAllowBlockingForTesting` has to outlive it. ASan, run first and for five hours,
+    found one use-after-free, in a unit test that read a deleted Space's id, and made
+    `RemoveSpace` take its id by value. Order the runs by yield per hour: the DCHECK build
+    first.
+
+61. **Two browsers from one executable with the same `--remote-debugging-port` leave the
+    second with a window and no UI.** A fresh profile launched while a scratch browser from
+    the same build still held port 9222 showed a black rectangle where the welcome flow
+    belongs, with a browser process, a GPU process and renderers all idle and nothing for UI
+    Automation to find; DevTools calls answered for the first browser. It read as a
+    regression for ten minutes. Stop the first browser (by profile path, trap 40), or give
+    each its own port; `Drive-Launch` takes the port from its parameter.
+
 ## The Windows build
 
 Git for Windows for the bash tooling, PowerShell for the rest, Visual Studio's own
@@ -749,24 +892,36 @@ path (`/c/...`). Then:
 2. `tooling/apply-branding` from Git for Windows: the BRANDING file, the logos, the
    Windows icons and the product-name rewrite over every locale's tables. Before
    `gn gen`, as on the Mac.
-3. `tooling\win\build.ps1` -- `win-release` (`tooling/args/win-release.gn`), the
-   args file copied into the output directory with `stedding_version` appended, then
-   `chrome` and `mini_installer` (`-Targets` names others, `unit_tests` and
-   `stedding_browser_tests` among them). A component build for iteration is the same
-   script with an args file of its own; the build is refused while a browser from
+3. `tooling\win\build-until-done.ps1` -- the build to the end, detached, one status
+   file (`out\<config>\supervisor.log`, last line `SUPERVISOR_EXIT=<n>`); it runs
+   `tooling\win\build.ps1` chunk after chunk and stops only when done, failed, stuck
+   or looping on the same killed steps (traps 9 and 57). `build.ps1` is the one chunk:
+   the args file of `tooling/args/<config>.gn` copied into the output directory with
+   `stedding_version` appended, `gn gen`, `autoninja`, a progress line every minute
+   (steps done, compilers, commit charge), a budget (`-BudgetMinutes`, exit 2 means it
+   stopped on it and a rerun resumes), `-KeepGoing` for one pass that lists every error
+   (trap 50), `-Jobs` to keep the commit charge inside memory (trap 54). The default
+   config is `win-release` (`chrome` and `mini_installer`; `unit_tests` and
+   `stedding_browser_tests` by `-Targets`). The other three are test-target builds only:
+   `win-checks` (DCHECKs and the dangling-pointer detector), `win-asan` and `win-debug`
+   (docs/ARCHITECTURE.md, "Build configurations"). A build is refused while a browser from
    that output directory runs (the link fails with "permission denied" otherwise).
-   It keeps the Mac's rules: a 15-minute budget with a progress line every minute
-   (`-BudgetMinutes`, 0 for none; exit 2 means it stopped on the budget and a rerun
-   resumes), and `-KeepGoing` for one pass that lists every error (trap 50).
 4. `tooling/dev test all --no-build` (or one feature) runs the same filters against
    `out/win-release/*.exe`; `tooling/dev test browser --no-build` runs
-   `stedding_browser_tests` with one job (both through `timeout`, trap 56).
+   `stedding_browser_tests` with one job (both through `timeout`, trap 56). On a
+   sanitizer build the same commands with `STEDDING_TEST_OUT=win-checks` or `win-asan`:
+   the run-time flags and options are set for you and a finding is printed as a digest
+   (`STEDDING_TEST_LOG=<path>` keeps the raw output). A browser-suite run under ASan takes
+   20 minutes: `STEDDING_TEST_BUDGET_S=2400`. The session must be connected (trap 59).
 5. `tooling\win\capture.ps1` for captures that need neither focus nor input (trap
    36); `tooling\win\cdp.ps1` for what a capture cannot reach -- JavaScript in a
    page over the DevTools websocket (the welcome flow's buttons pressed by name,
    a settings page scrolled to its Shortcuts block) and a screenshot of the page;
    `tooling\win\uia-dump.ps1` for a layout question -- every view of the window
    with its name and bounds through UI Automation, no build needed (trap 37);
+   `tooling\win\drive.ps1` to use the window for real -- the pointer, the keyboard,
+   a window-only screenshot, rows and buttons by UI Automation, the visible page by
+   DevTools, with the guards of trap 27 (ask the operator once first);
    `tooling\win\package-installer.ps1` for the release image in `dist/`;
    `tooling/publish-release` from Git for Windows to publish it beside the Mac's DMG
    (ADR 0018).

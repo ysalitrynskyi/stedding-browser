@@ -126,8 +126,10 @@ Policy for moving the pin: `decisions/0007-chromium-version-pin.md`.
   `out\win-release` with `chrome`, `mini_installer`, `unit_tests` and
   `stedding_browser_tests` in it (measured 2026-09-29, 155.0.8059.12). The same 150 GB
   floor applies to the sync there, the page file can take another 32 GB on a failed
-  build (trap 54), and a second output directory for an ASan build is a decision for
-  the owner.
+  build (trap 54). The sanitizer builds are two more output directories beside it: `out\win-asan`
+  (36 GB) and `out\win-checks`, DCHECKs and the dangling-pointer detector (30 GB), measured
+  2026-09-30 (`tooling/args/win-asan.gn`, `win-checks.gn`; traps 57 and 60). Remove them when the
+  runs are done; the release directory is the only one that has to stay.
 - **No `node_modules` in any directory above the checkout.** Chromium's TypeScript
   build resolves modules the way node does — by walking up parent directories — so a
   stray `node_modules` in your home directory leaks its `@types` into the build. The

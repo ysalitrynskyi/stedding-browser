@@ -189,6 +189,15 @@ applicable subset.
 11. Changelog written: user-facing changes, known issues, Chromium base version.
 12. Git tag created, matching the released artifact; release published with checksums
     and changelog.
+13. Used for real on the platform being released, from the installer a user gets: a fresh
+    profile, the first launch and its welcome flow, light and dark, a click on every kind of
+    row, the gestures the specs name, with the real pointer and keyboard
+    (`docs/AGENT-LOOP.md`, "Real use"). Every suite passed the build that first had this
+    done to it and five faults were on screen (`docs/HANDOFF.md`, trap 58).
+14. Both suites clean with DCHECKs and the dangling-pointer detector on
+    (`STEDDING_TEST_OUT=win-checks tooling/dev test all --no-build` on Windows), and the
+    lifetime suites clean under ASan. A build that stops at its first window on a DCHECK has
+    a defect whatever the release build does with it (trap 60).
 
 If any item fails, the release does not go out. There are no exceptions that are not
 written down as an ADR.

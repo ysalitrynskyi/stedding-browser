@@ -75,10 +75,10 @@ of the sidebar, shown as icons rather than named pills.
 ## Toolbar
 
 Thin — noticeably thinner than Chromium's. Back, forward and reload at the left.
-The URL is **centred** and shows the bare host with a small link glyph.
+At rest the URL is **centred** on the page and shows the whole address -- the host in the text colour, the rest a step dimmer -- after the page-info chip (toolbar T28, T30). It showed the bare host until 2026-09-30; Arc's bare host is what the address bar's "Always show full URLs" switched off gives.
 Extension and plugin icons are in the **top right**, on the same row.
 
-No omnibox chrome: no background, no border. The field is 560 DIP wide on the row's centre and shrinks when the toolbar is tight; the address is centred in it one point smaller than Chromium's, with the page actions at its right edge (round 7).
+No omnibox chrome: no background, no border. The field takes the row between the button clusters and shrinks when the toolbar is tight; at rest the address gathers on the page's centre in it, one point smaller than Chromium's, with the page actions at its right edge (round 7; the 560 DIP cap went on 2026-09-30, toolbar T29).
 
 ## Command bar
 
@@ -157,10 +157,10 @@ that matter are probes in `tooling/probes/window.json`; `tooling/dev capture
 | Tab row height | Done — 44 px, measured in the capture (Chromium's default is 30) |
 | Active tab pill radius | Done — 10 px |
 | Favicon size | **Done** — 18 px (patch 0002). The earlier claim that the image would not scale was wrong: TabIcon draws through DrawImageInt, scaled to its bounds |
-| Bare-host URL | Done — unfocused only; the full URL returns on focus. Verified in the capture |
+| Bare-host URL | Replaced 2026-09-30 by the whole address, always (toolbar T28); it was unfocused only, and a click that selected all never showed more |
 | Sign-in promo pill | Removed — Chromium advertises Google sign-in in the toolbar by default |
 | Command bar (⌘T) | **Done** — centred overlay, searches every Space and names the Space a result is in, opens URLs and searches (patch 0005) |
-| Centred URL | **Done** — capped by a flex rule, spacers either side; measured centre 890 against a content centre of 876 (patch 0002) |
+| Centred URL | **Done** — capped by a flex rule, spacers either side; measured centre 890 against a content centre of 876 (patch 0002). Since 2026-09-30 the field is the whole row and the address gathers on the page's centre inside it (toolbar T18, T29) |
 | Space switcher | **Done** — a row of icons at the **bottom** of the sidebar, active one full strength, plus a button that makes a new Space (patch 0004). The first attempt put named pills at the top, which was wrong |
 | Essentials row | **Done** — pinned tabs are exempt from the Space filter, so they sit above all Spaces, and their tiles are 50 DIP tall so they read as cards (patch 0004) |
 | Essentials grid | **Done** — two cards per row at the sidebar width, ~165 DIP wide, 50 tall; a lone card stays card-sized (patch 0002) |

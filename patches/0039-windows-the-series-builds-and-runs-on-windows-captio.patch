@@ -151,9 +151,9 @@ importers and backups are used in place of ours.
  .../tabs/common/tab_view_vertical_layout.cc   |  15 ++-
  .../unpinned_tab_container_view_layout.cc     |  15 ++-
  .../vertical_tab_strip_top_container.cc       |  13 ++-
- .../browser/ui/views/toolbar/toolbar_view.cc  |  24 +++-
+ .../browser/ui/views/toolbar/toolbar_view.cc  |  66 ++++++++---
  .../browser/ui/views/toolbar/toolbar_view.h   |   6 +
- 37 files changed, 577 insertions(+), 72 deletions(-)
+ 37 files changed, 607 insertions(+), 84 deletions(-)
 
 diff --git a/chrome/browser/extensions/external_provider_impl.cc b/chrome/browser/extensions/external_provider_impl.cc
 index 1cf32e1b816ac..9340e989771f1 100644
@@ -568,7 +568,7 @@ index ca534ab97c48e..5623e2635275a 100644
  
    // The change path without a page, for tests.
 diff --git a/chrome/browser/ui/stedding_ui_metrics.h b/chrome/browser/ui/stedding_ui_metrics.h
-index f45849c3a7143..3d446fa4d3091 100644
+index c14b8abcaef53..2e30c6503a256 100644
 --- a/chrome/browser/ui/stedding_ui_metrics.h
 +++ b/chrome/browser/ui/stedding_ui_metrics.h
 @@ -62,6 +62,15 @@ int SidebarPinnedHeight();
@@ -1451,13 +1451,39 @@ index f96973299376a..1d0c53c24c9be 100644
                    : std::max(0, (host_size.width() - pref_size.width()) / 2);
        gfx::Rect bounds(x, current_y, pref_size.width(), pref_size.height());
 diff --git a/chrome/browser/ui/views/toolbar/toolbar_view.cc b/chrome/browser/ui/views/toolbar/toolbar_view.cc
-index 70e4995b3b5c6..80242c7fc8e43 100644
+index 70e4995b3b5c6..1b5a790dd3eaf 100644
 --- a/chrome/browser/ui/views/toolbar/toolbar_view.cc
 +++ b/chrome/browser/ui/views/toolbar/toolbar_view.cc
-@@ -1481,19 +1481,37 @@ void ToolbarView::Layout(PassKey) {
-   // centre of the space between the button clusters -- the leading cluster
-   // is the wider, so "between" sat the bar 19 DIP right of the page's
-   // middle. It only moves as far as the clusters allow.
+@@ -1473,27 +1473,59 @@ void ToolbarView::Layout(PassKey) {
+     }
+   }
+ 
++  // Stedding (toolbar T18, T29): the address inside the bar reads as centred
++  // on the page, which on Windows runs on under the caption buttons. The bar
++  // is the whole row between the clusters and its own middle is not the
++  // page's, so it is told where the page's middle is, in this view's
++  // coordinates, before it lays out. A capped bar is centred below instead,
++  // after its layout, and gathers its contents on its own middle.
++  if (display_mode_ == DisplayMode::kNormal && location_bar_view_ &&
++      !stedding_left_spacer_ &&
++      base::FeatureList::IsEnabled(stedding::kArcStyleWindow)) {
++    location_bar_view_->SetSteddingCentre(
++        (width() + stedding_trailing_reserve_) / 2);
++  }
++
+   // Call super implementation to ensure layout manager and child layouts
+   // happen.
+   LayoutSuperclass<AccessiblePaneView>(this);
+ 
+-  // Stedding (toolbar T18): the bar sits on the row's centre, not on the
+-  // centre of the space between the button clusters -- the leading cluster
+-  // is the wider, so "between" sat the bar 19 DIP right of the page's
+-  // middle. It only moves as far as the clusters allow.
++  // Stedding (toolbar T18): a capped bar (`location_bar_width`, which has the
++  // spacers) sits on the row's centre, not on the centre of the space between
++  // the button clusters -- the leading cluster is the wider, so "between" sat
++  // the bar 19 DIP right of the page's middle. It only moves as far as the
++  // clusters allow.
 +  // With no width to spare the layout drops the spacers -- hidden, at the
 +  // origin -- and their bounds mean nothing; the field then keeps the
 +  // layout's own position. Reading them anyway clamped the field to x 0,
@@ -1495,6 +1521,44 @@ index 70e4995b3b5c6..80242c7fc8e43 100644
  void ToolbarView::OnThemeChanged() {
    views::AccessiblePaneView::OnThemeChanged();
    if (!initialized_) {
+@@ -1584,13 +1616,17 @@ void ToolbarView::InitLayout() {
+     location_bar_view_->SetProperty(views::kMarginsKey,
+                                     gfx::Insets::VH(0, location_bar_margin));
+ 
+-    // Stedding centres the location bar rather than letting it fill the row;
+-    // see docs/UI-SPEC.md. Two empty views either side take a share of the
++    // Stedding lets the bar fill the row between the button clusters (toolbar
++    // T29), as Chromium does; the address inside it reads as centred on the
++    // page all the same (T18, LocationBarView::CentreSteddingCluster). Only
++    // when `location_bar_width` asks for a width is the bar capped and centred
++    // by the views below. Two empty views either side take a share of the
+     // leftover width, so the bar sits between the button clusters instead of
+     // being pushed against the leading one. They flex at the same order as the
+     // location bar, so all three grow together and the bar keeps a third of
+     // whatever space is going rather than being pinned to its minimum.
+-    if (base::FeatureList::IsEnabled(stedding::kArcStyleWindow)) {
++    if (base::FeatureList::IsEnabled(stedding::kArcStyleWindow) &&
++        stedding::kLocationBarWidth.Get() > 0) {
+       // Cap the bar's width with a flex rule of its own. Left to itself it
+       // prefers the whole toolbar, so there is no leftover for the spacers to
+       // take and nothing to centre it in. SetPreferredSize() does not do this:
+@@ -1605,11 +1641,11 @@ void ToolbarView::InitLayout() {
+                   [](const views::View* view, const views::SizeBounds& bounds) {
+                     gfx::Size size = view->GetPreferredSize(bounds);
+                     // The cap is what the field takes when there is room; the
+-                    // bar centres on the row and gathers its own contents on
+-                    // its centre (toolbar T18). Where the toolbar is tight --
+-                    // a narrow window, a row of extension actions -- the field
+-                    // gives way and shrinks with the space it is offered,
+-                    // never below its own minimum (operator, 2026-09-05).
++                    // bar centres on the row (toolbar T5, T18). Where the
++                    // toolbar is tight -- a narrow window, a row of extension
++                    // actions -- the field gives way and shrinks with the
++                    // space it is offered, never below its own minimum
++                    // (operator, 2026-09-05).
+                     size.set_width(stedding::LocationBarWidthFor(
+                         size.width(), view->GetMinimumSize().width(),
+                         bounds.width().is_bounded()
 diff --git a/chrome/browser/ui/views/toolbar/toolbar_view.h b/chrome/browser/ui/views/toolbar/toolbar_view.h
 index 058f8c1c65d5d..42b7f982ddb07 100644
 --- a/chrome/browser/ui/views/toolbar/toolbar_view.h

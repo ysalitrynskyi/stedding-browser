@@ -43,8 +43,8 @@ Sixty-odd traps follow. Read the one for the topic in front of you, not the list
 | The working loop and the series | 9, 13, 14, 17, 22, 28, 50, 51 |
 | Driving and capturing the window | 3, 10, 11, 12, 15, 18, 27, 29, 30, 36, 37, 52, 56, 59, 61 |
 | What a test can and cannot prove | 2, 31, 46, 48, 55, 58, 60 |
-| Windows | 32, 34, 36, 38, 40, 42, 53, 54, 55, 56, 57, 59 |
-| Release and signing | 44, 47, 49 |
+| Windows | 32, 34, 36, 38, 40, 42, 53, 54, 55, 56, 57, 59, 62 |
+| Release and signing | 44, 47, 49, 62 |
 | Chromium's own behaviour to know | 6, 8, 20, 21, 25, 26, 35, 39, 41, 43, 60 |
 
 ## Where things live
@@ -131,7 +131,7 @@ full Xcode, so no amount of disk changes it. That is `S-49`.
 ## Dev parameters (all on `SteddingArcStyleWindow`, tunable without rebuilds)
 
 `contents_corner_radius`, `vertical_tab_height`, `vertical_tab_corner_radius`,
-`vertical_tab_pinned_height`, `location_bar_height`, `location_bar_width`,
+`vertical_tab_pinned_height`, `location_bar_height`, `location_bar_width` (0 = no cap, as shipped),
 `toolbar_vertical_margin`, `toolbar_button_height`, `toolbar_button_inset`,
 `toolbar_button_icon_size`, `tab_favicon_size`, `card_gutter` — metrics.
 `extra_spaces/N` — start with N extra Spaces. `pin_tabs/N` — pin first N tabs
@@ -870,6 +870,22 @@ private window has.
     Automation to find; DevTools calls answered for the first browser. It read as a
     regression for ten minutes. Stop the first browser (by profile path, trap 40), or give
     each its own port; `Drive-Launch` takes the port from its parameter.
+
+62. **A second Windows release on the same Chromium pin has the same file version as the
+    first, and the installer reads it as a repair.** The installer's version is
+    `chrome/VERSION`, which the pin sets, so beta 10 and beta 9 are both 155.0.8059.12. Chromium's
+    `setup.exe` compares versions and, for equal ones, repairs in place: with nothing running it
+    copies the new files over the old (`INSTALL_REPAIRED`); with Stedding running it cannot replace
+    the version folder, rolls back and reports `SAME_VERSION_REPAIR_FAILED` ("Chrome repair failed as
+    Chrome was running", `chrome/installer/util/util_constants.h`), changing nothing. It is versions
+    that differ which install beside a running browser (the new folder is added, the old one stays
+    and `new_chrome.exe` takes over at the next start), which is how beta 6 to beta 9 went. So:
+    quit Stedding first, and say so in the notes; `tooling/win/test-installer.ps1` refuses to
+    upgrade, install or uninstall while one runs, and logs the sha256 of `chrome.dll` before and
+    after, because the version resource cannot tell the two releases apart. The real fix is
+    `S-72`: a file version of Stedding's own for every Windows release, never lower than the last
+    one a profile ran (Chromium's downgrade manager reads a lower number as a downgrade), with the
+    About line's Chromium number read from the pin and not from `chrome/VERSION`.
 
 ## The Windows build
 

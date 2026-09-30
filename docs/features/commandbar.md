@@ -1,6 +1,6 @@
 # Feature: Command bar
 
-Status: **K1–K11, K13–K18 built**; **K12 partial** (round 6, `docs/ROUND6-PLAN.md` R6-11, patch 0022).
+Status: **K1–K11, K13–K20 built**; **K12 partial** (round 6, `docs/ROUND6-PLAN.md` R6-11, patch 0022).
 Owner docs: `docs/PRODUCT.md` ("Command bar"). Patch: `0005`.
 
 ⌘T opens a bar over the page. It lists open tabs from every Space, then the omnibox's own
@@ -32,6 +32,7 @@ On Windows every chord below is the Mac's with ⌘ read as Ctrl and ⌥⌘ as Ct
 | K17 | A dropdown preference appears as one cycling row ("Archive after: 12 hours ▸"): Enter advances to the next value and the row re-reads. | CommandBarViewTest.DropdownPrefRowCycles | built |
 | K18 | Typed `keyword query` whose first token is a search-engine keyword (`TemplateURL`) navigates that engine's `%s` template. An unknown keyword still uses the default engine. | `CommandBarViewTest.KeywordQueryUsesThatEngine`; `CommandBarViewTest.UnknownKeywordStaysADefaultSearch` | built |
 | K19 | `@Work rust` filters open and archived rows to Spaces whose name starts with that prefix. History stays profile-wide. | `SpaceQueryTest.AtSpacePrefixFiltersOpenAndArchived` | built |
+| K20 | The bar is never wider than the page card it sits over less 16 DIP each side. In a window of 1035 DIP with the sidebar open the card is about 670 and the bar's own 744 ran past the window's right edge, its right corner cut flat (backlog S-68, found 2026-09-30 with the real pointer). It follows the window while it is open and takes its own width back when the window widens; the field and the rows stretch to it. | browser: `CommandBarTest.TheBarStaysInsideANarrowWindow` | built |
 
 ## Notes from the live check (2026-09-05)
 

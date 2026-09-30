@@ -6,12 +6,16 @@ call, so a scheduled task (below) can run it outside an agent's sandbox.
                         ProgIds, the Start menu shortcut
   -Mode backup          copies %LOCALAPPDATA%\Stedding (program and User Data) to -Backup;
                         refuses to overwrite an earlier backup
-  -Mode upgrade         runs -Installer over what is installed (needs the backup)
+  -Mode upgrade         runs -Installer over what is installed (needs the backup, and Stedding
+                        quit: an installer of the same Chromium version repairs in place and cannot
+                        replace what a running Stedding holds, HANDOFF trap 62)
   -Mode uninstall-keep  setup.exe --uninstall --force-uninstall, never --delete-profile
                         (needs the backup)
-  -Mode install         runs -Installer when nothing is installed
+  -Mode install         runs -Installer when nothing is installed (Stedding quit)
 
-The log is -Log, one line per fact, ending in "task done". Wait for that line.
+The log is -Log, one line per fact, ending in "task done". Wait for that line. It names the
+sha256 of chrome.dll before and after, because two releases on one Chromium pin have one version
+resource.
 
 Why it is built like this. An install made from an agent's own shell lands in a virtualised
 copy of %LOCALAPPDATA% and HKCU that is not the user's (docs/HANDOFF.md, trap 40), so it runs
@@ -56,6 +60,11 @@ function Describe {
     $vi = (Get-Item $exe).VersionInfo
     Log "version resource: ProductName='$($vi.ProductName)' FileVersion='$($vi.FileVersion)' Company='$($vi.CompanyName)'"
     Log ('application dir: ' + ((Get-ChildItem $app | ForEach-Object { $_.Name }) -join ', '))
+    # The bits, not only the number: a release on the same Chromium pin has the same version
+    # resource as the one before it (docs/HANDOFF.md, trap 62), so the hash says which one this is.
+    $dll = Get-ChildItem $app -Directory -ErrorAction SilentlyContinue | ForEach-Object { Join-Path $_.FullName 'chrome.dll' } |
+      Where-Object { Test-Path $_ } | Select-Object -First 1
+    if ($dll) { Log "chrome.dll sha256: $((Get-FileHash $dll -Algorithm SHA256).Hash.ToLower())" }
   }
   Log "user data present: $(Test-Path $data)"
   $un = Get-ChildItem 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall' -ErrorAction SilentlyContinue |
@@ -79,6 +88,14 @@ function Need-Installer {
   if (-not (Test-Path $Installer)) { Log "refusing: no installer at $Installer"; return $false }
   return $true
 }
+# A running Stedding is somebody's session: ask for it to be quit, never kill it. An installer of
+# the same Chromium version repairs the install in place and cannot replace what a running
+# Stedding holds (trap 62), so neither the upgrade nor the install starts while one runs.
+function Need-Quiet {
+  $running = @(Get-Process chrome -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $exe })
+  if ($running.Count -gt 0) { Log "refusing: Stedding is running from $exe ($($running.Count) processes); quit it first"; return $false }
+  return $true
+}
 
 Set-Content -Path $Log -Value "task start, mode=$Mode, version=$version"
 switch ($Mode) {
@@ -95,7 +112,7 @@ switch ($Mode) {
     }
   }
   'upgrade' {
-    if ((Need-Backup) -and (Need-Installer)) {
+    if ((Need-Backup) -and (Need-Installer) -and (Need-Quiet)) {
       Describe
       Log "--- running $Installer"
       $i = Start-Process -FilePath $Installer -ArgumentList @('--do-not-launch-chrome') -PassThru -Wait
@@ -106,9 +123,7 @@ switch ($Mode) {
   }
   'uninstall-keep' {
     if (Need-Backup) {
-      # A running Stedding is somebody's session: ask for it to be quit, never kill it.
-      $running = @(Get-Process chrome -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $exe })
-      if ($running.Count -gt 0) { Log "refusing: Stedding is running from $exe ($($running.Count) processes); quit it first"; Log 'task done'; return }
+      if (-not (Need-Quiet)) { Log 'task done'; return }
       $setup = Get-ChildItem $app -Recurse -Filter setup.exe -ErrorAction SilentlyContinue | Select-Object -First 1
       if ($setup) {
         $u = Start-Process -FilePath $setup.FullName -ArgumentList @('--uninstall', '--force-uninstall') -PassThru -Wait
@@ -120,7 +135,7 @@ switch ($Mode) {
   }
   'install' {
     if (Test-Path $app) { Log "refusing: an install already exists at $app" }
-    elseif (Need-Installer) {
+    elseif ((Need-Installer) -and (Need-Quiet)) {
       $i = Start-Process -FilePath $Installer -ArgumentList @('--do-not-launch-chrome') -PassThru -Wait
       Log "install exit $($i.ExitCode)"
       Start-Sleep -Seconds 3

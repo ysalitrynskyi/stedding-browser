@@ -42,23 +42,23 @@ on upstream's vertical tabs rather than patched onto them.
 ---
  .../browser/ui/color/stedding_color_mixer.cc  |   5 +-
  chrome/browser/ui/stedding/BUILD.gn           |   5 +
- .../ui/stedding/address_row_unittest.cc       |  25 +++
+ .../ui/stedding/address_row_unittest.cc       |  58 ++++++
  .../stedding/theme/page_bar_color_supplier.cc |  10 +-
  .../stedding/theme/page_bar_color_supplier.h  |   5 -
  .../theme/page_bar_color_supplier_unittest.cc |  45 ++++
  .../theme/page_theme_color_controller.cc      |  32 +++
  .../theme/page_theme_color_controller.h       |   8 +
  .../page_theme_color_controller_unittest.cc   |  66 ++++++
- chrome/browser/ui/stedding_ui_metrics.cc      |  24 ++-
- chrome/browser/ui/stedding_ui_metrics.h       |  17 ++
+ chrome/browser/ui/stedding_ui_metrics.cc      |  29 ++-
+ chrome/browser/ui/stedding_ui_metrics.h       |  27 ++-
  .../layout/stedding_browser_view_layout.cc    |  47 ++++-
  .../views/frame/stedding_window_background.cc |  42 +++-
  .../views/frame/stedding_window_background.h  |   8 +
  .../stedding_window_background_unittest.cc    |  40 ++++
  .../frame/vertical_tab_strip_region_view.cc   |  46 +++-
  .../frame/vertical_tab_strip_region_view.h    |   5 +
- .../views/location_bar/location_bar_view.cc   |  85 +++++++-
- .../ui/views/location_bar/location_bar_view.h |   8 +-
+ .../views/location_bar/location_bar_view.cc   | 106 +++++++++-
+ .../ui/views/location_bar/location_bar_view.h |  16 +-
  chrome/browser/ui/views/spaces/BUILD.gn       |   3 +
  .../spaces/space_tab_visibility_controller.cc |  28 ++-
  chrome/browser/ui/views/tabs/common/BUILD.gn  |   9 +
@@ -81,7 +81,7 @@ on upstream's vertical tabs rather than patched onto them.
  .../browser/ui/views/toolbar/toolbar_view.cc  |  47 ++++-
  .../browser/ui/views/toolbar/toolbar_view.h   |   5 +
  chrome/test/BUILD.gn                          |   1 +
- 41 files changed, 1132 insertions(+), 96 deletions(-)
+ 41 files changed, 1206 insertions(+), 99 deletions(-)
  create mode 100644 chrome/browser/ui/stedding/theme/page_bar_color_supplier_unittest.cc
  create mode 100644 chrome/browser/ui/stedding/theme/page_theme_color_controller_unittest.cc
  create mode 100644 chrome/browser/ui/views/frame/stedding_window_background_unittest.cc
@@ -131,10 +131,10 @@ index f9bac5b531b95..0483bbdce7921 100644
      "//components/tabs:public",
      "//base/test:test_support",
 diff --git a/chrome/browser/ui/stedding/address_row_unittest.cc b/chrome/browser/ui/stedding/address_row_unittest.cc
-index 34a39f8c6e3ff..e34cb56313be0 100644
+index 34a39f8c6e3ff..a9bb364f54426 100644
 --- a/chrome/browser/ui/stedding/address_row_unittest.cc
 +++ b/chrome/browser/ui/stedding/address_row_unittest.cc
-@@ -4,8 +4,12 @@
+@@ -4,9 +4,14 @@
  
  #include "chrome/browser/ui/stedding/address_row.h"
  
@@ -145,31 +145,65 @@ index 34a39f8c6e3ff..e34cb56313be0 100644
  #include "chrome/browser/ui/stedding/stedding_prefs.h"
 +#include "chrome/browser/ui/stedding_ui_metrics.h"
  #include "chrome/test/base/browser_with_test_window_test.h"
++#include "components/omnibox/browser/omnibox_pref_names.h"
  #include "components/prefs/pref_service.h"
  #include "testing/gtest/include/gtest/gtest.h"
-@@ -33,5 +37,26 @@ TEST_F(AddressRowTest, ToggleOverridesUntilTheSidebarChanges) {
+ 
+@@ -33,5 +38,58 @@ TEST_F(AddressRowTest, ToggleOverridesUntilTheSidebarChanges) {
    EXPECT_FALSE(row->IsVisible()) << "T12: the toggle still works";
  }
  
-+// toolbar T5: the field takes its cap where the row has the room and gives the
-+// width back when it does not -- a narrow window, or a row of extension
-+// actions -- but never goes under its own minimum (operator, 2026-09-05).
-+TEST(AddressRowWidthTest, FieldWidthGivesWayWhenTheRowIsTight) {
++// toolbar T28: the address bar shows the whole address from a fresh profile,
++// "Always show full URLs" on; the bare host is what a user gets by turning it
++// off in the address bar's menu. The display itself is run in a real window
++// by DefaultsTest.TheAddressBarShowsTheWholeAddressAndTakesTheRow.
++TEST_F(AddressRowTest, TheWholeAddressIsShownByDefault) {
++  PrefService* const prefs = profile()->GetPrefs();
++  EXPECT_TRUE(prefs->GetBoolean(omnibox::kPreventUrlElisionsInOmnibox));
++  prefs->SetBoolean(omnibox::kPreventUrlElisionsInOmnibox, false);
++  EXPECT_FALSE(prefs->GetBoolean(omnibox::kPreventUrlElisionsInOmnibox))
++      << "the address bar's menu can still turn it off";
++}
++
++// toolbar T29: with no cap, which is how Stedding ships, the field takes the
++// row it is offered. Its own preferred width is a fraction of a wide row and
++// used to be the field's width in practice (220 DIP in a 1300 DIP row).
++TEST(AddressRowWidthTest, TheFieldTakesTheRowItIsOffered) {
 +  base::test::ScopedFeatureList features(stedding::kArcStyleWindow);
++  ASSERT_EQ(0, stedding::kLocationBarWidth.Get()) << "shipped with no cap";
++  constexpr int kMinimum = 120;
++  constexpr int kAsks = 220;
++
++  EXPECT_EQ(1300, stedding::LocationBarWidthFor(kAsks, kMinimum, 1300))
++      << "a wide row: all of it, not what the field's own content asks for";
++  EXPECT_EQ(240, stedding::LocationBarWidthFor(kAsks, kMinimum, 240))
++      << "a tight row -- extension actions beside it -- takes it back";
++  EXPECT_EQ(kMinimum, stedding::LocationBarWidthFor(kAsks, kMinimum, 40))
++      << "never below the field's own minimum";
++  EXPECT_EQ(kAsks, stedding::LocationBarWidthFor(kAsks, kMinimum, std::nullopt))
++      << "a row with no bound: what the field asks for";
++}
++
++// toolbar T5: with a width asked for (`location_bar_width`) the field takes it
++// where the row has the room and gives the width back when it does not -- a
++// narrow window, or a row of extension actions -- but never goes under its own
++// minimum (operator, 2026-09-05).
++TEST(AddressRowWidthTest, ACapHoldsWhereTheRowHasRoomAndGivesWayWhenItHasNot) {
++  base::test::ScopedFeatureList features;
++  features.InitAndEnableFeatureWithParameters(
++      stedding::kArcStyleWindow, {{"location_bar_width", "560"}});
 +  const int cap = stedding::kLocationBarWidth.Get();
++  ASSERT_EQ(560, cap);
 +  constexpr int kMinimum = 120;
 +
-+  EXPECT_EQ(cap,
-+            stedding::LocationBarWidthFor(cap + 400, kMinimum, std::nullopt))
-+      << "the cap holds where the row is unbounded";
-+  EXPECT_EQ(cap, stedding::LocationBarWidthFor(cap + 400, kMinimum, cap + 200))
-+      << "and where the row has room to spare";
-+  EXPECT_EQ(240, stedding::LocationBarWidthFor(cap + 400, kMinimum, 240))
++  EXPECT_EQ(cap, stedding::LocationBarWidthFor(220, kMinimum, std::nullopt))
++      << "the cap is what an unbounded row is asked for";
++  EXPECT_EQ(cap, stedding::LocationBarWidthFor(220, kMinimum, cap + 200))
++      << "and what a row with room to spare is given";
++  EXPECT_EQ(240, stedding::LocationBarWidthFor(220, kMinimum, 240))
 +      << "a tight row -- extension actions beside it -- takes it back";
-+  EXPECT_EQ(kMinimum, stedding::LocationBarWidthFor(cap, kMinimum, 40))
++  EXPECT_EQ(kMinimum, stedding::LocationBarWidthFor(220, kMinimum, 40))
 +      << "never below the field's own minimum";
-+  EXPECT_EQ(200, stedding::LocationBarWidthFor(200, kMinimum, cap + 200))
-+      << "a field that wants less than the cap keeps what it asked for";
 +}
 +
  }  // namespace
@@ -433,7 +467,7 @@ index 0000000000000..739d0e9e7db2f
 +}  // namespace
 +}  // namespace stedding
 diff --git a/chrome/browser/ui/stedding_ui_metrics.cc b/chrome/browser/ui/stedding_ui_metrics.cc
-index 34c0dec2ae679..47e4eb8567728 100644
+index 34c0dec2ae679..291f0157e94a0 100644
 --- a/chrome/browser/ui/stedding_ui_metrics.cc
 +++ b/chrome/browser/ui/stedding_ui_metrics.cc
 @@ -65,7 +65,7 @@ BASE_FEATURE_PARAM(int,
@@ -441,7 +475,7 @@ index 34c0dec2ae679..47e4eb8567728 100644
                     &kArcStyleWindow,
                     "location_bar_width",
 -                   380);
-+                   560);
++                   0);
  
  BASE_FEATURE_PARAM(bool,
                     kOpenCommandBarForTesting,
@@ -464,23 +498,28 @@ index 34c0dec2ae679..47e4eb8567728 100644
  BASE_FEATURE_PARAM(int,
                     kExtraSpacesForTesting,
                     &kArcStyleWindow,
-@@ -175,4 +187,14 @@ int SidebarFaviconSize() {
+@@ -175,4 +187,19 @@ int SidebarFaviconSize() {
  int SidebarCornerRadius() {
    return MetricsForDensity(DensityInForce()).corner_radius;
  }
 +int LocationBarWidthFor(int preferred,
 +                        int minimum,
 +                        std::optional<int> available) {
-+  int width = std::min(preferred, kLocationBarWidth.Get());
++  const int cap = kLocationBarWidth.Get();
++  // What the field asks for: the cap where there is one, the row it is offered
++  // where there is not. Its own preferred width, which is what Chromium's
++  // location bar reports and is a fraction of a wide row, is only the answer
++  // for a row with no bound at all.
++  int width = cap > 0 ? cap : preferred;
 +  if (available) {
-+    width = std::min(width, *available);
++    width = cap > 0 ? std::min(cap, *available) : *available;
 +  }
 +  return std::max(width, minimum);
 +}
 +
  }  // namespace stedding
 diff --git a/chrome/browser/ui/stedding_ui_metrics.h b/chrome/browser/ui/stedding_ui_metrics.h
-index abce46e678541..f45849c3a7143 100644
+index abce46e678541..c14b8abcaef53 100644
 --- a/chrome/browser/ui/stedding_ui_metrics.h
 +++ b/chrome/browser/ui/stedding_ui_metrics.h
 @@ -5,6 +5,8 @@
@@ -492,14 +531,26 @@ index abce46e678541..f45849c3a7143 100644
  #include "base/feature_list.h"
  #include "base/metrics/field_trial_params.h"
  
-@@ -92,6 +94,14 @@ BASE_DECLARE_FEATURE_PARAM(int, kToolbarButtonHeight);
- // take. Capping its preferred width is what makes centring possible.
+@@ -87,11 +89,23 @@ BASE_DECLARE_FEATURE_PARAM(int, kToolbarButtonInset);
+ // child, and the back button is that child.
+ BASE_DECLARE_FEATURE_PARAM(int, kToolbarButtonHeight);
+ 
+-// Width of the location bar, in DIPs. Chromium lets the bar fill the toolbar,
+-// which is why it cannot be centred: there is no leftover width for spacers to
+-// take. Capping its preferred width is what makes centring possible.
++// Width of the location bar, in DIPs, or 0 for no limit, which is how Stedding
++// ships: the bar takes the whole row between the button clusters (toolbar T29).
++// A positive value caps the bar, which then sits on the row's centre with an
++// empty view either side of it to take the leftover width; that is how the bar
++// was drawn until beta 9 (560), and it stays as a knob for capture work.
  BASE_DECLARE_FEATURE_PARAM(int, kLocationBarWidth);
  
-+// toolbar T5: how wide the address field is in a row `available` DIP wide.
-+// It takes `kLocationBarWidth` where the row has the room, gives way when it
-+// does not -- a narrow window, a row of extension actions -- and never goes
-+// below `minimum`. `available` is absent when the row is unbounded.
++// toolbar T5, T29: how wide the address field is in a row `available` DIP
++// wide. With no cap it takes the row; with one it takes the cap where the row
++// has the room. Either way it gives way when the row is tight -- a narrow
++// window, a row of extension actions -- and never goes below `minimum`.
++// `available` is absent when the row is unbounded, where the field asks for the
++// cap, or for `preferred` when there is none.
 +int LocationBarWidthFor(int preferred,
 +                        int minimum,
 +                        std::optional<int> available);
@@ -507,7 +558,7 @@ index abce46e678541..f45849c3a7143 100644
  // Open the command bar as soon as a window opens. Zero in normal use; this
  // exists so the overlay can be screenshotted, since it is otherwise only
  // reachable by pressing a key.
-@@ -122,6 +132,13 @@ BASE_DECLARE_FEATURE_PARAM(int, kFolderTabsForTesting);
+@@ -122,6 +136,13 @@ BASE_DECLARE_FEATURE_PARAM(int, kFolderTabsForTesting);
  // otherwise a UI gesture.
  BASE_DECLARE_FEATURE_PARAM(int, kPinTabsForTesting);
  
@@ -855,7 +906,7 @@ index 81e8ed7976c0d..10674ac72ebb3 100644
  
    const raw_ptr<tabs::VerticalTabStripStateController> state_controller_;
 diff --git a/chrome/browser/ui/views/location_bar/location_bar_view.cc b/chrome/browser/ui/views/location_bar/location_bar_view.cc
-index c028aa4a87f38..731adc727e5b4 100644
+index c028aa4a87f38..8622e6a30b0f8 100644
 --- a/chrome/browser/ui/views/location_bar/location_bar_view.cc
 +++ b/chrome/browser/ui/views/location_bar/location_bar_view.cc
 @@ -9,6 +9,7 @@
@@ -892,10 +943,23 @@ index c028aa4a87f38..731adc727e5b4 100644
  
    const gfx::FontList& omnibox_chip_font_list = typography_provider.GetFont(
        CONTEXT_OMNIBOX_PRIMARY, views::style::STYLE_BODY_4_EMPHASIS);
-@@ -729,6 +738,73 @@ gfx::Size LocationBarView::GetMinimumSize() const {
+@@ -729,6 +738,94 @@ gfx::Size LocationBarView::GetMinimumSize() const {
    return gfx::Size(width, height);
  }
  
++void LocationBarView::SetSteddingCentre(int centre_x) {
++  if (stedding_centre_x_ == centre_x) {
++    return;
++  }
++  stedding_centre_x_ = centre_x;
++  if (base::FeatureList::IsEnabled(stedding::kArcStyleWindow)) {
++    // Called from the toolbar's layout, which lays this view out next: there
++    // is no need to tell the toolbar, and the window above it, that theirs is
++    // stale.
++    views::View::InvalidateLayout(/*avoid_propagate_during_layout=*/true);
++  }
++}
++
 +void LocationBarView::CentreSteddingCluster() {
 +  // toolbar T18: the chip, the address and the page actions read as one
 +  // cluster on the field's centre, as Safari's compact bar draws them,
@@ -903,7 +967,9 @@ index c028aa4a87f38..731adc727e5b4 100644
 +  // right. Chromium's own layout stands while the address is being edited
 +  // or the popup is open, and whenever the address fills the field. Works
 +  // from the laid-out bounds: a field sized to a predicted content width
-+  // elided "github.com" to "githu..." (2026-09-05).
++  // elided "github.com" to "githu..." (2026-09-05). With the field the whole
++  // row (T29) the middle it gathers on is the page's (`SetSteddingCentre`),
++  // as far as the field's own edges allow.
 +  if (!base::FeatureList::IsEnabled(stedding::kArcStyleWindow) ||
 +      !IsInitialized() || omnibox_view_->HasFocus() ||
 +      omnibox_controller_->IsPopupOpen() || ShouldShowKeywordBubble() ||
@@ -950,7 +1016,13 @@ index c028aa4a87f38..731adc727e5b4 100644
 +  // and the address centre in what is left of the field.
 +  const int span_right = trailing.empty() ? trail_right : trail_x - padding;
 +  const int group = (box.x() - lead_x) + text_width;
-+  const int shift = std::max(0, (span_right - lead_x - group) / 2);
++  const int room = std::max(0, span_right - lead_x - group);
++  int shift = room / 2;
++  if (stedding_centre_x_) {
++    // Where the group's left edge sits for its middle to be the page's.
++    const int want = *stedding_centre_x_ - x() - group / 2 - lead_x;
++    shift = std::clamp(want, 0, room);
++  }
 +  for (views::View* view : leading) {
 +    view->SetX(view->x() + shift);
 +  }
@@ -966,7 +1038,7 @@ index c028aa4a87f38..731adc727e5b4 100644
  gfx::Size LocationBarView::CalculatePreferredSize(
      const views::SizeBounds& available_size) const {
    const int height = GetLayoutConstant(LayoutConstant::kLocationBarHeight);
-@@ -1019,6 +1095,7 @@ void LocationBarView::Layout(PassKey) {
+@@ -1019,6 +1116,7 @@ void LocationBarView::Layout(PassKey) {
    }
  
    LayoutSuperclass<View>(this);
@@ -974,7 +1046,7 @@ index c028aa4a87f38..731adc727e5b4 100644
  }
  
  void LocationBarView::OnThemeChanged() {
-@@ -1050,6 +1127,7 @@ bool LocationBarView::HasSecurityStateChanged() {
+@@ -1050,6 +1148,7 @@ bool LocationBarView::HasSecurityStateChanged() {
  
  void LocationBarView::Update(WebContents* contents) {
    TRACE_EVENT("omnibox", "LocationBarView::Update");
@@ -982,7 +1054,7 @@ index c028aa4a87f38..731adc727e5b4 100644
  
    RefreshContentSettingViews();
    RefreshPageActionIconViews();
-@@ -2032,6 +2110,7 @@ const LocationBarModel* LocationBarView::GetLocationBarModel() const {
+@@ -2032,6 +2131,7 @@ const LocationBarModel* LocationBarView::GetLocationBarModel() const {
  }
  
  void LocationBarView::OnOmniboxFocused() {
@@ -990,7 +1062,7 @@ index c028aa4a87f38..731adc727e5b4 100644
    if (views::FocusRing::Get(this)) {
      views::FocusRing::Get(this)->Refresh();
    }
-@@ -2056,6 +2135,7 @@ void LocationBarView::OpenOmniboxPopup(bool query_zps) {
+@@ -2056,6 +2156,7 @@ void LocationBarView::OpenOmniboxPopup(bool query_zps) {
  }
  
  void LocationBarView::OnOmniboxBlurred() {
@@ -998,7 +1070,7 @@ index c028aa4a87f38..731adc727e5b4 100644
    if (views::FocusRing::Get(this)) {
      views::FocusRing::Get(this)->Refresh();
    }
-@@ -2409,7 +2489,6 @@ void LocationBarView::OnAppShimChanged(const webapps::AppId& app_id) {
+@@ -2409,7 +2510,6 @@ void LocationBarView::OnAppShimChanged(const webapps::AppId& app_id) {
  }
  #endif
  
@@ -1007,10 +1079,31 @@ index c028aa4a87f38..731adc727e5b4 100644
  ADD_READONLY_PROPERTY_METADATA(int, BorderRadius)
  ADD_READONLY_PROPERTY_METADATA(gfx::Point, OmniboxViewOrigin)
 diff --git a/chrome/browser/ui/views/location_bar/location_bar_view.h b/chrome/browser/ui/views/location_bar/location_bar_view.h
-index dc2ea8c236d03..8e647d50218d3 100644
+index dc2ea8c236d03..0fcf2c29719ce 100644
 --- a/chrome/browser/ui/views/location_bar/location_bar_view.h
 +++ b/chrome/browser/ui/views/location_bar/location_bar_view.h
-@@ -187,7 +187,6 @@ class LocationBarView
+@@ -8,6 +8,7 @@
+ #include <stddef.h>
+ 
+ #include <memory>
++#include <optional>
+ #include <string>
+ #include <string_view>
+ #include <vector>
+@@ -132,6 +133,12 @@ class LocationBarView
+   LocationBarView& operator=(const LocationBarView&) = delete;
+   ~LocationBarView() override;
+ 
++  // Stedding (toolbar T18, T29): where the page's middle is, in the parent's
++  // coordinates. The bar fills the row between the button clusters, whose
++  // middle is not the page's, so the chip and the address gather on this
++  // instead of on the field's own centre (within the field's limits).
++  void SetSteddingCentre(int centre_x);
++
+   // Returns the location bar border radius in DIPs.
+   int GetBorderRadius() const;
+   static int ComputeBorderRadius(gfx::Size size);
+@@ -187,7 +194,6 @@ class LocationBarView
  
    const OmniboxController* GetOmniboxController() const;
  
@@ -1018,7 +1111,7 @@ index dc2ea8c236d03..8e647d50218d3 100644
    PermissionChipView* chip_view() { return chip_view_; }
    PermissionDashboardView* permission_dashboard_view() {
      return permission_dashboard_view_;
-@@ -340,6 +339,12 @@ class LocationBarView
+@@ -340,6 +346,13 @@ class LocationBarView
      run_omnibox_context_menu_callback_ = std::move(callback);
    }
  
@@ -1027,11 +1120,12 @@ index dc2ea8c236d03..8e647d50218d3 100644
 +  // a new text or a focus change lays the field out again.
 +  void CentreSteddingCluster();
 +  void SteddingClusterMayHaveChanged();
++  std::optional<int> stedding_centre_x_;
 +
    // Returns the amount of space required to the left of the omnibox text.
    int GetMinimumLeadingWidth() const;
  
-@@ -583,7 +588,6 @@ class LocationBarView
+@@ -583,7 +596,6 @@ class LocationBarView
    // Shown if the user has selected a keyword.
    raw_ptr<SelectedKeywordView> selected_keyword_view_ = nullptr;
  

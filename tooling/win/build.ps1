@@ -71,6 +71,13 @@ if ($running) {
 $env:DEPOT_TOOLS_WIN_TOOLCHAIN = "0"
 if ($env:STEDDING_DEPOT_TOOLS) { $env:PATH = "$($env:STEDDING_DEPOT_TOOLS);$($env:PATH)" }
 if ($env:STEDDING_VPYTHON_ROOT) { $env:VPYTHON_ROOT = $env:STEDDING_VPYTHON_ROOT }
+# In an ASan build the assembler is ASan-built too, and with ASan recording a stack for
+# every allocation it needs more than 20 minutes for each of three of the assembly files
+# (under 4 without): a build that never links, and a few "FAILED" nasm steps at the end of
+# every chunk that read as errors (docs/HANDOFF.md, trap 57).
+if (-not $env:ASAN_OPTIONS -and ((Get-Content $argsFile -Raw) -match '(?m)^\s*is_asan\s*=\s*true')) {
+  $env:ASAN_OPTIONS = "malloc_context_size=0"
+}
 if (-not (Get-Command gn -ErrorAction SilentlyContinue)) {
   throw "gn is not on PATH; set STEDDING_DEPOT_TOOLS to your depot_tools directory"
 }

@@ -1,0 +1,146 @@
+#!/usr/bin/env python3
+"""Digest of a test run's output: what crashed, and why, without the stacks.
+
+Usage:
+  tooling/digest-sanitizer <log>...        one or more files of test output
+  ... | tooling/digest-sanitizer -         from a pipe
+
+A sanitizer or DCHECK run prints a stack of sixty frames for every finding, and a
+finding that is one mistake repeats once per test. Reading them raw costs more than
+the fix. This prints, for the whole run:
+
+  * the tests that crashed or failed, by name;
+  * each distinct DCHECK / FATAL line once, with how often and the first frames that are
+    this project's own (the first place a fix can go);
+  * each dangling-pointer report as a pair -- who freed the memory, who still held the
+    pointer -- counted, which is how a test fixture's member is told from a product bug;
+  * each AddressSanitizer report's kind, the first project frames of the access, and of
+    the free and the allocation;
+  * for a DCHECK that names a view ("View: Textfield", "Hierarchy: ..."), that view.
+
+Nothing here decides whether a finding is a bug: it is the list to decide from. The
+same findings were all read by hand on 2026-09-30 (docs/HANDOFF.md, trap 58) and the
+hand-reading was most of a day.
+"""
+import collections
+import re
+import sys
+
+BS = chr(92)
+# Frames worth naming: this project's code and the parts of Chromium a fork edits.
+OWN = ("chrome" + BS + "browser", "chrome" + BS + "test", "chrome/browser", "chrome/test",
+       "components" + BS + "tabs", "components/tabs")
+NOISE = ("base::debug", "logging::", "partition_alloc", "allocator_shim", "testing::",
+         "base::allocator", "RawPtrBackupRefImpl", "CheckError", "DCheckLogMessage")
+LOC = re.compile(r" \[0x[0-9a-f+]+\]")
+STAMP = re.compile(r"^\[[0-9]+:[0-9]+:[0-9/.]+:")
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def frame(line):
+    return LOC.sub("", line.strip())[:170]
+
+
+def own_frames(lines, limit=3):
+    out = []
+    for raw in lines:
+        t = raw.strip()
+        if not t or any(n in t for n in NOISE):
+            continue
+        if any(o in t for o in OWN) and ("(o:" in t or "(" + BS in t or ".cc:" in t or ".mm:" in t):
+            out.append(frame(t))
+            if len(out) >= limit:
+                break
+    return out
+
+
+def main():
+    text = ""
+    for path in sys.argv[1:] or ["-"]:
+        data = sys.stdin.read() if path == "-" else open(path, encoding="utf-8", errors="replace").read()
+        text += data + "\n"
+    text = ANSI.sub("", text).replace("\r", "")
+    lines = text.split("\n")
+
+    crashed = collections.OrderedDict()
+    for line in lines:
+        m = re.search(r"\[\d+/\d+\] (\S+) \((CRASHED|TIMED OUT)\)", line)
+        if m:
+            crashed[m.group(1)] = m.group(2)
+        m = re.match(r"\[  FAILED  \] (\S+?)(?:,| \()", line)
+        if m and m.group(1) not in crashed:
+            crashed.setdefault(m.group(1), "FAILED")
+    print("== tests: %d crashed, failed or timed out" % len(crashed))
+    for name, how in list(crashed.items())[:40]:
+        print("   %-9s %s" % (how, name))
+    if len(crashed) > 40:
+        print("   ... and %d more" % (len(crashed) - 40))
+
+    # DCHECK / FATAL lines, each once.
+    fatal = collections.OrderedDict()
+    for i, line in enumerate(lines):
+        if "FATAL:" not in line:
+            continue
+        key = STAMP.sub("[", line.strip())[:260]
+        key = re.sub(r"\(\d+ vs\. .*?\)", "(...)", key)
+        entry = fatal.setdefault(key, {"n": 0, "frames": None, "view": None})
+        entry["n"] += 1
+        if entry["frames"] is None:
+            entry["frames"] = own_frames(lines[i + 1:i + 90])
+            for j in range(i + 1, min(i + 8, len(lines))):
+                if lines[j].startswith("View: "):
+                    entry["view"] = lines[j].strip() + " | " + lines[j + 1].strip()[:150]
+                    break
+    print("\n== DCHECK / FATAL lines: %d distinct" % len(fatal))
+    for key, e in fatal.items():
+        print("   x%-3d %s" % (e["n"], key[:230]))
+        if e["view"]:
+            print("        " + e["view"])
+        for f in e["frames"] or []:
+            print("        at " + f)
+
+    # Dangling raw_ptr reports: freed by / still held by.
+    reports = text.split("[DanglingPtr](1/3) A raw_ptr/raw_ref is dangling.")[1:]
+    pairs = collections.Counter()
+    for r in reports:
+        if "[DanglingPtr](2/3)" not in r:
+            continue
+        rest = r.split("[DanglingPtr](2/3)", 1)[1]
+        freed, _, released = rest.partition("[DanglingPtr](3/3)")
+        f = own_frames(freed.split("\n"), 1) or ["?"]
+        h = own_frames(released.split("\n"), 1) or ["?"]
+        pairs[(f[0], h[0])] += 1
+    print("\n== dangling raw_ptr reports: %d" % len(reports))
+    for (f, h), n in pairs.most_common(12):
+        print("   x%-3d freed in   %s" % (n, f))
+        print("        still held in %s" % h)
+
+    # AddressSanitizer.
+    asan = re.findall(r"==\d+==ERROR: AddressSanitizer: (.+)", text)
+    blocks = text.split("==ERROR: AddressSanitizer:")[1:]
+    print("\n== AddressSanitizer reports: %d" % len(asan))
+    seen = set()
+    for b in blocks:
+        head = b.split("\n", 1)[0].strip()[:120]
+        access = own_frames(b.split("\n")[1:60], 3)
+        freed_part = b.split("freed by thread", 1)[1] if "freed by thread" in b else ""
+        alloc_part = b.split("previously allocated by thread", 1)[1] if "previously allocated by thread" in b else ""
+        sig = (head.split(" on address")[0], tuple(access[:1]))
+        if sig in seen:
+            continue
+        seen.add(sig)
+        print("   " + head)
+        for f in access:
+            print("        at    " + f)
+        for f in own_frames(freed_part.split("\n"), 2):
+            print("        freed " + f)
+        for f in own_frames(alloc_part.split("\n"), 2):
+            print("        alloc " + f)
+
+    if not (crashed or fatal or reports or asan):
+        print("\nno findings")
+    return 1 if (fatal or reports or asan) else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

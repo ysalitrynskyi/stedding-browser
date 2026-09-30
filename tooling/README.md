@@ -38,6 +38,13 @@ its configuration from `chromium-version` — never from a value typed twice.
 | `brand/generate.py` | Regenerates the whole brand system from one geometry file. |
 | `check-repo` | Repository hygiene: shell portability, links, ADRs, patch series, the pin, traps, LF line endings, nothing tracked that is ignored, no machine paths; every test a spec row or BACKLOG cites exists and is in a `dev` filter. |
 | `check-shell` | shellcheck at the pinned version over every script here, plus `bash -n`. CI calls this exact script. |
+| `digest-sanitizer` | A test run's output as a few lines: the tests that crashed, each distinct DCHECK/FATAL once with the first frames that are this project's, each dangling raw_ptr as a pair (freed in / still held in), each AddressSanitizer report's head. `tooling/dev` calls it on any run with a finding; `STEDDING_TEST_LOG` keeps the raw output. Read findings through it, not raw (trap 60). |
+| `dev test` with `STEDDING_TEST_OUT` | `STEDDING_TEST_OUT=win-checks` or `win-asan` points `tooling/dev test` at that output directory and sets the run-time flags (the detector flag, ASan's option string with the quoted symbolizer path) |
+| `win/build.ps1` | One Windows build chunk: `gn gen` with the args file of `args/<config>.gn`, `autoninja`, a progress line a minute (steps, compilers, commit charge), a budget. `-Jobs` caps the steps; exit 0 built, 1 failed, 2 budget stop, 3 stuck |
+| `win/build-until-done.ps1` | The build to the end, detached: `build.ps1` chunk after chunk, status in `out\<config>\supervisor.log` ending in `SUPERVISOR_EXIT=<n>`, exit 4 on steps killed at three stops in a row. Wait for that line; do not poll a clock (traps 9, 54, 57) |
+| `win/drive.ps1` | The window used for real: pointer, keyboard, a window-only screenshot, rows and buttons by UI Automation, the visible page by DevTools, guarded (only into the window under test, only while the operator's hands are off). Ask the operator first (trap 27, trap 58) |
+| `win/capture.ps1`, `win/cdp.ps1`, `win/uia-dump.ps1`, `win/hit-test.ps1` | Looking without touching, for when real input is not allowed: a window rendered by `PrintWindow`, JavaScript in a page over DevTools, every view with its bounds, what the frame answers at each row (traps 36, 37) |
+| `win/package-installer.ps1` | The release image in `dist/` from a built `mini_installer` (ADR 0018) |
 | `check-geometry` | Re-measures the card's gutters and corner radius in `docs/images/*.png` against `probes/geometry.json`. Needs Pillow; runs anywhere. `--report` prints the measurements. Not a CI check. |
 | `verify-build` | Runs a built browser and checks it renders, does WebGL, and decodes video. |
 | `measure/` | Performance harness and the fixed ten-site list for the QUALITY.md budgets. |

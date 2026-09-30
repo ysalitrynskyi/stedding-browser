@@ -937,10 +937,12 @@ active Space switches to a neighbour, Chrome/Brave/Edge import is documented
 honestly now and built in Phase 2 (a first attempt landed early in patch 0055 and
 was withdrawn on 2026-09-28: it read the source browser's live databases and its
 keychain item regardless of the choices made), little windows get no Space commands.
-Beta 8 is the Mac image of pin 153.0.8010.53 (2026-09-18); beta 6 remains
-the current Windows preview until a Windows image joins a tag. `S-17` (signed
-re-release), `S-56` (the Windows port) and `S-58` (disk) stay. Do not publish
-a build of a series whose profile migration can open an empty window.
+Beta 8 is the current Mac image (pin 153.0.8010.53, 2026-09-18); beta 9
+(2026-09-30, pin 155.0.8059.12) is the current Windows image and went out from
+Windows alone. `S-17` (signed re-release), `S-56` (the Windows port) and `S-58`
+(disk) stay. Do not publish a Mac image of this series until the profile
+migration and the keychain copy are proven on a real beta 8 profile (`PLAN.md`
+Phase 0); the Windows image has neither.
 
 ## Release channel
 
@@ -952,16 +954,19 @@ repo root with a clean tree: bump `VERSION`, `tooling/dev build release chrome`
 (`dist/Stedding-<VERSION>-arm64.dmg` and its `.sha256`), paste the checksum into
 `docs/release-notes/v<ver>.md`, commit, **push**, `tooling/publish-release --check`,
 then `tooling/publish-release`. Beta 4 went out this way on 2026-09-05. The Windows
-image joins the same release from the Windows PC: `tooling\win\build.ps1`,
-`tooling\win\package-installer.ps1`, the checksum pasted under *Windows* in the
-notes, commit, push, `tooling/publish-release` from Git for Windows -- whichever
+image joins the same release from the Windows PC: `tooling\win\build-until-done.ps1`
+(then both suites on that exact build), `tooling\win\package-installer.ps1`,
+`tooling\win\test-installer.ps1` (upgrade, uninstall, install) and a real launch of
+the installed build (docs/QUALITY.md, release checklist 13), the checksum pasted under
+*Windows* in the notes, commit, push, `tooling/publish-release` from Git for Windows -- whichever
 platform publishes first creates the release, the other uploads into it and the
 notes are refreshed (ADR 0018). Beta 5's Windows preview went first, on
 2026-09-09, and beta 6 followed from Windows on 2026-09-10 with round 9; the Mac
 added the DMG to beta 6 the same day (beta 5 stays Windows-only) -- after a
 re-sync of the checkout, a sweep of every Stedding filter and the upstream suites
 of trap 31, and the captures the README shows -- and `publish-release` uploaded
-into the existing release and refreshed the notes with the checksum. With a
+into the existing release and refreshed the notes with the checksum. Beta 9 (2026-09-30) went out from
+Windows alone, with no Mac image of its series. With a
 Developer ID in the keychain (`S-17`), `tooling/sign-release release` goes between
 `verify-build` and `package-dmg`, which then takes `--app
 dist/signed/stable/Stedding.app`, and the notes and `docs/INSTALL.md` lose the unsigned paragraph.

@@ -59,15 +59,14 @@ project's own tooling; every claim below is backed by a test or a measured captu
 
 ## Download
 
-The current release is **0.2.0 beta 10**, a Windows preview built on Chromium 155.0.8059.12 (stable). The
-current macOS image is **beta 8**, built on Chromium 153.0.8010.53, until the Mac has built the newer
-series. Get them from
+The current release is **0.2.0 beta 10**, built on Chromium 155.0.8059.12 (stable): the macOS image,
+signed and notarized, and a Windows preview. Get them from
 [stedding.dev](https://stedding.dev/#download) or the
 [Releases page](https://github.com/ysalitrynskyi/stedding-browser/releases/latest):
 
 | Platform | File | Notes |
 |---|---|---|
-| macOS, Apple silicon (M1 or later) | `Stedding-<version>-arm64.dmg` | Open the DMG, drag **Stedding** to Applications, then run `xattr -dr com.apple.quarantine /Applications/Stedding.app` once in Terminal ([why](docs/INSTALL.md#macos-apple-silicon)). |
+| macOS, Apple silicon (M1 or later), macOS 13 or later | `Stedding-<version>-arm64.dmg` | Open the DMG, drag **Stedding** to Applications and open it: the image is signed and notarized ([details](docs/INSTALL.md#macos-apple-silicon)). |
 | Windows 10 / 11, x64 | `Stedding-<version>-win-x64.exe` | Installs for the current user, no administrator prompt. If SmartScreen appears: **More info → Run anyway**, once. |
 
 The builds are **not yet code-signed** (an Apple developer account exists; the
@@ -247,16 +246,16 @@ and what comes next:
 
 | | State |
 |---|---|
-| macOS (Apple silicon) | Beta releases since 2026-09-01; the current one is beta 8, and the Mac builds the beta 10 series next |
+| macOS (Apple silicon) | Beta releases since 2026-09-01; the current one is beta 10, the first signed and notarized |
 | Windows x64 | Preview installer since beta 5, on Chromium 155 from beta 9: the full interface, Arc's keys for Windows, a per-user install; both test suites also run clean with DCHECKs (beta 10) and under AddressSanitizer (beta 9's tree) |
-| Code signing and notarisation | The Developer ID certificate exists and the signing pipeline works; the first signed release follows the repair work (`S-17` in [BACKLOG.md](BACKLOG.md)) |
+| Code signing and notarisation | The macOS image is signed with the Developer ID and notarized from beta 10 on; Windows is not signed yet, and automatic updates come next (`S-17`, `S-74` in [BACKLOG.md](BACKLOG.md)) |
 | Automatic updates | After signing; checks go to GitHub Releases, with no identifier (ADR 0014) |
 | Windows: little windows, signing, updates | Open (`S-56`) |
 | Linux | After Windows (milestone M9 in [docs/ROADMAP.md](docs/ROADMAP.md)) |
 | Sync between machines | Not planned as a service; export a Space as a file and import it on the other machine |
 
-Known limits in the current builds: the first launch needs one Terminal command (unsigned);
-⌃1–⌃9 collide with macOS Mission Control once you have a second desktop (the Spaces
+Known limits in the current builds: no automatic updates yet, and the Windows installer is
+unsigned; ⌃1–⌃9 collide with macOS Mission Control once you have a second desktop (the Spaces
 menu keeps the commands reachable); a clipboard manager that owns ⇧⌘C system-wide
 takes it before the browser does.
 
@@ -270,11 +269,10 @@ are in [docs/release-notes/](docs/release-notes/).
 of patches that add the sidebar, Spaces, the command bar and the rest, written from
 scratch for this project.
 
-**Why is it unsigned? Is it safe to open?** Signing needs an Apple Developer ID
-certificate, which is being set up. Until then macOS calls the downloaded app
-"damaged"; the one Terminal command in [docs/INSTALL.md](docs/INSTALL.md) gets past
-it. Every build is made from the tagged commit on this repository and its checksum is
-published beside it, so you can check what you downloaded.
+**Is it signed? Is it safe to open?** From beta 10 the macOS image is signed with the
+project's Developer ID and notarized by Apple, so it opens like any other app. The
+Windows installer is not signed yet. Every build is made from this repository's patch
+series and its checksum is published beside it, so you can check what you downloaded.
 
 **Do my Chrome extensions work?** Yes. Stedding is Chromium; extensions install from
 the Chrome Web Store as usual.

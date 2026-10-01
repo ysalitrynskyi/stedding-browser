@@ -36,18 +36,17 @@ from real use recorded in [ARC-ROUND2.md](ARC-ROUND2.md).
 
 ## Installing and updating
 
-**Why is the build unsigned, and is it safe?**
-Code signing needs an Apple Developer ID certificate (and, on Windows, a code-signing
-certificate); the Apple account exists and the certificate is the next step. Until
-then macOS calls the downloaded app "damaged"; the one Terminal command in
-[INSTALL.md](INSTALL.md) gets past it, and right-click → Open does not. Every
-release is built from the tagged commit in this repository, and its SHA-256 checksum
-is published beside the file so you can check what you downloaded
-([INSTALL.md](INSTALL.md)).
+**Is the build signed, and is it safe?**
+From beta 10 the macOS image is signed with the project's Developer ID and notarized by
+Apple, so macOS opens it like any other app. The Windows installer is not signed yet:
+SmartScreen asks once ([INSTALL.md](INSTALL.md)). Every release is built from this
+repository's patch series, and its SHA-256 checksum is published beside the file so you
+can check what you downloaded.
 
 **Will it update itself?**
 Not yet. New versions appear on the Releases page. The in-app updater is designed
-(it checks GitHub Releases, sends no identifier) and lands together with signing.
+(it checks GitHub Releases, sends no identifier) and comes next, now that the Mac image is
+signed (`S-74`).
 
 **Does it run on Intel Macs? On Linux?**
 Not yet. Today: macOS on Apple silicon and Windows x64 (a preview). Linux is the next

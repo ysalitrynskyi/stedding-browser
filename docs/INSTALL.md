@@ -4,32 +4,24 @@ Stedding ships as beta pre-releases on the
 [Releases page](https://github.com/ysalitrynskyi/stedding-browser/releases). Each
 release carries one file per platform and a SHA-256 checksum for each.
 
-The builds are **not code-signed yet**. On macOS that means one Terminal command
-before the first launch; on Windows, one SmartScreen prompt. Signing and notarisation are the
-next step (`S-17` in [BACKLOG.md](../BACKLOG.md)); once they land, this page loses
-those paragraphs.
+The macOS image is signed with the project's Developer ID and notarized by Apple from
+beta 10 on, so it opens like any other app. The Windows installer is **not code-signed
+yet**, which means one SmartScreen prompt (`S-56` in [BACKLOG.md](../BACKLOG.md)). There are
+no automatic updates yet on either platform (`S-74`).
 
 ## macOS (Apple silicon)
 
-Requirements: a Mac with an M-series chip (M1 or later). Intel Macs are not supported
-yet.
+Requirements: a Mac with an M-series chip (M1 or later) and macOS 13 or later. Intel
+Macs are not supported yet.
 
 1. Download `Stedding-<version>-arm64.dmg` from the latest release and check its
    checksum ([below](#verifying-the-download)).
 2. Open the DMG and drag **Stedding** into **Applications**.
-3. Open Terminal and run, once:
+3. Open Stedding. macOS checks Apple's notarization once and opens it.
 
-   ```bash
-   xattr -dr com.apple.quarantine /Applications/Stedding.app
-   ```
-
-   Then open Stedding as usual. Every later launch is a normal double-click.
-
-Without step 3, macOS says Stedding "is damaged and can't be opened" and offers to
-move it to the Trash. The app is not damaged: that is what macOS says about an
-unsigned build of Chromium downloaded from the internet, and right-click → Open does
-not get past it. The command removes the download mark from this one app, which is
-why the checksum comes first. Do not turn Gatekeeper off system-wide for this.
+Betas up to beta 8 were not signed and needed a Terminal command
+(`xattr -dr com.apple.quarantine /Applications/Stedding.app`) before the first launch;
+from beta 10 on that step is gone.
 
 ### Verifying the download
 

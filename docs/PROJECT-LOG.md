@@ -6,6 +6,31 @@ This file was the "State of the project" section of `AGENTS.md` until 2026-09-30
 unchanged, and is where the dated record goes from now on: an agent opening the repo cold
 should not have to read four hundred lines of rounds to learn the rules.
 
+## 2026-10-01 -- the Mac's half of beta 10
+
+The Mac took the PC's series as it was, re-exported byte for byte from the Mac checkout (a
+re-apply by plumbing rewrote only the 39 files the PC had changed, so the rebuild took half an
+hour), and the suites passed on it before anything changed. Then:
+
+- **The migration, proven and fixed.** On a made-up profile the release build lost the move for
+  good when another browser held Chromium's folder: it started an empty profile, and no later
+  launch moved anything. The system's alert now asks first (patch 0057). On a clone of the
+  owner's real beta 8 profile in a scratch home (`CFFIXED_USER_HOME`) the move then held in all
+  four cases: no Stedding folder, a folder holding only `Crashpad`, beta 8 running on the old
+  folder (the alert, **Quit**, then the move), and a profile from the official Chromium 157
+  snapshot (left alone). `PLAN.md` PLT-1 is ticked.
+- **The keychain, with the real login keychain.** No macOS prompt came up on this Mac. A fresh
+  profile made its own "Stedding Safe Storage" item; a profile beta 8 itself made, with a cookie
+  sealed under Chromium's key, still sent the cookie after the move and on the next launch.
+- **The owner's eye.** The collapsed rail put the zoom button on the page's corner (the Mac's
+  rail is 80 DIP now, patch 0039, sidebar Y16), and full screen left an empty band at the top
+  of the sidebar (its toggle sits on the overlay's toolbar row, patch 0057, sidebar Y17).
+- **Signing.** The first run to reach the end showed Chromium's signer deleting the notarized
+  app when packaging is off (patch 0051). Beta 10's macOS image is the first Stedding signed
+  with the Developer ID and notarized by Apple, and it went into the existing beta 10 release.
+- **Tooling on macOS 26.** `tooling/drive-window.py` refused every click, because the Dock is
+  one transparent full-screen window there now; `tooling/capture-state` has light and dark seeds.
+
 ## 2026-09-29 to 2026-09-30 -- the Windows PC takes over
 
 The Windows build machine picked the work up from the Mac on 2026-09-29 (Ryzen 9 5900XT, 32 GB) with the pin at 155.0.8059.12 and 57 patches, and in two days did what the Mac's 2026-09-28 pass could not: built the series on Windows, ran it under sanitizers, and used the product with the real pointer and keyboard.

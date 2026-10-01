@@ -59,7 +59,7 @@ project's own tooling; every claim below is backed by a test or a measured captu
 
 ## Download
 
-The current release is **0.2.0 beta 9**, a Windows preview built on Chromium 155.0.8059.12 (stable). The
+The current release is **0.2.0 beta 10**, a Windows preview built on Chromium 155.0.8059.12 (stable). The
 current macOS image is **beta 8**, built on Chromium 153.0.8010.53, until the Mac has built the newer
 series. Get them from
 [stedding.dev](https://stedding.dev/#download) or the
@@ -247,8 +247,8 @@ and what comes next:
 
 | | State |
 |---|---|
-| macOS (Apple silicon) | Beta releases since 2026-09-01; the current one is beta 8, and the Mac builds the beta 9 series next |
-| Windows x64 | Preview installer since beta 5, on Chromium 155 from beta 9: the full interface, Arc's keys for Windows, a per-user install; both test suites also run clean with DCHECKs and under AddressSanitizer |
+| macOS (Apple silicon) | Beta releases since 2026-09-01; the current one is beta 8, and the Mac builds the beta 10 series next |
+| Windows x64 | Preview installer since beta 5, on Chromium 155 from beta 9: the full interface, Arc's keys for Windows, a per-user install; both test suites also run clean with DCHECKs (beta 10) and under AddressSanitizer (beta 9's tree) |
 | Code signing and notarisation | The Developer ID certificate exists and the signing pipeline works; the first signed release follows the repair work (`S-17` in [BACKLOG.md](BACKLOG.md)) |
 | Automatic updates | After signing; checks go to GitHub Releases, with no identifier (ADR 0014) |
 | Windows: little windows, signing, updates | Open (`S-56`) |

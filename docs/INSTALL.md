@@ -93,8 +93,12 @@ The profile is under `%LOCALAPPDATA%\Stedding\User Data`. Export works as on mac
 
 ### Updating and uninstalling
 
-Run the new installer over the old version; the profile is kept. Uninstall from
-**Settings → Apps**, as with any app.
+Close Stedding, then run the new installer over the old version; the profile is kept. When
+the new release is on the same Chromium number as the one installed (beta 9 and beta 10 are
+both 155.0.8059.12) the installer repairs in place and cannot replace the files of a running
+Stedding, so it has to be closed (a release on a different Chromium number is added beside the
+old version, which is how beta 6 became beta 9). Uninstall from **Settings → Apps**, as with any
+app.
 
 ### What the Windows preview does not have yet
 

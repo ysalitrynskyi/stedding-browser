@@ -33,8 +33,13 @@ otherwise meet later:
 - Is the machine mine overnight, and does a reboot need a reason?
 - Is there a setting I need you to flip (Windows clipboard history, for the Win+V check)?
   System settings are not yours to change.
+- Will you close your own Stedding when I tell you the installer test is next? A release
+  on the same Chromium number as the one installed installs as a repair and cannot replace
+  a running browser (trap 62); your installed build is your daily browser and is never
+  mine to close. Waiting for it cost 2.5 hours on 2026-09-30, with a watcher on "no
+  Stedding process" so that nothing else waited.
 
-One message at the start costs a minute. The same five answers found out one by one cost
+One message at the start costs a minute. The same six answers found out one by one cost
 the session most of a night.
 
 ## Order of evidence

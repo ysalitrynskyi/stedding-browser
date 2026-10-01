@@ -88,8 +88,9 @@ come from the long run of 2026-09-29 to 30, in which the slowest parts were not 
 2. **Ask once, up front.** May you drive the screen and keyboard. May you push, and release
    when done (neither happens without a yes in chat, ever). Which output directories may you
    delete. Is the machine yours for the night. Is there a setting only the operator may flip
-   (Windows clipboard history, for the Win+V check). A list asked at the start costs one
-   message; asked when blocked it cost hours.
+   (Windows clipboard history, for the Win+V check). Will they close their own Stedding for
+   the installer test (a release on the same Chromium number installs as a repair, trap 62).
+   A list asked at the start costs one message; asked when blocked it cost hours.
 3. **Supervise long jobs; do not poll them.** A build or run past a few minutes is one
    detached job that writes a status file and a last line (`tooling\win\build-until-done.ps1`,
    `tooling/dev`), waited for by that line and never by the clock. Post one status line, with a

@@ -953,8 +953,8 @@ active Space switches to a neighbour, Chrome/Brave/Edge import is documented
 honestly now and built in Phase 2 (a first attempt landed early in patch 0055 and
 was withdrawn on 2026-09-28: it read the source browser's live databases and its
 keychain item regardless of the choices made), little windows get no Space commands.
-Beta 8 is the current Mac image (pin 153.0.8010.53, 2026-09-18); beta 9
-(2026-09-30, pin 155.0.8059.12) is the current Windows image and went out from
+Beta 8 is the current Mac image (pin 153.0.8010.53, 2026-09-18); beta 10
+(2026-09-30, pin 155.0.8059.12) is the current Windows image, after beta 9 the same day, and both went out from
 Windows alone. `S-17` (signed re-release), `S-56` (the Windows port) and `S-58`
 (disk) stay. Do not publish a Mac image of this series until the profile
 migration and the keychain copy are proven on a real beta 8 profile (`PLAN.md`
@@ -981,8 +981,8 @@ notes are refreshed (ADR 0018). Beta 5's Windows preview went first, on
 added the DMG to beta 6 the same day (beta 5 stays Windows-only) -- after a
 re-sync of the checkout, a sweep of every Stedding filter and the upstream suites
 of trap 31, and the captures the README shows -- and `publish-release` uploaded
-into the existing release and refreshed the notes with the checksum. Beta 9 (2026-09-30) went out from
-Windows alone, with no Mac image of its series. With a
+into the existing release and refreshed the notes with the checksum. Beta 9 and beta 10 (2026-09-30) went out from
+Windows alone, with no Mac image of their series; beta 10 is the one the Mac image joins. A Windows release on the same Chromium number as the installed one installs as a repair and needs Stedding closed (trap 62). With a
 Developer ID in the keychain (`S-17`), `tooling/sign-release release` goes between
 `verify-build` and `package-dmg`, which then takes `--app
 dist/signed/stable/Stedding.app`, and the notes and `docs/INSTALL.md` lose the unsigned paragraph.

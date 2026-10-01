@@ -257,3 +257,20 @@ for every user of every Mac beta so far; the third turned up while fixing them.
 | — | Found while reproducing 2: the Mac builds kept the profile in `~/Library/Application Support/Chromium`, which any Chromium on the same Mac shares -- one process singleton between two browsers, and passwords sealed with the other's keychain key -- while `INSTALL.md` promised Stedding's own folder. | macOS uses `~/Library/Application Support/Stedding`, as Windows uses `%LOCALAPPDATA%\Stedding`. A profile an earlier build left in Chromium's folder is cloned across on the first launch that finds no folder of Stedding's own, and only when that profile carries Stedding's own preferences; Chromium's folder is left as it was (windows N8, patch 0050). |
 | 3 | "browser is full of bugs.. even tabs are unselectable. you can click them, hover works, but doesnt select. when collapsed - same and looks weird. crashes all the time.. no animation for scroll between spaces at all" (2026-09-24). | Taken apart: **crashes** -- the only report since the fix is beta 8 in /Applications with the full-screen abort of row 2. **Collapsed looks weird** -- in the rail a folder's rows kept their indent, so icons left the column and a nested folder's glyph, 28 DIP into a 44 DIP column, was clipped into a different icon; the rail now puts every row on one column and a folder header is its glyph alone (folders F13). **No animation between Spaces** -- there was none: the rows swapped in one frame. The list now slides in from the side of the Space being entered (spaces B32, patch 0052). **Unselectable tabs** -- open: the click path reads right in the code, so it needs a real click in a test window to see what takes it. The same day the pin went to 155.0.8059.12 (BACKLOG S-64). |
 
+## Round 11 — the owner's Mac pass on beta 10 (2026-10-01)
+
+The owner used beta 10 on their own profile, an Arc import with eight Spaces and long lists,
+and the Mac then drove a copy of it with real input. Patch 0058, with the click fix folded into
+0057. Built; the new unit and browser tests pass; what the last column says is still to be seen
+on the real build.
+
+| # | Found | Fix | Seen live |
+|---|---|---|---|
+| 1 | Tabs would not select: "worked 1 time and now stuck". | The sidebar's empty bottom bar was hidden under the long list but kept its old bounds over the rows, and the window read that as caption, so every press became a window drag (PLAN.md TAB-1). Only a showing container counts now. | yes: rows click on the owner's copy |
+| 2 | The address bar disappears when everything is collapsed. | "Hide the address row with the sidebar" is off by default (toolbar T8, T12). | not yet |
+| 3 | A swipe changes Space with no animation. | The title and the list follow the fingers; the lift switches or springs back; the next Space slides in (spaces B35). | not yet |
+| 4 | The Space chips turn to dots too early. | The gaps close up to 4 DIP first (spaces B24). | not yet |
+| 5 | Some icons in the address row look low. | Measured: every icon is centred in the row to half a DIP; the row sits 6 DIP below the window's top (T2), while the traffic lights and the sidebar toggle centre about 6 pt higher. The owner said that is fine if so; left as it is. | measured |
+| 6 | The row is not always the page's colour; sometimes none. | The colour the page draws along its top edge first (T31); the page's colour in full screen too (T32). | not yet |
+| — | Found on the owner's copy: restored tabs died with "Terminating renderer for bad IPC message, reason 332". | Unloaded imported tabs saved sequence numbers of -1 with the session; content now writes and reads them as 0 (import I26). | not yet |
+

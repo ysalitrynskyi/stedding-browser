@@ -1,0 +1,2204 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ys@ys.contact>
+Date: Thu, 1 Oct 2026 13:18:23 -0400
+Subject: fix: the owner's Mac pass on beta 10
+
+The owner used beta 10 on their own Arc-imported profile and found
+these, fixed here:
+
+- Restored tabs came back as crashed pages. A tab created unloaded,
+  as the Arc import creates them, never commits, so its frame entry
+  has sequence numbers of -1. The session saved them in the page
+  state, Blink keeps any non-zero number, and after a restart the
+  document committed with -1, which the browser kills as a bad
+  message (RFH_INVALID_DOCUMENT_SEQUENCE_NUMBER). NavigationEntryImpl
+  now writes a missing number as 0, Blink's "none", and reads a saved
+  negative one as 0 (import I26).
+- The address row hid with the sidebar, which read as the address bar
+  disappearing. The setting is now off by default (toolbar T8, T12).
+- The row's colour was often not the page's: pages paint their top
+  with layers their declared colour knows nothing of. The row now
+  takes the colour the page draws along its top edge when that edge
+  is one colour, then the theme colour, then the background (T31).
+  In macOS full screen the overlay paints the row in the page's
+  colour too; it was the bare ground there (T32).
+- The Space swipe switched at a fixed distance with nothing moving.
+  The title and the list now follow the fingers, the lift switches or
+  springs back, and the next Space slides in from the side the
+  fingers left (spaces B35).
+- The switcher turned to dots with room left for every chip. The gaps
+  close up to 4 DIP first (spaces B24).
+
+Why: the owner's own use of beta 10 on 2026-10-01 (docs/ARC-ROUND2.md,
+round 11); each finding is a behaviour in its feature's spec.
+Removable when: the Phase 4 re-cut (PLAN.md SER-4) folds these fixes
+into the feature patches they belong to.
+---
+ chrome/browser/ui/stedding/BUILD.gn           |   1 +
+ .../browser/ui/stedding/address_row_rules.h   |   4 +-
+ .../ui/stedding/address_row_rules_unittest.cc |   3 +
+ .../ui/stedding/address_row_unittest.cc       |  26 +++
+ chrome/browser/ui/stedding/motion.cc          |  27 +++
+ chrome/browser/ui/stedding/motion.h           |  29 +++
+ chrome/browser/ui/stedding/motion_unittest.cc |  31 +++
+ chrome/browser/ui/stedding/stedding_prefs.cc  |   5 +-
+ chrome/browser/ui/stedding/stedding_prefs.h   |   3 +-
+ .../ui/stedding/stedding_prefs_unittest.cc    |  14 +-
+ chrome/browser/ui/stedding/theme/BUILD.gn     |   9 +-
+ .../theme/page_theme_color_controller.cc      | 189 ++++++++++++++++--
+ .../theme/page_theme_color_controller.h       |  32 ++-
+ .../ui/stedding/theme/page_top_color.cc       |  76 +++++++
+ .../ui/stedding/theme/page_top_color.h        |  47 +++++
+ .../stedding/theme/page_top_color_unittest.cc |  88 ++++++++
+ .../views/frame/stedding_window_background.cc |  86 ++++++--
+ .../views/frame/stedding_window_background.h  |  20 ++
+ .../ui/views/frame/top_container_view.cc      |   5 +
+ .../frame/vertical_tab_strip_region_view.cc   | 164 ++++++++++++---
+ .../frame/vertical_tab_strip_region_view.h    |  17 ++
+ .../ui/views/spaces/space_switcher_rules.cc   |  22 +-
+ .../ui/views/spaces/space_switcher_rules.h    |  14 +-
+ .../spaces/space_switcher_rules_unittest.cc   |  24 +++
+ .../ui/views/spaces/space_switcher_view.cc    |  18 +-
+ ...rtical_tab_strip_focus_swipe_controller.cc | 168 +++++++++++++++-
+ ...ertical_tab_strip_focus_swipe_controller.h |  55 ++++-
+ chrome/test/stedding/BUILD.gn                 |   3 +
+ .../restored_page_state_browsertest.cc        |  99 +++++++++
+ .../test/stedding/space_switch_browsertest.cc |  99 +++++++++
+ .../renderer_host/navigation_entry_impl.cc    |  37 +++-
+ 31 files changed, 1309 insertions(+), 106 deletions(-)
+ create mode 100644 chrome/browser/ui/stedding/theme/page_top_color.cc
+ create mode 100644 chrome/browser/ui/stedding/theme/page_top_color.h
+ create mode 100644 chrome/browser/ui/stedding/theme/page_top_color_unittest.cc
+ create mode 100644 chrome/test/stedding/restored_page_state_browsertest.cc
+
+diff --git a/chrome/browser/ui/stedding/BUILD.gn b/chrome/browser/ui/stedding/BUILD.gn
+index ba046536f8c99..f1b9d3072ddd8 100644
+--- a/chrome/browser/ui/stedding/BUILD.gn
++++ b/chrome/browser/ui/stedding/BUILD.gn
+@@ -288,6 +288,7 @@ source_set("unit_tests") {
+     "menu_rules_unittest.cc",
+     "theme/page_bar_color_supplier_unittest.cc",
+     "theme/page_theme_color_controller_unittest.cc",
++    "theme/page_top_color_unittest.cc",
+     "motion_unittest.cc",
+     "pin_lifecycle_unittest.cc",
+     "privacy_defaults_unittest.cc",
+diff --git a/chrome/browser/ui/stedding/address_row_rules.h b/chrome/browser/ui/stedding/address_row_rules.h
+index 8028f84133fab..0d7cbc561b1bb 100644
+--- a/chrome/browser/ui/stedding/address_row_rules.h
++++ b/chrome/browser/ui/stedding/address_row_rules.h
+@@ -14,8 +14,8 @@ namespace stedding {
+ // docs/features/toolbar.md T8, T10-T12: whether the window shows its address
+ // row, from what the window knows.
+ struct AddressRowSignals {
+-  // stedding.toolbar.hide_with_sidebar (T12).
+-  bool hide_with_sidebar = true;
++  // stedding.toolbar.hide_with_sidebar (T12), off by default.
++  bool hide_with_sidebar = false;
+   // The sidebar is collapsed to icons (T8).
+   bool sidebar_collapsed = false;
+   // The active page is a localhost page (T11).
+diff --git a/chrome/browser/ui/stedding/address_row_rules_unittest.cc b/chrome/browser/ui/stedding/address_row_rules_unittest.cc
+index 7faf328a1c522..2d7cf48a4812c 100644
+--- a/chrome/browser/ui/stedding/address_row_rules_unittest.cc
++++ b/chrome/browser/ui/stedding/address_row_rules_unittest.cc
+@@ -13,6 +13,8 @@ namespace {
+ // T8, T10, T11, T12 in one table.
+ TEST(AddressRowRulesTest, HiddenWithTheSidebarUnlessLocalhostOrOverridden) {
+   AddressRowSignals signals;
++  // The setting on; it is off by default (T12).
++  signals.hide_with_sidebar = true;
+   EXPECT_TRUE(ShouldShowAddressRow(signals)) << "expanded: shown";
+   signals.sidebar_collapsed = true;
+   EXPECT_FALSE(ShouldShowAddressRow(signals)) << "T8: collapsed hides it";
+@@ -38,6 +40,7 @@ TEST(AddressRowRulesTest, HiddenWithTheSidebarUnlessLocalhostOrOverridden) {
+ // the toggle still wins.
+ TEST(AddressRowRulesTest, KeptUnderTheCaptionButtons) {
+   AddressRowSignals signals;
++  signals.hide_with_sidebar = true;
+   signals.sidebar_collapsed = true;
+   EXPECT_FALSE(ShouldShowAddressRow(signals)) << "T8: collapsed hides it";
+   signals.caption_buttons_over_row = true;
+diff --git a/chrome/browser/ui/stedding/address_row_unittest.cc b/chrome/browser/ui/stedding/address_row_unittest.cc
+index 553208d9a3906..49a56afe3e364 100644
+--- a/chrome/browser/ui/stedding/address_row_unittest.cc
++++ b/chrome/browser/ui/stedding/address_row_unittest.cc
+@@ -30,6 +30,9 @@ class AddressRowTest : public BrowserWithTestWindowTest {
+     if (tabs::VerticalTabStripStateController* const state = controller()) {
+       state->SetDelegate(&delegate_);
+     }
++    // The setting on, as the tests below need it: the row hides with the
++    // sidebar only while it is on, and it is off by default (toolbar T8).
++    profile()->GetPrefs()->SetBoolean(prefs::kToolbarHideWithSidebar, true);
+   }
+ 
+   void TearDown() override {
+@@ -47,6 +50,29 @@ class AddressRowTest : public BrowserWithTestWindowTest {
+   tabs::TestVerticalTabStripStateControllerDelegate delegate_;
+ };
+ 
++// toolbar T8, T12: a fresh profile keeps the address row when the sidebar
++// collapses; a collapsed window had no address bar at all, which the owner
++// read as the row disappearing (2026-10-01). The setting brings the hiding
++// back.
++TEST_F(AddressRowTest, AFreshProfileKeepsTheRowWhenTheSidebarCollapses) {
++  tabs::VerticalTabStripStateController* const state = controller();
++  ASSERT_TRUE(state);
++  AddressRow* const row = AddressRow::From(browser());
++  ASSERT_TRUE(row);
++  PrefService* const prefs = profile()->GetPrefs();
++  prefs->ClearPref(prefs::kToolbarHideWithSidebar);
++  ASSERT_FALSE(prefs->GetBoolean(prefs::kToolbarHideWithSidebar));
++
++  state->RequestCollapse(true);
++  ASSERT_TRUE(state->IsCollapsed());
++  EXPECT_TRUE(row->IsVisible()) << "collapsed, the row stays";
++
++  prefs->SetBoolean(prefs::kToolbarHideWithSidebar, true);
++  EXPECT_FALSE(row->IsVisible()) << "the setting on hides it";
++  state->RequestCollapse(false);
++  EXPECT_TRUE(row->IsVisible());
++}
++
+ // toolbar T8, PLAN.md WIN-1: the row hides with the sidebar only while the
+ // window shows one. A collapsed sidebar followed by the switch to horizontal
+ // tabs left a window with no toolbar, and no sidebar for cmd-S to bring back.
+diff --git a/chrome/browser/ui/stedding/motion.cc b/chrome/browser/ui/stedding/motion.cc
+index fcf19696c5c3e..2aef3507135ea 100644
+--- a/chrome/browser/ui/stedding/motion.cc
++++ b/chrome/browser/ui/stedding/motion.cc
+@@ -4,6 +4,9 @@
+ 
+ #include "chrome/browser/ui/stedding/motion.h"
+ 
++#include <algorithm>
++#include <cmath>
++
+ #include "chrome/browser/ui/stedding/stedding_prefs.h"
+ #include "chrome/browser/ui/stedding_ui_metrics.h"
+ #include "components/prefs/pref_service.h"
+@@ -21,6 +24,30 @@ bool ShouldAnimate(const PrefService* prefs) {
+   return !prefs || prefs->GetBoolean(prefs::kUiAnimate);
+ }
+ 
++float SpaceSwipeShift(float offset, float width, bool has_neighbour) {
++  if (has_neighbour) {
++    return std::clamp(offset, -std::max(width, 0.0f), std::max(width, 0.0f));
++  }
++  const float give = kSpaceSwipeEndGive *
++                     (1.0f - std::exp(-std::abs(offset) / kSpaceSwipeEndGive));
++  return std::copysign(give, offset);
++}
++
++float SpaceSwipeOpacity(float offset, float width, bool has_neighbour) {
++  if (!has_neighbour || width <= 0.0f) {
++    return 1.0f;
++  }
++  return 1.0f - 0.6f * std::min(1.0f, std::abs(offset) / (width * 0.5f));
++}
++
++bool SpaceSwipeCommits(float offset, float width, bool flick) {
++  const float distance = std::abs(offset);
++  const float needed = width > 0.0f
++                           ? std::min(kSpaceSwipeCommitDip, width * 0.3f)
++                           : kSpaceSwipeCommitDip;
++  return distance >= needed || (flick && distance >= kSpaceSwipeFlickDip);
++}
++
+ int SpaceSlideDirection(int from_index, int to_index, bool rtl) {
+   if (from_index < 0 || to_index < 0 || from_index == to_index) {
+     return 0;
+diff --git a/chrome/browser/ui/stedding/motion.h b/chrome/browser/ui/stedding/motion.h
+index f97b05c8051b3..66c5fe4dd7f9e 100644
+--- a/chrome/browser/ui/stedding/motion.h
++++ b/chrome/browser/ui/stedding/motion.h
+@@ -26,6 +26,35 @@ int SpaceSlideDirection(int from_index, int to_index, bool rtl);
+ inline constexpr int kSpaceSlideOffsetDip = 36;
+ inline constexpr int kSpaceSlideDurationMs = 200;
+ 
++// docs/features/spaces.md B35: the two-finger Space swipe follows the
++// fingers, as Arc's does; it switched at a fixed distance with nothing
++// moving until then (owner, 2026-10-01).
++//
++// Where the Space's title and list are drawn with the fingers `offset` DIPs
++// across a list `width` wide: with the fingers while there is a Space that
++// way, never further than the list's width; at the end of the switcher they
++// give a little, up to kSpaceSwipeEndGive, and no more.
++float SpaceSwipeShift(float offset, float width, bool has_neighbour);
++// Their opacity there: they fade as they leave, to 0.4 at half the list's
++// width; at the end of the switcher they do not fade.
++float SpaceSwipeOpacity(float offset, float width, bool has_neighbour);
++// Whether a swipe the fingers lift from `offset` DIPs across switches Space:
++// past kSpaceSwipeCommitDip or three tenths of the list, whichever is less,
++// or a flick (VerticalTabStripFocusSwipeController::kFlickSpeed) past
++// kSpaceSwipeFlickDip. Otherwise the list springs back.
++bool SpaceSwipeCommits(float offset, float width, bool flick);
++inline constexpr float kSpaceSwipeCommitDip = 75.0f;
++inline constexpr float kSpaceSwipeFlickDip = 16.0f;
++inline constexpr float kSpaceSwipeEndGive = 40.0f;
++// After a swipe switches, the next Space's title and list come in from that
++// side, this share of the list's width out and faded to
++// kSpaceSwipeEntryOpacity, and settle in kSpaceSwipeEntryMs; a swipe that
++// does not switch springs back in kSpaceSwipeSettleMs.
++inline constexpr float kSpaceSwipeEntryShare = 0.4f;
++inline constexpr float kSpaceSwipeEntryOpacity = 0.4f;
++inline constexpr int kSpaceSwipeEntryMs = 240;
++inline constexpr int kSpaceSwipeSettleMs = 180;
++
+ }  // namespace stedding
+ 
+ #endif  // CHROME_BROWSER_UI_STEDDING_MOTION_H_
+diff --git a/chrome/browser/ui/stedding/motion_unittest.cc b/chrome/browser/ui/stedding/motion_unittest.cc
+index 09749bb9c2354..e0fb09992cfdf 100644
+--- a/chrome/browser/ui/stedding/motion_unittest.cc
++++ b/chrome/browser/ui/stedding/motion_unittest.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "chrome/browser/ui/stedding/motion.h"
+ 
++#include <cmath>
++
+ #include "base/test/scoped_feature_list.h"
+ #include "chrome/browser/ui/stedding/stedding_prefs.h"
+ #include "chrome/browser/ui/stedding_ui_metrics.h"
+@@ -60,4 +62,33 @@ TEST(SpaceSlideTest, ComesInFromTheSideOfTheSpaceBeingEntered) {
+   EXPECT_EQ(0, SpaceSlideDirection(-1, 1, /*rtl=*/false));
+ }
+ 
++// Spaces B35: the list goes with the fingers while there is a Space that
++// way, never past its own width, and fades as it leaves; at the end of the
++// switcher it gives a little and does not fade.
++TEST(SpaceSwipeTest, TheListFollowsTheFingers) {
++  EXPECT_FLOAT_EQ(-60.0f, SpaceSwipeShift(-60.0f, 260.0f, true));
++  EXPECT_FLOAT_EQ(260.0f, SpaceSwipeShift(400.0f, 260.0f, true));
++  EXPECT_FLOAT_EQ(1.0f, SpaceSwipeOpacity(0.0f, 260.0f, true));
++  EXPECT_FLOAT_EQ(0.4f, SpaceSwipeOpacity(-130.0f, 260.0f, true));
++  EXPECT_FLOAT_EQ(0.4f, SpaceSwipeOpacity(-200.0f, 260.0f, true));
++
++  const float give = SpaceSwipeShift(-60.0f, 260.0f, false);
++  EXPECT_LT(give, 0.0f);
++  EXPECT_GT(give, -kSpaceSwipeEndGive);
++  EXPECT_GE(SpaceSwipeShift(-1000.0f, 260.0f, false), -kSpaceSwipeEndGive);
++  EXPECT_LT(std::abs(give), 60.0f) << "less than the fingers moved";
++  EXPECT_FLOAT_EQ(1.0f, SpaceSwipeOpacity(-60.0f, 260.0f, false));
++}
++
++// Spaces B35: the lift switches past 75 DIPs or three tenths of the list,
++// whichever is less, or on a flick past 16; short of that it springs back.
++TEST(SpaceSwipeTest, TheLiftSwitchesFarEnoughOrOnAFlick) {
++  EXPECT_TRUE(SpaceSwipeCommits(-75.0f, 260.0f, false));
++  EXPECT_FALSE(SpaceSwipeCommits(-74.0f, 260.0f, false));
++  EXPECT_TRUE(SpaceSwipeCommits(61.0f, 200.0f, false)) << "0.3 x 200 = 60";
++  EXPECT_TRUE(SpaceSwipeCommits(-20.0f, 260.0f, true));
++  EXPECT_FALSE(SpaceSwipeCommits(-10.0f, 260.0f, true));
++  EXPECT_FALSE(SpaceSwipeCommits(-40.0f, 0.0f, false)) << "no width: 75";
++}
++
+ }  // namespace stedding
+diff --git a/chrome/browser/ui/stedding/stedding_prefs.cc b/chrome/browser/ui/stedding/stedding_prefs.cc
+index 72b6209d0c5ad..5caef1efe5ea1 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs.cc
++++ b/chrome/browser/ui/stedding/stedding_prefs.cc
+@@ -16,7 +16,10 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
+   registry->RegisterBooleanPref(kPeekEnabled, false);
+   registry->RegisterIntegerPref(kArchiveIdleHours, 12);
+   registry->RegisterIntegerPref(kArchiveKeepDays, 30);
+-  registry->RegisterBooleanPref(kToolbarHideWithSidebar, true);
++  // The address row stays when the sidebar collapses: with it hidden a
++  // collapsed window had no address bar, and the owner read that as the row
++  // disappearing (toolbar T8, T12; 2026-10-01). The setting still hides it.
++  registry->RegisterBooleanPref(kToolbarHideWithSidebar, false);
+   registry->RegisterBooleanPref(kBookmarksConverted, false);
+   registry->RegisterListPref(kSpaceRegistry);
+   registry->RegisterBooleanPref(kLittleEnabled, true);
+diff --git a/chrome/browser/ui/stedding/stedding_prefs.h b/chrome/browser/ui/stedding/stedding_prefs.h
+index 3994a1e8dc9bf..91457b1ec018d 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs.h
++++ b/chrome/browser/ui/stedding/stedding_prefs.h
+@@ -30,7 +30,8 @@ inline constexpr char kPeekEnabled[] = "stedding.peek.enabled";
+ inline constexpr char kArchiveIdleHours[] = "stedding.archive.idle_hours";
+ // archive A11: how many days the Archived page and the bar look back.
+ inline constexpr char kArchiveKeepDays[] = "stedding.archive.keep_days";
+-// toolbar T8/T12: the address row hides when the sidebar collapses.
++// toolbar T8/T12: the address row hides when the sidebar collapses. Off by
++// default since 2026-10-01.
+ inline constexpr char kToolbarHideWithSidebar[] =
+     "stedding.toolbar.hide_with_sidebar";
+ // little E4: links from other apps open in a small window.
+diff --git a/chrome/browser/ui/stedding/stedding_prefs_unittest.cc b/chrome/browser/ui/stedding/stedding_prefs_unittest.cc
+index 6a925aea8801c..cb32901aa0dd5 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs_unittest.cc
++++ b/chrome/browser/ui/stedding/stedding_prefs_unittest.cc
+@@ -11,20 +11,22 @@ namespace stedding::prefs {
+ namespace {
+ 
+ // settings T2: every Stedding preference registers with the default its
+-// spec names: on, except Peek, which is off while it is rebuilt, and the Space
+-// sleep timer, which is Never until sleep is gated.
++// spec names: on, except Peek, which is off while it is rebuilt, the address
++// row's hiding with the sidebar, off since 2026-10-01 (toolbar T8), and the
++// Space sleep timer, which is Never until sleep is gated.
+ TEST(SteddingPrefsTest, EveryPreferenceRegistersWithItsDefault) {
+   sync_preferences::TestingPrefServiceSyncable service;
+   RegisterProfilePrefs(service.registry());
+   for (const char* name :
+        {kNewTabShowHint, kNewTabShowShortcuts, kCopyStripTracking, kUiAnimate,
+-        kPinsCloseSleeps, kMenusShort, kHoldCmdNumbers,
+-        kToolbarHideWithSidebar, kLittleEnabled}) {
++        kPinsCloseSleeps, kMenusShort, kHoldCmdNumbers, kLittleEnabled}) {
+     ASSERT_TRUE(service.FindPreference(name)) << name;
+     EXPECT_TRUE(service.GetBoolean(name)) << name;
+   }
+-  ASSERT_TRUE(service.FindPreference(kPeekEnabled));
+-  EXPECT_FALSE(service.GetBoolean(kPeekEnabled));
++  for (const char* name : {kPeekEnabled, kToolbarHideWithSidebar}) {
++    ASSERT_TRUE(service.FindPreference(name)) << name;
++    EXPECT_FALSE(service.GetBoolean(name)) << name;
++  }
+   EXPECT_EQ(0, service.GetInteger(kSpaceSleepMinutes));
+ }
+ 
+diff --git a/chrome/browser/ui/stedding/theme/BUILD.gn b/chrome/browser/ui/stedding/theme/BUILD.gn
+index 93d3ff886b3ea..9dce71bc60b4b 100644
+--- a/chrome/browser/ui/stedding/theme/BUILD.gn
++++ b/chrome/browser/ui/stedding/theme/BUILD.gn
+@@ -2,16 +2,19 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-# The active page's theme colour, per window, for the address row that sits
+-# on top of the page card (docs/UI-SPEC.md, "the bar is the page's").
++# The active page's colour, per window, for the address row that sits on top
++# of the page card (docs/UI-SPEC.md, "the bar is the page's"): the colour of
++# its top edge, its theme colour or its background (toolbar T3, T31).
+ source_set("theme") {
+   public = [
+     "page_bar_color_supplier.h",
+     "page_theme_color_controller.h",
++    "page_top_color.h",
+   ]
+   sources = [
+     "page_bar_color_supplier.cc",
+     "page_theme_color_controller.cc",
++    "page_top_color.cc",
+   ]
+   public_deps = [
+     "//base",
+@@ -26,6 +29,8 @@ source_set("theme") {
+     "//chrome/browser/ui/browser_window",
+     "//chrome/browser/ui/color:color_headers",
+     "//components/tabs:public",
++    "//components/viz/common",
+     "//ui/gfx",
++    "//ui/gfx/geometry",
+   ]
+ }
+diff --git a/chrome/browser/ui/stedding/theme/page_theme_color_controller.cc b/chrome/browser/ui/stedding/theme/page_theme_color_controller.cc
+index 1627843bf6a58..8b763749bf91a 100644
+--- a/chrome/browser/ui/stedding/theme/page_theme_color_controller.cc
++++ b/chrome/browser/ui/stedding/theme/page_theme_color_controller.cc
+@@ -4,14 +4,60 @@
+ 
+ #include "chrome/browser/ui/stedding/theme/page_theme_color_controller.h"
+ 
++#include <algorithm>
++
+ #include "base/functional/bind.h"
++#include "base/task/bind_post_task.h"
+ #include "base/task/sequenced_task_runner.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/stedding/theme/page_top_color.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "components/tabs/public/tab_interface.h"
++#include "components/viz/common/frame_sinks/copy_output_result.h"
++#include "content/public/browser/page.h"
++#include "content/public/browser/page_user_data.h"
++#include "content/public/browser/visibility.h"
+ #include "content/public/browser/web_contents.h"
++#include "ui/gfx/geometry/rect.h"
++#include "ui/gfx/geometry/size.h"
+ 
+ namespace stedding {
++namespace {
++
++// T31: what the page's top edge read as, kept on the page itself, so it goes
++// with the page: a new page in the tab starts with none, and a tab switched
++// back to has its own at once.
++class PageTopSample : public content::PageUserData<PageTopSample> {
++ public:
++  ~PageTopSample() override = default;
++
++  // The edge's colour, or nothing when the edge is not one colour.
++  std::optional<SkColor> color;
++
++ private:
++  explicit PageTopSample(content::Page& page) : PageUserData(page) {}
++
++  friend PageUserData;
++  PAGE_USER_DATA_KEY_DECL();
++};
++
++PAGE_USER_DATA_KEY_IMPL(PageTopSample);
++
++// When to read the page's top edge again: soon after a page shows, after it
++// finishes loading (and once more for pages that draw their header late),
++// and through a scroll and its momentum (a header that scrolls away leaves
++// the page's body at the top).
++constexpr base::TimeDelta kSampleAfterShown = base::Milliseconds(60);
++constexpr base::TimeDelta kSampleAfterPaint = base::Milliseconds(150);
++constexpr base::TimeDelta kSampleAfterStyle = base::Milliseconds(100);
++constexpr base::TimeDelta kSampleAfterLoad = base::Milliseconds(300);
++constexpr base::TimeDelta kSampleLate = base::Milliseconds(1500);
++constexpr base::TimeDelta kSampleScroll = base::Milliseconds(250);
++constexpr base::TimeDelta kSampleScrollMid = base::Milliseconds(700);
++constexpr base::TimeDelta kSampleScrollEnd = base::Milliseconds(1600);
++constexpr base::TimeDelta kSampleTimeout = base::Seconds(1);
++
++}  // namespace
+ 
+ DEFINE_USER_DATA(PageThemeColorController);
+ 
+@@ -65,16 +111,25 @@ void PageThemeColorController::OnTabStripModelChanged(
+     const TabStripSelectionChange& selection) {
+   if (selection.active_tab_changed()) {
+     Observe(selection.new_tab ? selection.new_tab->GetContents() : nullptr);
++    // Reads due for the tab that was active belong to it.
++    sample_due_.clear();
++    sample_timer_.Stop();
+     Refresh();
++    if (content::WebContents* const contents = web_contents();
++        contents && contents->CompletedFirstVisuallyNonEmptyPaint()) {
++      ScheduleTopSamples({kSampleAfterShown});
++    }
+   }
+ }
+ 
+ void PageThemeColorController::OnBackgroundColorChanged() {
+   Refresh();
++  ScheduleTopSamples({kSampleAfterStyle});
+ }
+ 
+ void PageThemeColorController::DidChangeThemeColor() {
+   Refresh();
++  ScheduleTopSamples({kSampleAfterStyle});
+ }
+ 
+ void PageThemeColorController::PrimaryPageChanged(content::Page& page) {
+@@ -87,30 +142,50 @@ void PageThemeColorController::DidFirstVisuallyNonEmptyPaint() {
+   // The Page's colour is populated by now whether or not a change was ever
+   // announced; see Refresh.
+   Refresh();
++  ScheduleTopSamples({kSampleAfterPaint});
+ }
+ 
+ void PageThemeColorController::DidStopLoading() {
+   Refresh();
++  ScheduleTopSamples({kSampleAfterLoad, kSampleLate});
++}
++
++void PageThemeColorController::DidGetUserInteraction(
++    const blink::WebInputEvent& event) {
++  // The start of a scroll, a click or a key: what is at the top of the page
++  // may change (a header scrolls away, a menu opens, Page Down).
++  ScheduleTopSamples({kSampleScroll, kSampleScrollMid, kSampleScrollEnd});
+ }
+ 
+ void PageThemeColorController::WebContentsDestroyed() {
+   Observe(nullptr);
++  sample_due_.clear();
++  sample_timer_.Stop();
+   Refresh();
+ }
+ 
+ void PageThemeColorController::Refresh() {
+   std::optional<SkColor> color;
+-  if (content::WebContents* const contents = web_contents()) {
+-    // A declared theme colour first; otherwise the page's own background,
+-    // the way Safari tints its bar, so a white page gets a white bar and a
+-    // dark page a dark one even without a <meta name="theme-color">.
+-    std::optional<SkColor> page = contents->GetThemeColor();
+-    if (!page) {
+-      page = contents->GetBackgroundColor();
+-    }
+-    if (page && SkColorGetA(*page) != SK_AlphaTRANSPARENT) {
+-      // The bar is an opaque surface.
+-      color = SkColorSetA(*page, SK_AlphaOPAQUE);
++  content::WebContents* const contents = web_contents();
++  if (contents) {
++    // T31: the colour the page is drawn in along its top edge, the edge the
++    // row sits on, when the edge is one colour. Then a declared theme
++    // colour; then the page's own background, the way Safari tints its bar,
++    // so a white page gets a white bar and a dark page a dark one even
++    // without a <meta name="theme-color"> (T3).
++    const PageTopSample* const sample =
++        PageTopSample::GetForPage(contents->GetPrimaryPage());
++    if (sample && sample->color) {
++      color = sample->color;
++    } else {
++      std::optional<SkColor> page = contents->GetThemeColor();
++      if (!page) {
++        page = contents->GetBackgroundColor();
++      }
++      if (page && SkColorGetA(*page) != SK_AlphaTRANSPARENT) {
++        // The bar is an opaque surface.
++        color = SkColorSetA(*page, SK_AlphaOPAQUE);
++      }
+     }
+     // A reload: the new Page starts with no colour of its own, and it reports
+     // one only when it differs from the last colour the WebContents sent
+@@ -119,15 +194,103 @@ void PageThemeColorController::Refresh() {
+     // announced and the row dropped to the window ground and stayed there
+     // (operator, 2026-09-08). Keep the colour while the page loads; the first
+     // paint and the end of loading re-read the Page, which has it by then.
+-    if (!color && color_ && contents->IsLoading()) {
++    // The same while a page loading in the tab whose colour the row shows
++    // has not had its top edge read: its declared colour can be far from the
++    // edge's (T31), and the row would flash it.
++    if (color_ && contents->IsLoading() &&
++        (!color || (!sample && shown_contents_.get() == contents))) {
+       return;
+     }
+   }
++  shown_contents_ = contents ? contents->GetWeakPtr()
++                             : base::WeakPtr<content::WebContents>();
+   SetColor(color);
+ }
+ 
++void PageThemeColorController::ScheduleTopSamples(
++    std::initializer_list<base::TimeDelta> delays) {
++  if (!web_contents()) {
++    return;
++  }
++  const base::TimeTicks now = base::TimeTicks::Now();
++  for (const base::TimeDelta delay : delays) {
++    sample_due_.insert(now + delay);
++  }
++  // Reads due within a frame or two of each other are one read.
++  const base::TimeTicks first = *sample_due_.begin();
++  if (!sample_timer_.IsRunning() ||
++      sample_timer_.desired_run_time() > first) {
++    sample_timer_.Start(FROM_HERE, std::max(first - now, base::TimeDelta()),
++                        this, &PageThemeColorController::OnSampleTimer);
++  }
++}
++
++void PageThemeColorController::OnSampleTimer() {
++  const base::TimeTicks now = base::TimeTicks::Now();
++  while (!sample_due_.empty() &&
++         *sample_due_.begin() <= now + base::Milliseconds(30)) {
++    sample_due_.erase(sample_due_.begin());
++  }
++  SampleTop();
++  if (!sample_due_.empty()) {
++    sample_timer_.Start(FROM_HERE,
++                        std::max(*sample_due_.begin() - now, base::TimeDelta()),
++                        this, &PageThemeColorController::OnSampleTimer);
++  }
++}
++
++void PageThemeColorController::SampleTop() {
++  content::WebContents* const contents = web_contents();
++  if (!contents || sample_in_flight_ ||
++      contents->GetVisibility() != content::Visibility::VISIBLE) {
++    return;
++  }
++  content::RenderWidgetHostView* const view =
++      contents->GetRenderWidgetHostView();
++  if (!view || !view->IsSurfaceAvailableForCopy()) {
++    return;
++  }
++  const gfx::Size viewport = view->GetVisibleViewportSize();
++  const int width = viewport.width() - kPageTopRightMargin;
++  if (width < kPageTopMinSamples * kPageTopSampleSpacing ||
++      viewport.height() < kPageTopStripHeight) {
++    return;
++  }
++  sample_in_flight_ = true;
++  // The result may come back on another sequence; the controller and the
++  // page live on this one.
++  view->CopyFromSurface(
++      gfx::Rect(0, 0, width, kPageTopStripHeight),
++      gfx::Size(width / kPageTopSampleSpacing, kPageTopStripHeight),
++      kSampleTimeout,
++      base::BindPostTask(
++          base::SequencedTaskRunner::GetCurrentDefault(),
++          base::BindOnce(&PageThemeColorController::OnTopSampled,
++                         weak_factory_.GetWeakPtr(),
++                         contents->GetPrimaryPage().GetWeakPtr())));
++}
++
++void PageThemeColorController::OnTopSampled(
++    base::WeakPtr<content::Page> page,
++    const content::CopyFromSurfaceResult& result) {
++  sample_in_flight_ = false;
++  if (!page || !result.has_value()) {
++    return;
++  }
++  PageTopSample* const sample = PageTopSample::GetOrCreateForPage(*page);
++  if (!sample) {
++    return;
++  }
++  sample->color = UniformTopEdgeColor(result.value().bitmap);
++  content::WebContents* const contents = web_contents();
++  if (contents && &contents->GetPrimaryPage() == page.get()) {
++    Refresh();
++  }
++}
++
+ void PageThemeColorController::SetColor(std::optional<SkColor> color) {
+-  if (color == color_) {
++  if (color == color_ ||
++      (color && color_ && PageColorsMatch(*color, *color_))) {
+     return;
+   }
+   color_ = color;
+diff --git a/chrome/browser/ui/stedding/theme/page_theme_color_controller.h b/chrome/browser/ui/stedding/theme/page_theme_color_controller.h
+index 5623e2635275a..12053e28665c4 100644
+--- a/chrome/browser/ui/stedding/theme/page_theme_color_controller.h
++++ b/chrome/browser/ui/stedding/theme/page_theme_color_controller.h
+@@ -5,16 +5,21 @@
+ #ifndef CHROME_BROWSER_UI_STEDDING_THEME_PAGE_THEME_COLOR_CONTROLLER_H_
+ #define CHROME_BROWSER_UI_STEDDING_THEME_PAGE_THEME_COLOR_CONTROLLER_H_
+ 
++#include <initializer_list>
+ #include <map>
+ #include <memory>
+ #include <optional>
+ 
+ #include "base/callback_list.h"
++#include "base/containers/flat_set.h"
+ #include "base/functional/callback.h"
+ #include "base/memory/raw_ref.h"
+ #include "base/memory/weak_ptr.h"
++#include "base/time/time.h"
++#include "base/timer/timer.h"
+ #include "chrome/browser/ui/stedding/theme/page_bar_color_supplier.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
++#include "content/public/browser/render_widget_host_view.h"
+ #include "content/public/browser/web_contents_observer.h"
+ #include "third_party/skia/include/core/SkColor.h"
+ #include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
+@@ -25,9 +30,11 @@ class BrowserWindowInterface;
+ 
+ namespace stedding {
+ 
+-// Follows the active tab's <meta name="theme-color"> so the address row,
+-// which sits on top of the page card, can take the page's own colour the way
+-// Arc's does (docs/features/toolbar.md). One per normal window, owned by
++// Follows the active tab's colour so the address row, which sits on top of
++// the page card, can take the page's own colour the way Arc's does
++// (docs/features/toolbar.md): the colour the page is drawn in along its top
++// edge when that edge is one colour (T31), else its <meta name="theme-color">,
++// else its document background (T3). One per normal window, owned by
+ // BrowserWindowFeatures; SteddingWindowBackground reads it while painting.
+ class PageThemeColorController : public TabStripModelObserver,
+                                  public content::WebContentsObserver {
+@@ -41,8 +48,8 @@ class PageThemeColorController : public TabStripModelObserver,
+   PageThemeColorController& operator=(const PageThemeColorController&) = delete;
+   ~PageThemeColorController() override;
+ 
+-  // The active page's theme colour, opaque, or nothing when the page has none
+-  // (or has not painted yet).
++  // The active page's colour, opaque, or nothing when the page has none (or
++  // has not painted yet).
+   std::optional<SkColor> color() const { return color_; }
+ 
+   // The supplier that recolours the toolbar for the current page colour
+@@ -67,6 +74,7 @@ class PageThemeColorController : public TabStripModelObserver,
+   void PrimaryPageChanged(content::Page& page) override;
+   void DidFirstVisuallyNonEmptyPaint() override;
+   void DidStopLoading() override;
++  void DidGetUserInteraction(const blink::WebInputEvent& event) override;
+   void WebContentsDestroyed() override;
+ 
+   // The change path without a page, for tests.
+@@ -77,8 +85,22 @@ class PageThemeColorController : public TabStripModelObserver,
+   void SetColor(std::optional<SkColor> color);
+   void NotifyChanged();
+ 
++  // T31: reads the page's top edge after each delay, from now; an earlier
++  // read already due stays due. Reads that fall due together are one read.
++  void ScheduleTopSamples(std::initializer_list<base::TimeDelta> delays);
++  void OnSampleTimer();
++  void SampleTop();
++  void OnTopSampled(base::WeakPtr<content::Page> page,
++                    const content::CopyFromSurfaceResult& result);
++
+   const raw_ref<BrowserWindowInterface> browser_;
+   std::optional<SkColor> color_;
++  // The tab whose colour color_ is, so a page loading in that same tab keeps
++  // it until its own top edge is read (a reload, a link within the site).
++  base::WeakPtr<content::WebContents> shown_contents_;
++  base::flat_set<base::TimeTicks> sample_due_;
++  base::OneShotTimer sample_timer_;
++  bool sample_in_flight_ = false;
+   std::map<SkColor, std::unique_ptr<PageBarColorSupplier>> suppliers_;
+   base::RepeatingClosureList changed_callbacks_;
+   ui::ScopedUnownedUserData<PageThemeColorController> scoped_user_data_;
+diff --git a/chrome/browser/ui/stedding/theme/page_top_color.cc b/chrome/browser/ui/stedding/theme/page_top_color.cc
+new file mode 100644
+index 0000000000000..87355a628cb62
+--- /dev/null
++++ b/chrome/browser/ui/stedding/theme/page_top_color.cc
+@@ -0,0 +1,76 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/stedding/theme/page_top_color.h"
++
++#include <algorithm>
++#include <cstdlib>
++#include <vector>
++
++#include "third_party/skia/include/core/SkBitmap.h"
++
++namespace stedding {
++namespace {
++
++int ChannelDistance(SkColor a, SkColor b) {
++  return std::max({std::abs(static_cast<int>(SkColorGetR(a)) -
++                            static_cast<int>(SkColorGetR(b))),
++                   std::abs(static_cast<int>(SkColorGetG(a)) -
++                            static_cast<int>(SkColorGetG(b))),
++                   std::abs(static_cast<int>(SkColorGetB(a)) -
++                            static_cast<int>(SkColorGetB(b)))});
++}
++
++U8CPU Median(std::vector<U8CPU> values) {
++  const auto middle = values.begin() + values.size() / 2;
++  std::nth_element(values.begin(), middle, values.end());
++  return *middle;
++}
++
++}  // namespace
++
++std::optional<SkColor> UniformTopEdgeColor(const SkBitmap& strip) {
++  if (strip.drawsNothing() || strip.height() < 1 ||
++      strip.width() < kPageTopMinSamples) {
++    return std::nullopt;
++  }
++  std::vector<SkColor> samples;
++  samples.reserve(static_cast<size_t>(strip.width()));
++  std::vector<U8CPU> reds, greens, blues;
++  for (int x = 0; x < strip.width(); ++x) {
++    const SkColor sample = SkColorSetA(strip.getColor(x, 0), SK_AlphaOPAQUE);
++    samples.push_back(sample);
++    reds.push_back(SkColorGetR(sample));
++    greens.push_back(SkColorGetG(sample));
++    blues.push_back(SkColorGetB(sample));
++  }
++  const SkColor median = SkColorSetRGB(Median(std::move(reds)),
++                                       Median(std::move(greens)),
++                                       Median(std::move(blues)));
++  int near = 0;
++  int red = 0;
++  int green = 0;
++  int blue = 0;
++  for (const SkColor sample : samples) {
++    if (ChannelDistance(sample, median) > kPageTopChannelTolerance) {
++      continue;
++    }
++    ++near;
++    red += SkColorGetR(sample);
++    green += SkColorGetG(sample);
++    blue += SkColorGetB(sample);
++  }
++  if (near * 10 < static_cast<int>(samples.size()) * 9) {
++    return std::nullopt;
++  }
++  return SkColorSetRGB(static_cast<U8CPU>((red + near / 2) / near),
++                       static_cast<U8CPU>((green + near / 2) / near),
++                       static_cast<U8CPU>((blue + near / 2) / near));
++}
++
++bool PageColorsMatch(SkColor a, SkColor b) {
++  return ChannelDistance(a, b) <= 2;
++}
++
++}  // namespace stedding
+diff --git a/chrome/browser/ui/stedding/theme/page_top_color.h b/chrome/browser/ui/stedding/theme/page_top_color.h
+new file mode 100644
+index 0000000000000..a1c0c5ea4ec6d
+--- /dev/null
++++ b/chrome/browser/ui/stedding/theme/page_top_color.h
+@@ -0,0 +1,47 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_STEDDING_THEME_PAGE_TOP_COLOR_H_
++#define CHROME_BROWSER_UI_STEDDING_THEME_PAGE_TOP_COLOR_H_
++
++#include <optional>
++
++#include "third_party/skia/include/core/SkColor.h"
++
++class SkBitmap;
++
++namespace stedding {
++
++// docs/features/toolbar.md T31: the address row takes the colour the page is
++// drawn in along its top edge, the edge the row sits on, the way Safari reads
++// a page's top colour. A page's declared colour -- its theme-color, or its
++// document background -- can be nothing like what it draws there: a site
++// that paints its purple with a full-page layer over a near-black body gave
++// a near-black row over a purple page (owner, 2026-10-01).
++
++// How far, in DIPs, the strip read from the top of the page reaches down, and
++// how much of the page's right edge is left out of it (a scroll bar).
++inline constexpr int kPageTopStripHeight = 2;
++inline constexpr int kPageTopRightMargin = 16;
++// One sample for this many DIPs across the page, and never fewer samples
++// than kPageTopMinSamples.
++inline constexpr int kPageTopSampleSpacing = 4;
++inline constexpr int kPageTopMinSamples = 8;
++// A sample counts as the edge's colour when no channel is further than this
++// from the median, and the edge is one colour when nine samples in ten are.
++inline constexpr int kPageTopChannelTolerance = 10;
++
++// The colour of `strip`'s first row when that row is one colour: the mean of
++// the samples near the per-channel median, if nine in ten are near it, and
++// nothing otherwise (a photograph, a gradient, a header of several colours),
++// or for a strip with fewer than kPageTopMinSamples columns. Opaque.
++std::optional<SkColor> UniformTopEdgeColor(const SkBitmap& strip);
++
++// Whether two row colours are close enough that changing from one to the
++// other is not worth re-theming the window: every channel within two.
++bool PageColorsMatch(SkColor a, SkColor b);
++
++}  // namespace stedding
++
++#endif  // CHROME_BROWSER_UI_STEDDING_THEME_PAGE_TOP_COLOR_H_
+diff --git a/chrome/browser/ui/stedding/theme/page_top_color_unittest.cc b/chrome/browser/ui/stedding/theme/page_top_color_unittest.cc
+new file mode 100644
+index 0000000000000..ee96eb3c1db66
+--- /dev/null
++++ b/chrome/browser/ui/stedding/theme/page_top_color_unittest.cc
+@@ -0,0 +1,88 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/stedding/theme/page_top_color.h"
++
++#include <optional>
++
++#include "testing/gtest/include/gtest/gtest.h"
++#include "third_party/skia/include/core/SkBitmap.h"
++#include "third_party/skia/include/core/SkColor.h"
++
++namespace stedding {
++namespace {
++
++SkBitmap Strip(int width, SkColor color) {
++  SkBitmap strip;
++  strip.allocN32Pixels(width, 2);
++  strip.eraseColor(color);
++  return strip;
++}
++
++void Paint(SkBitmap& strip, int from, int to, SkColor color) {
++  for (int x = from; x < to; ++x) {
++    for (int y = 0; y < strip.height(); ++y) {
++      *strip.getAddr32(x, y) = SkPreMultiplyColor(color);
++    }
++  }
++}
++
++// toolbar T31: a page drawn in one colour along its top edge gives that
++// colour -- farcaster.xyz's purple layer over its near-black body.
++TEST(PageTopColorTest, AnEdgeOfOneColourIsThatColour) {
++  const SkColor purple = SkColorSetRGB(48, 26, 158);
++  EXPECT_EQ(purple, UniformTopEdgeColor(Strip(300, purple)));
++  EXPECT_EQ(SK_ColorWHITE, UniformTopEdgeColor(Strip(300, SK_ColorWHITE)));
++}
++
++// A logo or a button that reaches the top edge over a few samples does not
++// stop the edge reading as the header's colour, and the noise of a header's
++// texture averages out.
++TEST(PageTopColorTest, ASmallElementOnTheEdgeIsIgnored) {
++  const SkColor header = SkColorSetRGB(1, 4, 9);
++  SkBitmap strip = Strip(200, header);
++  Paint(strip, 10, 25, SK_ColorWHITE);  // 7.5% of the edge
++  EXPECT_EQ(header, UniformTopEdgeColor(strip));
++
++  SkBitmap noisy = Strip(100, SkColorSetRGB(100, 100, 100));
++  Paint(noisy, 0, 50, SkColorSetRGB(104, 104, 104));
++  EXPECT_EQ(SkColorSetRGB(102, 102, 102), UniformTopEdgeColor(noisy));
++}
++
++// A photograph, a gradient or a header split between two colours is not one
++// colour: the row falls back to the page's declared colour.
++TEST(PageTopColorTest, AnEdgeOfSeveralColoursIsNone) {
++  SkBitmap halves = Strip(200, SK_ColorWHITE);
++  Paint(halves, 100, 200, SK_ColorBLACK);
++  EXPECT_EQ(std::nullopt, UniformTopEdgeColor(halves));
++
++  SkBitmap gradient = Strip(256, SK_ColorBLACK);
++  for (int x = 0; x < 256; ++x) {
++    Paint(gradient, x, x + 1, SkColorSetRGB(x, x, x));
++  }
++  EXPECT_EQ(std::nullopt, UniformTopEdgeColor(gradient));
++
++  SkBitmap busy = Strip(200, SK_ColorWHITE);
++  Paint(busy, 0, 30, SK_ColorRED);  // 15%: more than one sample in ten
++  EXPECT_EQ(std::nullopt, UniformTopEdgeColor(busy));
++}
++
++TEST(PageTopColorTest, TooFewSamplesOrNoPixelsIsNone) {
++  EXPECT_EQ(std::nullopt, UniformTopEdgeColor(SkBitmap()));
++  EXPECT_EQ(std::nullopt,
++            UniformTopEdgeColor(Strip(kPageTopMinSamples - 1, SK_ColorWHITE)));
++  EXPECT_EQ(SK_ColorWHITE,
++            UniformTopEdgeColor(Strip(kPageTopMinSamples, SK_ColorWHITE)));
++}
++
++// A sample a step away from the last is not a new colour for the window.
++TEST(PageTopColorTest, ColoursTwoStepsApartMatch) {
++  EXPECT_TRUE(PageColorsMatch(SkColorSetRGB(10, 20, 30),
++                              SkColorSetRGB(12, 18, 30)));
++  EXPECT_FALSE(PageColorsMatch(SkColorSetRGB(10, 20, 30),
++                               SkColorSetRGB(13, 20, 30)));
++}
++
++}  // namespace
++}  // namespace stedding
+diff --git a/chrome/browser/ui/views/frame/stedding_window_background.cc b/chrome/browser/ui/views/frame/stedding_window_background.cc
+index 043184080b4da..4c4819d635d52 100644
+--- a/chrome/browser/ui/views/frame/stedding_window_background.cc
++++ b/chrome/browser/ui/views/frame/stedding_window_background.cc
+@@ -6,6 +6,7 @@
+ 
+ #include <algorithm>
+ 
++#include "base/feature_list.h"
+ #include "base/functional/bind.h"
+ #include "cc/paint/paint_flags.h"
+ #include "cc/paint/paint_shader.h"
+@@ -17,6 +18,7 @@
+ #include "chrome/browser/ui/stedding_ui_metrics.h"
+ #include "chrome/browser/ui/views/frame/browser_view.h"
+ #include "chrome/browser/ui/views/frame/multi_contents_view.h"
++#include "chrome/browser/ui/views/frame/top_container_view.h"
+ #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
+ #include "third_party/skia/include/core/SkColor.h"
+ #include "third_party/skia/include/core/SkPath.h"
+@@ -24,6 +26,7 @@
+ #include "third_party/skia/include/core/SkRRect.h"
+ #include "ui/color/color_id.h"
+ #include "ui/color/color_provider.h"
++#include "ui/compositor/paint_recorder.h"
+ #include "ui/gfx/canvas.h"
+ #include "ui/gfx/color_utils.h"
+ #include "ui/gfx/geometry/rect_conversions.h"
+@@ -59,6 +62,11 @@ SteddingWindowBackground::SteddingWindowBackground(BrowserView* browser_view) {
+                     BrowserThemeChangeType::kWebAppTheme);
+               }
+               browser_view->SchedulePaint();
++              // In full screen the row is in the overlay, which paints it
++              // itself (PaintOverlayPageBar).
++              if (views::View* const top = browser_view->top_container()) {
++                top->SchedulePaint();
++              }
+             },
+             base::Unretained(browser_view)));
+   }
+@@ -130,6 +138,35 @@ void SteddingWindowBackground::Paint(gfx::Canvas* canvas,
+   PaintPageBar(canvas, view, dark, frame);
+ }
+ 
++namespace {
++
++// The row's surface: `surface` in `bar`, its top corners rounded as the
++// card's are, and one hairline along its bottom where the row meets the page,
++// a tenth of the contrast colour: row and page are one colour, so the line
++// is what tells them apart (toolbar T15).
++void PaintBarSurface(gfx::Canvas* canvas,
++                     const gfx::RectF& surface,
++                     SkColor bar) {
++  const float radius =
++      static_cast<float>(stedding::kContentsCornerRadius.Get());
++  cc::PaintFlags flags;
++  flags.setAntiAlias(true);
++  flags.setColor(bar);
++  SkRRect rrect;
++  const SkVector radii[4] = {
++      {radius, radius}, {radius, radius}, {0, 0}, {0, 0}};
++  rrect.setRectRadii(gfx::RectFToSkRect(surface), radii);
++  canvas->DrawPath(SkPath::RRect(rrect), flags);
++  const SkColor hairline = color_utils::AlphaBlend(
++      color_utils::GetColorWithMaxContrast(bar), bar, 0.10f);
++  canvas->FillRect(gfx::Rect(static_cast<int>(surface.x()),
++                             static_cast<int>(surface.bottom()) - 1,
++                             static_cast<int>(surface.width()), 1),
++                   hairline);
++}
++
++}  // namespace
++
+ bool PageBarViewsShareWidget(const views::View* painted,
+                              const views::View* toolbar,
+                              const views::View* card) {
+@@ -188,8 +225,6 @@ void SteddingWindowBackground::PaintPageBar(gfx::Canvas* canvas,
+   if (toolbar.IsEmpty() || card.IsEmpty()) {
+     return;
+   }
+-  const float radius =
+-      static_cast<float>(stedding::kContentsCornerRadius.Get());
+   // From the toolbar's top to the card's top edge: the page starts square
+   // under the row (toolbar T16), so nothing runs under it. And to the
+   // card's right edge, not the toolbar's: on Windows the toolbar's contents
+@@ -200,27 +235,34 @@ void SteddingWindowBackground::PaintPageBar(gfx::Canvas* canvas,
+   // On macOS the two edges coincide.
+   const float bar_right =
+       card.right() - static_cast<float>(stedding::kCardGutter.Get());
+-  gfx::RectF surface(toolbar.x(), toolbar.y(),
+-                     std::max(toolbar.width(), bar_right - toolbar.x()),
+-                     card.y() - toolbar.y());
+-  cc::PaintFlags flags;
+-  flags.setAntiAlias(true);
+-  flags.setColor(bar);
+-  SkRRect rrect;
+-  const SkVector radii[4] = {
+-      {radius, radius}, {radius, radius}, {0, 0}, {0, 0}};
+-  rrect.setRectRadii(gfx::RectFToSkRect(surface), radii);
+-  canvas->DrawPath(SkPath::RRect(rrect), flags);
++  PaintBarSurface(canvas,
++                  gfx::RectF(toolbar.x(), toolbar.y(),
++                             std::max(toolbar.width(), bar_right - toolbar.x()),
++                             card.y() - toolbar.y()),
++                  bar);
++}
+ 
+-  // One hairline where the row meets the page, a tenth of the contrast
+-  // colour: row and page are one colour, so the line is what tells them
+-  // apart (toolbar T15).
+-  const SkColor hairline = color_utils::AlphaBlend(
+-      color_utils::GetColorWithMaxContrast(bar), bar, 0.10f);
+-  canvas->FillRect(gfx::Rect(static_cast<int>(surface.x()),
+-                             static_cast<int>(surface.bottom()) - 1,
+-                             static_cast<int>(surface.width()), 1),
+-                   hairline);
++void PaintOverlayPageBar(const ui::PaintContext& context,
++                         views::View* top_container,
++                         BrowserView* browser_view) {
++  if (!base::FeatureList::IsEnabled(kArcStyleWindow) || !top_container ||
++      !browser_view || !browser_view->toolbar() ||
++      browser_view->toolbar()->parent() != top_container ||
++      !browser_view->toolbar()->GetVisible() ||
++      top_container->GetWidget() == browser_view->GetWidget()) {
++    return;
++  }
++  const PageThemeColorController* const controller =
++      PageThemeColorController::From(browser_view->browser());
++  if (!controller || !controller->color()) {
++    return;
++  }
++  const gfx::Rect toolbar = browser_view->toolbar()->bounds();
++  if (toolbar.IsEmpty()) {
++    return;
++  }
++  ui::PaintRecorder recorder(context, top_container->size());
++  PaintBarSurface(recorder.canvas(), gfx::RectF(toolbar), *controller->color());
+ }
+ 
+ }  // namespace stedding
+diff --git a/chrome/browser/ui/views/frame/stedding_window_background.h b/chrome/browser/ui/views/frame/stedding_window_background.h
+index d4911706b126c..b805a5b6ae563 100644
+--- a/chrome/browser/ui/views/frame/stedding_window_background.h
++++ b/chrome/browser/ui/views/frame/stedding_window_background.h
+@@ -10,6 +10,14 @@
+ 
+ class BrowserView;
+ 
++namespace ui {
++class PaintContext;
++}
++
++namespace views {
++class View;
++}
++
+ namespace stedding {
+ 
+ // The ground every piece of window chrome sits on: a #21263A to #31243A
+@@ -24,6 +32,18 @@ bool PageBarViewsShareWidget(const views::View* painted,
+                              const views::View* toolbar,
+                              const views::View* card);
+ 
++// toolbar T32: in macOS full screen the top container, the address row with
++// it, sits in an overlay widget that this background never paints, and the
++// row there showed the bare ground, no page colour at all (owner,
++// 2026-10-01). TopContainerView calls this after it paints the frame under
++// its children in the overlay: the row's page-coloured surface over the
++// toolbar's bounds, as PaintPageBar paints it in a window. Nothing without a
++// page colour, outside Arc mode, or while the top container is in the
++// window's own widget (PaintPageBar has it there).
++void PaintOverlayPageBar(const ui::PaintContext& context,
++                         views::View* top_container,
++                         BrowserView* browser_view);
++
+ class SteddingWindowBackground : public views::Background {
+  public:
+   // `browser_view` is the view this background paints; the background
+diff --git a/chrome/browser/ui/views/frame/top_container_view.cc b/chrome/browser/ui/views/frame/top_container_view.cc
+index bb6460de5b316..067596e00d174 100644
+--- a/chrome/browser/ui/views/frame/top_container_view.cc
++++ b/chrome/browser/ui/views/frame/top_container_view.cc
+@@ -11,6 +11,7 @@
+ #include "chrome/browser/ui/views/frame/browser_view.h"
+ #include "chrome/browser/ui/views/frame/browser_widget.h"
+ #include "chrome/browser/ui/views/frame/custom_corners_background.h"
++#include "chrome/browser/ui/views/frame/stedding_window_background.h"
+ #include "chrome/browser/ui/views/frame/themed_background.h"
+ #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
+ #include "ui/base/metadata/metadata_impl_macros.h"
+@@ -97,6 +98,10 @@ void TopContainerView::PaintChildren(const views::PaintInfo& paint_info) {
+     browser_view_->browser_widget()->GetFrameView()->Paint(
+         views::PaintInfo::CreateRootPaintInfo(
+             context, browser_view_->browser_widget()->GetFrameView()->size()));
++    // Stedding (toolbar T32): the address row in the page's colour, which the
++    // window's background paints in a window but cannot reach in the overlay
++    // that holds this view in full screen.
++    stedding::PaintOverlayPageBar(context, this, browser_view_);
+   }
+ #endif
+   View::PaintChildren(paint_info);
+diff --git a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+index f7d27660e6b79..82750aca53499 100644
+--- a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
++++ b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+@@ -420,17 +420,19 @@ VerticalTabStripRegionView::VerticalTabStripRegionView(
+   if (base::FeatureList::IsEnabled(features::kTabGroupsFocusing)) {
+     focus_swipe_controller_ =
+         std::make_unique<VerticalTabStripFocusSwipeController>(this);
+-  } else if (spaces::SpaceModel* const space_model =
+-                 spaces::SpaceModel::From(browser_view->browser())) {
++  } else if (spaces::SpaceModel::From(browser_view->browser())) {
+     // Stedding: a two-finger swipe across the sidebar moves to the next or
+-    // previous Space, as in Arc.
++    // previous Space, as in Arc, and the list follows the fingers (spaces
++    // B35).
+     focus_swipe_controller_ =
+         std::make_unique<VerticalTabStripFocusSwipeController>(
+-            this, base::BindRepeating(
+-                      [](spaces::SpaceModel* model, bool forward) {
+-                        model->SwitchToNeighbour(forward);
+-                      },
+-                      base::Unretained(space_model)));
++            this, VerticalTabStripFocusSwipeController::SpaceSwipe(
++                      base::BindRepeating(
++                          &VerticalTabStripRegionView::OnSpaceSwipeProgress,
++                          base::Unretained(this)),
++                      base::BindRepeating(
++                          &VerticalTabStripRegionView::OnSpaceSwipeEnd,
++                          base::Unretained(this))));
+   }
+ 
+   SetNotifyEnterExitOnChild(true);
+@@ -1308,25 +1310,139 @@ void VerticalTabStripRegionView::SlideInSpaceList(const spaces::SpaceId& from,
+   }
+   const int direction =
+       stedding::SpaceSlideDirection(from_index, to_index, base::i18n::IsRTL());
++  // A swipe that switched (spaces B35): the new Space comes in from the
++  // side the fingers left, from further out, picking up where the old list
++  // went, and with its title.
++  const bool swiped = space_swipe_switching_;
++  space_swipe_switching_ = false;
+   if (direction == 0) {
+     return;
+   }
+-  if (!list->layer()) {
+-    list->SetPaintToLayer();
+-    list->layer()->SetFillsBoundsOpaquely(false);
+-  }
+-  ui::Layer* const layer = list->layer();
+-  layer->GetAnimator()->StopAnimating();
+-  gfx::Transform start;
+-  start.Translate(direction * stedding::kSpaceSlideOffsetDip, 0);
+-  layer->SetTransform(start);
+-  layer->SetOpacity(0.0f);
+-  ui::ScopedLayerAnimationSettings settings(layer->GetAnimator());
+-  settings.SetTransitionDuration(
+-      base::Milliseconds(stedding::kSpaceSlideDurationMs));
+-  settings.SetTweenType(gfx::Tween::EASE_OUT);
+-  layer->SetTransform(gfx::Transform());
+-  layer->SetOpacity(1.0f);
++  const std::vector<views::View*> moving =
++      swiped ? SpaceSwipeViews() : std::vector<views::View*>{list};
++  for (views::View* const view : moving) {
++    if (!view->layer()) {
++      view->SetPaintToLayer();
++      view->layer()->SetFillsBoundsOpaquely(false);
++    }
++    ui::Layer* const layer = view->layer();
++    layer->GetAnimator()->StopAnimating();
++    gfx::Transform start;
++    start.Translate(
++        swiped ? direction * stedding::kSpaceSwipeEntryShare * list->width()
++               : direction * stedding::kSpaceSlideOffsetDip,
++        0);
++    layer->SetTransform(start);
++    layer->SetOpacity(swiped ? stedding::kSpaceSwipeEntryOpacity : 0.0f);
++    ui::ScopedLayerAnimationSettings settings(layer->GetAnimator());
++    settings.SetTransitionDuration(
++        base::Milliseconds(swiped ? stedding::kSpaceSwipeEntryMs
++                                  : stedding::kSpaceSlideDurationMs));
++    settings.SetTweenType(gfx::Tween::EASE_OUT);
++    layer->SetTransform(gfx::Transform());
++    layer->SetOpacity(1.0f);
++  }
++}
++
++bool VerticalTabStripRegionView::SpaceSwipeHasNeighbour(bool forward) const {
++  const spaces::SpaceModel* const model =
++      spaces::SpaceModel::From(browser_view()->browser());
++  if (!model) {
++    return false;
++  }
++  const auto& all = model->spaces();
++  for (size_t i = 0; i < all.size(); ++i) {
++    if (all[i]->id() == model->active_id()) {
++      return forward ? i + 1 < all.size() : i > 0;
++    }
++  }
++  return false;
++}
++
++std::vector<views::View*> VerticalTabStripRegionView::SpaceSwipeViews() {
++  std::vector<views::View*> views;
++  auto* const strip = static_cast<TabStripView*>(tab_strip_view());
++  if (!strip) {
++    return views;
++  }
++  if (views::View* const title = strip->GetSpaceTitleRow();
++      title && title->GetVisible()) {
++    views.push_back(title);
++  }
++  if (views::View* const list = strip->unpinned_tabs_scroll_view()) {
++    views.push_back(list);
++  }
++  for (views::View* const view : views) {
++    if (!view->layer()) {
++      view->SetPaintToLayer();
++      view->layer()->SetFillsBoundsOpaquely(false);
++    }
++  }
++  return views;
++}
++
++void VerticalTabStripRegionView::OnSpaceSwipeProgress(float offset) {
++  space_swipe_switching_ = false;
++  if (!stedding::ShouldAnimate(browser_view()->GetProfile()->GetPrefs())) {
++    return;
++  }
++  const std::vector<views::View*> moving = SpaceSwipeViews();
++  if (moving.empty()) {
++    return;
++  }
++  // Swiping left brings in the next Space; mirrored right to left.
++  const bool forward = (offset < 0) != base::i18n::IsRTL();
++  const bool has_neighbour = SpaceSwipeHasNeighbour(forward);
++  const float width = static_cast<float>(moving.back()->width());
++  gfx::Transform shift;
++  shift.Translate(stedding::SpaceSwipeShift(offset, width, has_neighbour), 0);
++  const float opacity =
++      stedding::SpaceSwipeOpacity(offset, width, has_neighbour);
++  for (views::View* const view : moving) {
++    ui::Layer* const layer = view->layer();
++    layer->GetAnimator()->StopAnimating();
++    layer->SetTransform(shift);
++    layer->SetOpacity(opacity);
++  }
++}
++
++void VerticalTabStripRegionView::OnSpaceSwipeEnd(float offset, bool flick) {
++  spaces::SpaceModel* const model =
++      spaces::SpaceModel::From(browser_view()->browser());
++  const std::vector<views::View*> moving = SpaceSwipeViews();
++  const bool forward = (offset < 0) != base::i18n::IsRTL();
++  const float width =
++      moving.empty() ? 0.0f : static_cast<float>(moving.back()->width());
++  if (model && SpaceSwipeHasNeighbour(forward) &&
++      stedding::SpaceSwipeCommits(offset, width, flick)) {
++    // SlideInSpaceList runs inside the switch and brings the new Space in
++    // from the side the fingers left.
++    space_swipe_switching_ =
++        stedding::ShouldAnimate(browser_view()->GetProfile()->GetPrefs());
++    const spaces::SpaceId before = model->active_id();
++    model->SwitchToNeighbour(forward);
++    const bool slid = !space_swipe_switching_;
++    space_swipe_switching_ = false;
++    if (slid && model->active_id() != before) {
++      return;
++    }
++  }
++  // Back where they were: a swipe too short to switch, the end of the
++  // switcher, or a switch that brought nothing in.
++  for (views::View* const view : moving) {
++    ui::Layer* const layer = view->layer();
++    if (layer->transform().IsIdentity() && layer->opacity() == 1.0f) {
++      continue;
++    }
++    ui::ScopedLayerAnimationSettings settings(layer->GetAnimator());
++    settings.SetPreemptionStrategy(
++        ui::LayerAnimator::IMMEDIATELY_ANIMATE_TO_NEW_TARGET);
++    settings.SetTransitionDuration(
++        base::Milliseconds(stedding::kSpaceSwipeSettleMs));
++    settings.SetTweenType(gfx::Tween::EASE_OUT);
++    layer->SetTransform(gfx::Transform());
++    layer->SetOpacity(1.0f);
++  }
+ }
+ 
+ TabDragTarget* VerticalTabStripRegionView::GetTabDragTargetInsideTabStrip(
+diff --git a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
+index bc6b3c5a1cd73..7665a77aaae20 100644
+--- a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
++++ b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
+@@ -6,6 +6,7 @@
+ #define CHROME_BROWSER_UI_VIEWS_FRAME_VERTICAL_TAB_STRIP_REGION_VIEW_H_
+ 
+ #include <optional>
++#include <vector>
+ 
+ #include "base/callback_list.h"
+ #include "base/containers/flat_set.h"
+@@ -390,6 +391,22 @@ class VerticalTabStripRegionView final
+   // Spaces B32: the list slides in from the side of the Space being entered.
+   void SlideInSpaceList(const spaces::SpaceId& from, const spaces::SpaceId& to);
+ 
++  // Spaces B35: the two-finger Space swipe follows the fingers. `offset` is
++  // how far they have moved across the sidebar since the swipe began, in
++  // DIPs, negative to the left. While they move, the Space's title and list
++  // go with them; when they lift, the swipe switches Space if it went far
++  // enough or was a flick, and the list springs back otherwise.
++  void OnSpaceSwipeProgress(float offset);
++  void OnSpaceSwipeEnd(float offset, bool flick);
++  // Whether there is a Space before (or, `forward`, after) the active one.
++  bool SpaceSwipeHasNeighbour(bool forward) const;
++  // What a swipe moves: the Space's title row, while it shows, and its list,
++  // each painted to a layer of its own.
++  std::vector<views::View*> SpaceSwipeViews();
++  // Set while a swipe switches Space, for SlideInSpaceList: the list comes in
++  // from further out than a click's switch brings it.
++  bool space_swipe_switching_ = false;
++
+   void OnSpaceChipHovered(const std::u16string& name,
+                           const gfx::Rect& chip_bounds);
+ 
+diff --git a/chrome/browser/ui/views/spaces/space_switcher_rules.cc b/chrome/browser/ui/views/spaces/space_switcher_rules.cc
+index 93acf69d59b1c..cd995c00911da 100644
+--- a/chrome/browser/ui/views/spaces/space_switcher_rules.cc
++++ b/chrome/browser/ui/views/spaces/space_switcher_rules.cc
+@@ -7,15 +7,27 @@
+ #include <algorithm>
+ #include <cstddef>
+ #include <cstdlib>
++#include <optional>
+ 
+ namespace spaces {
+ 
+-bool SwitcherOverflows(int row_width, size_t chip_count) {
++std::optional<int> SwitcherChipGap(int row_width, size_t chip_count) {
++  if (chip_count == 0) {
++    return kSwitcherChipGap;
++  }
+   // Every chip carries half the gap on each side; the "+" is one more chip.
+-  const int need =
+-      static_cast<int>(chip_count) * (kSwitcherChip + kSwitcherChipGap) +
+-      kSwitcherChip;
+-  return need > row_width - 2 * kSwitcherRowInset;
++  const int count = static_cast<int>(chip_count);
++  const int spare = row_width - 2 * kSwitcherRowInset - kSwitcherChip -
++                    count * kSwitcherChip;
++  const int gap = spare / count;
++  if (spare < 0 || gap < kSwitcherMinChipGap) {
++    return std::nullopt;
++  }
++  return std::min(gap, kSwitcherChipGap);
++}
++
++bool SwitcherOverflows(int row_width, size_t chip_count) {
++  return !SwitcherChipGap(row_width, chip_count).has_value();
+ }
+ 
+ int SwitcherChipWidth(bool overflow, bool active, bool row_hovered) {
+diff --git a/chrome/browser/ui/views/spaces/space_switcher_rules.h b/chrome/browser/ui/views/spaces/space_switcher_rules.h
+index d163095a9e0d5..9f55cc56e728f 100644
+--- a/chrome/browser/ui/views/spaces/space_switcher_rules.h
++++ b/chrome/browser/ui/views/spaces/space_switcher_rules.h
+@@ -6,6 +6,7 @@
+ #define CHROME_BROWSER_UI_VIEWS_SPACES_SPACE_SWITCHER_RULES_H_
+ 
+ #include <cstddef>
++#include <optional>
+ #include <vector>
+ 
+ namespace spaces {
+@@ -18,8 +19,19 @@ inline constexpr int kSwitcherChipGap = 12;
+ inline constexpr int kSwitcherRowInset = 12;
+ inline constexpr int kSwitcherDot = 6;
+ 
++// The narrowest gap full-size chips close up to before the row turns to dots
++// (spaces B24): the row went to dots at the full gap with room left for
++// every chip (owner, 2026-10-01).
++inline constexpr int kSwitcherMinChipGap = 4;
++
++// The gap between full-size chips in a row `row_width` wide that holds
++// `chip_count` chips and the "+": kSwitcherChipGap while the row has room,
++// narrower as it fills, never under kSwitcherMinChipGap; nullopt when the
++// chips do not fit even then.
++std::optional<int> SwitcherChipGap(int row_width, size_t chip_count);
++
+ // True when `chip_count` chips plus the "+" would not fit a row `row_width`
+-// wide at full size.
++// wide at full size, even with the gaps closed up (SwitcherChipGap).
+ bool SwitcherOverflows(int row_width, size_t chip_count);
+ 
+ // The width a chip takes: full while the row has room, while it is the
+diff --git a/chrome/browser/ui/views/spaces/space_switcher_rules_unittest.cc b/chrome/browser/ui/views/spaces/space_switcher_rules_unittest.cc
+index e1739a9f37961..53d023e8cabe7 100644
+--- a/chrome/browser/ui/views/spaces/space_switcher_rules_unittest.cc
++++ b/chrome/browser/ui/views/spaces/space_switcher_rules_unittest.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "chrome/browser/ui/views/spaces/space_switcher_rules.h"
+ 
++#include <optional>
++
+ #include "testing/gtest/include/gtest/gtest.h"
+ 
+ namespace spaces {
+@@ -50,6 +52,10 @@ TEST(SwitcherRulesTest, OverflowShrinksInactiveChips) {
+   EXPECT_FALSE(SwitcherOverflows(352, 8));
+   EXPECT_TRUE(SwitcherOverflows(352, 12));
+   EXPECT_TRUE(SwitcherOverflows(126, 3));
++  // The owner's row (2026-10-01): eight Spaces in a row 290 wide went to dots
++  // at the full gap; closed up to 6 they all fit.
++  EXPECT_FALSE(SwitcherOverflows(290, 8));
++  EXPECT_TRUE(SwitcherOverflows(250, 8));
+ 
+   EXPECT_EQ(kSwitcherChip, SwitcherChipWidth(false, false, false));
+   EXPECT_EQ(kSwitcherDot, SwitcherChipWidth(true, false, false));
+@@ -58,6 +64,24 @@ TEST(SwitcherRulesTest, OverflowShrinksInactiveChips) {
+   EXPECT_EQ(kSwitcherChip, SwitcherChipWidth(true, false, true));
+ }
+ 
++// spaces B24: full chips close their gaps up as the row fills, down to
++// kSwitcherMinChipGap, before any of them turns to a dot.
++TEST(SwitcherRulesTest, ChipsCloseUpBeforeTheyTurnToDots) {
++  EXPECT_EQ(kSwitcherChipGap, SwitcherChipGap(352, 5));
++  EXPECT_EQ(kSwitcherChipGap, SwitcherChipGap(352, 0));
++  // 290 less the insets, the "+" and eight chips leaves 50: 6 a chip.
++  EXPECT_EQ(6, SwitcherChipGap(290, 8));
++  EXPECT_EQ(kSwitcherMinChipGap,
++            SwitcherChipGap(2 * kSwitcherRowInset + kSwitcherChip +
++                                8 * (kSwitcherChip + kSwitcherMinChipGap),
++                            8));
++  EXPECT_EQ(std::nullopt,
++            SwitcherChipGap(2 * kSwitcherRowInset + kSwitcherChip +
++                                8 * (kSwitcherChip + kSwitcherMinChipGap) - 1,
++                            8));
++  EXPECT_EQ(std::nullopt, SwitcherChipGap(40, 3));
++}
++
+ // sidebar Y13: the rail's stack goes by the count, and measures itself.
+ TEST(SwitcherRulesTest, StackOverflowsByCountAndMeasuresItself) {
+   EXPECT_FALSE(SwitcherStackOverflows(1));
+diff --git a/chrome/browser/ui/views/spaces/space_switcher_view.cc b/chrome/browser/ui/views/spaces/space_switcher_view.cc
+index 14623b38d64ad..c5c88af089efa 100644
+--- a/chrome/browser/ui/views/spaces/space_switcher_view.cc
++++ b/chrome/browser/ui/views/spaces/space_switcher_view.cc
+@@ -7,6 +7,7 @@
+ #include <algorithm>
+ #include <array>
+ #include <memory>
++#include <optional>
+ #include <string>
+ #include <utility>
+ #include <vector>
+@@ -392,10 +393,15 @@ void SpaceSwitcherView::ApplyOverflow() {
+     return;
+   }
+   // In the row the rule is the width; stacked in the rail, one chip wide,
+-  // it is the count (sidebar Y13).
+-  const bool overflow = collapsed_
+-                            ? SwitcherStackOverflows(chips_.size())
+-                            : SwitcherOverflows(width(), chips_.size());
++  // it is the count (sidebar Y13). In the row full chips first close their
++  // gaps up, and only chips that do not fit even then turn to dots: the row
++  // went to dots with room left for every chip (spaces B24, owner,
++  // 2026-10-01).
++  const std::optional<int> row_gap =
++      collapsed_ ? std::nullopt : SwitcherChipGap(width(), chips_.size());
++  const bool overflow = collapsed_ ? SwitcherStackOverflows(chips_.size())
++                                   : !row_gap.has_value();
++  const int gap = row_gap.value_or(kSwitcherChipGap);
+   const auto& spaces = model_->spaces();
+   std::vector<int> widths;
+   for (size_t i = 0; i < chips_.size(); ++i) {
+@@ -428,6 +434,10 @@ void SpaceSwitcherView::ApplyOverflow() {
+     chip->SetBackground(dot ? views::CreateRoundedRectBackground(
+                                   space.color(), kSwitcherDot / 2)
+                             : nullptr);
++    if (!collapsed_) {
++      chip->SetProperty(views::kMarginsKey,
++                        gfx::Insets::TLBR(0, gap / 2, 0, gap - gap / 2));
++    }
+   }
+   if (collapsed_) {
+     // As tall as the stack it holds, so the "+" is never laid out past the
+diff --git a/chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_focus_swipe_controller.cc b/chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_focus_swipe_controller.cc
+index d220beb6d7ebe..b2e1740cfd61a 100644
+--- a/chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_focus_swipe_controller.cc
++++ b/chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_focus_swipe_controller.cc
+@@ -7,6 +7,7 @@
+ #include <cmath>
+ 
+ #include "base/feature_list.h"
++#include "base/functional/bind.h"
+ #include "base/functional/callback.h"
+ #include "base/i18n/rtl.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+@@ -22,11 +23,25 @@ VerticalTabStripFocusSwipeController::VerticalTabStripFocusSwipeController(
+   region_view_->AddPreTargetHandler(this);
+ }
+ 
++VerticalTabStripFocusSwipeController::SpaceSwipe::SpaceSwipe() = default;
++VerticalTabStripFocusSwipeController::SpaceSwipe::SpaceSwipe(
++    base::RepeatingCallback<void(float)> on_progress,
++    base::RepeatingCallback<void(float, bool)> on_end)
++    : on_progress(std::move(on_progress)), on_end(std::move(on_end)) {}
++VerticalTabStripFocusSwipeController::SpaceSwipe::SpaceSwipe(
++    const SpaceSwipe&) = default;
++VerticalTabStripFocusSwipeController::SpaceSwipe&
++VerticalTabStripFocusSwipeController::SpaceSwipe::operator=(
++    const SpaceSwipe&) = default;
++VerticalTabStripFocusSwipeController::SpaceSwipe::~SpaceSwipe() = default;
++
+ VerticalTabStripFocusSwipeController::VerticalTabStripFocusSwipeController(
+     VerticalTabStripRegionView* region_view,
+-    base::RepeatingCallback<void(bool)> on_swipe)
+-    : region_view_(region_view), on_swipe_(std::move(on_swipe)) {
++    SpaceSwipe space_swipe)
++    : region_view_(region_view), space_swipe_(std::move(space_swipe)) {
+   CHECK(region_view_);
++  CHECK(space_swipe_.on_progress);
++  CHECK(space_swipe_.on_end);
+   region_view_->AddPreTargetHandler(this);
+ }
+ 
+@@ -49,9 +64,13 @@ void VerticalTabStripFocusSwipeController::OnMouseEvent(ui::MouseEvent* event) {
+ #elif BUILDFLAG(IS_MAC)
+ void VerticalTabStripFocusSwipeController::OnScrollEvent(
+     ui::ScrollEvent* event) {
+-  // Stedding: with an on_swipe callback the gesture is a Space switch and
+-  // needs no feature flag.
+-  if ((!on_swipe_ && !base::FeatureList::IsEnabled(features::kTabGroupsFocusing)) ||
++  // Stedding: with the Space swipe's callbacks the gesture is a Space switch
++  // that follows the fingers, and needs no feature flag (spaces B35).
++  if (space_swipe_.on_end) {
++    OnSpaceSwipeScroll(event);
++    return;
++  }
++  if (!base::FeatureList::IsEnabled(features::kTabGroupsFocusing) ||
+       !region_view_ || region_view_->IsDragging()) {
+     return;
+   }
+@@ -145,22 +164,151 @@ void VerticalTabStripFocusSwipeController::ProcessSwipeOffset(
+         forward = !forward;
+       }
+       has_triggered_in_current_gesture_ = true;
+-      if (on_swipe_) {
+-        on_swipe_.Run(forward);
+-      } else {
+-        RotateTabGroupFocus(forward);
+-      }
++      RotateTabGroupFocus(forward);
+     }
+   }
+ }
+ 
+ void VerticalTabStripFocusSwipeController::ResetGesture() {
+   gesture_state_ = GestureState::kNone;
++  recent_moves_.clear();
++  give_up_timer_.Stop();
+   cumulative_x_ = 0.0f;
+   cumulative_y_ = 0.0f;
+   has_triggered_in_current_gesture_ = false;
+ }
+ 
++#if BUILDFLAG(IS_MAC)
++void VerticalTabStripFocusSwipeController::OnSpaceSwipeScroll(
++    ui::ScrollEvent* event) {
++  if (!region_view_ || region_view_->IsDragging()) {
++    return;
++  }
++  const bool fingers_down =
++      event->scroll_event_phase() == ui::ScrollEventPhase::kBegan ||
++      event->momentum_phase() == ui::EventMomentumPhase::MAY_BEGIN;
++  // The fingers lift: macOS marks it in the momentum phase, synthetic
++  // streams in the scroll phase. The end of a momentum stream is marked the
++  // same way and comes after its inertial updates.
++  const bool lift =
++      event->scroll_event_phase() == ui::ScrollEventPhase::kEnd ||
++      (event->momentum_phase() == ui::EventMomentumPhase::END &&
++       gesture_state_ != GestureState::kSpaceSwipeMomentum);
++  const bool inertial =
++      event->momentum_phase() == ui::EventMomentumPhase::INERTIAL_UPDATE ||
++      event->type() == ui::EventType::kScrollFlingStart ||
++      event->type() == ui::EventType::kScrollFlingCancel;
++
++  if (gesture_state_ == GestureState::kSpaceSwipeMomentum) {
++    // The swipe's momentum is the swipe's: it neither scrolls the list nor
++    // starts another swipe. Fingers down again begin a new gesture.
++    if (fingers_down) {
++      ResetGesture();
++    } else {
++      event->SetHandled();
++      event->StopPropagation();
++      if (event->momentum_phase() == ui::EventMomentumPhase::END) {
++        ResetGesture();
++      }
++      return;
++    }
++  }
++
++  if (fingers_down) {
++    if (gesture_state_ == GestureState::kHorizontalSwipe) {
++      // A swipe whose lift never came: it ends where it is.
++      EndSpaceSwipe();
++    }
++    ResetGesture();
++  }
++
++  if (lift) {
++    if (gesture_state_ == GestureState::kHorizontalSwipe) {
++      event->SetHandled();
++      event->StopPropagation();
++      EndSpaceSwipe();
++      gesture_state_ = GestureState::kSpaceSwipeMomentum;
++      return;
++    }
++    ResetGesture();
++    return;
++  }
++  if (inertial) {
++    return;
++  }
++
++  const float x_offset = event->x_offset();
++  const float y_offset = event->y_offset();
++  if (gesture_state_ == GestureState::kVerticalPassthrough) {
++    return;
++  }
++  cumulative_x_ += x_offset;
++  cumulative_y_ += y_offset;
++  if (gesture_state_ == GestureState::kNone) {
++    if (std::abs(cumulative_y_) >= kAxisLockThreshold &&
++        std::abs(cumulative_y_) > std::abs(cumulative_x_)) {
++      gesture_state_ = GestureState::kVerticalPassthrough;
++      return;
++    }
++    if (std::abs(cumulative_x_) >= kAxisLockThreshold &&
++        std::abs(cumulative_x_) > std::abs(cumulative_y_)) {
++      gesture_state_ = GestureState::kHorizontalSwipe;
++    }
++  }
++  if (gesture_state_ != GestureState::kHorizontalSwipe) {
++    return;
++  }
++  event->SetHandled();
++  event->StopPropagation();
++  const base::TimeTicks now = event->time_stamp();
++  recent_moves_.emplace_back(now, x_offset);
++  while (!recent_moves_.empty() &&
++         now - recent_moves_.front().first > kFlickWindow) {
++    recent_moves_.pop_front();
++  }
++  space_swipe_.on_progress.Run(cumulative_x_);
++  give_up_timer_.Start(FROM_HERE, kSpaceSwipeGiveUp,
++                       base::BindOnce(
++                           [](VerticalTabStripFocusSwipeController* self) {
++                             if (self->gesture_state_ ==
++                                 GestureState::kHorizontalSwipe) {
++                               self->EndSpaceSwipe();
++                               self->ResetGesture();
++                             }
++                           },
++                           base::Unretained(this)));
++}
++
++void VerticalTabStripFocusSwipeController::EndSpaceSwipe() {
++  give_up_timer_.Stop();
++  const float offset = cumulative_x_;
++  const bool flick = SpaceSwipeIsFlick();
++  recent_moves_.clear();
++  space_swipe_.on_end.Run(offset, flick);
++}
++
++bool VerticalTabStripFocusSwipeController::SpaceSwipeIsFlick() const {
++  if (recent_moves_.size() < 2) {
++    return false;
++  }
++  float distance = 0.0f;
++  for (const auto& move : recent_moves_) {
++    distance += move.second;
++  }
++  const base::TimeDelta span =
++      recent_moves_.back().first - recent_moves_.front().first;
++  // Moves too close together to time -- a burst the system delivered at
++  // once -- say nothing about speed.
++  if (span < kFlickMinSpan) {
++    return false;
++  }
++  // A flick goes the way the swipe went.
++  return std::abs(distance) / static_cast<float>(span.InMillisecondsF()) >=
++             kFlickSpeed &&
++         (distance < 0) == (cumulative_x_ < 0);
++}
++#endif  // BUILDFLAG(IS_MAC)
++
+ void VerticalTabStripFocusSwipeController::RotateTabGroupFocus(bool forward) {
+   if (!region_view_ || !region_view_->tab_strip_model()) {
+     return;
+diff --git a/chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_focus_swipe_controller.h b/chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_focus_swipe_controller.h
+index 1413a7e710516..9abcc209ffed4 100644
+--- a/chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_focus_swipe_controller.h
++++ b/chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_focus_swipe_controller.h
+@@ -5,12 +5,20 @@
+ #ifndef CHROME_BROWSER_UI_VIEWS_TABS_VERTICAL_VERTICAL_TAB_STRIP_FOCUS_SWIPE_CONTROLLER_H_
+ #define CHROME_BROWSER_UI_VIEWS_TABS_VERTICAL_VERTICAL_TAB_STRIP_FOCUS_SWIPE_CONTROLLER_H_
+ 
++#include <utility>
++
++#include "base/containers/circular_deque.h"
+ #include "base/functional/callback.h"
+ #include "base/memory/raw_ptr.h"
+ #include "base/time/time.h"
++#include "base/timer/timer.h"
+ #include "build/build_config.h"
+ #include "ui/events/event_handler.h"
+ 
++namespace ui {
++class ScrollEvent;
++}
++
+ class VerticalTabStripRegionView;
+ 
+ // Handles two-finger swipe gestures across the vertical tab strip to cycle
+@@ -23,11 +31,32 @@ class VerticalTabStripFocusSwipeController : public ui::EventHandler {
+   static constexpr base::TimeDelta kGestureResetTimeout =
+       base::Milliseconds(300);
+ 
+-  // Stedding: the same gesture recogniser, but a horizontal swipe runs
+-  // `on_swipe` (forward = swiped left) instead of rotating group focus.
+-  VerticalTabStripFocusSwipeController(
+-      VerticalTabStripRegionView* region_view,
+-      base::RepeatingCallback<void(bool)> on_swipe);
++  // Stedding (spaces B35): the Space swipe follows the fingers. While a
++  // horizontal swipe lasts, `on_progress` runs with how far the fingers have
++  // moved across the sidebar since it began, in DIPs, negative to the left;
++  // when they lift, `on_end` runs with that distance and whether the last
++  // moves were a flick. The momentum that follows is the swipe's.
++  struct SpaceSwipe {
++    SpaceSwipe();
++    SpaceSwipe(base::RepeatingCallback<void(float)> on_progress,
++               base::RepeatingCallback<void(float, bool)> on_end);
++    SpaceSwipe(const SpaceSwipe&);
++    SpaceSwipe& operator=(const SpaceSwipe&);
++    ~SpaceSwipe();
++
++    base::RepeatingCallback<void(float)> on_progress;
++    base::RepeatingCallback<void(float, bool)> on_end;
++  };
++  // A flick: the fingers' speed over their last moves, in DIPs a
++  // millisecond, and how far back those moves go.
++  static constexpr float kFlickSpeed = 0.5f;
++  static constexpr base::TimeDelta kFlickWindow = base::Milliseconds(80);
++  static constexpr base::TimeDelta kFlickMinSpan = base::Milliseconds(20);
++  // A swipe whose lift never arrived ends this long after its last move.
++  static constexpr base::TimeDelta kSpaceSwipeGiveUp = base::Seconds(2);
++
++  VerticalTabStripFocusSwipeController(VerticalTabStripRegionView* region_view,
++                                       SpaceSwipe space_swipe);
+ 
+   explicit VerticalTabStripFocusSwipeController(
+       VerticalTabStripRegionView* region_view);
+@@ -53,14 +82,28 @@ class VerticalTabStripFocusSwipeController : public ui::EventHandler {
+     kNone,
+     kHorizontalSwipe,
+     kVerticalPassthrough,
++    // Stedding: the fingers lifted from a Space swipe; its momentum is
++    // consumed until it ends.
++    kSpaceSwipeMomentum,
+   };
+ 
+   void ProcessSwipeOffset(float x_offset, float y_offset, ui::Event* event);
+   void ResetGesture();
+   void RotateTabGroupFocus(bool forward);
+ 
++  // Stedding: the Space swipe's own path through a scroll stream, phases
++  // read the way both macOS's events (the momentum phase carries the
++  // fingers' touch-down and lift) and synthetic ones (the scroll phase)
++  // carry them.
++  void OnSpaceSwipeScroll(ui::ScrollEvent* event);
++  void EndSpaceSwipe();
++  bool SpaceSwipeIsFlick() const;
++
+   const raw_ptr<VerticalTabStripRegionView> region_view_;
+-  const base::RepeatingCallback<void(bool)> on_swipe_;
++  const SpaceSwipe space_swipe_;
++  // The swipe's last moves, for SpaceSwipeIsFlick.
++  base::circular_deque<std::pair<base::TimeTicks, float>> recent_moves_;
++  base::OneShotTimer give_up_timer_;
+ 
+   GestureState gesture_state_ = GestureState::kNone;
+   float cumulative_x_ = 0.0f;
+diff --git a/chrome/test/stedding/BUILD.gn b/chrome/test/stedding/BUILD.gn
+index a33b9248a9018..bde449a5e438f 100644
+--- a/chrome/test/stedding/BUILD.gn
++++ b/chrome/test/stedding/BUILD.gn
+@@ -29,6 +29,7 @@ test("stedding_browser_tests") {
+     "little_window_browsertest.cc",
+     "private_coat_browsertest.cc",
+     "restore_browsertest.cc",
++    "restored_page_state_browsertest.cc",
+     "screenshot_browsertest.cc",
+     "search_default_browsertest.cc",
+     "settings_spaces_browsertest.cc",
+@@ -67,6 +68,7 @@ test("stedding_browser_tests") {
+     "//chrome/browser/ui/spaces",
+     "//chrome/browser/ui/stedding:address_row",
+     "//chrome/browser/ui/stedding:little_window",
++    "//chrome/browser/ui/stedding:motion",
+     "//chrome/browser/ui/stedding:pin_home",
+     "//chrome/browser/ui/stedding:pin_lifecycle",
+     "//chrome/browser/ui/stedding:prefs",
+@@ -103,6 +105,7 @@ test("stedding_browser_tests") {
+     "//extensions/browser:test_support",
+     "//extensions/common",
+     "//net:test_support",
++    "//services/network/public/cpp",
+     "//skia",
+     "//testing/gtest",
+     "//third_party/blink/public/common",
+diff --git a/chrome/test/stedding/restored_page_state_browsertest.cc b/chrome/test/stedding/restored_page_state_browsertest.cc
+new file mode 100644
+index 0000000000000..43f088c9d44ad
+--- /dev/null
++++ b/chrome/test/stedding/restored_page_state_browsertest.cc
+@@ -0,0 +1,99 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++// A tab created unloaded -- as the Arc import makes them (import I3) -- saves
++// a page state that the next start can load (owner, 2026-10-01). The saved
++// state carried the sequence numbers -1 of an entry that never committed; the
++// restored document committed with them, which the browser kills as a bad
++// message (RFH_INVALID_DOCUMENT_SEQUENCE_NUMBER), so every such tab came back
++// from a restart as a crashed page until it was reloaded.
++
++#include <memory>
++#include <optional>
++#include <string>
++#include <utility>
++#include <vector>
++
++#include "base/strings/utf_string_conversions.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "chrome/test/base/in_process_browser_test.h"
++#include "content/public/browser/navigation_controller.h"
++#include "content/public/browser/navigation_entry.h"
++#include "content/public/browser/navigation_entry_restore_context.h"
++#include "content/public/browser/restore_type.h"
++#include "content/public/browser/web_contents.h"
++#include "content/public/common/referrer.h"
++#include "content/public/test/browser_test.h"
++#include "content/public/test/browser_test_utils.h"
++#include "net/test/embedded_test_server/embedded_test_server.h"
++#include "services/network/public/cpp/shared_url_loader_factory.h"
++#include "third_party/blink/public/common/page_state/page_state.h"
++#include "third_party/blink/public/common/page_state/page_state_serialization.h"
++#include "ui/base/page_transition_types.h"
++#include "url/gurl.h"
++
++namespace {
++
++class RestoredPageStateTest : public InProcessBrowserTest {
++ protected:
++  void SetUpOnMainThread() override {
++    InProcessBrowserTest::SetUpOnMainThread();
++    ASSERT_TRUE(embedded_test_server()->Start());
++  }
++
++  // An entry as the Arc import builds one for a tab it does not load.
++  std::unique_ptr<content::NavigationEntry> UnloadedEntry(const GURL& url) {
++    return content::NavigationController::CreateNavigationEntry(
++        url, content::Referrer(), std::nullopt, std::nullopt,
++        ui::PAGE_TRANSITION_TYPED, false, std::string(),
++        browser()->GetProfile(), nullptr);
++  }
++};
++
++// What the session saves for a tab that was never loaded has no -1 in it.
++IN_PROC_BROWSER_TEST_F(RestoredPageStateTest, AnUnloadedTabSavesNoMinusOne) {
++  const GURL url = embedded_test_server()->GetURL("/title1.html");
++  std::unique_ptr<content::NavigationEntry> entry = UnloadedEntry(url);
++  blink::ExplodedPageState saved;
++  ASSERT_TRUE(
++      blink::DecodePageState(entry->GetPageState().ToEncodedData(), &saved));
++  EXPECT_GE(saved.top.item_sequence_number, 0);
++  EXPECT_GE(saved.top.document_sequence_number, 0);
++}
++
++// A page state saved with -1 by an earlier build loads: the tab's page shows
++// and its renderer is not killed.
++IN_PROC_BROWSER_TEST_F(RestoredPageStateTest, AMinusOneSavedEarlierLoads) {
++  const GURL url = embedded_test_server()->GetURL("/title1.html");
++  blink::ExplodedPageState saved;
++  saved.top.url_string = base::UTF8ToUTF16(url.spec());
++  saved.top.item_sequence_number = -1;
++  saved.top.document_sequence_number = -1;
++  std::string data;
++  blink::EncodePageState(saved, &data);
++
++  std::unique_ptr<content::NavigationEntry> entry = UnloadedEntry(url);
++  std::unique_ptr<content::NavigationEntryRestoreContext> context =
++      content::NavigationEntryRestoreContext::Create();
++  entry->SetPageState(blink::PageState::CreateFromEncodedData(data),
++                      context.get());
++  std::vector<std::unique_ptr<content::NavigationEntry>> entries;
++  entries.push_back(std::move(entry));
++  std::unique_ptr<content::WebContents> contents =
++      content::WebContents::Create(
++          content::WebContents::CreateParams(browser()->GetProfile()));
++  contents->GetController().Restore(0, content::RestoreType::kRestored,
++                                    &entries);
++  content::WebContents* const tab = contents.get();
++  browser()->tab_strip_model()->AppendWebContents(std::move(contents),
++                                                  /*foreground=*/true);
++  tab->GetController().LoadIfNecessary();
++  EXPECT_TRUE(content::WaitForLoadStop(tab));
++  EXPECT_FALSE(tab->IsCrashed()) << "the restored page's renderer was killed";
++  EXPECT_EQ(url, tab->GetLastCommittedURL());
++}
++
++}  // namespace
+diff --git a/chrome/test/stedding/space_switch_browsertest.cc b/chrome/test/stedding/space_switch_browsertest.cc
+index 9e2b05b6f6c1d..510ff8e30a38c 100644
+--- a/chrome/test/stedding/space_switch_browsertest.cc
++++ b/chrome/test/stedding/space_switch_browsertest.cc
+@@ -30,6 +30,7 @@
+ #include "chrome/browser/ui/spaces/space.h"
+ #include "chrome/browser/ui/spaces/space_id.h"
+ #include "chrome/browser/ui/spaces/space_model.h"
++#include "chrome/browser/ui/stedding/motion.h"
+ #include "chrome/browser/ui/stedding/sleep_tabs.h"
+ #include "chrome/browser/ui/tabs/tab_enums.h"
+ #include "chrome/browser/ui/tabs/tab_menu_model.h"
+@@ -43,6 +44,7 @@
+ #include "chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h"
+ #include "chrome/browser/ui/views/spaces/space_switcher_view.h"
+ #include "chrome/browser/ui/views/tabs/browser_tab_strip_controller.h"
++#include "chrome/browser/ui/views/tabs/common/tab_strip_view.h"
+ #include "chrome/browser/ui/views/tabs/common/tab_view.h"
+ #include "chrome/browser/ui/views/tabs/tab.h"
+ #include "chrome/browser/ui/views/tabs/tab/tab_context_menu_controller.h"
+@@ -62,6 +64,7 @@
+ #include "ui/base/accelerators/accelerator.h"
+ #include "ui/base/hit_test.h"
+ #include "ui/base/window_open_disposition.h"
++#include "ui/compositor/layer.h"
+ #include "ui/events/event.h"
+ #include "ui/events/event_utils.h"
+ #include "ui/events/keycodes/keyboard_codes.h"
+@@ -69,6 +72,7 @@
+ #include "ui/events/types/event_type.h"
+ #include "ui/gfx/geometry/point.h"
+ #include "ui/gfx/geometry/point_f.h"
++#include "ui/gfx/geometry/transform.h"
+ #include "ui/gfx/geometry/vector2d.h"
+ #include "ui/menus/simple_menu_model.h"
+ #include "ui/views/controls/textfield/textfield.h"
+@@ -108,6 +112,18 @@ spaces::SpaceSwitcherView* FindDrawnSwitcher(views::View* view) {
+   return nullptr;
+ }
+ 
++const TabStripView* FindTabStripView(const views::View* view) {
++  if (const auto* const strip = views::AsViewClass<TabStripView>(view)) {
++    return strip;
++  }
++  for (const views::View* child : view->children()) {
++    if (const TabStripView* const found = FindTabStripView(child)) {
++      return found;
++    }
++  }
++  return nullptr;
++}
++
+ // Every moment on the way through a change at which the active tab is one
+ // the sidebar hides: a tab of another Space than the active one. Checked at
+ // each notification of the strip and of the Spaces, not once it settled.
+@@ -692,6 +708,89 @@ IN_PROC_BROWSER_TEST_F(SpaceSwitchTest, NoSwitchEverShowsAHiddenTab) {
+       << " notification(s), the first at " << watcher.seen().front();
+ }
+ 
++#if BUILDFLAG(IS_MAC)
++// spaces B35: the two-finger Space swipe follows the fingers (owner,
++// 2026-10-01: it switched with no motion at all). While they move, the
++// Space's list goes with them and nothing switches; lifted short of the
++// distance it springs back and the Space stays; lifted past it, the next
++// Space comes in from the side the fingers left. At the end of the switcher
++// the list only gives a little.
++IN_PROC_BROWSER_TEST_F(SpaceSwitchTest, ASwipeFollowsTheFingers) {
++  if (!stedding::ShouldAnimate(browser()->GetProfile()->GetPrefs())) {
++    GTEST_SKIP() << "the machine asks for reduced motion";
++  }
++  MakeThreeSpaces();
++  views::Widget* const window = browser_view()->GetWidget();
++  VerticalTabStripRegionView* const region =
++      browser_view()->vertical_tab_strip_region_view_for_testing();
++  ASSERT_TRUE(region);
++  const TabStripView* const strip = FindTabStripView(region);
++  ASSERT_TRUE(strip);
++  views::View* const list = strip->unpinned_tabs_scroll_view();
++  ASSERT_TRUE(list);
++  gfx::Point at = region->GetBoundsInScreen().CenterPoint();
++  views::View::ConvertPointFromScreen(window->GetRootView(), &at);
++  const gfx::PointF point(at);
++  const auto send = [&](float dx, ui::ScrollEventPhase phase) {
++    ui::ScrollEvent scroll(ui::EventType::kScroll, point, point,
++                           ui::EventTimeForNow(), ui::EF_NONE, dx, 0, dx, 0,
++                           /*finger_count=*/2, ui::EventMomentumPhase::NONE,
++                           phase);
++    window->OnScrollEvent(&scroll);
++  };
++  const auto shift = [&]() {
++    return list->layer() ? list->layer()->transform().To2dTranslation().x()
++                         : 0.0f;
++  };
++
++  // 50 DIPs to the left, the fingers still down: the list is 50 DIPs to the
++  // left and fading, and the Space has not changed.
++  send(0, ui::ScrollEventPhase::kBegan);
++  send(-25, ui::ScrollEventPhase::kUpdate);
++  send(-25, ui::ScrollEventPhase::kUpdate);
++  ASSERT_TRUE(list->layer());
++  EXPECT_FLOAT_EQ(-50.0f, shift());
++  EXPECT_LT(list->layer()->opacity(), 1.0f);
++  EXPECT_EQ(ids_[0], model()->active_id());
++
++  // Lifted there: too short to switch; it goes back where it was.
++  send(0, ui::ScrollEventPhase::kEnd);
++  EXPECT_EQ(ids_[0], model()->active_id());
++  EXPECT_TRUE(list->layer()->GetTargetTransform().IsIdentity());
++  EXPECT_FLOAT_EQ(1.0f, list->layer()->GetTargetOpacity());
++
++  // Far enough: the next Space, its list coming in from the right.
++  send(0, ui::ScrollEventPhase::kBegan);
++  for (int i = 0; i < 5; ++i) {
++    send(-20, ui::ScrollEventPhase::kUpdate);
++  }
++  EXPECT_EQ(ids_[0], model()->active_id()) << "nothing switches mid-swipe";
++  send(0, ui::ScrollEventPhase::kEnd);
++  ExpectShowing(ids_[1]);
++  EXPECT_TRUE(list->layer()->GetTargetTransform().IsIdentity());
++  EXPECT_FLOAT_EQ(1.0f, list->layer()->GetTargetOpacity());
++
++  // Back to the first Space, then on past its end: the list gives a little
++  // and does not fade, and nothing switches.
++  send(0, ui::ScrollEventPhase::kBegan);
++  for (int i = 0; i < 5; ++i) {
++    send(20, ui::ScrollEventPhase::kUpdate);
++  }
++  send(0, ui::ScrollEventPhase::kEnd);
++  ExpectShowing(ids_[0]);
++  send(0, ui::ScrollEventPhase::kBegan);
++  for (int i = 0; i < 5; ++i) {
++    send(20, ui::ScrollEventPhase::kUpdate);
++  }
++  EXPECT_GT(shift(), 0.0f);
++  EXPECT_LT(shift(), stedding::kSpaceSwipeEndGive);
++  EXPECT_FLOAT_EQ(1.0f, list->layer()->opacity());
++  send(0, ui::ScrollEventPhase::kEnd);
++  ExpectShowing(ids_[0]);
++  EXPECT_TRUE(list->layer()->GetTargetTransform().IsIdentity());
++}
++#endif  // BUILDFLAG(IS_MAC)
++
+ IN_PROC_BROWSER_TEST_F(SpaceSwitchTest, AChipDraggedAlongTheRowMovesItsSpace) {
+   MakeThreeSpaces();
+   DragTheThirdChipSecond(/*along_y=*/false);
+diff --git a/content/browser/renderer_host/navigation_entry_impl.cc b/content/browser/renderer_host/navigation_entry_impl.cc
+index 83b871f22c2fb..40937c75601f5 100644
+--- a/content/browser/renderer_host/navigation_entry_impl.cc
++++ b/content/browser/renderer_host/navigation_entry_impl.cc
+@@ -8,6 +8,7 @@
+ 
+ #include <algorithm>
+ #include <map>
++#include <optional>
+ #include <string>
+ #include <utility>
+ 
+@@ -62,12 +63,38 @@ int CreateUniqueEntryID() {
+   return ++unique_id_counter;
+ }
+ 
++// Stedding: a sequence number a PageState may carry. In a PageState "none" is
++// 0 -- Blink keeps any other value it is given -- while a FrameNavigationEntry
++// that never committed has -1. A tab created unloaded, as the Arc import
++// creates them, saved -1 with the session (RecursivelyGenerateFrameState
++// below), and after a restart its document committed with -1, which the
++// browser kills as a bad message (RFH_INVALID_DOCUMENT_SEQUENCE_NUMBER): every
++// such tab came back as a crashed page until it was reloaded (owner,
++// 2026-10-01). Negative numbers go into a PageState as 0, and a saved one
++// restores as 0.
++int64_t SequenceNumberForPageState(int64_t sequence_number) {
++  return sequence_number < 0 ? 0 : sequence_number;
++}
++
+ void RecursivelyGenerateFrameEntries(
+     NavigationEntryRestoreContextImpl* context,
+-    const blink::ExplodedFrameState& state,
++    const blink::ExplodedFrameState& restored_state,
+     const std::vector<std::optional<std::u16string>>& referenced_files,
+     NavigationEntryImpl::TreeNode* node) {
+   CHECK(context, base::NotFatalUntil::M152);
++  // Stedding: a negative sequence number saved by an earlier build restores
++  // as none (SequenceNumberForPageState).
++  std::optional<blink::ExplodedFrameState> sanitized;
++  if (restored_state.item_sequence_number < 0 ||
++      restored_state.document_sequence_number < 0) {
++    sanitized = restored_state;
++    sanitized->item_sequence_number =
++        SequenceNumberForPageState(restored_state.item_sequence_number);
++    sanitized->document_sequence_number =
++        SequenceNumberForPageState(restored_state.document_sequence_number);
++  }
++  const blink::ExplodedFrameState& state =
++      sanitized ? *sanitized : restored_state;
+   // Set a single-frame PageState on the entry.
+   blink::ExplodedPageState page_state;
+ 
+@@ -188,9 +215,11 @@ void RecursivelyGenerateFrameState(
+   state->url_string = UrlToOptionalString16(node->frame_entry->url());
+   state->referrer = UrlToOptionalString16(node->frame_entry->referrer().url);
+   state->referrer_policy = node->frame_entry->referrer().policy;
+-  state->item_sequence_number = node->frame_entry->item_sequence_number();
+-  state->document_sequence_number =
+-      node->frame_entry->document_sequence_number();
++  // Stedding: never -1 (SequenceNumberForPageState).
++  state->item_sequence_number =
++      SequenceNumberForPageState(node->frame_entry->item_sequence_number());
++  state->document_sequence_number = SequenceNumberForPageState(
++      node->frame_entry->document_sequence_number());
+   state->initiator_origin = node->frame_entry->initiator_origin();
+   // Note: If UrlToOptionalString16 receives an empty GURL, it returns nullopt.
+   state->initiator_base_url_string = UrlToOptionalString16(

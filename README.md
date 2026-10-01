@@ -101,8 +101,9 @@ it, click the favicon and you are back.
 
 ![Nested folders and pinned tabs in the sidebar](docs/images/readme/folders.png)
 
-**The rail.** ⌘S collapses the sidebar to a column of icons and hides the address row;
-hover to peek at it, or ⇧⌘D to show the address row on its own.
+**The rail.** ⌘S collapses the sidebar to a column of icons; hover to peek at it. The
+address row stays; a setting hides it with the sidebar, and ⇧⌘D shows or hides it on
+its own.
 
 ![The sidebar collapsed to a rail of icons](docs/images/readme/rail.png)
 

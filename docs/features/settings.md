@@ -14,7 +14,7 @@ gains a preference adds a row here and a behaviour in its own spec.
 | Id | Behaviour | Test | State |
 |---|---|---|---|
 | T1 | chrome://settings/stedding exists, is the first entry in the settings menu, and is titled "Stedding" with the Stedding mark. | live: capture; `tooling/probes/settings.json` | built |
-| T2 | Every Stedding preference registers on every profile with the default its spec names: on, except Peek (off while it is rebuilt) and the Space sleep timer (Never until sleep is gated). | `SteddingPrefsTest.EveryPreferenceRegistersWithItsDefault` | built |
+| T2 | Every Stedding preference registers on every profile with the default its spec names: on, except Peek (off while it is rebuilt), "Hide the address row with the sidebar" (off since 2026-10-01, toolbar T8 and T12) and the Space sleep timer (Never until sleep is gated). | `SteddingPrefsTest.EveryPreferenceRegistersWithItsDefault` | built |
 | T3 | "Open links that leave a pinned tab's site in a peek": the row is hidden while Peek is rebuilt (PLAN.md CMD-4, CMD-9); the preference stays off. | none | withdrawn · returns with Peek |
 | T4 | "Show the command-bar hint on the new tab page" off removes the hint line (new-tab N3). | live: toggle, open a new tab, the hint probe in `tooling/probes/ntp.json` fails as it should | built |
 | T5 | "Show most-visited shortcuts on the new tab page" off leaves an empty page (new-tab N5). | live: toggle, then the new tab page puts `hidden` on its shortcut row, the same attribute mechanism T4 proves (a fresh profile has no shortcuts to see either way) | built |

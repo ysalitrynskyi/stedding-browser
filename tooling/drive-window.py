@@ -186,13 +186,14 @@ class Driver:
     def __init__(self, pid):
         import Quartz
         from AppKit import (NSApplicationActivateIgnoringOtherApps, NSRunningApplication,
-                            NSWorkspace)
+                            NSScreen, NSWorkspace)
         from window_by_pid import pids_in_tree, windows_for_pid
         self.q = Quartz
         self.pid = pid
         self.activate_option = NSApplicationActivateIgnoringOtherApps
         self.running_app = NSRunningApplication
         self.workspace = NSWorkspace
+        self.screens = NSScreen
         self.pids_in_tree = pids_in_tree
         self.windows_for_pid = windows_for_pid
         self.buttons = {}   # CG button -> (x, y) of its last event while it is down
@@ -256,9 +257,32 @@ class Driver:
                     bounds.get("Y", 0) <= y < bounds.get("Y", 0) + bounds.get("Height", 0)):
                 if int(window.get("kCGWindowOwnerPID", -1)) in owners:
                     return
+                if window.get("kCGWindowOwnerName") == "Dock" and self.in_visible_frame(x, y):
+                    # From macOS 26 the Dock is one transparent window over the whole
+                    # screen; it takes the pointer only on its own strip, which is what
+                    # the screen's visible frame leaves out (with the menu bar).
+                    continue
                 sys.exit("(%s, %s) is covered by %s's window; not sending mouse input"
                          % (x, y, window.get("kCGWindowOwnerName", "another app")))
         sys.exit("no window at (%s, %s); not sending mouse input" % (x, y))
+
+    def in_visible_frame(self, x, y):
+        # NSScreen frames are in Cocoa's coordinates, origin at the bottom left of
+        # the main screen; window bounds and events are top-left, on the same scale.
+        screens = self.screens.screens()
+        if not screens:
+            return False
+        main_height = screens[0].frame().size.height
+        for screen in screens:
+            frame, visible = screen.frame(), screen.visibleFrame()
+            top = main_height - (frame.origin.y + frame.size.height)
+            if not (frame.origin.x <= x < frame.origin.x + frame.size.width and
+                    top <= y < top + frame.size.height):
+                continue
+            visible_top = main_height - (visible.origin.y + visible.size.height)
+            return (visible.origin.x <= x < visible.origin.x + visible.size.width and
+                    visible_top <= y < visible_top + visible.size.height)
+        return False
 
     # -- raw events, no checks; every press is remembered ---------------------
 

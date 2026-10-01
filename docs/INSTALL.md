@@ -48,7 +48,9 @@ Your profile — tabs, Spaces, history, passwords, extensions — lives in
 `~/Library/Application Support/Chromium` by mistake, a folder any Chromium on the
 same Mac also uses. The first launch of a later build copies that profile into
 Stedding's own folder, if that folder holds no profile yet, and leaves the old one as
-it was. Keep the old folder until that build has been released and you have checked
+it was. If another browser is using the old folder at that moment, Stedding asks
+first: **Quit**, close the other browser and open Stedding again to bring the profile
+across, or **Start a New Profile** and leave the old one where it is. Keep the old folder until that build has been released and you have checked
 that your tabs and Spaces came across. **Export Space…** in Settings → Stedding writes a
 Space to a file you can keep or move to another machine.
 

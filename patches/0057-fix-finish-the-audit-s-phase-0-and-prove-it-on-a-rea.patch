@@ -97,7 +97,7 @@ Removable when: the Phase 4 re-cut (PLAN.md SER-4) folds these fixes
 into the feature patches they belong to.
 ---
  BUILD.gn                                      |   1 +
- chrome/app/chrome_main_delegate.cc            |  20 +-
+ chrome/app/chrome_main_delegate.cc            |  22 +-
  chrome/app/stedding_strings.grdp              |   3 +
  chrome/browser/BUILD.gn                       |   1 +
  chrome/browser/app_controller_mac.mm          |  13 +-
@@ -278,9 +278,9 @@ into the feature patches they belong to.
  chrome/browser/web_applications/BUILD.gn      |   2 +
  ...bage_collect_storage_partitions_command.cc |   8 +
  ..._storage_partitions_command_browsertest.cc |  42 +
- chrome/common/chrome_paths_internal.h         |  50 +-
- chrome/common/chrome_paths_mac.mm             | 318 +++++--
- chrome/common/chrome_paths_unittest.cc        | 241 +++--
+ chrome/common/chrome_paths_internal.h         |  65 +-
+ chrome/common/chrome_paths_mac.mm             | 384 ++++++--
+ chrome/common/chrome_paths_unittest.cc        | 335 +++++--
  chrome/common/stedding/BUILD.gn               |  13 +
  chrome/common/stedding/space_partitions.cc    |  41 +
  chrome/common/stedding/space_partitions.h     |  49 +
@@ -333,7 +333,7 @@ into the feature patches they belong to.
  .../user_data_importer/common/importer_type.h |   3 -
  crypto/apple/fake_keychain_v2.h               |  11 -
  crypto/apple/fake_keychain_v2.mm              |   2 -
- 237 files changed, 19408 insertions(+), 3602 deletions(-)
+ 237 files changed, 19587 insertions(+), 3600 deletions(-)
  delete mode 100644 chrome/browser/ui/spaces/chromium_profile_import.cc
  delete mode 100644 chrome/browser/ui/spaces/chromium_profile_import.h
  delete mode 100644 chrome/browser/ui/spaces/chromium_profile_import_unittest.cc
@@ -405,7 +405,7 @@ index 5d49f9d915ff8..e8069a13657b3 100644
          if (!is_chromeos_device) {
            deps += [
 diff --git a/chrome/app/chrome_main_delegate.cc b/chrome/app/chrome_main_delegate.cc
-index 9ab561f99cf5a..ef3a9264aa5a8 100644
+index 9ab561f99cf5a..93cd89a24fc19 100644
 --- a/chrome/app/chrome_main_delegate.cc
 +++ b/chrome/app/chrome_main_delegate.cc
 @@ -628,11 +628,6 @@ void InitializeUserDataDir(base::CommandLine* command_line) {
@@ -420,7 +420,7 @@ index 9ab561f99cf5a..ef3a9264aa5a8 100644
  #endif  // BUILDFLAG(IS_MAC)
  
    const bool specified_directory_was_invalid =
-@@ -1486,17 +1481,14 @@ void ChromeMainDelegate::PreSandboxStartup() {
+@@ -1486,16 +1481,17 @@ void ChromeMainDelegate::PreSandboxStartup() {
  #endif
  
  #if BUILDFLAG(IS_MAC)
@@ -438,12 +438,14 @@ index 9ab561f99cf5a..ef3a9264aa5a8 100644
 -    policy::path_parser::CheckUserDataDirPolicy(&policy_user_data_dir);
 -    if (policy_user_data_dir.empty()) {
 -      chrome::MigrateDefaultUserDataDirectoryIfNeeded();
--    }
 +    policy::path_parser::CheckUserDataDirPolicy(&launch_user_data_dir);
-+    chrome::PrepareUserDataDirectoryAtStartup(launch_user_data_dir);
++    if (!chrome::PrepareUserDataDirectoryAtStartup(launch_user_data_dir)) {
++      // The person chose to quit so that their profile can come across on the
++      // next launch: nothing may be written to Stedding's folder before then.
++      base::Process::TerminateCurrentProcessImmediately(0);
+     }
    }
    InitMacCrashReporter(command_line, process_type);
-   SetUpInstallerPreferences(command_line);
 diff --git a/chrome/app/stedding_strings.grdp b/chrome/app/stedding_strings.grdp
 index b196f8e2275a8..d54143532062a 100644
 --- a/chrome/app/stedding_strings.grdp
@@ -20719,10 +20721,10 @@ index e0aa02be85a3b..c7cf21b9dc165 100644
 +
  }  // namespace web_app
 diff --git a/chrome/common/chrome_paths_internal.h b/chrome/common/chrome_paths_internal.h
-index 594daa2458dc3..5eb5cd512863c 100644
+index 594daa2458dc3..312925bde533f 100644
 --- a/chrome/common/chrome_paths_internal.h
 +++ b/chrome/common/chrome_paths_internal.h
-@@ -86,16 +86,46 @@ bool GetLocalLibraryDirectory(base::FilePath* result);
+@@ -86,16 +86,61 @@ bool GetLocalLibraryDirectory(base::FilePath* result);
  bool GetGlobalApplicationSupportDirectory(base::FilePath* result);
  
  // The first macOS builds of Stedding kept the profile in Chromium's folder,
@@ -20765,13 +20767,28 @@ index 594daa2458dc3..5eb5cd512863c 100644
 +    const base::FilePath& default_user_data_dir,
 +    const base::FilePath& launch_user_data_dir);
 +
++// Asked when the move cannot happen on this launch (kLegacyInUse, kFailed):
++// true to go on with a new profile, which leaves the old one in `legacy` for
++// good, false to quit so that the next launch can try again.
++using LegacyProfileQuestion = bool (*)(const base::FilePath& legacy,
++                                       LegacyProfileMigration outcome);
++
++// One launch's move: MigrateLegacyUserDataDirectory(), and `ask` when the move
++// cannot happen now. `go_on` says whether the launch may go on; a launch that
++// goes on creates a profile in `target`, after which no launch moves anything.
++LegacyProfileMigration MoveLegacyProfileForLaunch(const base::FilePath& legacy,
++                                                  const base::FilePath& target,
++                                                  LegacyProfileQuestion ask,
++                                                  bool* go_on);
++
 +// Runs once in the browser process, before anything creates the default
 +// user-data directory. Notes whether Stedding data existed before this launch
 +// (for the keychain), then, for a launch that uses the default folder, moves a
 +// Stedding profile out of Chromium's folder once. The outcome is kept in the
 +// app's defaults, outside the profile folder. `launch_user_data_dir` is the
-+// --user-data-dir or policy folder, empty for the default one.
-+void PrepareUserDataDirectoryAtStartup(
++// --user-data-dir or policy folder, empty for the default one. Returns false
++// when the person chose to quit rather than start without their profile.
++bool PrepareUserDataDirectoryAtStartup(
 +    const base::FilePath& launch_user_data_dir);
 +
 +// What PrepareUserDataDirectoryAtStartup() found; true until it runs.
@@ -20780,10 +20797,10 @@ index 594daa2458dc3..5eb5cd512863c 100644
  #endif  // BUILDFLAG(IS_MAC)
  
 diff --git a/chrome/common/chrome_paths_mac.mm b/chrome/common/chrome_paths_mac.mm
-index 60bd197f763ca..2a691f40f5540 100644
+index 60bd197f763ca..782a3287bef7a 100644
 --- a/chrome/common/chrome_paths_mac.mm
 +++ b/chrome/common/chrome_paths_mac.mm
-@@ -3,11 +3,18 @@
+@@ -3,24 +3,35 @@
  // found in the LICENSE file.
  
  #import <Foundation/Foundation.h>
@@ -20800,9 +20817,12 @@ index 60bd197f763ca..2a691f40f5540 100644
 +#include <string_view>
 +#include <vector>
  
++#import "base/apple/bridging.h"
  #import "base/apple/bundle_locations.h"
  #import "base/apple/foundation_util.h"
-@@ -16,11 +23,13 @@
+ #include "base/base_paths.h"
+ #include "base/check_op.h"
++#include "base/command_line.h"
  #include "base/compiler_specific.h"
  #include "base/files/file_enumerator.h"
  #include "base/files/file_util.h"
@@ -20817,7 +20837,7 @@ index 60bd197f763ca..2a691f40f5540 100644
  #include "build/branding_buildflags.h"
  #include "build/build_config.h"
  #include "chrome/common/chrome_constants.h"
-@@ -97,32 +106,95 @@ bool GetDefaultUserDataDirectory(base::FilePath* result) {
+@@ -97,32 +108,95 @@ bool GetDefaultUserDataDirectory(base::FilePath* result) {
  
  namespace {
  
@@ -20928,7 +20948,7 @@ index 60bd197f763ca..2a691f40f5540 100644
        continue;
      }
      return false;
-@@ -130,97 +202,106 @@ bool TargetIsSafeToReplace(const base::FilePath& dir) {
+@@ -130,105 +204,233 @@ bool TargetIsSafeToReplace(const base::FilePath& dir) {
    return true;
  }
  
@@ -20963,30 +20983,13 @@ index 60bd197f763ca..2a691f40f5540 100644
 +  return dash != std::string::npos &&
 +         base::StringToInt(std::string_view(value).substr(dash + 1), &pid) &&
 +         ProcessIsAlive(pid);
- }
- 
--}  // namespace
++}
++
 +base::FilePath StagingPathFor(const base::FilePath& target, pid_t pid) {
 +  return target.DirName().Append(target.BaseName().value() + ".migrating-" +
 +                                 base::NumberToString(pid));
 +}
- 
--bool MigrateLegacyUserDataDirectory(const base::FilePath& legacy,
--                                    const base::FilePath& target) {
--  if (!base::DirectoryExists(legacy) || legacy == target) {
--    return false;
--  }
--  // Only a folder Stedding has run in. Every profile names the product that
--  // created it in its GCM category ("com.stedding.macosx"; a Chromium writes
--  // "org.chromium.macosx" and the value is never rewritten), and a profile
--  // whose user changed a Stedding setting also has a "stedding" dictionary.
--  // The dictionary alone missed a real profile from an early beta, which had
--  // no Stedding setting changed.
--  std::string prefs;
--  if (!base::ReadFileToStringWithMaxSize(
--          legacy.Append("Default").Append("Preferences"), &prefs,
--          64 * 1024 * 1024)) {
--    return false;
++
 +// A launch that died mid-copy leaves its staging folder behind.
 +void DeleteAbandonedStaging(const base::FilePath& target) {
 +  const std::string prefix = target.BaseName().value() + ".migrating-";
@@ -21001,20 +21004,41 @@ index 60bd197f763ca..2a691f40f5540 100644
 +        !ProcessIsAlive(pid)) {
 +      base::DeletePathRecursively(child);
 +    }
-   }
--  const std::optional<base::DictValue> dict =
--      base::JSONReader::ReadDict(prefs, base::JSON_PARSE_RFC);
--  if (!dict) {
++  }
+ }
+ 
+ }  // namespace
+ 
+-bool MigrateLegacyUserDataDirectory(const base::FilePath& legacy,
+-                                    const base::FilePath& target) {
+-  if (!base::DirectoryExists(legacy) || legacy == target) {
 -    return false;
-+}
-+
-+}  // namespace
-+
 +LegacyProfileMigration MigrateLegacyUserDataDirectory(
 +    const base::FilePath& legacy,
 +    const base::FilePath& target) {
 +  if (legacy == target || !base::DirectoryExists(legacy)) {
 +    return LegacyProfileMigration::kNoLegacyFolder;
+   }
+-  // Only a folder Stedding has run in. Every profile names the product that
+-  // created it in its GCM category ("com.stedding.macosx"; a Chromium writes
+-  // "org.chromium.macosx" and the value is never rewritten), and a profile
+-  // whose user changed a Stedding setting also has a "stedding" dictionary.
+-  // The dictionary alone missed a real profile from an early beta, which had
+-  // no Stedding setting changed.
+-  std::string prefs;
+-  if (!base::ReadFileToStringWithMaxSize(
+-          legacy.Append("Default").Append("Preferences"), &prefs,
+-          64 * 1024 * 1024)) {
+-    return false;
++  if (!HoldsNoUserData(target)) {
++    return LegacyProfileMigration::kTargetHasUserData;
+   }
+-  const std::optional<base::DictValue> dict =
+-      base::JSONReader::ReadDict(prefs, base::JSON_PARSE_RFC);
+-  if (!dict) {
+-    return false;
++  if (!HoldsSteddingProfile(legacy)) {
++    return LegacyProfileMigration::kNotSteddingData;
    }
 -  const std::string* const category =
 -      dict->FindStringByDottedPath("gcm.product_category_for_subtypes");
@@ -21022,8 +21046,8 @@ index 60bd197f763ca..2a691f40f5540 100644
 -      category && category->starts_with("com.stedding.");
 -  if (!created_by_stedding && !dict->FindDict("stedding")) {
 -    return false;
-+  if (!HoldsNoUserData(target)) {
-+    return LegacyProfileMigration::kTargetHasUserData;
++  if (LockedByLiveProcess(legacy)) {
++    return LegacyProfileMigration::kLegacyInUse;
    }
 -  // Crashpad's database path is the default user-data directory plus
 -  // "Crashpad", and PathService creates that directory (parents included)
@@ -21031,8 +21055,15 @@ index 60bd197f763ca..2a691f40f5540 100644
 -  // holds only Crashpad, is not a profile and must not block the move.
 -  if (!TargetIsSafeToReplace(target)) {
 -    return false;
-+  if (!HoldsSteddingProfile(legacy)) {
-+    return LegacyProfileMigration::kNotSteddingData;
++  // Built beside the target and renamed into place, so a failure at any point
++  // leaves no half profile where the browser looks. A clone on APFS costs no
++  // space and leaves Chromium's folder as it was.
++  const base::FilePath staging = StagingPathFor(target, getpid());
++  base::DeletePathRecursively(staging);
++  if (clonefile(legacy.value().c_str(), staging.value().c_str(), 0) != 0 &&
++      !base::CopyDirectory(legacy, staging, /*recursive=*/true)) {
++    base::DeletePathRecursively(staging);
++    return LegacyProfileMigration::kFailed;
    }
 -  base::FilePath parked_crashpad;
 -  base::ScopedTempDir park;
@@ -21045,18 +21076,15 @@ index 60bd197f763ca..2a691f40f5540 100644
 -    if (!base::Move(crashpad, parked_crashpad)) {
 -      return false;
 -    }
-+  if (LockedByLiveProcess(legacy)) {
-+    return LegacyProfileMigration::kLegacyInUse;
++  // The copied links name the old folder's last process.
++  for (const char* name :
++       {"SingletonLock", "SingletonSocket", "SingletonCookie"}) {
++    base::DeleteFile(staging.Append(name));
    }
 -  if (base::PathExists(target)) {
 -    base::DeletePathRecursively(target);
-+  // Built beside the target and renamed into place, so a failure at any point
-+  // leaves no half profile where the browser looks. A clone on APFS costs no
-+  // space and leaves Chromium's folder as it was.
-+  const base::FilePath staging = StagingPathFor(target, getpid());
-+  base::DeletePathRecursively(staging);
-+  if (clonefile(legacy.value().c_str(), staging.value().c_str(), 0) != 0 &&
-+      !base::CopyDirectory(legacy, staging, /*recursive=*/true)) {
++  // Only regenerated files are in the target (HoldsNoUserData()).
++  if (base::PathExists(target) && !base::DeletePathRecursively(target)) {
 +    base::DeletePathRecursively(staging);
 +    return LegacyProfileMigration::kFailed;
    }
@@ -21066,31 +21094,15 @@ index 60bd197f763ca..2a691f40f5540 100644
 -      base::Move(parked_crashpad, target.Append("Crashpad"));
 -    }
 -    return false;
-+  // The copied links name the old folder's last process.
-+  for (const char* name :
-+       {"SingletonLock", "SingletonSocket", "SingletonCookie"}) {
-+    base::DeleteFile(staging.Append(name));
-   }
--  if (!parked_crashpad.empty()) {
--    base::DeletePathRecursively(target.Append("Crashpad"));
--    base::Move(parked_crashpad, target.Append("Crashpad"));
-+  // Only regenerated files are in the target (HoldsNoUserData()).
-+  if (base::PathExists(target) && !base::DeletePathRecursively(target)) {
-+    base::DeletePathRecursively(staging);
-+    return LegacyProfileMigration::kFailed;
-   }
--  // The copied process-singleton links name the old folder's last process.
--  for (const char* name : {"SingletonLock", "SingletonSocket",
--                           "SingletonCookie"}) {
--    base::DeleteFile(target.Append(name));
 +  if (renamex_np(staging.value().c_str(), target.value().c_str(),
 +                 RENAME_EXCL) != 0) {
 +    // Another launch created the target first; it decides next time.
 +    base::DeletePathRecursively(staging);
 +    return LegacyProfileMigration::kFailed;
    }
--  base::WriteFile(target.Append(kKeyMigrationMarker), "1");
--  return true;
+-  if (!parked_crashpad.empty()) {
+-    base::DeletePathRecursively(target.Append("Crashpad"));
+-    base::Move(parked_crashpad, target.Append("Crashpad"));
 +  return LegacyProfileMigration::kMigrated;
 +}
 +
@@ -21102,19 +21114,80 @@ index 60bd197f763ca..2a691f40f5540 100644
 +         (!launch_user_data_dir.empty() &&
 +          HoldsProfile(launch_user_data_dir)) ||
 +         (legacy != default_user_data_dir && HoldsSteddingProfile(legacy));
++}
++
++LegacyProfileMigration MoveLegacyProfileForLaunch(const base::FilePath& legacy,
++                                                  const base::FilePath& target,
++                                                  LegacyProfileQuestion ask,
++                                                  bool* go_on) {
++  const LegacyProfileMigration outcome =
++      MigrateLegacyUserDataDirectory(legacy, target);
++  *go_on = true;
++  if (outcome == LegacyProfileMigration::kLegacyInUse ||
++      outcome == LegacyProfileMigration::kFailed) {
++    *go_on = ask(legacy, outcome);
+   }
+-  // The copied process-singleton links name the old folder's last process.
+-  for (const char* name : {"SingletonLock", "SingletonSocket",
+-                           "SingletonCookie"}) {
+-    base::DeleteFile(target.Append(name));
++  return outcome;
++}
++
++namespace {
++
++// What a person launching Stedding sees when their old profile cannot come
++// across on this launch (PLAN.md PLT-1). Going on would create a profile in
++// Stedding's folder, and a folder with a profile is never moved into, so the
++// choice is theirs. It comes before anything else of the browser exists, so it
++// is the system's own alert. A launch for a test answers from its command line.
++bool AskAboutLegacyProfile(const base::FilePath& legacy,
++                           LegacyProfileMigration outcome) {
++  const base::CommandLine& command_line =
++      *base::CommandLine::ForCurrentProcess();
++  constexpr char kAnswerSwitch[] = "stedding-legacy-profile-answer";
++  if (command_line.HasSwitch(kAnswerSwitch)) {
++    return command_line.GetSwitchValueASCII(kAnswerSwitch) == "new-profile";
+   }
+-  base::WriteFile(target.Append(kKeyMigrationMarker), "1");
+-  return true;
++  const bool in_use = outcome == LegacyProfileMigration::kLegacyInUse;
++  NSString* const header =
++      in_use ? @"Another browser is using your Stedding profile"
++             : @"Stedding could not bring your profile across";
++  NSString* const reason =
++      in_use ? @"A browser running now is using that folder. Quit that "
++               @"browser, then open Stedding again."
++             : @"Copying it to Stedding's own folder failed. Check that the "
++               @"disk has room, then open Stedding again.";
++  NSString* const message = [NSString
++      stringWithFormat:@"Your profile from an earlier Stedding is in %@. %@\n\n"
++                       @"If you start a new profile instead, the old one "
++                       @"stays where it is and is not brought across later.",
++                       base::SysUTF8ToNSString(legacy.value()), reason];
++  CFOptionFlags response = kCFUserNotificationCancelResponse;
++  CFUserNotificationDisplayAlert(
++      /*timeout=*/0, kCFUserNotificationCautionAlertLevel, /*iconURL=*/nullptr,
++      /*soundURL=*/nullptr, /*localizationURL=*/nullptr,
++      base::apple::NSToCFPtrCast(header), base::apple::NSToCFPtrCast(message),
++      CFSTR("Quit"), CFSTR("Start a New Profile"), /*otherButtonTitle=*/nullptr,
++      &response);
++  return (response & 0x3) == kCFUserNotificationAlternateResponse;
  }
  
 -void MigrateDefaultUserDataDirectoryIfNeeded() {
-+void PrepareUserDataDirectoryAtStartup(
++}  // namespace
++
++bool PrepareUserDataDirectoryAtStartup(
 +    const base::FilePath& launch_user_data_dir) {
    base::FilePath target;
    base::FilePath legacy;
    if (!GetDefaultUserDataDirectory(&target) ||
-@@ -228,7 +309,60 @@ void MigrateDefaultUserDataDirectoryIfNeeded() {
+       !GetDefaultUserDataDirectoryForProduct("Chromium", &legacy) ||
        legacy == target) {
-     return;
-   }
--  MigrateLegacyUserDataDirectory(legacy, target);
+-    return;
++    return true;
++  }
 +  NSUserDefaults* const defaults = NSUserDefaults.standardUserDefaults;
 +  NSString* const decided = [defaults stringForKey:kLegacyProfileDefaultsKey];
 +
@@ -21136,10 +21209,12 @@ index 60bd197f763ca..2a691f40f5540 100644
 +  // The move is only for the default folder; a launch told where its profile
 +  // is leaves both folders alone.
 +  if (!launch_user_data_dir.empty() || decided) {
-+    return;
++    return true;
 +  }
 +  DeleteAbandonedStaging(target);
-+  switch (MigrateLegacyUserDataDirectory(legacy, target)) {
++  bool go_on = true;
++  switch (MoveLegacyProfileForLaunch(legacy, target, &AskAboutLegacyProfile,
++                                     &go_on)) {
 +    case LegacyProfileMigration::kMigrated:
 +      LOG(WARNING) << "Moved the Stedding profile from " << legacy << " to "
 +                   << target;
@@ -21147,24 +21222,34 @@ index 60bd197f763ca..2a691f40f5540 100644
 +                   forKey:kLegacyProfileDefaultsKey];
 +      break;
 +    case LegacyProfileMigration::kNotSteddingData:
++      LOG(WARNING) << "Left " << legacy << " alone: Stedding made no profile "
++                   << "there.";
 +      [defaults setObject:kLegacyProfileNotStedding
 +                   forKey:kLegacyProfileDefaultsKey];
 +      break;
 +    case LegacyProfileMigration::kTargetHasUserData:
++      LOG(WARNING) << "Left " << legacy << " alone: " << target
++                   << " already holds a profile.";
 +      [defaults setObject:kLegacyProfileTargetInUse
 +                   forKey:kLegacyProfileDefaultsKey];
 +      break;
 +    case LegacyProfileMigration::kLegacyInUse:
 +      LOG(WARNING) << "Not moving the Stedding profile from " << legacy
-+                   << ": another browser is using it. Quit it and relaunch.";
++                   << ": another browser is using it. "
++                   << (go_on ? "Starting a new profile; the old one stays."
++                             : "Quitting, so the next launch can move it.");
 +      break;
 +    case LegacyProfileMigration::kFailed:
 +      LOG(ERROR) << "Could not move the Stedding profile from " << legacy
-+                 << " to " << target << "; the next launch tries again.";
++                 << " to " << target << ". "
++                 << (go_on ? "Starting a new profile; the old one stays."
++                           : "Quitting, so the next launch can try again.");
 +      break;
 +    case LegacyProfileMigration::kNoLegacyFolder:
 +      break;
-+  }
+   }
+-  MigrateLegacyUserDataDirectory(legacy, target);
++  return go_on;
 +}
 +
 +bool SteddingDataMayUseLegacyKeychainKey() {
@@ -21173,7 +21258,7 @@ index 60bd197f763ca..2a691f40f5540 100644
  
  bool GetUserDocumentsDirectory(base::FilePath* result) {
 diff --git a/chrome/common/chrome_paths_unittest.cc b/chrome/common/chrome_paths_unittest.cc
-index 95471981130c1..e8c2b85d4c85c 100644
+index 95471981130c1..2b211e4a6d7ba 100644
 --- a/chrome/common/chrome_paths_unittest.cc
 +++ b/chrome/common/chrome_paths_unittest.cc
 @@ -7,11 +7,13 @@
@@ -21201,7 +21286,7 @@ index 95471981130c1..e8c2b85d4c85c 100644
  namespace chrome {
  
  // Test the behavior of chrome::GetUserCacheDirectory.
-@@ -228,93 +234,186 @@ TEST(ChromePaths, DefaultUserDataDirIsSteddingsOwn) {
+@@ -228,93 +234,280 @@ TEST(ChromePaths, DefaultUserDataDirIsSteddingsOwn) {
  }
  #endif
  
@@ -21402,6 +21487,100 @@ index 95471981130c1..e8c2b85d4c85c 100644
  
 -// Patch 0050: Chromium's own profile, with no Stedding preferences, stays
 -// where it is and Stedding starts a fresh one.
++namespace {
++
++int g_questions = 0;
++LegacyProfileMigration g_asked_about = LegacyProfileMigration::kMigrated;
++
++bool AnswerQuit(const base::FilePath& legacy, LegacyProfileMigration outcome) {
++  ++g_questions;
++  g_asked_about = outcome;
++  return false;
++}
++
++bool AnswerNewProfile(const base::FilePath& legacy,
++                      LegacyProfileMigration outcome) {
++  ++g_questions;
++  g_asked_about = outcome;
++  return true;
++}
++
++}  // namespace
++
++// PLAN.md PLT-1: a launch that finds the old folder in use asks first, because
++// going on creates a profile in Stedding's folder and a folder with a profile
++// is never moved into. Quitting leaves that folder empty, so the launch after
++// the other browser quits brings the profile across.
++TEST(ChromePaths, AFolderInUseAsksAndTheNextLaunchMovesIt) {
++  LegacyProfileFixture fixture;
++  LegacyProfileFixture::WriteProfile(fixture.legacy(), "Default",
++                                     LegacyProfileFixture::kSteddingPrefs);
++  ASSERT_TRUE(base::CreateSymbolicLink(
++      base::FilePath("host-" + base::NumberToString(getpid())),
++      fixture.legacy().Append("SingletonLock")));
++  g_questions = 0;
++  bool go_on = true;
++
++  EXPECT_EQ(LegacyProfileMigration::kLegacyInUse,
++            MoveLegacyProfileForLaunch(fixture.legacy(), fixture.target(),
++                                       &AnswerQuit, &go_on));
++  EXPECT_FALSE(go_on);
++  EXPECT_EQ(1, g_questions);
++  EXPECT_EQ(LegacyProfileMigration::kLegacyInUse, g_asked_about);
++  EXPECT_FALSE(base::PathExists(fixture.target()));
++
++  // The other browser has quit.
++  ASSERT_TRUE(base::DeleteFile(fixture.legacy().Append("SingletonLock")));
++  EXPECT_EQ(LegacyProfileMigration::kMigrated,
++            MoveLegacyProfileForLaunch(fixture.legacy(), fixture.target(),
++                                       &AnswerQuit, &go_on));
++  EXPECT_TRUE(go_on);
++  EXPECT_EQ(1, g_questions);
++  EXPECT_TRUE(base::PathExists(
++      fixture.target().Append("Default").Append("Preferences")));
++}
++
++// Starting a new profile instead goes on and leaves the old one where it is.
++TEST(ChromePaths, StartingANewProfileLeavesTheOldOneWhereItIs) {
++  LegacyProfileFixture fixture;
++  LegacyProfileFixture::WriteProfile(fixture.legacy(), "Default",
++                                     LegacyProfileFixture::kSteddingPrefs);
++  ASSERT_TRUE(base::CreateSymbolicLink(
++      base::FilePath("host-" + base::NumberToString(getpid())),
++      fixture.legacy().Append("SingletonLock")));
++  g_questions = 0;
++  bool go_on = false;
++
++  EXPECT_EQ(LegacyProfileMigration::kLegacyInUse,
++            MoveLegacyProfileForLaunch(fixture.legacy(), fixture.target(),
++                                       &AnswerNewProfile, &go_on));
++  EXPECT_TRUE(go_on);
++  EXPECT_EQ(1, g_questions);
++  EXPECT_FALSE(base::PathExists(fixture.target()));
++  EXPECT_TRUE(base::PathExists(
++      fixture.legacy().Append("Default").Append("Preferences")));
++}
++
++// Nobody is asked anything when there is nothing to move.
++TEST(ChromePaths, NothingToMoveAsksNothing) {
++  LegacyProfileFixture fixture;
++  g_questions = 0;
++  bool go_on = false;
++
++  EXPECT_EQ(LegacyProfileMigration::kNoLegacyFolder,
++            MoveLegacyProfileForLaunch(fixture.legacy(), fixture.target(),
++                                       &AnswerQuit, &go_on));
++  EXPECT_TRUE(go_on);
++  LegacyProfileFixture::WriteProfile(fixture.legacy(), "Default",
++                                     LegacyProfileFixture::kChromiumPrefs);
++  go_on = false;
++  EXPECT_EQ(LegacyProfileMigration::kNotSteddingData,
++            MoveLegacyProfileForLaunch(fixture.legacy(), fixture.target(),
++                                       &AnswerQuit, &go_on));
++  EXPECT_TRUE(go_on);
++  EXPECT_EQ(0, g_questions);
++}
++
 +// Chromium's own profile stays where it is and Stedding starts a fresh one.
  TEST(ChromePaths, LeavesChromiumsOwnProfileAlone) {
 -  base::ScopedTempDir temp;

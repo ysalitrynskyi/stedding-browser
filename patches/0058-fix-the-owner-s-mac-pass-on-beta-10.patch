@@ -29,8 +29,33 @@ these, fixed here:
 - The switcher turned to dots with room left for every chip. The gaps
   close up to 4 DIP first (spaces B24).
 
-Why: the owner's own use of beta 10 on 2026-10-01 (docs/ARC-ROUND2.md,
-round 11); each finding is a behaviour in its feature's spec.
+The Mac then used the build on a copy of that profile and on a fresh
+one, with the real pointer and keyboard, and found these, fixed here
+too:
+
+- On saturated pages the row was a step off the page's colour. The
+  page's top is read back in the display's colour space, Display P3
+  on a Mac's own screen, and was painted as if it were sRGB, so the
+  colour went to P3 twice. The strip is read as sRGB now (T31).
+- In full screen a second, darker line sat under the row's hairline:
+  Chromium's separator for its slide-in toolbar. It is not drawn for
+  Stedding's window (T32).
+- A Space switch on the owner's profile, hundreds of tabs, showed
+  nothing for half a second. The Space's tint re-themes every row of
+  every Space; each row set its title's font again, and a label asks
+  for a layout whenever its font is set, so the whole list was laid
+  out once per row, and each row in a folder drew the folder's glyph
+  from macOS's symbol again. A row sets its font only when it changed
+  and the glyph is drawn once per colour and size (spaces B36).
+- In the rail the Clear line's label was drawn clipped to "lear". The
+  line is drawn alone there, with no press (spaces B17).
+- In light mode a folder's name and glyph, white for the dark ground,
+  were nearly invisible. They take the rows' own text colour
+  (folders F12).
+
+Why: the owner's own use of beta 10 on 2026-10-01 and the Mac's pass
+on a copy of their profile on 2026-10-02 (docs/ARC-ROUND2.md, round
+11); each finding is a behaviour in its feature's spec.
 Removable when: the Phase 4 re-cut (PLAN.md SER-4) folds these fixes
 into the feature patches they belong to.
 ---
@@ -47,9 +72,10 @@ into the feature patches they belong to.
  chrome/browser/ui/stedding/theme/BUILD.gn     |   9 +-
  .../theme/page_theme_color_controller.cc      | 189 ++++++++++++++++--
  .../theme/page_theme_color_controller.h       |  32 ++-
- .../ui/stedding/theme/page_top_color.cc       |  76 +++++++
+ .../ui/stedding/theme/page_top_color.cc       |  93 +++++++++
  .../ui/stedding/theme/page_top_color.h        |  47 +++++
- .../stedding/theme/page_top_color_unittest.cc |  88 ++++++++
+ .../stedding/theme/page_top_color_unittest.cc | 117 +++++++++++
+ .../layout/browser_view_tabbed_layout_impl.cc |  12 ++
  .../views/frame/stedding_window_background.cc |  86 ++++++--
  .../views/frame/stedding_window_background.h  |  20 ++
  .../ui/views/frame/top_container_view.cc      |   5 +
@@ -59,13 +85,21 @@ into the feature patches they belong to.
  .../ui/views/spaces/space_switcher_rules.h    |  14 +-
  .../spaces/space_switcher_rules_unittest.cc   |  24 +++
  .../ui/views/spaces/space_switcher_view.cc    |  18 +-
+ .../views/tabs/common/clear_tabs_separator.cc |  17 +-
+ .../ui/views/tabs/common/folder_view.cc       |  32 ++-
+ .../views/tabs/common/folder_view_unittest.cc |  36 ++++
+ .../ui/views/tabs/common/sidebar_font.h       |  11 +
+ .../ui/views/tabs/common/sidebar_symbols.cc   |  34 +++-
+ .../common/stedding_tab_row_rules_unittest.cc |  26 +++
+ .../browser/ui/views/tabs/common/tab_view.cc  |  13 +-
  ...rtical_tab_strip_focus_swipe_controller.cc | 168 +++++++++++++++-
  ...ertical_tab_strip_focus_swipe_controller.h |  55 ++++-
  chrome/test/stedding/BUILD.gn                 |   3 +
  .../restored_page_state_browsertest.cc        |  99 +++++++++
- .../test/stedding/space_switch_browsertest.cc |  99 +++++++++
+ .../test/stedding/space_switch_browsertest.cc | 140 +++++++++++++
+ .../stedding/window_buttons_browsertest.mm    |  36 ++++
  .../renderer_host/navigation_entry_impl.cc    |  37 +++-
- 31 files changed, 1309 insertions(+), 106 deletions(-)
+ 40 files changed, 1595 insertions(+), 124 deletions(-)
  create mode 100644 chrome/browser/ui/stedding/theme/page_top_color.cc
  create mode 100644 chrome/browser/ui/stedding/theme/page_top_color.h
  create mode 100644 chrome/browser/ui/stedding/theme/page_top_color_unittest.cc
@@ -737,10 +771,10 @@ index 5623e2635275a..12053e28665c4 100644
    ui::ScopedUnownedUserData<PageThemeColorController> scoped_user_data_;
 diff --git a/chrome/browser/ui/stedding/theme/page_top_color.cc b/chrome/browser/ui/stedding/theme/page_top_color.cc
 new file mode 100644
-index 0000000000000..87355a628cb62
+index 0000000000000..70ce603235dee
 --- /dev/null
 +++ b/chrome/browser/ui/stedding/theme/page_top_color.cc
-@@ -0,0 +1,76 @@
+@@ -0,0 +1,93 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -752,6 +786,8 @@ index 0000000000000..87355a628cb62
 +#include <vector>
 +
 +#include "third_party/skia/include/core/SkBitmap.h"
++#include "third_party/skia/include/core/SkColorSpace.h"
++#include "third_party/skia/include/core/SkImageInfo.h"
 +
 +namespace stedding {
 +namespace {
@@ -778,11 +814,26 @@ index 0000000000000..87355a628cb62
 +      strip.width() < kPageTopMinSamples) {
 +    return std::nullopt;
 +  }
++  // The readback is in the colour space of the surface it was copied from,
++  // on a Mac the display's (Display P3 on its own screen), while the row is
++  // painted from an sRGB colour: the strip is read as sRGB, or the row is the
++  // page's colour taken to the display's space twice, a step less saturated
++  // than the page (the owner's copy, 2026-10-02).
++  SkBitmap srgb;
++  const SkBitmap* edge = &strip;
++  if (strip.colorSpace() && !strip.colorSpace()->isSRGB()) {
++    if (!srgb.tryAllocPixels(
++            strip.info().makeColorSpace(SkColorSpace::MakeSRGB())) ||
++        !strip.readPixels(srgb.pixmap())) {
++      return std::nullopt;
++    }
++    edge = &srgb;
++  }
 +  std::vector<SkColor> samples;
-+  samples.reserve(static_cast<size_t>(strip.width()));
++  samples.reserve(static_cast<size_t>(edge->width()));
 +  std::vector<U8CPU> reds, greens, blues;
-+  for (int x = 0; x < strip.width(); ++x) {
-+    const SkColor sample = SkColorSetA(strip.getColor(x, 0), SK_AlphaOPAQUE);
++  for (int x = 0; x < edge->width(); ++x) {
++    const SkColor sample = SkColorSetA(edge->getColor(x, 0), SK_AlphaOPAQUE);
 +    samples.push_back(sample);
 +    reds.push_back(SkColorGetR(sample));
 +    greens.push_back(SkColorGetG(sample));
@@ -872,10 +923,10 @@ index 0000000000000..a1c0c5ea4ec6d
 +#endif  // CHROME_BROWSER_UI_STEDDING_THEME_PAGE_TOP_COLOR_H_
 diff --git a/chrome/browser/ui/stedding/theme/page_top_color_unittest.cc b/chrome/browser/ui/stedding/theme/page_top_color_unittest.cc
 new file mode 100644
-index 0000000000000..ee96eb3c1db66
+index 0000000000000..253e39787f951
 --- /dev/null
 +++ b/chrome/browser/ui/stedding/theme/page_top_color_unittest.cc
-@@ -0,0 +1,88 @@
+@@ -0,0 +1,117 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -887,6 +938,8 @@ index 0000000000000..ee96eb3c1db66
 +#include "testing/gtest/include/gtest/gtest.h"
 +#include "third_party/skia/include/core/SkBitmap.h"
 +#include "third_party/skia/include/core/SkColor.h"
++#include "third_party/skia/include/core/SkColorSpace.h"
++#include "third_party/skia/include/core/SkImageInfo.h"
 +
 +namespace stedding {
 +namespace {
@@ -946,6 +999,33 @@ index 0000000000000..ee96eb3c1db66
 +  EXPECT_EQ(std::nullopt, UniformTopEdgeColor(busy));
 +}
 +
++// The readback comes in the colour space of the surface it was copied from,
++// on a Mac the display's: Display P3 on its own screen. The row is painted
++// from an sRGB colour, so the strip is read as sRGB first; read as it came,
++// the row was the page's colour taken to P3 twice, a step less saturated
++// than the page under it (the owner's copy, 2026-10-02: farcaster.xyz's
++// purple, (47, 28, 158) over (50, 27, 165)).
++TEST(PageTopColorTest, ADisplayP3StripIsReadAsSRGB) {
++  const SkColor purple = SkColorSetRGB(48, 26, 158);
++  SkBitmap srgb;
++  srgb.allocPixels(
++      SkImageInfo::MakeN32Premul(100, 2, SkColorSpace::MakeSRGB()));
++  srgb.eraseColor(purple);
++  SkBitmap p3;
++  p3.allocPixels(SkImageInfo::MakeN32Premul(
++      100, 2,
++      SkColorSpace::MakeRGB(SkNamedTransferFn::kSRGB,
++                            SkNamedGamut::kDisplayP3)));
++  ASSERT_TRUE(srgb.readPixels(p3.pixmap()));
++  ASSERT_FALSE(PageColorsMatch(purple, p3.getColor(0, 0)))
++      << "the strip holds the display's values, not sRGB's";
++  const std::optional<SkColor> edge = UniformTopEdgeColor(p3);
++  ASSERT_TRUE(edge);
++  EXPECT_TRUE(PageColorsMatch(purple, *edge))
++      << "read " << SkColorGetR(*edge) << "," << SkColorGetG(*edge) << ","
++      << SkColorGetB(*edge);
++}
++
 +TEST(PageTopColorTest, TooFewSamplesOrNoPixelsIsNone) {
 +  EXPECT_EQ(std::nullopt, UniformTopEdgeColor(SkBitmap()));
 +  EXPECT_EQ(std::nullopt,
@@ -964,6 +1044,43 @@ index 0000000000000..ee96eb3c1db66
 +
 +}  // namespace
 +}  // namespace stedding
+diff --git a/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc b/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
+index 29dfbde914c55..f662e5bb6dce6 100644
+--- a/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
++++ b/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
+@@ -9,6 +9,7 @@
+ #include <optional>
+ #include <utility>
+ 
++#include "base/feature_list.h"
+ #include "base/functional/bind.h"
+ #include "base/i18n/rtl.h"
+ #include "base/numerics/safe_conversions.h"
+@@ -21,6 +22,7 @@
+ #include "chrome/browser/ui/color/chrome_color_id.h"
+ #include "chrome/browser/ui/immersive/immersive_mode_controller.h"
+ #include "chrome/browser/ui/layout_constants.h"
++#include "chrome/browser/ui/stedding_ui_metrics.h"
+ #include "chrome/browser/ui/ui_features.h"
+ #include "chrome/browser/ui/views/animations/organizer_panel_animations.h"
+ #include "chrome/browser/ui/views/animations/side_panel_animations.h"
+@@ -258,6 +260,16 @@ BrowserViewTabbedLayoutImpl::CalculateSeparatorInfo() const {
+       break;
+   }
+ 
++  // Stedding (toolbar T32): in full screen the overlay paints the address
++  // row's own hairline where the row meets the page; this separator under it
++  // drew a second line, a step darker than the page (the owner's copy,
++  // 2026-10-02).
++  if (base::FeatureList::IsEnabled(stedding::kArcStyleWindow) &&
++      (layout_data_->window_state == WindowState::kFullscreen ||
++       layout_data_->window_state == WindowState::kFullscreenWithToolbar)) {
++    info.top_container_separator = false;
++  }
++
+   return info;
+ }
+ 
 diff --git a/chrome/browser/ui/views/frame/stedding_window_background.cc b/chrome/browser/ui/views/frame/stedding_window_background.cc
 index 043184080b4da..4c4819d635d52 100644
 --- a/chrome/browser/ui/views/frame/stedding_window_background.cc
@@ -1550,6 +1667,318 @@ index 14623b38d64ad..c5c88af089efa 100644
    }
    if (collapsed_) {
      // As tall as the stack it holds, so the "+" is never laid out past the
+diff --git a/chrome/browser/ui/views/tabs/common/clear_tabs_separator.cc b/chrome/browser/ui/views/tabs/common/clear_tabs_separator.cc
+index 28ec01a958400..9a3237f4354e1 100644
+--- a/chrome/browser/ui/views/tabs/common/clear_tabs_separator.cc
++++ b/chrome/browser/ui/views/tabs/common/clear_tabs_separator.cc
+@@ -69,9 +69,15 @@ void ClearTabsSeparator::OnPaint(gfx::Canvas* canvas) {
+   cc::PaintFlags flags;
+   flags.setColor(hairline);
+   flags.setStrokeWidth(1);
++  // Where the label has no room -- the rail's column -- the line is drawn
++  // alone, across the column (spaces B17, sidebar Y8).
++  const int line_end =
++      clear_rect.IsEmpty() ? bounds.right() - kSideInset : clear_rect.x();
+   canvas->DrawLine(gfx::PointF(bounds.x() + kSideInset, line_y),
+-                   gfx::PointF(clear_rect.x(), line_y), flags);
+-
++                   gfx::PointF(line_end, line_y), flags);
++  if (clear_rect.IsEmpty()) {
++    return;
++  }
+   canvas->DrawStringRectWithFlags(kLabel, LabelFont(), label_color, clear_rect,
+                                   gfx::Canvas::TEXT_ALIGN_CENTER);
+ }
+@@ -80,6 +86,13 @@ gfx::Rect ClearTabsSeparator::GetClearRect() const {
+   const int label_width =
+       gfx::Canvas::GetStringWidth(kLabel, LabelFont()) + 2 * kLabelGap;
+   const gfx::Rect bounds = GetContentsBounds();
++  // The label takes its own width and the side inset on both sides. In the
++  // rail's column (sidebar Y8) it has no room: it was drawn clipped to
++  // "lear", over a press target that ran off the column's left edge (the
++  // owner's copy, 2026-10-02).
++  if (bounds.width() < label_width + 2 * kSideInset) {
++    return gfx::Rect();
++  }
+   return gfx::Rect(bounds.right() - kSideInset - label_width, bounds.y(),
+                    label_width, bounds.height());
+ }
+diff --git a/chrome/browser/ui/views/tabs/common/folder_view.cc b/chrome/browser/ui/views/tabs/common/folder_view.cc
+index 4221171979c30..0879bdd89980e 100644
+--- a/chrome/browser/ui/views/tabs/common/folder_view.cc
++++ b/chrome/browser/ui/views/tabs/common/folder_view.cc
+@@ -27,6 +27,7 @@
+ #include "content/public/browser/web_contents.h"
+ #include "ui/base/metadata/metadata_impl_macros.h"
+ #include "ui/base/models/image_model.h"
++#include "ui/color/color_provider.h"
+ #include "ui/events/event.h"
+ #include "ui/gfx/font.h"
+ #include "ui/gfx/font_list.h"
+@@ -47,8 +48,9 @@ namespace {
+ 
+ constexpr int kIndent = 14;
+ constexpr int kHeaderInset = 8;
++// Until the header is in a window, whose colours it then takes
++// (UpdateSleptLook).
+ constexpr SkColor kHeaderText = SkColorSetA(SK_ColorWHITE, 0xD8);
+-constexpr SkColor kGlyphText = SkColorSetA(SK_ColorWHITE, 0xC0);
+ constexpr SkColor kDropHighlight = SkColorSetA(SK_ColorWHITE, 0x2E);
+ // Arc's folder glyph, macOS's "folder" symbol at 15 points, centred in the
+ // favicon column's 18 DIP (sidebar_symbols.h).
+@@ -140,6 +142,9 @@ FolderView::FolderView(TabCollectionNode* collection_node)
+                                      stedding::SidebarFaviconSize()));
+   name_ = header->AddChildView(std::make_unique<views::Label>());
+   name_->SetEnabledColor(kHeaderText);
++  // The rows' own text colour, as it is: the label does not know the ground
++  // it is drawn on, and turned the dark theme's white grey on light mode's.
++  name_->SetAutoColorReadabilityEnabled(false);
+   // On the ground the sidebar paints: no opaque region under the text, so
+   // grayscale text, and no DCHECK about subpixel text on a transparent one.
+   name_->SetSkipSubpixelRenderingOpacityCheck(true);
+@@ -323,8 +328,13 @@ void FolderView::UpdateHeader() {
+   }
+   // sidebar Y2, Y3: the header's text and height follow the preset; the
+   // title is semibold, as Arc's folder rows are (F12).
+-  name_->SetFontList(
+-      stedding::SidebarFont().DeriveWithWeight(gfx::Font::Weight::SEMIBOLD));
++  const gfx::FontList font =
++      stedding::SidebarFont().DeriveWithWeight(gfx::Font::Weight::SEMIBOLD);
++  // Set only when it changed: a label asks for a layout whatever the font,
++  // and a Space switch re-themes every row (spaces B36).
++  if (!stedding::SameFont(name_->font_list(), font)) {
++    name_->SetFontList(font);
++  }
+   header_->SetPreferredSize(
+       gfx::Size(0, GetLayoutConstant(LayoutConstant::kVerticalTabHeight)));
+   const std::string& title = f->title();
+@@ -343,13 +353,19 @@ void FolderView::UpdateSleptLook() {
+       std::ranges::all_of(tabs, [](const tabs::TabInterface* tab) {
+         return tab->GetContents() && tab->GetContents()->WasDiscarded();
+       });
++  // The title and the glyph are the rows' own text colour (F12), the colour
++  // the "+ New Tab" row has, so they read on light mode's ground as on dark:
++  // white at 85% and 75%, made for the dark ground alone, read at 1.95:1 on
++  // light mode's sand (2026-10-02).
++  const ui::ColorProvider* const provider = GetColorProvider();
++  const SkColor text =
++      provider ? provider->GetColor(kColorTabForegroundInactiveFrameActive)
++               : kHeaderText;
+   // The glyph dims with its tabs (R7); it is the same folder open or closed,
+   // as Arc draws it (F12).
+-  glyph_->SetImage(stedding::FolderGlyph(
+-      all_asleep ? stedding::SleptTitleColor(kGlyphText) : kGlyphText,
+-      kGlyphSize));
+-  name_->SetEnabledColor(all_asleep ? stedding::SleptTitleColor(kHeaderText)
+-                                    : kHeaderText);
++  const SkColor color = all_asleep ? stedding::SleptTitleColor(text) : text;
++  glyph_->SetImage(stedding::FolderGlyph(color, kGlyphSize));
++  name_->SetEnabledColor(color);
+ }
+ 
+ void FolderView::BeginRename() {
+diff --git a/chrome/browser/ui/views/tabs/common/folder_view_unittest.cc b/chrome/browser/ui/views/tabs/common/folder_view_unittest.cc
+index 3cdbafb2207c1..bae4501cff4a6 100644
+--- a/chrome/browser/ui/views/tabs/common/folder_view_unittest.cc
++++ b/chrome/browser/ui/views/tabs/common/folder_view_unittest.cc
+@@ -9,11 +9,13 @@
+ #include <vector>
+ 
+ #include "base/check.h"
++#include "chrome/browser/ui/color/chrome_color_id.h"
+ #include "chrome/browser/ui/spaces/space.h"
+ #include "chrome/browser/ui/spaces/space_id.h"
+ #include "chrome/browser/ui/spaces/space_model.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "chrome/browser/ui/views/spaces/space_tab_visibility_controller.h"
++#include "chrome/browser/ui/views/tabs/common/sidebar_symbols.h"
+ #include "chrome/browser/ui/views/tabs/common/tab_collection_node.h"
+ #include "chrome/browser/ui/views/tabs/shared/tab_strip_types.h"
+ #include "chrome/test/base/browser_with_test_window_test.h"
+@@ -134,6 +136,40 @@ TEST_F(FolderViewTest, RailDropsTheIndentAndTheTitle) {
+   EXPECT_TRUE(view.name_for_testing()->GetVisible());
+ }
+ 
++// spaces B36: a Space switch re-themes every row of every Space, and every
++// row in a folder redraws its folder's glyph. The glyph is drawn once per
++// colour and size and then shared: drawing macOS's symbol each time was a
++// third of a Space switch on the owner's profile (2026-10-02).
++TEST_F(FolderViewTest, TheGlyphIsDrawnOncePerColourAndSize) {
++  const SkColor colour = SkColorSetRGB(0x20, 0x30, 0x40);
++  const ui::ImageModel glyph = stedding::FolderGlyph(colour, 15);
++  EXPECT_EQ(glyph, stedding::FolderGlyph(colour, 15)) << "drawn again";
++  EXPECT_NE(glyph, stedding::FolderGlyph(SK_ColorWHITE, 15));
++  EXPECT_NE(glyph, stedding::FolderGlyph(colour, 16));
++}
++
++// folders F12: the header's title and glyph take the rows' own text colour,
++// which follows the theme and the ground, so they read in light mode as they
++// do in dark. They were white at 85% and 75%, made for the dark ground; on
++// light mode's sand the title measured 1.95:1 where a row's is 6.8:1
++// (2026-10-02).
++TEST_F(FolderViewTest, TheHeaderTakesTheRowsTextColour) {
++  tabs::FolderTabCollection folder(tabs::FolderId::GenerateNew(), "Work",
++                                   /*collapsed=*/false);
++  TabCollectionNode node(&folder, TabStripOrientation::kVertical);
++  std::unique_ptr<views::Widget> widget =
++      CreateTestWidget(views::Widget::InitParams::CLIENT_OWNS_WIDGET);
++  FolderView* const view =
++      widget->SetContentsView(std::make_unique<FolderView>(&node));
++  widget->Show();
++  const SkColor text = widget->GetColorProvider()->GetColor(
++      kColorTabForegroundInactiveFrameActive);
++  EXPECT_EQ(text, view->name_for_testing()->GetEnabledColor());
++  // The glyph at its 15 points (folder_view.cc), in the same colour.
++  EXPECT_EQ(stedding::FolderGlyph(text, 15),
++            view->glyph_for_testing()->GetImageModel());
++}
++
+ constexpr SkColor kBlue = SkColorSetRGB(0x00, 0x00, 0xFF);
+ 
+ // FolderViews for real folders in a window with Spaces, in a widget, under
+diff --git a/chrome/browser/ui/views/tabs/common/sidebar_font.h b/chrome/browser/ui/views/tabs/common/sidebar_font.h
+index 810a190455bb9..fc16db1207700 100644
+--- a/chrome/browser/ui/views/tabs/common/sidebar_font.h
++++ b/chrome/browser/ui/views/tabs/common/sidebar_font.h
+@@ -21,6 +21,17 @@ inline gfx::FontList SidebarFont() {
+   return size > 0 ? base.DeriveWithSizeDelta(size - base.GetFontSize()) : base;
+ }
+ 
++// Whether `a` and `b` draw text the same. A label asks for a layout whenever
++// its font is set, the same font or not, so a sidebar row sets its font only
++// when this says no: a Space switch re-themes every row of every Space, and
++// each row set again laid the whole list out again (spaces B36).
++inline bool SameFont(const gfx::FontList& a, const gfx::FontList& b) {
++  return a.GetFontSize() == b.GetFontSize() &&
++         a.GetFontStyle() == b.GetFontStyle() &&
++         a.GetFontWeight() == b.GetFontWeight() &&
++         a.GetPrimaryFont().GetFontName() == b.GetPrimaryFont().GetFontName();
++}
++
+ }  // namespace stedding
+ 
+ #endif  // CHROME_BROWSER_UI_VIEWS_TABS_COMMON_SIDEBAR_FONT_H_
+diff --git a/chrome/browser/ui/views/tabs/common/sidebar_symbols.cc b/chrome/browser/ui/views/tabs/common/sidebar_symbols.cc
+index 7d333329fc282..29dc5690415fd 100644
+--- a/chrome/browser/ui/views/tabs/common/sidebar_symbols.cc
++++ b/chrome/browser/ui/views/tabs/common/sidebar_symbols.cc
+@@ -4,18 +4,44 @@
+ 
+ #include "chrome/browser/ui/views/tabs/common/sidebar_symbols.h"
+ 
++#include <utility>
++
++#include "base/containers/flat_map.h"
++#include "base/no_destructor.h"
+ #include "build/build_config.h"
+ #include "components/vector_icons/vector_icons.h"
+ 
+ namespace stedding {
+ 
+ ui::ImageModel FolderGlyph(SkColor color, int size) {
+-  const gfx::ImageSkia symbol = SystemSymbolImage("folder", size, color);
++  // Drawn once per colour and size, then shared (spaces B36). Every row in a
++  // folder redraws its folder's glyph on a theme change, and a Space switch
++  // re-themes every row of every Space: drawing macOS's symbol each time was
++  // a third of a Space switch on the owner's profile (2026-10-02). Only a
++  // few colours ever reach it -- the rows' text colour, dimmed or not, in
++  // each theme -- and the cache starts again past a few dozen.
++  static base::NoDestructor<
++      base::flat_map<std::pair<SkColor, int>, ui::ImageModel>>
++      drawn;
++  const std::pair<SkColor, int> key(color, size);
++  if (const auto it = drawn->find(key); it != drawn->end()) {
++    return it->second;
++  }
++  if (drawn->size() >= 32) {
++    drawn->clear();
++  }
++  gfx::ImageSkia symbol = SystemSymbolImage("folder", size, color);
++  ui::ImageModel glyph;
+   if (!symbol.isNull()) {
+-    return ui::ImageModel::FromImageSkia(symbol);
++    // Every representation drawn now, so the shared image is read-only.
++    symbol.MakeThreadSafe();
++    glyph = ui::ImageModel::FromImageSkia(symbol);
++  } else {
++    glyph = ui::ImageModel::FromVectorIcon(
++        vector_icons::kFolderChromeRefreshOldIcon, color, size);
+   }
+-  return ui::ImageModel::FromVectorIcon(
+-      vector_icons::kFolderChromeRefreshOldIcon, color, size);
++  drawn->emplace(key, glyph);
++  return glyph;
+ }
+ 
+ #if !BUILDFLAG(IS_MAC)
+diff --git a/chrome/browser/ui/views/tabs/common/stedding_tab_row_rules_unittest.cc b/chrome/browser/ui/views/tabs/common/stedding_tab_row_rules_unittest.cc
+index e15f8af8ac8b0..d3a58121dcc78 100644
+--- a/chrome/browser/ui/views/tabs/common/stedding_tab_row_rules_unittest.cc
++++ b/chrome/browser/ui/views/tabs/common/stedding_tab_row_rules_unittest.cc
+@@ -4,7 +4,12 @@
+ 
+ #include "chrome/browser/ui/views/tabs/common/stedding_tab_row_rules.h"
+ 
++#include "base/functional/callback_helpers.h"
++#include "chrome/browser/ui/views/tabs/common/clear_tabs_separator.h"
++#include "chrome/test/views/chrome_views_test_base.h"
+ #include "testing/gtest/include/gtest/gtest.h"
++#include "ui/gfx/geometry/point.h"
++#include "ui/gfx/geometry/rect.h"
+ 
+ namespace stedding {
+ namespace {
+@@ -129,5 +134,26 @@ TEST(TabRowRulesTest, DriftShowsASlashOnRowsAndADotOnCards) {
+   EXPECT_TRUE(ShowsDriftDot(rail, true));
+ }
+ 
++using ClearLineTest = ChromeViewsTestBase;
++
++// spaces B17, sidebar Y8: in the rail's column the Clear line has no room
++// for its label. It draws the line alone and takes no press there; the label
++// used to be drawn clipped to "lear" across the column, over a press target
++// that ran off its left edge (the owner's copy, 2026-10-02).
++TEST_F(ClearLineTest, TheRailDrawsTheLineWithoutTheLabel) {
++  ClearTabsSeparator line;
++  line.SetClearCallback(base::DoNothing());
++
++  line.SetBounds(0, 0, 240, 22);
++  const gfx::Rect label = line.GetClearRect();
++  EXPECT_FALSE(label.IsEmpty());
++  EXPECT_TRUE(gfx::Rect(240, 22).Contains(label));
++  EXPECT_FALSE(line.GetRenderedTooltipText(label.CenterPoint()).empty());
++
++  line.SetBounds(0, 0, 44, 22);  // the rail's column (sidebar Y8)
++  EXPECT_TRUE(line.GetClearRect().IsEmpty());
++  EXPECT_TRUE(line.GetRenderedTooltipText(gfx::Point(22, 11)).empty());
++}
++
+ }  // namespace
+ }  // namespace stedding
+diff --git a/chrome/browser/ui/views/tabs/common/tab_view.cc b/chrome/browser/ui/views/tabs/common/tab_view.cc
+index 1ccaabc847bce..0daeec306d9be 100644
+--- a/chrome/browser/ui/views/tabs/common/tab_view.cc
++++ b/chrome/browser/ui/views/tabs/common/tab_view.cc
+@@ -1045,10 +1045,15 @@ void TabView::UpdateLayerRoundedCorners() {
+ void TabView::OnThemeChanged() {
+   views::View::OnThemeChanged();
+   // sidebar Y2: the title at the chosen size. A density change is sent to
+-  // every window as a theme change, which is how it reaches every row.
+-  title_->SetFontList(stedding::SidebarFont());
+-  if (drift_slash_) {
+-    drift_slash_->SetFontList(stedding::SidebarFont());
++  // every window as a theme change, which is how it reaches every row. Set
++  // only when it changed: a Space switch re-themes every row too (spaces
++  // B36).
++  const gfx::FontList font = stedding::SidebarFont();
++  if (!stedding::SameFont(title_->font_list(), font)) {
++    title_->SetFontList(font);
++  }
++  if (drift_slash_ && !stedding::SameFont(drift_slash_->font_list(), font)) {
++    drift_slash_->SetFontList(font);
+   }
+   UpdateColors();
+ }
 diff --git a/chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_focus_swipe_controller.cc b/chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_focus_swipe_controller.cc
 index d220beb6d7ebe..b2e1740cfd61a 100644
 --- a/chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_focus_swipe_controller.cc
@@ -1991,7 +2420,7 @@ index 0000000000000..43f088c9d44ad
 +
 +}  // namespace
 diff --git a/chrome/test/stedding/space_switch_browsertest.cc b/chrome/test/stedding/space_switch_browsertest.cc
-index 9e2b05b6f6c1d..510ff8e30a38c 100644
+index 9e2b05b6f6c1d..6fc46536cd97d 100644
 --- a/chrome/test/stedding/space_switch_browsertest.cc
 +++ b/chrome/test/stedding/space_switch_browsertest.cc
 @@ -30,6 +30,7 @@
@@ -2018,7 +2447,7 @@ index 9e2b05b6f6c1d..510ff8e30a38c 100644
  #include "ui/events/event.h"
  #include "ui/events/event_utils.h"
  #include "ui/events/keycodes/keyboard_codes.h"
-@@ -69,6 +72,7 @@
+@@ -69,12 +72,14 @@
  #include "ui/events/types/event_type.h"
  #include "ui/gfx/geometry/point.h"
  #include "ui/gfx/geometry/point_f.h"
@@ -2026,7 +2455,14 @@ index 9e2b05b6f6c1d..510ff8e30a38c 100644
  #include "ui/gfx/geometry/vector2d.h"
  #include "ui/menus/simple_menu_model.h"
  #include "ui/views/controls/textfield/textfield.h"
-@@ -108,6 +112,18 @@ spaces::SpaceSwitcherView* FindDrawnSwitcher(views::View* view) {
+ #include "ui/views/focus/focus_manager.h"
+ #include "ui/views/test/views_test_utils.h"
+ #include "ui/views/view.h"
++#include "ui/views/view_observer.h"
+ #include "ui/views/view_utils.h"
+ #include "ui/views/widget/widget.h"
+ #include "ui/views/widget/widget_utils.h"
+@@ -108,6 +113,18 @@ spaces::SpaceSwitcherView* FindDrawnSwitcher(views::View* view) {
    return nullptr;
  }
  
@@ -2045,7 +2481,7 @@ index 9e2b05b6f6c1d..510ff8e30a38c 100644
  // Every moment on the way through a change at which the active tab is one
  // the sidebar hides: a tab of another Space than the active one. Checked at
  // each notification of the strip and of the Spaces, not once it settled.
-@@ -692,6 +708,89 @@ IN_PROC_BROWSER_TEST_F(SpaceSwitchTest, NoSwitchEverShowsAHiddenTab) {
+@@ -692,6 +709,129 @@ IN_PROC_BROWSER_TEST_F(SpaceSwitchTest, NoSwitchEverShowsAHiddenTab) {
        << " notification(s), the first at " << watcher.seen().front();
  }
  
@@ -2132,9 +2568,108 @@ index 9e2b05b6f6c1d..510ff8e30a38c 100644
 +}
 +#endif  // BUILDFLAG(IS_MAC)
 +
++// How many times a view is told its layout is no longer valid.
++class LayoutInvalidations : public views::ViewObserver {
++ public:
++  explicit LayoutInvalidations(views::View* view) {
++    observation_.Observe(view);
++  }
++
++  // views::ViewObserver:
++  void OnViewLayoutInvalidated(views::View* view) override { ++count_; }
++
++  int count() const { return count_; }
++
++ private:
++  int count_ = 0;
++  base::ScopedObservation<views::View, views::ViewObserver> observation_{this};
++};
++
++// spaces B36: a Space switch re-themes the window for the Space's tint, and
++// the theme change reaches every row of every Space. A row whose font did
++// not change asks for no layout. Each row used to set its title's font
++// again, and a label asks for a layout whatever the font, so the whole list
++// was laid out once per row: on the owner's profile, hundreds of tabs, a
++// quarter of a second before the new Space showed (2026-10-02).
++IN_PROC_BROWSER_TEST_F(SpaceSwitchTest, ARethemeDoesNotLayOutTheListPerRow) {
++  constexpr int kRows = 30;
++  while (tab_strip_model()->count() < kRows) {
++    AppendTab();
++  }
++  views::Widget* const window = browser_view()->GetWidget();
++  views::test::RunScheduledLayout(window);
++  const TabStripView* const strip = FindTabStripView(
++      browser_view()->vertical_tab_strip_region_view_for_testing());
++  ASSERT_TRUE(strip);
++  LayoutInvalidations list(strip->unpinned_tabs_scroll_view());
++  window->ThemeChanged();
++  EXPECT_LT(list.count(), kRows / 3)
++      << "the list was told to lay out again " << list.count()
++      << " times for one theme change of " << kRows << " rows";
++}
++
  IN_PROC_BROWSER_TEST_F(SpaceSwitchTest, AChipDraggedAlongTheRowMovesItsSpace) {
    MakeThreeSpaces();
    DragTheThirdChipSecond(/*along_y=*/false);
+diff --git a/chrome/test/stedding/window_buttons_browsertest.mm b/chrome/test/stedding/window_buttons_browsertest.mm
+index e0ce584eb8b3a..6e5a51dc678cf 100644
+--- a/chrome/test/stedding/window_buttons_browsertest.mm
++++ b/chrome/test/stedding/window_buttons_browsertest.mm
+@@ -16,6 +16,7 @@
+ #include "base/test/run_until.h"
+ #include "chrome/browser/ui/animation/browser_animation_controller.h"
+ #include "chrome/browser/ui/browser_commands.h"
++#include "chrome/browser/ui/browser_element_identifiers.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/stedding_ui_metrics.h"
+ #include "chrome/browser/ui/tabs/vertical_tab_strip_state_controller.h"
+@@ -37,6 +38,7 @@
+ #include "ui/views/controls/button/label_button.h"
+ #include "ui/views/test/button_test_api.h"
+ #include "ui/views/test/views_test_utils.h"
++#include "ui/views/view_class_properties.h"
+ #include "ui/views/view_utils.h"
+ #include "ui/views/widget/widget.h"
+ 
+@@ -144,4 +146,38 @@ IN_PROC_BROWSER_TEST_F(WindowButtonsTest,
+   EXPECT_TRUE(strip->GetTopContainer()->GetVisible());
+ }
+ 
++// toolbar T32: in full screen the overlay paints the row's own hairline where
++// the row meets the page. Chromium's separator for its slide-in top container
++// drew a second line a DIP under it, a step darker than the page (the owner's
++// copy, 2026-10-02: (240, 240, 240) under the hairline on a white page).
++IN_PROC_BROWSER_TEST_F(WindowButtonsTest, FullScreenDrawsOneLineUnderTheRow) {
++  ui::test::ScopedFakeNSWindowFullscreen fake_fullscreen;
++  BrowserView* const browser_view =
++      BrowserView::GetBrowserViewForBrowser(browser());
++  views::View* separator = nullptr;
++  for (views::View* const child : browser_view->top_container()->children()) {
++    if (child->GetProperty(views::kElementIdentifierKey) ==
++        kContentsSeparatorTopEdgeElementId) {
++      separator = child;
++    }
++  }
++  ASSERT_TRUE(separator);
++
++  chrome::ToggleFullscreenMode(browser());
++  ASSERT_TRUE(base::test::RunUntil([&] {
++    views::test::RunScheduledLayout(browser_view->GetWidget());
++    return browser_view->GetWidget()->IsFullscreen();
++  }));
++  views::test::RunScheduledLayout(browser_view->GetWidget());
++  EXPECT_TRUE(browser_view->toolbar()->GetVisible());
++  EXPECT_FALSE(separator->GetVisible())
++      << "a second line under the row's own hairline";
++
++  chrome::ToggleFullscreenMode(browser());
++  ASSERT_TRUE(base::test::RunUntil([&] {
++    views::test::RunScheduledLayout(browser_view->GetWidget());
++    return !browser_view->GetWidget()->IsFullscreen();
++  }));
++}
++
+ }  // namespace
 diff --git a/content/browser/renderer_host/navigation_entry_impl.cc b/content/browser/renderer_host/navigation_entry_impl.cc
 index 83b871f22c2fb..40937c75601f5 100644
 --- a/content/browser/renderer_host/navigation_entry_impl.cc

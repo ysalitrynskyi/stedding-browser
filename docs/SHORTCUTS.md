@@ -78,6 +78,9 @@ Session** row in the command bar (⇧⌘P). Off by default.
   the commands reachable.
 - **macOS:** a clipboard manager that owns ⇧⌘C system-wide (Maccy does by default)
   takes it before the browser does; the File menu row always works.
+- **macOS:** while Arc is running it takes ⌥⌘N from every app for its Little Arc window,
+  so ⌥⌘N opens Arc instead of a split here. Quit Arc, or use **New Split View with Current
+  Tab** on a tab's right-click menu.
 - **Windows:** a tap of Alt on its own still focuses the app menu, as in Chromium; the
   digit goes with the key held.
 - **Windows:** Ctrl+Alt with an arrow is also the display-rotation hotkey some Intel

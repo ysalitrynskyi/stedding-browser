@@ -41,7 +41,7 @@ Sixty-odd traps follow. Read the one for the topic in front of you, not the list
 |---|---|
 | Building, disk, rebuild cost | 1, 16, 19, 23, 44, 45, 53, 54, 57 |
 | The working loop and the series | 9, 13, 14, 17, 22, 28, 50, 51 |
-| Driving and capturing the window | 3, 10, 11, 12, 15, 18, 27, 29, 30, 36, 37, 52, 56, 59, 61 |
+| Driving and capturing the window | 3, 10, 11, 12, 15, 18, 27, 29, 30, 36, 37, 52, 56, 59, 61, 63, 64, 65 |
 | What a test can and cannot prove | 2, 31, 46, 48, 55, 58, 60 |
 | Windows | 32, 34, 36, 38, 40, 42, 53, 54, 55, 56, 57, 59, 62 |
 | Release and signing | 44, 47, 49, 62 |
@@ -886,6 +886,34 @@ private window has.
     `S-72`: a file version of Stedding's own for every Windows release, never lower than the last
     one a profile ran (Chromium's downgrade manager reads a lower number as a downgrade), with the
     About line's Chromium number read from the pin and not from `chrome/VERSION`.
+
+63. **A synthetic two-finger swipe that sets the line delta travels eight times as far.**
+    `CGEventCreateScrollWheelEvent` in pixel units sets the event's point delta; setting
+    `kCGScrollWheelEventDeltaAxis2`, the line delta, as well makes macOS recompute the point
+    delta as eight times the lines: `NSEvent.scrollingDeltaX` read 40 for a 5-point step. The
+    helper that posted the round 11 swipes did that, so a "short" swipe of 60 points went 480,
+    switched Spaces, and the shot taken mid-swipe showed the list gone (2026-10-02). A trackpad's
+    line delta is about a tenth of its point delta: post the point delta and the phases only,
+    and read a synthetic event back through `[NSEvent eventWithCGEvent:]` before trusting what
+    it measures.
+
+64. **Arc takes ⌥⌘N from any app while it runs.** A drive's ⌥⌘N opened a Little Arc window
+    and brought Arc to the front, and the rest of that run's keys went nowhere, Stedding no
+    longer being frontmost (2026-10-02). Quit Arc before a drive that uses the chord, or reach a
+    split from the tab menu ("New Split View with Current Tab"); `S-79` is the product side.
+    In the same run `drive-window.py` refused a second click at the point of the first, "covered
+    by Window Server's window": the pointer's own window is the topmost one there. Hover away
+    before clicking the same spot twice.
+
+65. **A stall is measured, not guessed.** A Space switch on the owner's profile (hundreds of
+    tabs, dozens of folders) showed nothing for 450 to 700 ms. One `sample <pid> 3 1 -file <out>` started in the
+    background just before the key, its main thread read as a tree under the slow call
+    (`SpaceModel::SetActiveSpace`, then `Widget::ThemeChanged`), named both causes in one run:
+    every row set its title's font again, and a label asks for a layout whenever that happens,
+    so the whole list was laid out once per row; and every row in a folder drew the folder's
+    glyph from macOS's symbol again (spaces B36). Time an action from window captures taken in
+    process (`CGWindowListCreateImage` by window id, every few milliseconds), not with
+    `screencapture`, which takes half a second a shot.
 
 ## The Windows build
 

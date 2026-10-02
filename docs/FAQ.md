@@ -86,6 +86,11 @@ macOS Mission Control takes ⌃1–⌃9 for "Switch to Desktop N" once you have 
 desktop, before the browser sees them. The Spaces menu in the menu bar keeps every
 command reachable. Full list of collisions: [SHORTCUTS.md](SHORTCUTS.md).
 
+**Why does ⌥⌘N open Arc?**
+While Arc is running it takes ⌥⌘N from every app to open its Little Arc window, so the key
+never reaches Stedding. Quit Arc once you have moved over, or split from a tab's
+right-click menu (**New Split View with Current Tab**).
+
 **How do I get the old Chromium tab menu back?**
 Settings → Stedding has a switch for Chromium's full context menus. Stedding's short
 menus are the default.

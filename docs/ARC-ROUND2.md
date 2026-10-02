@@ -261,16 +261,33 @@ for every user of every Mac beta so far; the third turned up while fixing them.
 
 The owner used beta 10 on their own profile, an Arc import with eight Spaces and long lists,
 and the Mac then drove a copy of it with real input. Patch 0058, with the click fix folded into
-0057. Built; the new unit and browser tests pass; what the last column says is still to be seen
-on the real build.
+0057. Built; the new unit and browser tests pass. On 2026-10-02 the Mac used the release build
+with the real pointer and keyboard on a copy of the owner's profile and on a fresh one: the last
+column says what was seen, and rows 7 to 11 are what that pass found, fixed in the same patch.
 
 | # | Found | Fix | Seen live |
 |---|---|---|---|
-| 1 | Tabs would not select: "worked 1 time and now stuck". | The sidebar's empty bottom bar was hidden under the long list but kept its old bounds over the rows, and the window read that as caption, so every press became a window drag (PLAN.md TAB-1). Only a showing container counts now. | yes: rows click on the owner's copy |
-| 2 | The address bar disappears when everything is collapsed. | "Hide the address row with the sidebar" is off by default (toolbar T8, T12). | not yet |
-| 3 | A swipe changes Space with no animation. | The title and the list follow the fingers; the lift switches or springs back; the next Space slides in (spaces B35). | not yet |
-| 4 | The Space chips turn to dots too early. | The gaps close up to 4 DIP first (spaces B24). | not yet |
+| 1 | Tabs would not select: "worked 1 time and now stuck". | The sidebar's empty bottom bar was hidden under the long list but kept its old bounds over the rows, and the window read that as caption, so every press became a window drag (PLAN.md TAB-1). Only a showing container counts now. | yes: rows click on the owner's copy; again on 2026-10-02, in the open sidebar and in the rail |
+| 2 | The address bar disappears when everything is collapsed. | "Hide the address row with the sidebar" is off by default (toolbar T8, T12). | yes, 2026-10-02: after ⌘S the row stays, clear of the traffic lights |
+| 3 | A swipe changes Space with no animation. | The title and the list follow the fingers; the lift switches or springs back; the next Space slides in (spaces B35). | yes, 2026-10-02: the list follows, a short swipe springs back, a long one switches and the next Space slides in; the old list stood still for a quarter second first on the owner's profile, fixed (row 8) |
+| 4 | The Space chips turn to dots too early. | The gaps close up to 4 DIP first (spaces B24). | yes, 2026-10-02: the owner's eight Spaces as icons |
 | 5 | Some icons in the address row look low. | Measured: every icon is centred in the row to half a DIP; the row sits 6 DIP below the window's top (T2), while the traffic lights and the sidebar toggle centre about 6 pt higher. The owner said that is fine if so; left as it is. | measured |
-| 6 | The row is not always the page's colour; sometimes none. | The colour the page draws along its top edge first (T31); the page's colour in full screen too (T32). | not yet |
-| — | Found on the owner's copy: restored tabs died with "Terminating renderer for bad IPC message, reason 332". | Unloaded imported tabs saved sequence numbers of -1 with the session; content now writes and reads them as 0 (import I26). | not yet |
+| 6 | The row is not always the page's colour; sometimes none. | The colour the page draws along its top edge first (T31); the page's colour in full screen too (T32). | yes, 2026-10-02, with row 7's fix: farcaster.xyz, Google's dark sign-in page, a purple layer, a red header scrolled away, and full screen over white, red and purple, the row's pixel the page's |
+| — | Found on the owner's copy: restored tabs died with "Terminating renderer for bad IPC message, reason 332". | Unloaded imported tabs saved sequence numbers of -1 with the session; content now writes and reads them as 0 (import I26). | yes, 2026-10-02: three launches with the last session restored, no "reason 332" in any log, the imported tabs load |
+| 7 | Found 2026-10-02: on saturated pages the row was a step off the page's colour (farcaster.xyz: a row of (47, 28, 158) over (50, 27, 165)). | The page's top is read back in the display's colour space, Display P3, and was painted as if it were sRGB; the strip is read as sRGB now (toolbar T31). | yes: equal to the unit on four pages |
+| 8 | Found 2026-10-02: on the owner's profile a Space switch showed nothing for half a second, and a swipe's lift held the old list still. | The Space's tint re-themes every row of every Space, and each row set its font again, which laid the whole list out once per row, and drew its folder's glyph from macOS's symbol again. A row sets its font only when it changes and the glyph is drawn once (spaces B36). | yes: ⌃4 shows the new Space by 60 ms (450 to 700 before) |
+| 9 | Found 2026-10-02: in full screen a second, darker line under the row's hairline. | Chromium's separator for its slide-in toolbar is not drawn for Stedding's window (toolbar T32). | yes: one hairline |
+| 10 | Found 2026-10-02: in the rail the Clear line's label was drawn clipped to "lear". | In the rail's column the line is drawn alone, with no label and no press (spaces B17). | yes |
+| 11 | Found 2026-10-02 on a fresh profile: in light mode a folder's name and glyph were nearly invisible (1.95:1). | They take the rows' own text colour (folders F12). | yes: 6.8:1, as the rows |
+
+The same pass, with the real pointer and keyboard on the release build, also closed the Mac halves
+of two items: TAB-3 (in the rail a click on a drifted Space pin keeps its page, an Option-click
+sends it home, and straight after it the video's own fullscreen button and Esc work, a ⌘-click
+adds a row to the selection and the red button closes the window) and WIN-21 (View → Always
+Show Full URLs checked; google.com's whole address at rest and after a click, in a field of
+about 1180 DIP in a window of 1688). A human-style pass on a fresh profile (the welcome flow,
+⌘T, a folder, a drag onto it, a split, Settings, light and dark) found rows 10 and 11 and four
+things logged rather than fixed: the welcome steps running under the footer (S-76), a globe for
+every search engine (S-77), ⌘T leaving an empty New Tab behind (S-78) and Arc taking ⌥⌘N while
+it runs (S-79); the switch's row animation is S-80.
 

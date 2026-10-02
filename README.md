@@ -59,8 +59,8 @@ project's own tooling; every claim below is backed by a test or a measured captu
 
 ## Download
 
-The current release is **0.2.0 beta 10**, built on Chromium 155.0.8059.12 (stable): the macOS image,
-signed and notarized, and a Windows preview. Get them from
+The current release is **0.2.0 beta 11**, built on Chromium 155.0.8059.12 (stable): the macOS image,
+signed and notarized. The Windows preview is beta 10's installer until beta 11's joins it. Get them from
 [stedding.dev](https://stedding.dev/#download) or the
 [Releases page](https://github.com/ysalitrynskyi/stedding-browser/releases/latest):
 
@@ -69,9 +69,8 @@ signed and notarized, and a Windows preview. Get them from
 | macOS, Apple silicon (M1 or later), macOS 13 or later | `Stedding-<version>-arm64.dmg` | Open the DMG, drag **Stedding** to Applications and open it: the image is signed and notarized ([details](docs/INSTALL.md#macos-apple-silicon)). |
 | Windows 10 / 11, x64 | `Stedding-<version>-win-x64.exe` | Installs for the current user, no administrator prompt. If SmartScreen appears: **More info → Run anyway**, once. |
 
-The builds are **not yet code-signed** (an Apple developer account exists; the
-certificate and notarisation are the next step), which is why the first launch needs
-that one extra click. A SHA-256 checksum for each file is in the release notes; the
+The Windows installer is **not yet code-signed**, which is why SmartScreen asks once; the
+macOS image is signed and notarized. A SHA-256 checksum for each file is in the release notes; the
 [install guide](docs/INSTALL.md) shows how to verify it, where your data lives, and how
 to update or uninstall.
 
@@ -105,7 +104,7 @@ it, click the favicon and you are back.
 address row stays; a setting hides it with the sidebar, and ⇧⌘D shows or hides it on
 its own.
 
-![The sidebar collapsed to a rail of icons](docs/images/readme/rail.png)
+![The sidebar collapsed to a rail of icons, the address row still across the top in the page's colour](docs/images/readme/rail.png)
 
 **Light and dark.** Sand by day, a blue-to-plum gradient by night, following the
 system or your choice; each Space's colour tints the sidebar.
@@ -247,7 +246,7 @@ and what comes next:
 
 | | State |
 |---|---|
-| macOS (Apple silicon) | Beta releases since 2026-09-01; the current one is beta 10, the first signed and notarized |
+| macOS (Apple silicon) | Beta releases since 2026-09-01; the current one is beta 11, signed and notarized as every macOS image is from beta 10 on |
 | Windows x64 | Preview installer since beta 5, on Chromium 155 from beta 9: the full interface, Arc's keys for Windows, a per-user install; both test suites also run clean with DCHECKs (beta 10) and under AddressSanitizer (beta 9's tree) |
 | Code signing and notarisation | The macOS image is signed with the Developer ID and notarized from beta 10 on; Windows is not signed yet, and automatic updates come next (`S-17`, `S-74` in [BACKLOG.md](BACKLOG.md)) |
 | Automatic updates | After signing; checks go to GitHub Releases, with no identifier (ADR 0014) |

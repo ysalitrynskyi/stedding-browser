@@ -6,6 +6,30 @@ This file was the "State of the project" section of `AGENTS.md` until 2026-09-30
 unchanged, and is where the dated record goes from now on: an agent opening the repo cold
 should not have to read four hundred lines of rounds to learn the rules.
 
+## 2026-10-02 -- round 11 seen live, and beta 11
+
+Patch 0058 (the owner's report on beta 10) had passed its tests without anyone looking at
+it; the Mac then used the release build with the real pointer and keyboard on a copy of the
+owner's profile and on a fresh one.
+
+- **Round 11's live column, filled in** (`docs/ARC-ROUND2.md`): three restarts of the copy with
+  no "reason 332" and the imported tabs loading; rows clicked in the open sidebar and the rail;
+  ⌘S keeping the address row; the swipe following the fingers; the eight Spaces as icons; the
+  row's colour against the page on five pages and in full screen. TAB-3's and WIN-21's Mac
+  halves passed too (`PLAN.md`).
+- **Five faults found and fixed in 0058**, each with a test that failed first: the page's top
+  read in the display's colour space (Display P3) and painted as sRGB (toolbar T31); a Space
+  switch that showed nothing for half a second on the owner's profile, because the Space's tint
+  re-themed every row and each row laid the whole list out again and redrew its folder glyph
+  (spaces B36, found with `sample`, HANDOFF trap 65); a second line under the row in full screen
+  (T32); the rail's Clear label clipped to "lear" (B17); folder names nearly invisible in light
+  mode (folders F12). Logged instead: S-76 to S-80.
+- **Two things about the harness**: the round 11 swipe helper set the event's line delta, which
+  makes macOS report eight times the travel (trap 63), and Arc takes ⌥⌘N from every app while
+  it runs (trap 64, `S-79`).
+- **Beta 11**, the macOS image of this series, signed and notarized; Windows stays on beta 10's
+  installer until the PC builds this tag.
+
 ## 2026-10-01 -- the Mac's half of beta 10
 
 The Mac took the PC's series as it was, re-exported byte for byte from the Mac checkout (a

@@ -42,7 +42,7 @@ Sixty-odd traps follow. Read the one for the topic in front of you, not the list
 | Building, disk, rebuild cost | 1, 16, 19, 23, 44, 45, 53, 54, 57 |
 | The working loop and the series | 9, 13, 14, 17, 22, 28, 50, 51 |
 | Driving and capturing the window | 3, 10, 11, 12, 15, 18, 27, 29, 30, 36, 37, 52, 56, 59, 61, 63, 64, 65 |
-| What a test can and cannot prove | 2, 31, 46, 48, 55, 58, 60 |
+| What a test can and cannot prove | 2, 31, 46, 48, 55, 58, 60, 66 |
 | Windows | 32, 34, 36, 38, 40, 42, 53, 54, 55, 56, 57, 59, 62 |
 | Release and signing | 44, 47, 49, 62 |
 | Chromium's own behaviour to know | 6, 8, 20, 21, 25, 26, 35, 39, 41, 43, 60 |
@@ -914,6 +914,14 @@ private window has.
     glyph from macOS's symbol again (spaces B36). Time an action from window captures taken in
     process (`CGWindowListCreateImage` by window id, every few milliseconds), not with
     `screencapture`, which takes half a second a shot.
+
+66. **A browser test that crashes at "CompleteShutdown took more than 30 seconds" is the machine,
+    not the code.** The harness gives the browser's thread pool thirty seconds to stop; with
+    other jobs holding this Mac at a load of about 400 and swap full, sixteen of the first
+    twenty-nine browser tests of a sweep crashed there ("ThreadPool currently running tasks:
+    none"), tests the change did not touch among them, and the whole suite passed, 160 of 160,
+    once the load fell (2026-10-02). Read `uptime` and `sysctl vm.swapusage` before reading a
+    sweep; wait for a quiet machine rather than retrying, and never stop other sessions' jobs.
 
 ## The Windows build
 

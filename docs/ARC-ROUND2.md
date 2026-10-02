@@ -291,3 +291,13 @@ things logged rather than fixed: the welcome steps running under the footer (S-7
 every search engine (S-77), ⌘T leaving an empty New Tab behind (S-78) and Arc taking ⌥⌘N while
 it runs (S-79); the switch's row animation is S-80.
 
+After beta 11, the same day, the items that pass had logged were fixed in 0058 too, each with a
+test that failed first, and seen on the rebuilt app: the rows take their places at once on a
+Space switch (spaces B37, S-80: ten rows in place 10 ms after the switch); ⌘T from an untouched
+New Tab page opens there (commandbar K21, S-78); the welcome flow's steps fade out at the bottom
+while there is more below and the keys step, without Peek's ⌘O, fits (welcome W6, W11, S-76);
+the Clear line is the rows' text colour at a quarter strength, visible on a tinted Space (spaces
+B17); and Settings' shortcut reference names Arc's ⌥⌘N (shortcuts Z3, S-79 stays open for the
+chord itself). The search engines' icons (S-77) wait for the owner: they need images Chromium
+builds do not carry.
+

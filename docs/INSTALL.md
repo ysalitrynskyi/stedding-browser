@@ -4,7 +4,7 @@ Stedding ships as beta pre-releases on the
 [Releases page](https://github.com/ysalitrynskyi/stedding-browser/releases). Each
 release carries a file for each platform it was built for, and a SHA-256 checksum for
 each. When the newest release has no file for your platform, take it from the one before:
-beta 11 is the macOS image only, and the Windows preview is beta 10's installer.
+beta 11 and beta 12 are the macOS image only, and the Windows preview is beta 10's installer.
 
 The macOS image is signed with the project's Developer ID and notarized by Apple from
 beta 10 on, so it opens like any other app. The Windows installer is **not code-signed
@@ -70,7 +70,7 @@ Keychain Access.
 Requirements: Windows 10 or 11, 64-bit.
 
 1. Download `Stedding-<version>-win-x64.exe` from the newest release that has one
-   (beta 10's, while beta 11 is the macOS image only).
+   (beta 10's, while the betas after it are the macOS image only).
 2. Run it. If SmartScreen shows "Windows protected your PC", click **More info**, then
    **Run anyway**. This is needed once.
 3. Stedding installs for the current user only, into `%LOCALAPPDATA%\Stedding`, with no

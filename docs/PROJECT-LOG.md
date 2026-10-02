@@ -29,6 +29,12 @@ owner's profile and on a fresh one.
   it runs (trap 64, `S-79`).
 - **Beta 11**, the macOS image of this series, signed and notarized; Windows stays on beta 10's
   installer until the PC builds this tag.
+- **Beta 12** the same day: what the pass had logged, fixed in 0058 with tests that failed first
+  and seen on the rebuilt app -- the rows in place on a Space switch (S-80), ⌘T into an empty
+  New Tab (S-78), the welcome flow fitting or fading (S-76), the Clear line on tinted Spaces, and
+  Arc's ⌥⌘N in Settings' shortcut notes. The browser suite crashed at the harness's 30-second
+  shutdown limit while other jobs held the Mac at a load of about 400 with swap full, and passed
+  once the load fell; a sweep is only read on a quiet machine.
 
 ## 2026-10-01 -- the Mac's half of beta 10
 

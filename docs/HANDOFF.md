@@ -42,8 +42,8 @@ Sixty-odd traps follow. Read the one for the topic in front of you, not the list
 | Building, disk, rebuild cost | 1, 16, 19, 23, 44, 45, 53, 54, 57 |
 | The working loop and the series | 9, 13, 14, 17, 22, 28, 50, 51 |
 | Driving and capturing the window | 3, 10, 11, 12, 15, 18, 27, 29, 30, 36, 37, 52, 56, 59, 61, 63, 64, 65 |
-| What a test can and cannot prove | 2, 31, 46, 48, 55, 58, 60, 66 |
-| Windows | 32, 34, 36, 38, 40, 42, 53, 54, 55, 56, 57, 59, 62 |
+| What a test can and cannot prove | 2, 31, 46, 48, 55, 58, 60, 66, 68 |
+| Windows | 32, 34, 36, 38, 40, 42, 53, 54, 55, 56, 57, 59, 62, 67, 68 |
 | Release and signing | 44, 47, 49, 62 |
 | Chromium's own behaviour to know | 6, 8, 20, 21, 25, 26, 35, 39, 41, 43, 60 |
 
@@ -780,7 +780,7 @@ private window has.
     flags, the working directory, `lib.sh`'s environment, the temp file, stdin, the
     `--gtest_list_tests` pass, job membership (both are in the tool's job), the real
     pointer (it does not move in either mode) and the process group. Why is not
-    understood. `tooling/dev` runs its binaries through `timeout` on Windows
+    understood; trap 67 has the likely reason for the drags. `tooling/dev` runs its binaries through `timeout` on Windows
     (`STEDDING_TEST_BUDGET_S`, 900 by default, which is also the 15-minute cap), and
     anything else that starts one from the tool's shell should do the same or start it
     detached. A Windows run that fails exactly these tests is this, not a regression.
@@ -922,6 +922,33 @@ private window has.
     none"), tests the change did not touch among them, and the whole suite passed, 160 of 160,
     once the load fell (2026-10-02). Read `uptime` and `sysctl vm.swapusage` before reading a
     sweep; wait for a quiet machine rather than retrying, and never stop other sessions' jobs.
+
+67. **Browser tests started over SSH need the signed-in session at normal priority, and their
+    drags need the foreground.** From the Mac, `ssh` to the PC lands in PowerShell, and what it
+    starts, even detached through WMI's `Win32_Process Create`, runs in session 0, where every
+    browser test failed waiting for its window to show (`widget_test.cc(277)`). A scheduled task
+    with an interactive token (`schtasks /Create ... /IT`, then `/Run`) runs in the operator's
+    session, but Task Scheduler starts it below normal priority, and Chromium's test suite stops
+    before it lists a test (`Check failed: !IsProcessBackgrounded()`, `base\test\test_suite.cc`).
+    The task's script raises itself first, `(Get-Process -Id $PID).PriorityClass = 'Normal'`,
+    and what it starts inherits that. Even then the four tests that drag a row
+    (`SidebarClickTest.EveryPartOfEveryRowSelects` and the three `TabDropTest` drags, trap 56's
+    set) failed there on every run, most likely because Windows gives the mouse capture a drag
+    needs only to the foreground window, and a task's window may not take the foreground from
+    the window the operator left in front (2026-10-02). Run those at the desk, or say they were
+    not run. Such a task is created only with the operator's yes, and deleted when its run ends.
+
+68. **On Windows at a display scale other than 1, a click from `ui::test::EventGenerator`
+    lands in the wrong place.** The generator hands the window a point already in DIPs, and
+    aura scales a located event by the display's scale once more on its way in
+    (`WindowEventDispatcher::TransformEventForDeviceScaleFactor`). On the PC's 4K display at
+    150 % every generated click landed at two thirds of where it was aimed: sixteen click tests
+    failed with "the click landed on the row of tab 0" (the hit test before the click) while
+    the tab stayed unselected, and the same sixteen passed with `--force-device-scale-factor=1`
+    (2026-10-02). A real click arrives in pixels and is scaled once, so this says nothing about
+    the product. The click fixtures run at scale 1 off the Mac
+    (`stedding::test::ForceScaleOneForEventGenerator`); a new fixture that clicks through the
+    generator calls it too. `TabDropTest` hands its events to the root view and is not affected.
 
 ## The Windows build
 

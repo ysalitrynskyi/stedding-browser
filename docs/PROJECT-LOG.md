@@ -35,6 +35,14 @@ owner's profile and on a fresh one.
   Arc's ⌥⌘N in Settings' shortcut notes. The browser suite crashed at the harness's 30-second
   shutdown limit while other jobs held the Mac at a load of about 400 with swap full, and passed
   once the load fell; a sweep is only read on a quiet machine.
+- **Beta 12 for Windows**, built on the PC and driven from the Mac over SSH. Its browser suite
+  found the welcome flow's keys step 44 px under its footer on Windows, where the chords are
+  spelled out; fixed in 0058, and Windows is no longer taught the Space swipe, which works on
+  the Mac only. Two lessons about running the suite unattended: a scheduled task in the
+  operator's session can run it at normal priority, but its windows cannot take the foreground
+  a drag needs (trap 67); and at a display scale of 150 % Chromium's event generator scales a
+  click twice, so sixteen click tests had been testing the generator (trap 68). The installer
+  went into beta 12 beside the Mac's DMG: unit 817 of 817, browser 157 of 161, the four drag tests the only failures.
 
 ## 2026-10-01 -- the Mac's half of beta 10
 

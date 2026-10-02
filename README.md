@@ -60,7 +60,7 @@ project's own tooling; every claim below is backed by a test or a measured captu
 ## Download
 
 The current release is **0.2.0 beta 12**, built on Chromium 155.0.8059.12 (stable): the macOS image,
-signed and notarized. The Windows preview is beta 10's installer until a newer tag gains one. Get them from
+signed and notarized, and a Windows preview. Get them from
 [stedding.dev](https://stedding.dev/#download) or the
 [Releases page](https://github.com/ysalitrynskyi/stedding-browser/releases/latest):
 

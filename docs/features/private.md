@@ -1,12 +1,12 @@
 # Feature: Private windows wear a different coat
 
-Status: **V3, V6 built; V1, V2 and V7 planned, written, not yet run** (one test for "private", `PLAN.md` WIN-4); **V4 and V5 dropped** (round 6, `docs/ROUND6-PLAN.md` R6-32).
+Status: **V1–V3, V7, V8 built** (one test for "private", `PLAN.md` WIN-4); **V6 partial** (it does not arise while Peek is off); **V4 and V5 dropped** (round 6, `docs/ROUND6-PLAN.md` R6-32).
 Owner docs: `docs/PRIVACY.md`, `docs/PRODUCT.md` §7. Patch: 0034.
 
 A private window (⇧⌘N) must be told apart at a glance and must leave nothing in the
 sidebar's model, the session or the archive. It paints a flat graphite ground with no
 Space tint, its title row reads "Private", it has no Space switcher, and Chromium's
-"Incognito" badge is back for it alone.
+avatar badge stays hidden (V4).
 
 ## Behaviours
 
@@ -17,8 +17,8 @@ Space tint, its title row reads "Private", it has no Space switcher, and Chromiu
 | V3 | No `SpaceModel` and no `TabArchiver` for a private window: the archiver never closes a private tab, and nothing private reaches the sidebar model or the session's extra data. | `TabArchiverTest.SkipsOffTheRecordWindows`, `SpaceWindowTest.PrivateWindowHasNoSpaceModel` | built |
 | V4 | Chromium's avatar badge ("Incognito") shows again for private windows only; every other window keeps the toolbar without it. | none yet | gap · dropped: the address row keeps Chromium's avatar button hidden; the coat, the title row's glyph and the window title say what the window is |
 | V5 | The local new tab page adds one line under the hint: "Private window: history, cookies and site data are forgotten when the last private window closes". | none yet | gap · dropped: a private window shows Chromium's own incognito new tab page, which already says what is forgotten; Stedding's local page never appears there |
-| V6 | Peek and its promotion into a split stay inside the private window. | by construction: `PeekView::PromoteToTab` and `PromoteToSplit` insert into the peek's own window; live: ⌘O on a private peek stays private | built |
-| V7 | A Guest window is not private. Its profile is off the record, so it has no Spaces and no archive, and it gets the private window's rows -- the New Tab row, the Clear line, no Space switcher, no "+" pill -- but it wears the ordinary coat (the sand or navy ground, not graphite), its title row stays empty, and its window title has no " – Private". It was labelled "Private" without the coat (`PLAN.md` WIN-F8). | `PrivateWindowTest.OffTheRecordAloneIsNotPrivate`; browser: `PrivateCoatTest.OnlyAnIncognitoWindowIsGraphite` (a Guest window: not graphite, no " – Private" in its title, no "Private" row); live: a Guest window on the 155.0.8059.12 build (`tooling/capture-state --guest`, 2026-09-29): the navy ground, the New Tab row, no title row | built |
+| V6 | Peek and its promotion into a split stay inside the private window. | by construction: `PeekView::PromoteToTab` and `PromoteToSplit` insert into the peek's own window; live: ⌘O on a private peek stays private | partial · does not arise while Peek is off (peek.md); returns with Peek |
+| V7 | A Guest window is not private. Its profile is off the record, so it has no Spaces and no archive, and it gets the private window's rows -- the New Tab row, no Clear line, no Space switcher, no "+" pill -- but it wears the ordinary coat (the sand or navy ground, not graphite), its title row stays empty, and its window title has no " – Private". It was labelled "Private" without the coat (`PLAN.md` WIN-F8). | `PrivateWindowTest.OffTheRecordAloneIsNotPrivate`; browser: `PrivateCoatTest.OnlyAnIncognitoWindowIsGraphite` (a Guest window: not graphite, no " – Private" in its title, no "Private" row); live: a Guest window on the 155.0.8059.12 build (`tooling/capture-state --guest`, 2026-09-29): the navy ground, the New Tab row, no title row | built |
 | V8 | ⇧⌘K (and the Clear rows of the menus) closes a private window's tabs and keeps the window and its private session, with one New Tab; the window has no Spaces, so no pinned run and no Clear line (spaces B17). The command was disabled there, because it read the window as having no Spaces to clear (PLAN.md CMD-3). | browser: `ClearSpaceTest.ClearingAPrivateWindowKeepsIt` | built |
 
 ## Notes

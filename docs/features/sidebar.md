@@ -1,6 +1,6 @@
 # Feature: Sidebar density, text size and the collapsed rail
 
-Status: **Y1–Y7 built** (Y1–Y5 round 6, `docs/ROUND6-PLAN.md` R6-27; Y6–Y7 round 7, `docs/ARC-ROUND2.md`, 2026-09-05); **Y9–Y14 partial** (rounds 8 and 9, the Windows captures); **Y8 planned, written, not yet run** (the form from the drawn width, `PLAN.md` WIN-3).
+Status: **Y1–Y7 built** (Y1–Y5 round 6, `docs/ROUND6-PLAN.md` R6-27; Y6–Y7 round 7, `docs/ARC-ROUND2.md`, 2026-09-05); **Y8, Y11, Y16, Y17 built** (Y8 the form from the drawn width, `PLAN.md` WIN-3); **Y9, Y10, Y12–Y15 partial** (rounds 8 and 9, the Windows captures).
 Owner docs: `docs/UI-SPEC.md` (the measured Arc match), `docs/PRODUCT.md` §2. Patches: 0031, 0037 (Y6–Y7).
 
 The sidebar's rows are Arc's: 44 DIP with an 18 DIP favicon, measured in

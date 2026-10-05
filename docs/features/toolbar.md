@@ -1,6 +1,6 @@
 # Feature: Toolbar and page bar
 
-Status: **T1–T8, T10–T12, T14–T18, T28–T30 built**; **T13 planned (D10), T9 dropped** (round 6, `docs/ROUND6-PLAN.md` R6-25); **T26–T27 planned, written, not yet run** (horizontal tabs, `PLAN.md` WIN-1 and WIN-F6). T15–T18 are round 7 (`docs/ARC-ROUND2.md`, 2026-09-05). T24 is the full-screen crash (2026-09-19). T28–T30 are the operator's address-bar request of 2026-09-30. T31–T32 are the owner's Mac pass on beta 10 (2026-10-01): the row takes the colour the page draws along its top edge, and the page's colour in full screen; T8 is off by default since then.
+Status: **T1–T8, T10–T12, T14–T18, T22, T24, T26, T28, T29, T31, T32 built; T19–T21, T23, T25, T30 partial**; **T13 planned (D10), T9 dropped** (round 6, `docs/ROUND6-PLAN.md` R6-25); **T27 planned** (horizontal tabs, `PLAN.md` WIN-1 and WIN-F6). T15–T18 are round 7 (`docs/ARC-ROUND2.md`, 2026-09-05). T24 is the full-screen crash (2026-09-19). T28–T30 are the operator's address-bar request of 2026-09-30. T31–T32 are the owner's Mac pass on beta 10 (2026-10-01): the row takes the colour the page draws along its top edge, and the page's colour in full screen; T8 is off by default since then.
 Owner docs: `docs/UI-SPEC.md`. Patches: `0002` (layout), `0007` (colours), `0037` (round 7: T15–T18).
 
 The address row is the top of the page card, not a strip above it: no gap, no hairline,

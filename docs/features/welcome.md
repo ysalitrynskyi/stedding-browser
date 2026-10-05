@@ -1,6 +1,6 @@
 # Feature: Welcome flow
 
-Status: **W1–W8 built** (W7 round 6, `docs/ROUND6-PLAN.md` R6-10, backlog S-42; W8 round 7, `docs/ARC-ROUND2.md`, 2026-09-05); **W9 partial** (round 9).
+Status: **W1, W2, W4–W8, W10, W11 built** (W7 round 6, `docs/ROUND6-PLAN.md` R6-10, backlog S-42; W8 round 7, `docs/ARC-ROUND2.md`, 2026-09-05); **W3, W9 partial** (W9 round 9).
 Owner docs: `docs/PRODUCT.md` (first run, import), `docs/PRIVACY.md` (the chooser).
 Patch: `0015`.
 

@@ -1,7 +1,7 @@
 # Feature: Motion
 
-Status: **O1–O3 planned** (round 6, `docs/ROUND6-PLAN.md` R6-08).
-Owner docs: `docs/QUALITY.md`. Patch: TBD.
+Status: **O1, O3 built; O2 partial** (round 6, `docs/ROUND6-PLAN.md` R6-08).
+Owner docs: `docs/QUALITY.md`. Patch: 0017.
 
 One helper decides whether Stedding animates: `stedding::ShouldAnimate()` is false when
 macOS Reduce Motion is on or the preference `stedding.ui.animate` is off. Every Stedding

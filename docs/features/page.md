@@ -1,7 +1,7 @@
 # Feature: Page card
 
-Status: **U1–U8 planned** (round 6, `docs/ROUND6-PLAN.md` R6-05, R6-06).
-Owner docs: `docs/UI-SPEC.md`. Patch: TBD.
+Status: **U1, U3–U8 built; U2 partial** (round 6, `docs/ROUND6-PLAN.md` R6-05, R6-06).
+Owner docs: `docs/UI-SPEC.md`. Patch: 0017.
 
 The content card is one surface: the link status bubble is a pill inside it, the find
 bar takes the dialog colours and the card's right edge, and split panes carry no ring

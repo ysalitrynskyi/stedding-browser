@@ -1,8 +1,7 @@
 # Feature: Auto-archive
 
-Status: **A1–A7, A10, A11 built**; **A8, A9 partial and A12 planned**: rewritten
-for PLAN.md WEB-6 and WEB-7, written, not yet run (A7–A11: round 6,
-`docs/ROUND6-PLAN.md` R6-24).
+Status: **A1–A7, A9–A12 built**; **A8 partial** (A9 and A12 rewritten for PLAN.md WEB-6
+and WEB-7; A7–A11: round 6, `docs/ROUND6-PLAN.md` R6-24).
 Owner docs: `docs/PRODUCT.md` ("Unpinned Tabs — auto-archived when idle"). Patch: `0011`
 (`patches/README.md`); A7–A11: `0028`.
 

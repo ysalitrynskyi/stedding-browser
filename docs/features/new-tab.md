@@ -19,4 +19,4 @@ command-bar shortcut, not a feed.
 | N5 | A setting hides the shortcut row entirely, for users who want Arc's empty page. | settings T5 (live) | built |
 | N6 | Space home: a new tab in Space S lists that Space's pins, recents and yesterday's archive. No feed, no network (N1). | `MorningDigestTest.CardIsForTheTabsSpace` | planned |
 | N7 | Morning card: after local midnight, one card of local facts (archived, slept with a recorded reason, downloads started in S). Counts and titles, never a generated paragraph. Off-able. | `MorningDigestTest.EmptySpaceHasNoCard` | planned |
-| N8 | Isolated visits do not rank in ⌘T of another Space unless a modifier is held (command bar K19). | `CommandBarViewTest.AtSpacePrefixFiltersOpenAndArchived` | planned |
+| N8 | Isolated visits do not rank in ⌘T of another Space unless a modifier is held (command bar K19). | `SpaceQueryTest.AtSpacePrefixFiltersOpenAndArchived` (commandbar K19) | planned |

@@ -1,6 +1,6 @@
 # Feature: Command bar
 
-Status: **K1–K11, K13–K20 built**; **K12 partial** (round 6, `docs/ROUND6-PLAN.md` R6-11, patch 0022).
+Status: **K1–K11, K13–K21 built**; **K12 partial** (round 6, `docs/ROUND6-PLAN.md` R6-11, patch 0022).
 Owner docs: `docs/PRODUCT.md` ("Command bar"). Patch: `0005`.
 
 ⌘T opens a bar over the page. It lists open tabs from every Space, then the omnibox's own
@@ -28,7 +28,7 @@ On Windows every chord below is the Mac's with ⌘ read as Ctrl and ⌥⌘ as Ct
 | K13 | ⇥ with text already typed filters that text against actions (Arc); ⇧⇥ returns to tabs mode with the text kept. | CommandBarViewTest.TabWithTextFiltersActions | built |
 | K14 | Escape in actions mode returns to tabs mode, listing the tabs that match the text in the field; a second Escape closes the bar. | `CommandBarViewTest.EscapeLeavesActionsModeThenCloses`, `CommandBarViewTest.EscapeShowsTheTabsForTheTypedText`; browser: `CommandBarKeysTest.EscapeFromActionsKeepsTheText` | built |
 | K15 | In a private window actions mode lists only the table's commands that belong in a private window and are enabled there: no Space, pin, folder, archive or preference rows, no history and no clearing of browsing data (B14, V2). A popup window has no command bar and no command rows. | `CommandBarViewTest.PrivateWindowListsItsCommands`, `CommandBarViewTest.PopupWindowsHaveNoCommandRows`; browser: `CommandBarActionsTest.EveryRowRunsInAPrivateWindow` | built |
-| K16 | A row whose target is absent is hidden: Move to Space for an essentials tab, tab-scoped rows while a peek is open. | `CommandBarViewTest.RowsWithoutATargetAreHidden` (the essentials case), `CommandBarViewTest.TabRowsStepAsideWhileAPeekIsOpen` (the peek case, through a seam the test window needs; live: `w2_bar_peek`). | built |
+| K16 | A row whose target is absent is hidden: Move to Space for an essentials tab, tab-scoped rows while a peek is open. | `CommandBarViewTest.RowsWithoutATargetAreHidden` (the essentials case), `CommandBarViewTest.TabRowsStepAsideWhileAPeekIsOpen` (the peek case, through a seam the test window needs; live: `w2_bar_peek`). | built · the peek case does not arise while Peek is off (peek.md) |
 | K17 | A dropdown preference appears as one cycling row ("Archive after: 12 hours ▸"): Enter advances to the next value and the row re-reads. | CommandBarViewTest.DropdownPrefRowCycles | built |
 | K18 | Typed `keyword query` whose first token is a search-engine keyword (`TemplateURL`) navigates that engine's `%s` template. An unknown keyword still uses the default engine. | `CommandBarViewTest.KeywordQueryUsesThatEngine`; `CommandBarViewTest.UnknownKeywordStaysADefaultSearch` | built |
 | K19 | `@Work rust` filters open and archived rows to Spaces whose name starts with that prefix. History stays profile-wide. | `SpaceQueryTest.AtSpacePrefixFiltersOpenAndArchived` | built |

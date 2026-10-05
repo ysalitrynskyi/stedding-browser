@@ -1,6 +1,6 @@
 # Feature: Folders
 
-Status: **F1–F2, F4–F9, F11–F13 built and tested; F3 partial; F10 model only; F15–F16, F20–F22 planned (fixed in the series, tests not yet run); F17, F19 partial; F18 gap**. F12 is round 7 (`docs/ARC-ROUND2.md`, 2026-09-05); F13 round 10; F15–F18 are the restore review of 2026-09-28.
+Status: **F1–F9, F11–F13, F15, F16, F18–F29 built; F17 partial; F10 withdrawn** (cut in patch 0055). F12 is round 7 (`docs/ARC-ROUND2.md`, 2026-09-05); F13 round 10; F15–F18 are the restore review of 2026-09-28.
 Owner docs: `docs/decisions/0013-folders-are-a-collection-type.md` (model). Patches: `0008` (the whole feature; the series is per feature since `S-11`), `0037` (F12, round 7).
 
 A folder is a named, collapsible container of tabs in the sidebar. Folders nest. A folder is

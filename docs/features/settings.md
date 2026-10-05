@@ -1,6 +1,6 @@
 # Feature: Settings surface
 
-Status: **T1, T2, T4–T9 built**; **T3 withdrawn** while Peek is rebuilt; **T10 planned** (round 6, `docs/ROUND6-PLAN.md` R6-09, backlog S-43).
+Status: **T1, T2, T4–T10 built; T11, T12 partial**; **T3 withdrawn** while Peek is rebuilt (round 6, `docs/ROUND6-PLAN.md` R6-09, backlog S-43).
 Owner docs: `docs/PRODUCT.md` (settings), `docs/ROADMAP.md` M5. Patch: `0010`.
 
 Stedding's own settings live in one section of chrome://settings, listed first and

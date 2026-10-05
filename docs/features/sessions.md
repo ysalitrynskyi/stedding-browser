@@ -1,6 +1,6 @@
 # Feature: Independent Space sessions
 
-Status: **S1–S13, S17, S19 built** (with the open findings in PLAN.md); **S16 partial, model only**; **S14, S15, S18 withdrawn**; S24, S25 planned, written, not yet run (ADR 0019). Patches: 0046 (S1–S12), 0047 (S13–S17), the 2026-09-18 audit (S18–S19).
+Status: **S1–S9, S11–S13, S17, S19–S26 built** (with the open findings in PLAN.md; S24 and S25, Delete browsing data and the garbage collection reaching every Space's jar, are out from beta 9, on the Mac from beta 10); **S10 partial; S16 partial, model only**; **S14, S15, S18 withdrawn** (ADR 0019). Patches: 0046 (S1–S12), 0047 (S13–S17), the 2026-09-18 audit (S18–S19).
 Owner docs: `docs/decisions/0019-space-sessions-are-storage-partitions.md`,
 `docs/PRODUCT.md` §2, `docs/features/spaces.md`, `docs/features/windows.md` G5.
 
@@ -9,8 +9,9 @@ can be signed into with different credentials in different Spaces of one window.
 Off by default. Extensions, settings, history and saved passwords stay on the
 profile.
 
-This file is the definition of done. A behaviour is shipped when its test id is
-green.
+This file is the definition of done. "built" means the row's tests pass on the pinned
+tree; a row is done when its `PLAN.md` item is closed (`PLAN.md` section 2: the old rule,
+"a behaviour is shipped when its test is green", is withdrawn).
 
 ## What isolation is
 

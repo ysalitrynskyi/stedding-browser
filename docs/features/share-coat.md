@@ -1,9 +1,8 @@
 # Feature: Share coat
 
-Status: **Sc1 built**; **Sc2–Sc3 planned**. Owner: spaces. Patch: 0048.
+Status: **Sc1, Sc3 built**; **Sc2 planned**. Owner: spaces. Patch: 0048.
 
-While this window is captured (or the user asks), other Space chips are not
-painted. No Connect, no intern, no model.
+When the user asks (Hide Other Spaces), other Space chips are not painted. No Connect, no intern, no model.
 
 ## Behaviours
 

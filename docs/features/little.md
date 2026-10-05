@@ -1,10 +1,11 @@
 # Feature: Little window
 
-Status: **E3–E5 built, E1 and E2 partial** (round 6, `docs/ROUND6-PLAN.md` R6-30).
+Status: **E4, E5 built; E1–E3, E6 partial** (round 6, `docs/ROUND6-PLAN.md` R6-30). The Mac only: on Windows, links from other applications open as tabs (`BACKLOG.md` S-56).
 Owner docs: `docs/PRODUCT.md` §5. Patch: 0035.
 
-A link from another application opens small: a popup-type window with a thin bar
-(back, forward, reload, the host, Pin) and no sidebar, the way Little Arc does.
+On the Mac, a link from another application opens small: a popup-type window with
+no sidebar, the way Little Arc does. On Windows it opens as an ordinary tab and the
+setting is not shown (`BACKLOG.md` S-56).
 ⌘O moves the page into the last-active window. A little window has no Space
 commands. Escape closes it.
 A route (routing D1) wins over the little window, and the setting off opens such links as
@@ -23,10 +24,10 @@ ordinary tabs.
 
 ## Notes
 
-- The little window is Chromium's popup window with Stedding's bar in place of the
-  popup's location bar; its size is 1000 × 700 at most, centred over the window that
-  would have taken the link.
+- The little window is Chromium's popup window with Chromium's popup bar; Stedding's
+  thin bar (the host, Pin) is not built (E1). Its size is 1000 × 700 at most, centred
+  over the window that would have taken the link.
 - "Last-active window" is the last activated normal window; with the registry (ADR 0016)
   every normal window shares the Spaces, so the choice only decides where the tab lands.
-- VoiceOver: the thin bar is a toolbar with named buttons; the host label is its title
-  (critic #31).
+- VoiceOver, once the thin bar is built (E1): a toolbar with named buttons, the host
+  label its title (critic #31).

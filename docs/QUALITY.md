@@ -43,12 +43,14 @@ tooling/measure/harness.py all --app /Applications/Stedding.app            --out
 ```
 
 Two practical notes before running it. Measure the **`official`** build, not `release`:
-the release configuration skips PGO and LTO, so numbers from it describe a browser
-nobody ships. And a full run takes tens of minutes and needs working network — ten cold
-launches, ten warm, and five memory runs that each load the ten live sites in
-`tooling/measure/sites.txt` and idle for a minute. There is no offline mode; without
-network the memory and warm legs fail, and the harness will tell you so rather than
-publish a median over whatever survived.
+the release configuration skips PGO and LTO. Published images so far come from
+`release` (`tooling/publish-release` packages it), so these numbers are not the shipped
+build's; which configuration should ship is TBD. And a full run with `--sites live`
+takes tens of minutes and needs working network — ten cold launches, ten warm, and five
+memory runs that each load the ten live sites in `tooling/measure/sites.txt` and idle
+for a minute; without network the memory and warm legs fail, and the harness will tell
+you so rather than publish a median over whatever survived. `--sites local` runs
+offline.
 
 Two things about the harness are worth knowing before quoting anything it prints.
 It measures launch to **first painted frame** of a trivial local page — the browser
@@ -71,8 +73,8 @@ Expect a three-figure process count: with site isolation, an ad-heavy news page 
 contributes a process per cross-origin iframe. The harness reports the count alongside
 the total, because a count that moves between two builds is itself a finding.
 
-Metrics that depend on features not yet built (sidebar tab switching, command bar) are
-absent from the harness rather than stubbed, and are added with the feature.
+Sidebar tab switching and the command bar ship, but the harness has no measurement for
+them yet, so both budgets are TBD; they are added to the harness rather than stubbed.
 
 A budget miss is a release blocker; either the regression is fixed or the
 budget is changed by ADR with the reasoning on record.

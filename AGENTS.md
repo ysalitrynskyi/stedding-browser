@@ -68,7 +68,7 @@ Concretely (full detail in `docs/QUALITY.md`):
 2. `PLAN.md`: the owner's decisions and the status block at the top, then the work order
    until its Phase 1 is done; `BACKLOG.md` after that.
 3. `docs/HANDOFF.md`: the "Fast path" and the trap index at its top. Read a trap when its
-   topic comes up; there are about sixty.
+   topic comes up.
 4. Ask the operator **once**, in one message, for what you would otherwise find out hours in
    (the list under "How to work", rule 2).
 5. Use the product before any long job: launch it, click it, look at it.

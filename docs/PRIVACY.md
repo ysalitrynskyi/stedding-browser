@@ -36,7 +36,7 @@ bug. Report it through SECURITY.md.
 | Connection | To | Contains | Why |
 |---|---|---|---|
 | Browser update check | GitHub Releases API (`api.github.com`), per `decisions/0014` — see "The update check" below. **Off** until it has a settings entry; no build so far makes it. | A plain GET; no unique ID, no cookies, no query. | Security updates are non-negotiable for a Chromium fork. |
-| Security component updates | Google's component update service, as in stock Chromium: no patch in the series changes it yet. Mirroring or removal is decided before 1.0 (ARCHITECTURE.md); what a fresh profile actually contacts is recorded by the audit in `BACKLOG.md` S-50. | Component name and version. | Chromium ships security-critical data as components (e.g. certificate revocation sets). We mirror the ones we keep; the exact list is documented in ARCHITECTURE.md before 1.0. Components fetched from Google by stock Chromium are proxied or removed. |
+| Security component updates | Google's component update service, as in stock Chromium: no patch in the series changes it yet. Mirroring or removal is decided before 1.0 (ARCHITECTURE.md); what a fresh profile actually contacts is recorded by the audit in `BACKLOG.md` S-50. | Component name and version. | Chromium ships security-critical data as components (e.g. certificate revocation sets). Today every component comes from Google, as in stock Chromium; which ones to mirror, proxy or remove is decided before 1.0. |
 | Safe Browsing list updates | See Safe Browsing section | Hashed URL prefixes, not URLs. | Phishing/malware protection. |
 | The user's own browsing | Sites the user visits | Whatever the user does. | This is a web browser. Includes the DNS, TLS (OCSP/CT), and favicon traffic that browsing implies. |
 | Extension install/update | Chrome Web Store (Google) | Standard store traffic. | Only once the user installs an extension. See extension note below. |
@@ -105,16 +105,16 @@ after start, went to `safebrowsing.googleapis.com` with no key and Google answer
 HTTP 400. So the local lists stay empty and no listed site gets a warning page --
 while the requests themselves still reach Google, with your IP address. Only the
 local warnings for dangerous file types remain. Do not count on Safe Browsing to
-protect you in Stedding. Whether to ship a key, proxy the lists, or turn it off and
-say so in Settings is the owner's decision (PLAN.md WEB-5).
+protect you in Stedding. The owner's direction (2026-10-01, `BACKLOG.md` S-75): the
+lists are to come through stedding.dev, with the key on the server and no Google API
+in the browser; that is not built yet.
 
 Our stance, once it is settled:
 
 - **By default:** standard, hash-prefix Safe Browsing that is proven to work,
   because shipping a browser to non-hypothetical users with phishing protection off
-  is not a defensible default. Whether list traffic can be proxied through Stedding
-  infrastructure so Google never sees user IPs is an open implementation question
-  — tracked in ARCHITECTURE.md, TBD.
+  is not a defensible default. List traffic through stedding.dev, so that Google
+  never sees user IPs, is the chosen route (`BACKLOG.md` S-75).
 - **Available by choice:** turning it off entirely, one switch, clearly explained.
 - **Never by default:** "Enhanced" Safe Browsing modes that send full URLs or page
   content in real time. Stedding never turns it on, but Chromium's Security page
@@ -137,9 +137,9 @@ gone while each such Space stayed signed in, and so did the jar a Space keeps
 while its independent session is switched off. The same was true of
 `chrome.browsingData` and of deleting one site's data. The fix makes every removal
 that names no jar again for each Space's jar, with the same time range and the same
-sites (sessions S24, PLAN.md SPC-11). It is written, not yet confirmed on a running
-build. Until a build carries it, use **Clear Independent Session** on the Space, or
-delete the Space.
+sites (sessions S24, PLAN.md SPC-11). Beta 9 and later carry the fix (on the Mac,
+beta 10 and later). On beta 8 or earlier, use **Clear Independent Session** on the
+Space, or delete the Space.
 
 Chromium also clears out unused storage after an extension or app is removed, and
 that clean-up could delete the jar of a Space with no tab open, cookies and all
@@ -159,10 +159,11 @@ import/export and profile migration are the supported paths.
 
 Chromium's default mDNS obfuscation of local IP addresses is kept, so sites using
 WebRTC see mDNS hostnames rather than your LAN IPs, and calls still work (the
-ready-to-use mandate applies to privacy features too). Shipped as a visible
-setting, off by default: stricter policies for VPN users ("public interface only",
-"disable non-proxied UDP") that prevent WebRTC from bypassing a VPN at the cost of
-breaking some calls.
+ready-to-use mandate applies to privacy features too). Not built: a visible
+setting, off by default, for the stricter policies VPN users want ("public interface
+only", "disable non-proxied UDP"), which keep WebRTC from bypassing a VPN at the cost
+of breaking some calls. Until it exists, an extension that sets Chromium's WebRTC
+IP-handling policy can apply them.
 
 ### Global Privacy Control — on by default
 
@@ -183,7 +184,7 @@ consequences we will not hide:
   does not audit, vet, or sandbox extensions beyond what Chromium provides.
   Review permissions before installing; prefer open-source extensions.
 - Whether extension update traffic can be proxied through Stedding infrastructure
-  is an open question — TBD in ARCHITECTURE.md.
+  is an open question, TBD.
 
 ## Summary: default vs. choice
 
@@ -191,13 +192,17 @@ consequences we will not hide:
 |---|---|---|
 | Telemetry / metrics | None (does not exist) | — |
 | Crash reporting | Off | Opt in |
-| Update checks | On (no identifiers) | — (required for a safe product) |
+| Update checks | None yet: no build checks for updates (`BACKLOG.md` S-74); once built, on, with no identifiers, and listed here | — |
 | Search engine | User chooses at first run | Change anytime |
-| Cookies per Space | Off: every Space shares the profile's jar | Independent session on a Space keeps its own cookies, cache and site data on this disk; Clear Independent Session empties it; deleting the Space deletes it; Delete browsing data reaches it only from the build that carries sessions S24 (see above) (`features/sessions.md`) |
+| Cookies per Space | Off: every Space shares the profile's jar | Independent session on a Space keeps its own cookies, cache and site data on this disk; Clear Independent Session empties it; deleting the Space deletes it; Delete browsing data reaches it from beta 9 on (Mac: beta 10) (`features/sessions.md`) |
 | Search suggestions | Off | Opt in |
+| Third-party cookies | Blocked | Allow per site |
+| HTTPS-First | On | Turn off |
+| Quiet permission prompts | On | Turn off |
+| Topics, Protected Audience, Attribution Reporting | Off | — |
 | Safe Browsing | The setting is on (hash-prefix only), but it does not protect in these builds: the list updates are refused without an API key (see above) | Turn off |
 | Google sync | Not available | — |
-| WebRTC local IPs | Hidden (mDNS) | Stricter VPN-safe policies |
+| WebRTC local IPs | Hidden (mDNS) | Stricter VPN-safe policies through an extension; no setting yet |
 | Global Privacy Control | On | Turn off |
 | New-tab sponsored content | Never (no network on NTP) | — |
 | Extensions | None installed | User installs; store traffic follows |
@@ -209,8 +214,9 @@ release-notes entry.
 
 ## The update check
 
-Stedding checks for updates against the GitHub Releases API
-(`decisions/0014-github-releases-as-update-channel.md`). This is the only endpoint
+Stedding will check for updates against the GitHub Releases API
+(`decisions/0014-github-releases-as-update-channel.md`); no build does yet
+(`BACKLOG.md` S-74). This is the only endpoint
 this project deliberately adds to Chromium, so it is described exactly.
 
 | | |
@@ -242,14 +248,13 @@ to GitHub at all.
 ## Implementation status against the current build
 
 Everything above is a product commitment. This section says how much of it is *already
-true* of the vanilla Chromium we build today, and what each remaining item actually
-costs. It was produced by auditing the Chromium source at the pin, not from memory, and
+true* of the builds we ship, and what each remaining item actually costs. It was produced by auditing the Chromium source at the pin, not from memory, and
 every mechanism named below was located in the tree.
 
 It exists because the two are easy to confuse. Building unbranded Chromium
 (`is_chrome_branded=false`, no Google API keys) already removes a great deal — but it
-removes far less than a reader of the Principles section would assume, and the gap is
-the M1 work.
+removes far less than a reader of the Principles section would assume; the table below
+is that gap, closed row by row.
 
 ### Already true, because we build unbranded
 
@@ -258,7 +263,7 @@ fetch, Google account sign-in and Sync, and the browser updater are all absent o
 inert without Google branding and API keys. `enable_updater` is literally
 `is_chrome_branded && …`, so no updater is even compiled.
 
-### Still to do, with the mechanism
+### Status, with the mechanism
 
 | Commitment | Costs |
 |---|---|
@@ -266,20 +271,19 @@ inert without Google branding and API keys. `enable_updater` is literally
 | No Google New Tab Page network | Done: the new tab page is always Chromium's local third-party page, whatever the default engine; a provider's own remote new-tab URL is never used (patch 0003) |
 | Default search engine chosen by the user | Chromium's shuffled choice screen shows at first run in every country (patch 0003); DuckDuckGo is the prepopulated default behind it, which keeps the new tab page local |
 | Global Privacy Control on | done: `stedding.privacy.gpc` defaults on, adding `Sec-GPC: 1` through a URL loader throttle and turning on Blink's runtime feature, because upstream's own `IsGlobalPrivacyControlEnabled()` is gated behind a Force/Test flag and its pref path is an unfinished TODO (`docs/features/privacy.md` Q4, patch 0030) |
-| Translate off by default | `translate.enabled` defaults to true |
-| No navigation prediction / preconnect | `net.network_prediction_options` defaults to standard preloading |
-| Network time queries off | enabled by default on desktop, and not gated on branding |
-| Component updates from our infrastructure | component updater is on by default; needs an endpoint swap and a component allowlist |
-| No dummy API keys in request URLs | the placeholder key is still appended to some Google requests |
+| Translate off by default | to do: `translate.enabled` defaults to true |
+| No navigation prediction / preconnect | to do: `net.network_prediction_options` defaults to standard preloading |
+| Network time queries off | to do: enabled by default on desktop, and not gated on branding |
+| Component updates from our infrastructure | to do: the component updater is on by default; it needs an endpoint swap and a component allowlist |
+| No dummy API keys in request URLs | to do: the placeholder key is still appended to some Google requests |
 
 ### What a fresh profile at rest actually contacts today
 
-This is the list the M1 network capture is checked against, and the reason that
-criterion is worth having. On an idle, freshly-created profile, an unbranded build
-still reaches out for: **component updater checks** (first at about one minute, then
-roughly every five hours, including the certificate CRLSet), **Safe Browsing list
-updates**, and **network time**. Opening the New Tab Page adds Google requests for the
-logo and the One Google Bar.
+The recorded run above (2026-09-28) is the current answer, and the list the M1 network
+capture is checked against: **component updater checks** (first at about one minute,
+then roughly every five hours, including the certificate CRLSet), **Safe Browsing list
+updates**, **network time**, Google's push service (`BACKLOG.md` S-54) and the account
+check (S-67). The new tab page makes no request.
 
 Nothing here is telemetry. But "no telemetry" and "contacts nothing" are different
 claims, and only the first one is currently true — which is exactly why

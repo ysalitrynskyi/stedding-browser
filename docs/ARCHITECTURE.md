@@ -16,13 +16,12 @@ little or no manual work.
 ```
 tooling/          Scripts: sync, build, patch series, checks, measurement   exists
 docs/             This documentation                                        exists
-patches/          Ordered patch series: NNNN-short-slug.patch               from M1
-branding/         Icons, names, strings, installer assets replacing Chromium's   from M1
+patches/          Ordered patch series: NNNN-short-slug.patch               exists
+branding/         Icons, names, strings, installer assets replacing Chromium's   exists
 ```
 
-`patches/` and `branding/` are empty until the first branding patch at M1; the tooling
-that reads them (`tooling/apply-patches`, `tooling/update-patches`) already exists and
-treats an absent series as a valid, empty one.
+`tooling/apply-patches` puts the series on the checkout, `tooling/apply-branding` copies
+`branding/` over it before `gn gen`, and `tooling/dev status` counts the patches.
 
 The Chromium source tree itself is never committed here. A pinned upstream version
 (exact commit and tag, recorded in `tooling/chromium-version`) is fetched at build
@@ -162,7 +161,7 @@ normative — it is the answer to "compared to what?":
 | Xcode | 26.6 (17F113) |
 | Command Line Tools | 26.6.0.0.1781586589 |
 | depot_tools | `08f3e8c0eb66d6de3a048a757d0ff708dbc8ea34` (2026-09-09) — observed, **not a pin**: `bootstrap-depot-tools` tracks upstream `main` |
-| Chromium | `153.0.8010.12` (M153 stable) |
+| Chromium | `153.0.8010.12` (M153 stable), the pin these numbers were measured at; today's pin is in `tooling/chromium-version` |
 
 ### The build, end to end
 
@@ -179,16 +178,24 @@ tooling/bootstrap-depot-tools
 #    cache download — that is normal, see "Known failure modes".
 tooling/sync-chromium
 
-# 3. Build. Config is one of release (default), debug, official.
+# 3. Put Stedding's patch series and branding on the checkout, in that order.
+tooling/apply-patches
+tooling/apply-branding
+
+# 4. Build. Config is one of release (default), debug, official.
 tooling/build-chromium release
 
-# 4. Check that what you built actually works. This is M0's acceptance criterion,
-#    not step 5's eyeball test.
-tooling/verify-build --app ~/chromium/src/out/release/Chromium.app
+# 5. Check that what you built actually works. This is M0's acceptance criterion,
+#    not step 6's eyeball test.
+tooling/verify-build --app ~/chromium/src/out/release/Stedding.app
 
-# 5. Run it.
-open ~/chromium/src/out/release/Chromium.app
+# 6. Run it.
+open ~/chromium/src/out/release/Stedding.app
 ```
+
+On Windows the same series builds with Visual Studio 2022 and the Windows SDK, through
+`tooling\win\build.ps1` (one chunk) or `tooling\win\build-until-done.ps1` (the whole
+build, supervised); `docs/HANDOFF.md`, "The Windows build", has the steps.
 
 To put the checkout somewhere other than `~/chromium`, set `CHROMIUM_ROOT` on the
 sync — you only need it once, because sync records the location in `.stedding-local`
@@ -230,9 +237,9 @@ pin, upstream commits mixed in — is refused.
 
 | Config | Purpose | Notes |
 |---|---|---|
-| `release` | Day-to-day development | Optimised, no symbols, single binary. **Never quote performance numbers from this config.** |
+| `release` | Day-to-day development, and every published image so far | Optimised, no symbols, single binary, no PGO or LTO. **Never quote performance numbers from this config.** |
 | `debug` | Debugging Chromium and our patches | Component build: one target relinks a small library, not the browser. |
-| `official` | Anything a user or benchmark sees | `is_official_build` — PGO with upstream's profile for the pin, plus ThinLTO. Slow, memory-hungry link. |
+| `official` | Performance baselines | `is_official_build` — PGO with upstream's profile for the pin, plus ThinLTO. Slow, memory-hungry link. No published image has been built with it yet (`tooling/publish-release` packages `release`); which configuration should ship is TBD. |
 | `win-release` | The Windows build and its installer | The Mac's `release` on the other platform: non-component, no symbols, no PGO (ADR 0018). |
 | `win-asan` | AddressSanitizer runs of the lifetime tests (PLAN.md TAB-7, TAB-8, TAB-9, SPC-1 to SPC-3, WIN-1, WEB-2) | `is_asan`, line-table symbols so a report names functions. Test targets only; the Mac has no counterpart. |
 | `win-checks` | The dangling-pointer detector with DCHECKs on (the same items, and WIN-2) | Release code with `dcheck_always_on` and BackupRefPtr; needs `--enable-features=PartitionAllocBackupRefPtr,PartitionAllocDanglingPtr` at run time. Test targets only. |
@@ -252,8 +259,7 @@ The M0 build is vanilla: upstream defaults, which means `ffmpeg_branding = "Chro
 and no proprietary codecs. Video plays via VP8/VP9/AV1/Opus, so WebM and YouTube work,
 but H.264 and AAC do not. Shipping a browser without H.264 is not viable for a real
 product, and enabling it carries patent-licensing consequences rather than merely
-technical ones. That decision is deliberately not made here — it belongs to M1, with
-an ADR, and it needs a human to weigh the licensing position.
+technical ones. ADR 0008 decides it for Stedding's builds.
 
 ### Measured results
 
@@ -422,8 +428,8 @@ Recorded as they were actually hit on the reference machine, not imagined.
   encrypted at rest.
 
   The lesson for CI: any unattended test of a freshly built browser needs
-  `--use-mock-keychain`, or a human to authorise the binary once, or signing. Signing
-  lands at M7 and makes this go away for real builds.
+  `--use-mock-keychain`, or a human to authorise the binary once, or signing. Released
+  Mac builds are signed since beta 10, which makes this go away for them.
 
 - **`gsutil` warns that `~/.boto` authentication is deprecated.** Harmless; the
   bootstrap download proceeds anyway.
@@ -454,10 +460,10 @@ features that users expect from a real product just to make a purity claim.
   Today the builds carry no Google API key, which list updates need: on a
   running build the first update was refused with HTTP 400 and the lists stay
   empty (PLAN.md WEB-5, 2026-09-28; `PRIVACY.md`, the recorded run).
-- **Component updater: kept, pointed at infrastructure we control where feasible.**
+- **Component updater: kept, to be pointed at infrastructure we control where feasible.**
   Some components matter for security and site compatibility (certificate revocation
-  lists, Widevine for DRM playback). Each shipped component is enumerated in
-  `PRIVACY.md` with its endpoint.
+  lists, Widevine for DRM playback). Today every component comes from Google, as in
+  stock Chromium; which ones to mirror, proxy or remove is decided before 1.0.
 - **Default search, suggestions, spellcheck, translate, DNS/preconnect defaults:**
   privacy-preserving defaults per `PRIVACY.md`. Not yet true that nothing phones home
   out of the box: a fresh profile checks Google's account list and registers with
@@ -544,10 +550,11 @@ a patch and a site-compatibility regression. Leaving it alone is the decision.
 ## Updates and distribution
 
 macOS distribution for real users requires an Apple Developer ID, **code signing, and
-notarization** — without them, Gatekeeper blocks the app. Per `ROADMAP.md`,
-signing/notarization lands at M7. Builds before that — including M2, the first public
-pre-alpha — ship unsigned, with the Gatekeeper bypass documented alongside each
-release.
+notarization** — without them, Gatekeeper blocks the app. Signing landed for the Mac
+with beta 10 (2026-10-01): every macOS image since is signed with the Developer ID,
+notarized and stapled, then put through `tooling/package-dmg` and
+`tooling/publish-release`. Betas 1–9 shipped unsigned, with the Gatekeeper bypass in
+their notes. Windows is not code-signed yet (`BACKLOG.md` S-56).
 
 **Signing** runs Chromium's own signer (`chrome/installer/mac/signing`, built into
 `out/<config>/Stedding Packaging` by `chrome/installer/mac:mac`) through
@@ -564,18 +571,18 @@ longer, and a timed-out run loses its signed copy with the signer's work directo
 so the rerun signs again.
 
 **Update checks go to the GitHub Releases API** — `decisions/0014-github-releases-as-update-channel.md`.
-The browser compares its version against the latest release of the repository and says
-when a newer one exists. No account, no identifier, no telemetry; GitHub sees an IP and
+The browser will compare its version against the latest release of the repository and
+say when a newer one exists; no build does yet. No account, no identifier, no telemetry; GitHub sees an IP and
 a timing pattern, and `PRIVACY.md` names that endpoint rather than glossing it. The
 check is off until it has a settings entry, per the UX completeness rule in
 `QUALITY.md`.
 
 That decision removes the update *server* from the project: the release artifacts and
 the update metadata are the same objects, so there is nothing extra to run, secure or
-pay for. What stays open for M7 is whether we ever download and apply updates
-automatically, and with what — Sparkle and `chrome/updater` are both still candidates
-for that, and both need signing first. Full-size updates before deltas; correctness and
-signature verification before either.
+pay for. Automatic updates come next, the Mac first (`BACKLOG.md` S-74): a Sparkle-style
+check, the download verified against the Developer ID and the published sha256, applied
+on the next quit. The signing this needs is in place for the Mac. Full-size updates
+before deltas; correctness and signature verification before either.
 
 **stedding.dev is a website, not infrastructure.** Separate repository (`ysalitrynskyi/stedding.dev`, live since 2026-09-16), Astro, static, Cloudflare Pages.
 Download link, release notes, security policy, source link. Deliberately not on the path
@@ -589,7 +596,7 @@ of an update check: if the site is down, updates still work.
   the strongest argument for the minimal-patch-series design: a browser that lags
   upstream security fixes is worse than no browser.
 - **A minor rebase must usually be zero-touch.** The pin moves, `apply-patches` runs
-  clean, CI builds, release ships. If a routine point release regularly causes manual
+  clean, the build machine builds, release ships. If a routine point release regularly causes manual
   conflict resolution, the offending patches are in the wrong layer — fix the patch,
   not the process.
 - Major-version rebases (new stable milestone) are scheduled, budgeted work with a

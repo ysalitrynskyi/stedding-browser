@@ -33,6 +33,7 @@ Everything under `docs/`, grouped by who it is for.
 | Document | Contents |
 |---|---|
 | [../AGENTS.md](../AGENTS.md) | Start here: the project, the rules, how to work, the red lines |
+| [../PLAN.md](../PLAN.md) | The order of work until Phase 1 is done; the status blocks are at the top |
 | [HANDOFF.md](HANDOFF.md) | The fast path, where things live, the dev parameters, the traps already paid for (with an index) |
 | [AGENT-LOOP.md](AGENT-LOOP.md) | The working procedure: ask once, order of evidence, supervise long jobs, one pass finds everything, then the loop for one change |
 | [PROJECT-LOG.md](PROJECT-LOG.md) | What was built, round by round, with the evidence: history, not instructions |

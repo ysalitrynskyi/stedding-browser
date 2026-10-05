@@ -18,7 +18,7 @@
   <a href="https://github.com/ysalitrynskyi/stedding-browser/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/ysalitrynskyi/stedding-browser?include_prereleases&label=download&color=2F4858"></a>
   <a href="LICENSE"><img alt="License: BSD-3-Clause" src="https://img.shields.io/badge/license-BSD--3--Clause-E8B04B"></a>
   <img alt="Platforms: macOS and Windows" src="https://img.shields.io/badge/platforms-macOS%20%7C%20Windows-1C2B33">
-  <img alt="Chromium 153" src="https://img.shields.io/badge/Chromium-153%20stable-2F4858">
+  <img alt="Chromium 155" src="https://img.shields.io/badge/Chromium-155%20stable-2F4858">
 </p>
 
 <p align="center">
@@ -49,13 +49,15 @@ rebuilds that way of working on ground you control.
 - **Built on Chromium stable** as a small, documented patch series, so it keeps up with
   Chromium's security releases and runs the extensions you already use.
 - **Private by default.** No telemetry, no experiments, no Google sign-in or AI
-  surfaces, tracker-blocking defaults switched on, DuckDuckGo as the search engine.
+  surfaces, tracker-blocking defaults switched on, the search engine of your choice
+  (DuckDuckGo until you choose).
 - **Made for technical users** who want a modern, keyboard-driven browser without
   trusting anyone's servers.
 
-Every screenshot in this README is a capture of the current build, taken by the
-project's own tooling; every claim below is backed by a test or a measured capture
-(see [docs/features/](docs/features/)).
+Every screenshot in this README is a capture taken by the project's own tooling: most
+on beta 8, the rail and the welcome flow's keys on beta 11 and 12, Windows on beta 5.
+Every claim below is backed by a test or a measured capture (see
+[docs/features/](docs/features/)).
 
 ## Download
 
@@ -79,7 +81,8 @@ Not available yet: Intel Macs and Linux. See [Status and roadmap](#status-and-ro
 ## A tour
 
 **Spaces.** Each Space is a set of tabs with its own colour, icon and pinned sites.
-Switch with the chips at the bottom of the sidebar, with ⌃1–⌃9, or by swiping. A Space
+Switch with the chips at the bottom of the sidebar, with ⌃1–⌃9, or, on a Mac, with a
+two-finger swipe across the sidebar. A Space
 you leave puts its tabs to sleep; sites can be routed so they always open in the right
 Space. Turn on **Independent session** on a Space (chip menu, or Settings → Stedding)
 and that Space keeps its own cookies: you can be signed into the same site with a
@@ -96,7 +99,7 @@ its shortcut.
 
 **Folders and pinned tabs.** Drag tabs into folders, nest folders, collapse them, rename
 anything in place. A pinned tab remembers its home page: wander away and a slash shows
-it, click the favicon and you are back.
+it; ⌥-click the favicon, or choose **Reset to Pinned Page**, and you are back.
 
 ![Nested folders and pinned tabs in the sidebar](docs/images/readme/folders.png)
 
@@ -144,7 +147,8 @@ buttons and Arc's keyboard mapped to Ctrl and Alt.
 - One sidebar for every window; ⌥⇧⌘N opens a blank window with Spaces of its own.
 
 **Little windows**
-- Links from other apps open in a small window of their own.
+- Links from other apps open in a small window of their own (macOS; on Windows they
+  open as tabs for now, `S-56`).
 - Peek, a link from a pinned site opening over the window, is switched off while
   it is rebuilt.
 
@@ -204,7 +208,7 @@ As is ⇧⌘S (Ctrl+Shift+S), the system print dialog on Windows is Ctrl+Alt+P.
 
 ## Moving from Arc
 
-On the first start, the welcome flow offers **Move everything from Arc**: your Spaces
+On a Mac with Arc installed, the first start offers **Move everything from Arc**: your Spaces
 with their colours and icons, the essentials row, pinned tabs, folders (nested), open
 tabs, browsing history and saved passwords. Each is a checkbox, all checked by default.
 
@@ -213,6 +217,7 @@ tabs, browsing history and saved passwords. Each is a checkbox, all checked by d
 - Imported tabs are created asleep, so a big sidebar costs nothing until you open one.
 - You can run it again later from **Settings → Stedding → Import from Arc…** or from
   the command bar; a second run never duplicates what is already there.
+- On Windows, Stedding does not read Arc's files yet (`S-81`).
 
 ![The welcome flow's import step: everything from Arc in one click](docs/images/readme/welcome-import.png)
 
@@ -227,29 +232,31 @@ Privacy here is a set of defaults, not a mode. Out of the box:
 - **No telemetry, no experiments.** No usage metrics, no crash reports, no unique
   identifiers, no field trials. The new tab page is local and makes no requests.
 - **No Google account surfaces.** No sign-in, no Google services in the omnibox, no AI
-  sections in Settings. DuckDuckGo is the default search engine; search suggestions
-  are off until you turn them on.
+  sections in Settings. You pick the search engine at first start (DuckDuckGo until
+  you do); search suggestions are off until you turn them on.
 - **Tracker-blocking defaults on:** third-party cookies blocked, HTTPS-first, Global
   Privacy Control sent, quiet permission prompts, Chromium's ad-measurement APIs off.
 - **Private windows** in their own colours, with the same defaults.
 
-Every network connection the browser makes is listed in
-[docs/PRIVACY.md](docs/PRIVACY.md); anything not on that list is a bug we want to hear
-about. Updates are not automatic yet: new versions appear on the Releases page.
+[docs/PRIVACY.md](docs/PRIVACY.md) lists the network connections the browser makes and
+records what a fresh profile actually contacted; two Google calls on that record are
+still being removed (`S-54`, `S-67`), and anything else not on the list is a bug we
+want to hear about. Updates are not automatic yet: new versions appear on the Releases
+page.
 
 ## Status and roadmap
 
 Stedding is an early **beta**. A review of the whole code in September 2026 found many
 defects, some of them in the basics (selecting a tab, the collapsed sidebar, restoring a
-session); they are being fixed, and the next release waits for that work. What is out
+session); betas 9 to 12 carry the fixes so far, and `PLAN.md` lists the rest. What is out
 and what comes next:
 
 | | State |
 |---|---|
 | macOS (Apple silicon) | Beta releases since 2026-09-01; the current one is beta 12, signed and notarized as every macOS image is from beta 10 on |
 | Windows x64 | Preview installer since beta 5, on Chromium 155 from beta 9: the full interface, Arc's keys for Windows, a per-user install; both test suites also run clean with DCHECKs (beta 10) and under AddressSanitizer (beta 9's tree) |
-| Code signing and notarisation | The macOS image is signed with the Developer ID and notarized from beta 10 on; Windows is not signed yet, and automatic updates come next (`S-17`, `S-74` in [BACKLOG.md](BACKLOG.md)) |
-| Automatic updates | After signing; checks go to GitHub Releases, with no identifier (ADR 0014) |
+| Code signing and notarisation | The macOS image is signed with the Developer ID and notarized from beta 10 on; Windows is not signed yet (`S-56` in [BACKLOG.md](BACKLOG.md)) |
+| Automatic updates | Next, the Mac first (`S-74`); checks go to GitHub Releases, with no identifier (ADR 0014) |
 | Windows: little windows, signing, updates | Open (`S-56`) |
 | Linux | After Windows (milestone M9 in [docs/ROADMAP.md](docs/ROADMAP.md)) |
 | Sync between machines | Not planned as a service; export a Space as a file and import it on the other machine |
@@ -257,11 +264,13 @@ and what comes next:
 Known limits in the current builds: no automatic updates yet, and the Windows installer is
 unsigned; ⌃1–⌃9 collide with macOS Mission Control once you have a second desktop (the Spaces
 menu keeps the commands reachable); a clipboard manager that owns ⇧⌘C system-wide
-takes it before the browser does.
+takes it before the browser does; while Arc runs it takes ⌥⌘N from every app (`S-79`);
+on Windows, close Stedding before installing a release on the same Chromium number
+(`S-72`).
 
 The full list of open work is [BACKLOG.md](BACKLOG.md); each feature's specification
-and its tests are in [docs/features/](docs/features/). Release notes for every version
-are in [docs/release-notes/](docs/release-notes/).
+and its tests are in [docs/features/](docs/features/). Release notes for every release
+from 0.2.0 beta 1 are in [docs/release-notes/](docs/release-notes/).
 
 ## FAQ
 
@@ -277,9 +286,10 @@ series and its checksum is published beside it, so you can check what you downlo
 **Do my Chrome extensions work?** Yes. Stedding is Chromium; extensions install from
 the Chrome Web Store as usual.
 
-**Does it talk to Google?** Not for its own purposes. There is no telemetry, no
-sign-in and no experiment downloads; the Web Store is contacted only when you install
-or update an extension. The complete list of connections is in
+**Does it talk to Google?** For what Chromium itself does: component updates, Safe
+Browsing lists and network time, and two calls still being removed (`S-54`, `S-67`).
+There is no telemetry, no sign-in and no experiment downloads; the Web Store is
+contacted only when you install or update an extension. The connections are listed in
 [docs/PRIVACY.md](docs/PRIVACY.md).
 
 **Where is my data?** In your profile folder, on your machine: on macOS under
@@ -287,7 +297,7 @@ or update an extension. The complete list of connections is in
 You can also export a Space as a file.
 
 **Will it update itself?** Not yet. New versions appear on the Releases page; the
-in-app updater lands with signing.
+in-app updater is next, the Mac first (`S-74`).
 
 **Intel Mac? Linux?** Neither yet. Apple silicon and Windows x64 today; Linux is the
 next platform after the Windows port is complete.
@@ -301,15 +311,16 @@ More questions and answers: [docs/FAQ.md](docs/FAQ.md).
 
 ## Building from source
 
-Stedding is a patch series on Chromium stable. Building needs a Mac with Apple silicon,
-about 85 GB of disk for the checkout and one build, and a few hours the first time.
+Stedding is a patch series on Chromium stable. Building the macOS app needs a Mac with
+Apple silicon and 150 GB free (the checkout and one build use about 85 GB), and a few
+hours the first time.
 
 ```bash
 tooling/bootstrap-depot-tools     # once per machine
 tooling/sync-chromium             # once per pin change; downloads tens of GB
 tooling/apply-patches             # the Stedding patch series
 tooling/apply-branding            # the name and the icon
-tooling/build-chromium release
+tooling/build-chromium release --budget 0   # 0 = no time limit (the default stops at 15 min)
 tooling/package-dmg release
 ```
 

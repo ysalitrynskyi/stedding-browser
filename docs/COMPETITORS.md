@@ -125,7 +125,7 @@ much distribution a solo closed product can't get.
 | Floorp | Gecko | Partial | Yes | MPL-2.0 | No (Firefox add-ons) | Active |
 | SigmaOS | WebKit | Partial (tasks) | No | — | Yes (vendor claim) | Active |
 | Horse | Chromium | No (Trails) | No | — | Yes (recent) | Active, paid |
-| **Stedding** | Chromium | Yes (goal) | Yes | BSD-3-Clause | Yes (hard req.) | M0, no installer |
+| **Stedding** | Chromium | Yes (goal) | Yes | BSD-3-Clause | Yes (hard req.) | Beta (2026-10): signed macOS image, unsigned Windows preview |
 
 Competitor claims in this document were fact-checked against vendor sources on
 2026-08-30. Rival products move; treat anything here as needing a re-check before it
@@ -133,11 +133,11 @@ is quoted, and prefer the vendor's own site over this table.
 
 ### The competitor this table omits: Chromium itself
 
-Chromium 153 ships vertical tabs. Not an experiment — a landed feature with collapse,
+Chromium ships vertical tabs, since 153. Not an experiment — a landed feature with collapse,
 pinning, drag-to-reorder, persisted width and state, a settings toggle, in-product help
 promoting it to users, and interactive tests. `kVerticalTabsLaunch` is enabled by
 default; only a user pref keeps it off. There is a separate expand-on-hover feature.
-Verified in the tree at our pin; details and file paths are in
+Verified in the tree at the 153 pin; details and file paths are in
 `decisions/0010-ride-upstream-vertical-tabs.md`.
 
 This matters more than any row above. The gap analysis below was written on the premise
@@ -146,10 +146,9 @@ has now filled part of it, and Chrome inherits it. What is *not* upstream is the
 the workflow model — workspaces, a command bar, split view as a first-class concept —
 together with privacy defaults and who controls the roadmap.
 
-Whether that is still enough to justify this project is a genuine question and is
-deliberately not answered here or in the ADR. It is the kind of decision that belongs
-to a person, taken deliberately, and not to whoever happens to be editing the
-competitive analysis.
+Whether that is still enough to justify this project was a genuine question, and the
+owner answered it in ADR 0011: full functional parity with Arc, plus what Arc could not
+offer.
 
 ## The gap we occupy
 
@@ -171,12 +170,12 @@ copyleft conditions). No other project on this list offers all three.
 
 ## Why users would not pick us today
 
-Honesty section. As of 2026-09-05:
+Honesty section. As of 2026-10-05:
 
-- **We ship an unsigned beta, on one platform.** macOS on Apple silicon only, and the
-  image is unsigned until M7, so installing it means a Terminal command past
-  Gatekeeper and no automatic updates. Every browser above ships a signed, updating
-  build on more platforms than we do; Zen and Brave ship polished products today.
+- **A beta, with no automatic updates.** The macOS image (Apple silicon only) is signed
+  and notarized; the Windows x64 preview is not code-signed; on both, a new version is a
+  new download. Every browser above ships an updating build on more platforms than we
+  do; Zen and Brave ship polished products today.
 - **No track record.** Keeping a Chromium fork current with security updates is a
   treadmill that has broken larger teams. Until we demonstrate months of on-time
   stable rebases, trusting us with your daily browsing is a leap.
@@ -185,8 +184,8 @@ Honesty section. As of 2026-09-05:
 - **Small team, bus factor.** Brave has a company behind it; Zen has a large
   community. We have neither yet. The BSD license is the mitigation — anyone can
   pick up the work — but a license is not a maintainer.
-- **macOS only at first.** Windows and Linux users have nothing to try until later
-  milestones.
+- **No Linux and no Intel Mac yet.** Windows is a preview: no signing, no updates,
+  and links from other applications open as tabs (`BACKLOG.md` S-56).
 
 The bet is that the empty cell above is worth occupying anyway, and that shipping
 complete, polished milestones (see QUALITY.md) closes the trust gap over time.

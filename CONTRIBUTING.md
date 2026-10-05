@@ -1,10 +1,11 @@
 # Contributing to Stedding Browser
 
-Thanks for your interest. The project ships **unsigned betas** for macOS (Apple
-silicon) and a **Windows preview**, built from a patch series on Chromium stable (see
-[README.md](README.md) and [docs/ROADMAP.md](docs/ROADMAP.md)): M0 through M6 are
-built, M7 waits on the signing certificate, M8 (Windows) is half way, and Linux has
-not started. `tooling/dev status` prints the live counts. That shapes what kinds of
+Thanks for your interest. The project ships **betas** for macOS (Apple silicon), signed
+and notarized, and an unsigned **Windows preview**, built from a patch series on
+Chromium stable (see [README.md](README.md) and [docs/ROADMAP.md](docs/ROADMAP.md)): M0
+through M6 are built; of M7, the website and Mac signing are done and automatic updates
+are next (`BACKLOG.md` S-74); M8 (Windows) lacks little windows, signing and updates
+(`S-56`); Linux has not started. `tooling/dev status` prints the live counts. That shapes what kinds of
 contributions are useful right now.
 
 ## What helps now
@@ -23,18 +24,19 @@ contributions are useful right now.
 - **Design input.** The feature spec (`docs/PRODUCT.md`) and privacy defaults
   (`docs/PRIVACY.md`) are living documents until code freezes them into behavior.
 
-- **Build tooling.** `tooling/` exists and is exercised on macOS arm64 only. Fixes
-  to the scripts, and reports of what breaks on a machine unlike the reference one,
-  are useful now. Run `tooling/check-repo` and `tooling/check-shell` before opening a
-  PR; CI runs exactly those two commands, so a pass here is a pass there. Note that
-  macOS ships bash 3.2, so the scripts must work there.
+- **Build tooling.** `tooling/` runs on macOS arm64 and, through `tooling/win/`, on
+  Windows x64. Fixes to the scripts, and reports of what breaks on a machine unlike
+  the reference one, are useful now. Run `tooling/check-repo` and `tooling/check-shell`
+  before opening a PR; CI runs those two, `tooling/check-pin --self-test`, and
+  `tooling/apply-patches --check` when `patches/` changes. Note that macOS ships bash
+  3.2, so the scripts must work there.
 
 ## Browser code
 
 The patch series is real and per feature (`patches/README.md`; `tooling/dev status`
-counts it, 45 patches on Chromium 153 as of beta 6). A change follows
-`docs/AGENT-LOOP.md`: a row in the feature's spec
-under `docs/features/`, a failing unit test, the code in the checkout, a fixup into the
+counts it). A change follows `docs/AGENT-LOOP.md`: a row in the feature's spec under
+`docs/features/`, a failing test (a unit test for model logic, a browser test for a
+click or a drag), the code in the checkout, a fixup into the
 feature's patch (or a new patch for a new feature) with `Why:` and `Removable when:`
 footers, `tooling/dev patch`, and a capture for anything visual. `docs/HANDOFF.md`
 carries the dev parameters and the traps already paid for.

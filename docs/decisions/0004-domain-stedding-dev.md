@@ -1,6 +1,6 @@
 # 0004 — Canonical domain: stedding.dev
 
-Status: Accepted
+Status: Accepted; update checks and downloads superseded by ADR 0014 (GitHub Releases)
 Date: 2026-08-30
 
 ## Context

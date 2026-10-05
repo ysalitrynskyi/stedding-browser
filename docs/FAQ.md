@@ -53,7 +53,7 @@ Not yet. Today: macOS on Apple silicon and Windows x64 (a preview). Linux is the
 platform after the Windows port is complete ([ROADMAP.md](ROADMAP.md)).
 
 **Can it be my default browser?**
-Yes. The welcome flow offers it, and it is in Settings → Stedding at any time.
+Yes. The welcome flow offers it, and Settings → Default browser does it at any time.
 
 ## Using it
 
@@ -101,8 +101,9 @@ Yes. Right-click a Space chip (or open Settings → Stedding) and turn on
 a second isolated Space can use a different account on the same site. Essentials
 (the top pinned row, visible in every Space) stay on the shared jar, as do
 extensions, history and saved passwords. Off by default: Spaces share one login
-until you opt in. Turning it off sends new tabs back to the shared jar; the
-stored session stays on disk until you isolate that Space again. To sign that
+until you opt in. Turning it off moves the Space's tabs, open ones too, back to the
+shared jar (each loads there when you come to it); the stored session stays on disk
+until you isolate that Space again. To sign that
 Space out of everything at once, right-click its chip and choose **Clear
 Independent Session**; deleting the Space clears it too.
 
@@ -110,14 +111,17 @@ Independent Session**; deleting the Space clears it too.
 
 **Does it send anything to Google, or to you?**
 No telemetry, no crash reports, no experiment downloads, no identifiers. Google's
-sign-in and services are removed from the interface. The Chrome Web Store is contacted
-only when you install or update an extension. Every connection the browser makes is
-listed in [PRIVACY.md](PRIVACY.md); anything not on that list is a bug.
+sign-in and services are removed from the interface. Google is still contacted for what
+Chromium itself does: component updates, Safe Browsing lists and network time, and two
+calls being removed (`S-54`, `S-67`). The Chrome Web Store is contacted only when you
+install or update an extension. [PRIVACY.md](PRIVACY.md) lists the connections and
+records what a fresh profile actually contacted; anything else is a bug.
 
 **What is on by default?**
 Third-party cookies blocked, HTTPS-first, Global Privacy Control, quiet permission
-prompts, Chromium's ad-measurement APIs off, search suggestions off, DuckDuckGo as the
-search engine. Each is one switch in Settings → Stedding → Privacy.
+prompts, Chromium's ad-measurement APIs off, search suggestions off, and DuckDuckGo
+until you choose a search engine. Most are a switch in Settings → Stedding → Privacy;
+the search engine is in Settings → Search engine.
 
 **Where is my data?**
 On your machine only: `~/Library/Application Support/Stedding` on macOS,

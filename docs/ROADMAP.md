@@ -13,18 +13,19 @@ below always means: a fresh macOS user account can install the artifact and run 
 without developer tools, without terminal commands, and without reading build docs
 (Windows/Linux equivalents apply from M8/M9 on).
 
-**Where this stands (2026-09-18):** M0–M6 are built and shipped unsigned; the current
-release is `v0.2.0-beta.8`, macOS (Apple silicon) on Chromium 153.0.8010.53 — the ladder
-was climbed out of order, chasing feedback from real use (`docs/ARC-ROUND2.md`), and each
-feature's own spec under `docs/features/` is the record of what passes. The Windows x64
-preview is still beta 6 until that image joins this tag (`S-56`). Of M7, the
-website is done: https://stedding.dev is live with the download, the release notes
-link, the source link and a security policy (`ysalitrynskyi/stedding.dev`); signing
-waits on the Developer ID certificate (the Apple developer account exists since
-2026-09-10; `BACKLOG.md` S-17) and the updater follows it. M8 started on 2026-09-08 with
-the first Windows build and has its first slice and the keyboard map
+**Where this stands (2026-10-05):** the current release is `v0.2.0-beta.12` on Chromium
+155.0.8059.12: a macOS image (Apple silicon), signed and notarized as every macOS image
+is from beta 10 on, and an unsigned Windows x64 preview. M0–M5 are built and shipped, and
+M6 too except importing from Chrome, Brave and the new Edge (`PLAN.md` decision 8) and
+the VoiceOver pass (`PLAN.md` WIN-3) — the ladder was climbed out of order, chasing
+feedback from real use (`docs/ARC-ROUND2.md`), and each feature's own spec under
+`docs/features/` is the record of what passes. Of M7, the website is done
+(https://stedding.dev, `ysalitrynskyi/stedding.dev`) and so is signing on the Mac;
+automatic updates come next, the Mac first (`BACKLOG.md` S-74). M8 started on
+2026-09-08 with the first Windows build and has its first slice and the keyboard map
 (`docs/features/windows.md` N1–N7): branding, a per-user installer, Arc's keys for
-Windows; little windows, signing, updates and CI are open (`S-56`). M9 has not started.
+Windows; little windows, signing, updates and CI are open (`S-56`). M9 has not started,
+and there is no Intel Mac build.
 
 ---
 
@@ -55,13 +56,13 @@ Acceptance criteria:
 
 ## M1 — Branded minimal build, installable .dmg
 
-> **Done.** The build produces `Stedding.app` with our icon and bundle identifier
-> `dev.stedding.Stedding`, `tooling/package-dmg` makes an installable image, the codec
-> decision is ADR 0008 (accepted, `BACKLOG.md` S-18) and the performance baselines are
-> in `docs/perf/README.md` (`S-13`, `S-31`, `S-37`). The one criterion below still
-> answered by inspection rather than a capture is the idle-network audit: what a fresh
-> profile contacts is written up in `docs/PRIVACY.md`, and turning that list into a
-> recorded run is `S-50`.
+> **Done, except the network criterion.** The build produces `Stedding.app` with our icon
+> and bundle identifier `dev.stedding.Stedding`, `tooling/package-dmg` makes an installable
+> image, the codec decision is ADR 0008 (accepted, `BACKLOG.md` S-18) and the performance
+> baselines are in `docs/perf/README.md` (`S-13`, `S-31`, `S-37`). The first recorded
+> idle-network run (2026-09-28, headless, about four and a half minutes, `docs/PRIVACY.md`)
+> found three contacts the list lacked: network time, Google's push service (`S-54`) and
+> the account check (`S-67`). The ten-minute run with a window is `S-50`.
 
 **Goal:** the same browser, but ours: name, icons, defaults, and zero telemetry —
 delivered as a .dmg a user can install.
@@ -102,8 +103,8 @@ publish for strangers to try.
 > `decisions/0010-ride-upstream-vertical-tabs.md`. That makes M2 much cheaper, and it
 > means the sidebar by itself is no longer a differentiator. What still distinguishes
 > Stedding is workspaces, the command bar, split view, privacy defaults and
-> governance. Whether that changes the product's positioning is an open question for
-> a human, recorded in ADR 0010.
+> governance. ADR 0011 answers what that means for the product: full functional parity
+> with Arc, plus what Arc could not offer.
 
 Scope:
 
@@ -215,12 +216,13 @@ Scope:
 - Full pass of `docs/QUALITY.md` UX completeness and accessibility gates over M2–M5
   features; fix or explicitly de-scope (ADR) everything that fails.
 - Complete keyboard shortcut reference shipped in-product.
-- A setting for URL elision. The steady-state omnibox shows the bare host, as Arc
-  does; Chrome tried the same thing and withdrew it, on the grounds that a user
-  can misjudge a page from a host a long path would contradict. Ours is narrower
-  -- the full URL returns on focus, and a bad certificate or the existing
-  `kPreventUrlElisionsInOmnibox` pref keeps it visible throughout -- but the
-  choice belongs to the user, not to us. See patch 0002.
+- A setting for URL elision. From beta 10 the address bar shows the whole address by
+  default (Chromium's "Always show full URLs" on; toolbar T28, patch 0002), and its menu
+  turns that off, which brings back Arc's bare host. Chrome tried the bare host and
+  withdrew it, on the grounds that a user can misjudge a page from a host a long path
+  would contradict. Stedding's is narrower -- the full URL returns on focus, and a bad
+  certificate keeps it visible throughout -- and the choice belongs to the user. See
+  patch 0002.
 - Known-issues list triaged to zero release-blockers.
 
 Acceptance criteria:
@@ -266,7 +268,10 @@ Acceptance criteria:
 
 **Goal:** feature parity on Windows x64 with a native-quality installer and updates.
 
-**Where this stands (2026-09-09):** the series builds and runs on Windows (round 8,
+**Where this stands (2026-10-05):** the preview ships with beta 12 on 155.0.8059.12, and
+both suites passed with DCHECKs and the dangling-pointer detector on and under
+AddressSanitizer (2026-09-30). A second release on one Chromium number installs as a
+repair that needs Stedding closed (`S-72`). The history: the series builds and runs on Windows (round 8,
 patch 0039): the Stedding window with its sidebar, Spaces, folders, the command bar,
 archive and routing, the address row under the window's own caption buttons and
 measured to the Mac's geometry. Since 2026-09-09: branding -- the name, the icon,
@@ -276,7 +281,8 @@ prefix (N3–N4) -- and the installer's tooling, Chromium's `mini_installer` fro
 machine and published with beta 5 as a preview (N6). Since 2026-09-10: Arc's keyboard
 for Windows (N7, patch 0043) with round 9's look at the preview, published as beta
 6. Not done: little windows and links from other applications, signing and
-SmartScreen, updates, CI, the quality gates. `BACKLOG.md` S-56.
+SmartScreen, updates, CI, Windows performance budgets, and importing from Arc for
+Windows (`BACKLOG.md` S-81). `BACKLOG.md` S-56.
 
 Scope:
 

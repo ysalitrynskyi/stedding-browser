@@ -283,7 +283,7 @@ column says what was seen, and rows 7 to 11 are what that pass found, fixed in t
 The same pass, with the real pointer and keyboard on the release build, also closed the Mac halves
 of two items: TAB-3 (in the rail a click on a drifted Space pin keeps its page, an Option-click
 sends it home, and straight after it the video's own fullscreen button and Esc work, a ⌘-click
-adds a row to the selection and the red button closes the window) and WIN-21 (View → Always
+adds a row to the selection and the red button closes the window) and WIN-29 (View → Always
 Show Full URLs checked; google.com's whole address at rest and after a click, in a field of
 about 1180 DIP in a window of 1688). A human-style pass on a fresh profile (the welcome flow,
 ⌘T, a folder, a drag onto it, a split, Settings, light and dark) found rows 10 and 11 and four

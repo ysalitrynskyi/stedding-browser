@@ -51,7 +51,9 @@ it is wrong on the website.
 
 ## Taglines
 
-Candidates. None is final; the choice belongs with the first website release.
+Chosen with the website (stedding.dev, 2026-09-16): **"Your haven on the web."**, with
+**"A quiet place to get things done."** as the second. The candidates as they were
+weighed:
 
 1. **"Your haven on the web."** — The name's meaning in five words. Warm,
    direct, works even for readers who have never met the name.
@@ -66,15 +68,15 @@ Candidates. None is final; the choice belongs with the first website release.
    in four words. Strongest as a short mark next to the logo; too clipped to
    stand entirely alone.
 
-Working recommendation: lead with **"Your haven on the web"** and use
-**"A quiet place to get things done"** where the workflow features are the
-subject. Revisit before launch.
+The website leads with **"Your haven on the web"** and keeps **"A quiet place to get
+things done"** for where the workflow features are the subject.
 
 ## Visual direction
 
-Suggestions, not decisions — this space is open for exploration. The logo and
-palette do not exist yet; when they do, they get recorded here and in an ADR
-if the choice is hard to reverse.
+The logo and palette exist: the mark is generated from one geometry file by
+`tooling/brand/mark.py` into `branding/`, and the palette — sand by day, a blue-to-plum
+gradient by night — is patch 0007's. Neither has an ADR yet. The notes below are the
+direction they came from.
 
 - **Mood: quiet and settled.** The name means a settled, kept place. Calm,
   grounded, unhurried. The opposite of neon gradients, glassy chrome, and

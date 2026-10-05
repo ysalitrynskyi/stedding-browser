@@ -151,8 +151,10 @@ research  →  spec  →  failing test  →  implement  →  build  →  test  �
 4. **Implement.** Smallest change that turns the test green. New files in our
    directories; upstream hunks only where the seam is (`docs/ARCHITECTURE.md`, "Where
    patches are allowed to live").
-5. **Build and test.** `tooling/dev test <feature>` builds `unit_tests` and runs the
-   feature's filter; `tooling/dev test all` before a commit. On a sanitizer output
+5. **Build and test.** On the Mac `tooling/dev test <feature>` builds `unit_tests` and
+   runs the feature's filter; on Windows build with `tooling\win\build-until-done.ps1
+   -Targets unit_tests,stedding_browser_tests` and pass `--no-build`. `tooling/dev test
+   all` before a commit. On a sanitizer output
    directory (`STEDDING_TEST_OUT=win-checks` or `win-asan`) the same command runs with the
    detector on and prints the digest.
 6. **Use it, and capture if it is visual.** Launch the build and do the thing (above). For
@@ -181,8 +183,9 @@ research  →  spec  →  failing test  →  implement  →  build  →  test  �
   another build is running.
 - **Numbers in docs come from `tooling/dev status`.** Do not hand-type test counts, patch
   counts, or the pin. `tooling/check-repo truth` fails on known stale phrases.
-- **One backlog.** `BACKLOG.md`. `AGENTS.md`, `HANDOFF.md` and feature specs cite ids
-  (`S-12`), they do not carry their own lists.
+- **One backlog.** `BACKLOG.md`, by S- id. Until `PLAN.md`'s Phase 1 is done, `PLAN.md`
+  sets the order and its own ids (TAB-1, PLT-3) are cited as they are. `AGENTS.md`,
+  `HANDOFF.md` and feature specs cite ids (`S-12`); they do not carry their own lists.
 - **Anything that owns a tab needs a test, not a screenshot** (trap 2 in
   `docs/HANDOFF.md`; the folder close-crash was invisible to every capture), and **anything a
   person clicks needs to have been clicked** (trap 58).
@@ -202,7 +205,7 @@ a subagent; the critical path is not (a subagent needs the context you already h
 ## Cheap checks before you claim done
 
 ```bash
-tooling/dev test all        # every Stedding test, filtered from unit_tests
+tooling/dev test all        # every Stedding test (--no-build on Windows)
 tooling/dev check           # check-repo, check-shell
 tooling/dev status          # what the repo actually contains, for docs
 tooling/check-repo          # 12 checks, 3 seconds

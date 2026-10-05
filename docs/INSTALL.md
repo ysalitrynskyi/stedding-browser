@@ -44,9 +44,9 @@ same Mac also uses. The first launch of a later build copies that profile into
 Stedding's own folder, if that folder holds no profile yet, and leaves the old one as
 it was. If another browser is using the old folder at that moment, Stedding asks
 first: **Quit**, close the other browser and open Stedding again to bring the profile
-across, or **Start a New Profile** and leave the old one where it is. Keep the old folder until that build has been released and you have checked
-that your tabs and Spaces came across. **Export Space…** in Settings → Stedding writes a
-Space to a file you can keep or move to another machine.
+across, or **Start a New Profile** and leave the old one where it is. Keep the old
+folder until you have checked that your tabs and Spaces came across. **Export Space…**
+in Settings → Stedding writes a Space to a file you can keep or move to another machine.
 
 Saved passwords are encrypted with a key kept in the macOS keychain under the name
 "Stedding Safe Storage". Builds up to beta 8 used the item "Chromium Safe Storage"; a
@@ -55,9 +55,9 @@ access to the Chromium item.
 
 ### Updating
 
-Download the new DMG and drag Stedding over the old one in Applications, then run
-the command in step 3 again: each download carries the mark anew. Your profile is
-untouched. In-app updates arrive with signing (`S-17`).
+Download the new DMG and drag Stedding over the old one in Applications; it opens with
+no extra step. Your profile is untouched. In-app updates come next, the Mac first
+(`S-74`).
 
 ### Uninstalling
 
@@ -100,12 +100,14 @@ as with any app.
 
 The Windows build is a preview: the full interface, Arc's keyboard mapped to Ctrl and
 Alt, the name and icon, and a per-user installer. Still open: little windows for links
-from other apps, signing, and automatic updates (`S-56`).
+from other apps, signing, and automatic updates (`S-56`); the two-finger Space swipe
+(`PLAN.md` TAB-31); and importing from Arc, whose Windows files Stedding does not read
+yet (`S-81`).
 
 ## First start
 
-The first window opens the welcome flow: choose a search engine; import from Arc, or
-through Chromium's importer from Safari (bookmarks) or Firefox (bookmarks and history)
+The first window opens the welcome flow: choose a search engine; import from Arc (on a
+Mac), or through Chromium's importer from Safari (bookmarks) or Firefox (bookmarks and history)
 on macOS, and from Firefox, Internet Explorer or the old Edge on Windows; pick a Space
 colour; set Stedding as the default browser if you want; and see the keyboard
 shortcuts. Chrome, Brave and the new Edge cannot be imported yet. Each choice can be

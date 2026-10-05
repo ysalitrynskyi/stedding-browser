@@ -2,7 +2,9 @@
 
 Every shortcut Stedding adds or changes, on both platforms. The same list is inside
 the browser at **Settings → Stedding → Shortcuts**, generated from the keyboard tables
-the browser itself uses, so that page is always exact for the version you run.
+the browser itself uses, so its keys are those of the version you run. Two of its
+descriptions are behind this page: it still lists Peek's two keys, though Peek is off,
+and it calls ⌘1–⌘9 the first nine rows, though ⌘9 is the last one (`BACKLOG.md` S-82).
 
 Keys: ⌘ Command, ⌥ Option, ⇧ Shift, ⌃ Control, ⇥ Tab.
 

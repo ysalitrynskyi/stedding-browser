@@ -21,8 +21,8 @@ What is measured, precisely:
                  all of its descendants, after loading the ten-site list and idling,
                  per QUALITY.md. Not RSS: see the note above phys_footprint below.
 
-Anything requiring Stedding features that do not exist yet (sidebar tab switching,
-command bar) is deliberately absent rather than stubbed.
+Sidebar tab switching and the command bar ship, but are not measured here yet: they
+are deliberately absent rather than stubbed (docs/QUALITY.md, budgets TBD).
 
 Usage:
     tooling/measure/harness.py all       --app /path/to/Chromium.app --out results.json

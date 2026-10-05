@@ -11,7 +11,7 @@ email or social media — the Security tab is the only monitored channel.
 
 A good report includes:
 
-- What is affected (file, document, or — once code exists — component and version).
+- What is affected (file, document, or component and version).
 - Steps to reproduce, or a clear explanation of the flaw.
 - Impact as you understand it.
 
@@ -27,8 +27,9 @@ This is a small project without a dedicated security team. Honestly stated:
 
 ## Scope
 
-Stedding ships **unsigned beta binaries** for macOS (Apple silicon) and a Windows x64
-preview on [Releases](https://github.com/ysalitrynskyi/stedding-browser/releases).
+Stedding ships beta binaries on
+[Releases](https://github.com/ysalitrynskyi/stedding-browser/releases): a macOS image
+(Apple silicon), signed and notarized, and an unsigned Windows x64 preview.
 Anything in one of those builds is in scope:
 
 - The Stedding patch series on top of Chromium (`patches/`) and the branding applied to
@@ -41,9 +42,9 @@ Anything in one of those builds is in scope:
 Two things about the current builds that are not vulnerabilities, because they are
 documented properties of a beta:
 
-- **The builds are unsigned and unnotarised** (`BACKLOG.md` S-17). macOS refuses them
-  on a double-click and the release notes give the per-app right-click bypass. Signing
-  lands at M7.
+- **The Windows installer is not code-signed** (`BACKLOG.md` S-56). SmartScreen asks
+  once, and the release notes give the step: **More info → Run anyway**. The macOS
+  image is signed with the project's Developer ID and notarized from beta 10 on.
 - **There is no auto-updater yet.** A build does not update itself, so an installed
   beta stays on the Chromium version it was cut from until it is replaced by hand. The
   pin is watched daily (`.github/workflows/upstream.yml`, `tooling/check-pin`) and the

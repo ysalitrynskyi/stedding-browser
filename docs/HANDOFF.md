@@ -57,9 +57,10 @@ Sixty-odd traps follow. Read the one for the topic in front of you, not the list
   `patches/` is generated FROM that branch by `tooling/update-patches` — the
   branch is the source of truth while working; the patches are the durable
   artifact.
-- Build output: `out/release` (proprietary codecs on). `out/official` exists
-  for performance baselines (never quote numbers from `release`;
-  `docs/QUALITY.md`).
+- Build output on the Mac: `out/release` (proprietary codecs on). `out/official` is
+  built only for a performance baseline (`tooling/dev build official chrome`) and is
+  not there now (never quote numbers from `release`; `docs/QUALITY.md`). On the PC:
+  `STEDDING_CHROMIUM_SRC` and `out\win-release` ("The Windows build").
 - The website: `ysalitrynskyi/stedding.dev` (private), live
   at https://stedding.dev since 2026-09-16. Astro, static, Cloudflare Pages from
   `main`; it reads the latest release from the GitHub Releases API at build time and
@@ -100,10 +101,13 @@ round 7 was verified. `tooling/drive <profile> <steps>` clicks, drags and types;
 is the only way to reach a context menu or a typed URL, and it waits for an empty
 chair (trap 27). Measure the PNG (PIL, a luma scan) rather than eyeballing it.
 
-## What can be checked without a Mac
+## What needs which machine
 
-Most of this project needs the Mac. Three things do not, and they are worth knowing
-about before assuming a check has to wait for a build:
+The Windows PC is the development machine: it builds the series, runs both suites and
+drives the window ("The Windows build"). The Mac is needed for the macOS image: its
+build (13 Objective-C++ files against AppKit, and full Xcode), its suites and the
+Mac-only checks, and signing and notarizing. Three checks need no build at all, and
+they are worth knowing about before assuming a check has to wait for one:
 
 - **The series applies.** `tooling/apply-patches --check` reads the pinned tree into a
   temporary index and applies the series into it. Plain git: no depot_tools, no build,
@@ -124,9 +128,7 @@ about before assuming a check has to wait for a build:
   under Git Bash through a one-line shim on PATH, so `tooling/check-shell` gives the
   same answer CI gives.
 
-What still cannot: the build, Chromium's own suites, anything driving a window, and
-signing. The patch series touches nine Objective-C++ files against AppKit and needs
-full Xcode, so no amount of disk changes it. That is `S-49`.
+No CI runner can build, run the suites, drive a window or sign: that is `S-49`.
 
 ## Dev parameters (all on `SteddingArcStyleWindow`, tunable without rebuilds)
 
@@ -1016,22 +1018,27 @@ active Space switches to a neighbour, Chrome/Brave/Edge import is documented
 honestly now and built in Phase 2 (a first attempt landed early in patch 0055 and
 was withdrawn on 2026-09-28: it read the source browser's live databases and its
 keychain item regardless of the choices made), little windows get no Space commands.
-Beta 10 (pin 155.0.8059.12) is the current image on both platforms: the Windows installer
-went out on 2026-09-30, after beta 9 the same day, and the Mac image joined it on 2026-10-01,
-the first one signed with the Developer ID and notarized, built from the tag's series plus
-three Mac-only changes (the release notes name them). `S-56` (the Windows port), `S-58`
-(disk) and `S-74` (automatic updates, next) stay.
+Beta 12 (pin 155.0.8059.12, 2026-10-02) is the current image on both platforms: the Mac's
+DMG, signed with the Developer ID and notarized, and the Windows installer, an unsigned
+preview built on the PC from commit `abc3cd4` (the tag's series plus a Windows fix to
+the welcome flow and changes to tests) and added the same evening. Beta 11 (the same
+day) was the Mac's alone. `S-56` (the Windows port), `S-58` (disk) and `S-74` (automatic
+updates, next) stay.
 
 ## Release channel
 
-Pre-releases on GitHub Releases, unsigned, with the Gatekeeper instructions
-(`docs/INSTALL.md`'s `xattr` command, trap 47) in the notes and the sha256 beside the DMG. The order, all from the
-repo root with a clean tree: bump `VERSION`, `tooling/dev build release chrome`
-(the About line is a build flag), `tooling/verify-build --app
-.../out/release/Stedding.app`, empty `dist/`, `tooling/package-dmg release`
-(`dist/Stedding-<VERSION>-arm64.dmg` and its `.sha256`), paste the checksum into
+Pre-releases on GitHub Releases: the Mac's DMG signed with the Developer ID and
+notarized (since beta 10), the Windows installer an unsigned preview, each with its
+sha256 beside it. The Mac's order, all from the repo root with a clean tree: bump
+`VERSION`, `tooling/dev build release chrome` (the About line is a build flag), empty
+`dist/`, `tooling/sign-release release` (`--check` first; it signs, notarizes and staples
+into `dist/signed/stable/Stedding.app`), `tooling/verify-build --app
+dist/signed/stable/Stedding.app`, `tooling/package-dmg release --app
+dist/signed/stable/Stedding.app` (`dist/Stedding-<VERSION>-arm64.dmg` and its `.sha256`),
+`syspolicy_check distribution` on that app (trap 47), paste the checksum into
 `docs/release-notes/v<ver>.md`, commit, **push**, `tooling/publish-release --check`,
-then `tooling/publish-release`. Beta 4 went out this way on 2026-09-05. The Windows
+then `tooling/publish-release`. Betas 1 to 8 went out unsigned, with `docs/INSTALL.md`'s
+`xattr` command in their notes. The Windows
 image joins the same release from the Windows PC: `tooling\win\build-until-done.ps1`
 (then both suites on that exact build), `tooling\win\package-installer.ps1`,
 `tooling\win\test-installer.ps1` (upgrade, uninstall, install) and a real launch of
@@ -1044,10 +1051,11 @@ added the DMG to beta 6 the same day (beta 5 stays Windows-only) -- after a
 re-sync of the checkout, a sweep of every Stedding filter and the upstream suites
 of trap 31, and the captures the README shows -- and `publish-release` uploaded
 into the existing release and refreshed the notes with the checksum. Beta 9 (2026-09-30) went out from Windows alone; beta 10 went out from Windows the same day
-and the Mac added its signed, notarized DMG on 2026-10-01. A Windows release on the same Chromium number as the installed one installs as a repair and needs Stedding closed (trap 62). With a
-Developer ID in the keychain (`S-17`), `tooling/sign-release release` goes between
-`verify-build` and `package-dmg`, which then takes `--app
-dist/signed/stable/Stedding.app`, and the notes and `docs/INSTALL.md` lose the unsigned paragraph.
+and the Mac added its signed, notarized DMG on 2026-10-01. Beta 12's installer was built,
+tested and published on the PC from the Mac over SSH, with the browser suite in a
+temporary task in the operator's session (traps 67, 68). A Windows release on the same
+Chromium number as the installed one installs as a repair and needs Stedding closed
+(trap 62).
 After `publish-release`, nothing is needed on the site: its scheduled rebuild
 (every six hours) reads the release list, pre-releases included. To see the new
 version at once, `gh workflow run rebuild.yml -R ysalitrynskyi/stedding.dev`

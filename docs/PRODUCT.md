@@ -573,20 +573,26 @@ is why one tab strip holding every Space's tabs (ADR 0015) is the model.
 
 ### How it is checked
 
-![The Stedding window, beta 7](images/ui-current.png)
+![The Stedding window, 0.4.0 beta 1](images/ui-current.png)
 
-The pictures in this section are from beta 7, with four Spaces, two essentials and a
-Space-pinned tab:
+The pictures in this section are from 0.4.0 beta 1, dark, with two essentials and a page
+that stays light (Hacker News has no dark theme), so the card stands out from the window
+ground. The four Spaces add `extra_spaces/3/space_pin_tabs/1` to the params, the command
+bar `open_command_bar/true`, and the welcome flow is `--stedding-welcome=search`. Each is
+taken at Retina size and halved to 1400 × 880, one pixel to a DIP:
 
 ```
-tooling/capture-state --size 1400x880 --features \
-  'SteddingArcStyleWindow:extra_spaces/3/pin_tabs/2/space_pin_tabs/1'
+tooling/capture-state --size 1400x880 --seed dark --settle 30 \
+  --features 'SteddingArcStyleWindow:pin_tabs/2' \
+  'https://news.ycombinator.com/front?day=2026-10-24' \
+  https://en.wikipedia.org/wiki/Web_browser https://www.iana.org/
 ```
 
-![Four Spaces, beta 7](images/ui-spaces.png)
+![Four Spaces, 0.4.0 beta 1](images/ui-spaces.png)
 
-`tooling/capture-state` takes the window by its id and needs neither the keyboard nor
-the pointer. It runs on macOS. On Windows the capture is `tooling/win/capture.ps1`.
+`tooling/capture-state` takes the window by its id and needs neither the keyboard nor a
+click; before the launch it parks the pointer off the window (`docs/HANDOFF.md`, trap 136).
+It runs on macOS. On Windows the capture is `tooling/win/capture.ps1`.
 `tooling/probes/window.json` is the probe spec; `tooling/dev capture --assert
 tooling/probes/window.json` runs that spec's own capture and checks it.
 `tooling/check-geometry` re-measures the gutters and the corner radius in the

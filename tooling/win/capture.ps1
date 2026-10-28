@@ -99,6 +99,11 @@ function Start-Browser {
   param([string]$Url = "about:blank", [string[]]$Extra = @(), [double]$Scale = 1, [int]$W = 1400, [int]$H = 880)
   if (-not $script:Exe) { throw "set STEDDING_WIN_EXE or pass -Exe: the built chrome.exe" }
   Stop-Browser
+  # Trap 136: a pointer resting where the window opens hovers the row under it, and the
+  # capture keeps that hover. park-cursor.ps1 moves it to the screen's bottom-right
+  # corner, and only after ten seconds with no input.
+  $parked = & (Join-Path $PSScriptRoot 'park-cursor.ps1')
+  if ($LASTEXITCODE -ne 0) { Write-Warning "$parked; a row under the pointer may show its hover" }
   $b = 8  # Windows' invisible resize border; cancelled so the visible frame is W x H
   $list = @("--user-data-dir=$($script:Profile)", "--no-first-run",
     "--no-default-browser-check", "--force-device-scale-factor=$Scale",

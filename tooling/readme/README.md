@@ -13,6 +13,8 @@ The README's pictures and its animation, made on a Mac from a build, the same wa
 | `common.sh` | What both scripts share: the pages, the local servers, the checks before a launch. |
 | `pages/` | Two local pages, served on localhost:5173 and localhost:8797 while the scripts run. |
 | `promote-readme.py` | Checks `docs/readme-draft.md` and, with `--write`, replaces `README.md`. |
+| `win-stills.ps1` | **(Windows)** The Windows pictures, `win-wide` and `win-rail`, light and dark, through `tooling/win/capture.ps1`. |
+| `round-corners.py` | Clears a Windows capture's corners the way Windows 11 rounds the window on screen. |
 
 ## What it needs
 
@@ -49,7 +51,7 @@ Each script writes only under the folder it is given, and refuses one inside the
 
 ## The stills
 
-`capture-stills.sh <out> [still ...]`. `--list` names them. `--build` chooses the output directory under `out/` (default `release`). `--scheme light` or `dark` sets the scheme for every still except `hero-dark`, which is always dark. `--keep-profiles` leaves the seeded profiles in place.
+`capture-stills.sh <out> [still ...]`. `--list` names them. `--build` chooses the output directory under `out/` (default `release`). `--scheme light` or `dark` sets the scheme for every still except `hero-dark`, which is always dark. `--keep-profiles` leaves the seeded profiles in place. `--settle S` waits S seconds for the pages before each capture (18 by default); a tab whose page is slow keeps the plain globe until its icon arrives, so look at the icons and take such a still again with a longer wait. Before each launch `capture-state` parks the pointer off the window's area once nobody has used the Mac for ten seconds, and refuses to capture while the pointer is over the window: a resting pointer leaves its hover in the picture (`docs/HANDOFF.md`, trap 136).
 
 Each still is `<out>/<still>.png` at 1800 px wide, the size `docs/images/readme/` keeps. A window already narrower than that (a web app's) is copied as captured. The capture as taken is `<out>/raw/`, and a second window is `raw/<still>-2.png`. `<out>/captures.tsv` names the still, the file, the app version, the time, the fixture and the arguments.
 
@@ -71,6 +73,29 @@ Each still is `<out>/<still>.png` at 1800 px wide, the size `docs/images/readme/
 `media.py seed` writes a fresh profile: the Spaces (names, colours, icons, and a Space with its own session), the colour scheme, the rail, dark pages, the welcome flow marked as shown, and the version that last ran. The profile is passed as a second `--user-data-dir` after the one `capture-state` passes. Chromium keeps the last value of a repeated switch, so the browser runs on the seeded profile and `capture-state`'s empty one is deleted unused. Essentials, folders and pins are not in that profile. The testing params apply them about a second after the tabs exist.
 
 `welcome-import` runs with a scratch home folder that holds the made-up Arc sidebar (`arc-demo-sidebar.py`: four Spaces, pinned tabs and folders, four essentials, on example sites). That home is handed to the browser alone through `STEDDING_LAUNCH_ENV` (`tooling/lib.sh`), so the step reads that sidebar and the dialog sits on GitHub's home page.
+
+## The Windows pictures
+
+`docs/images/win-wide.png` (the open sidebar) and `win-rail.png` (the rail) come from the
+PC's `win-release` build, which is not an official one, so the capture params work. They
+show the stills' demo fixture: four essentials, a folder holding a nested one, three Spaces,
+GitHub's trending page on screen, the sample app left out.
+
+1. On the Mac, seed four profiles: `media.py seed <dir>/wide-light --fixture demo
+   --version-file VERSION --scheme light`, the same for `wide-dark` with `--scheme dark`,
+   and `rail-light` and `rail-dark` with `--collapsed` added. Copy them to the PC.
+2. Run `win-stills.ps1 -Exe <src>\out\win-release\chrome.exe -Profiles <dir> -Out <folder>`
+   in the signed-in session. Over SSH, register a one-off task with an interactive token
+   (`New-ScheduledTaskPrincipal -LogonType Interactive`, `-Priority 4` in its settings),
+   start it, read `<folder>\run.log` until it says `end`, and unregister the task (trap 67).
+3. Clear the corners: `round-corners.py <in> <out>`. PrintWindow gives the window's full
+   rectangle, and Windows 11 rounds its corners on screen with an 8 px radius, so a capture
+   kept as it is shows square corners the window never has. A capture of the screen instead
+   shows the desktop in them.
+4. Look at each: the page on screen, no hover on a row, the corners.
+
+A Windows page shows its scrollbar while it can scroll, as Chrome does there; the
+sidebar's does not.
 
 ## The animation
 

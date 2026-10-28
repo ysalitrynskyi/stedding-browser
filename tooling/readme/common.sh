@@ -25,6 +25,10 @@ URL_REPO="https://github.com/ysalitrynskyi/stedding-browser"
 URL_MDN="https://developer.mozilla.org/en-US/"
 URL_DDG="https://duckduckgo.com/"
 URL_HN="https://news.ycombinator.com/"
+# One day's front page, for a still that shows Hacker News itself: today's front page
+# changes by the hour and can carry politics; this day's top stories are technology, and
+# the page stays the same for every retake.
+URL_HN_DAY="https://news.ycombinator.com/front?day=2026-10-24"
 URL_MDN_CSS="https://developer.mozilla.org/en-US/docs/Web/CSS"
 URL_PY_TUTORIAL="https://docs.python.org/3/tutorial/"
 URL_DJANGO="https://www.djangoproject.com/"

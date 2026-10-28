@@ -33,7 +33,7 @@ The traps follow. 28 is retired. Read the one for the topic in front of you, not
 |---|---|
 | Building, disk, rebuild cost | 1, 16, 19, 23, 44, 45, 53, 54, 57, 70, 73, 74, 83, 89, 90, 100, 123 |
 | The working loop and the series | 5, 9, 13, 14, 17, 22, 50, 51, 89, 92 |
-| Driving and capturing the window | 3, 7, 10, 11, 12, 15, 18, 24, 27, 29, 30, 36, 37, 52, 56, 59, 61, 63, 64, 65, 76, 82, 93, 94, 95, 96, 103, 105, 107, 116, 121, 130, 132, 133 |
+| Driving and capturing the window | 3, 7, 10, 11, 12, 15, 18, 24, 27, 29, 30, 36, 37, 52, 56, 59, 61, 63, 64, 65, 76, 82, 93, 94, 95, 96, 103, 105, 107, 116, 121, 130, 132, 133, 136 |
 | What a test can and cannot prove | 2, 4, 31, 46, 48, 51, 52, 55, 56, 58, 59, 60, 66, 68, 69, 72, 75, 77, 78, 79, 80, 81, 84, 86, 87, 88, 91, 98, 99, 101, 102, 104, 106, 107, 110, 111, 112, 113, 114, 115, 119, 120, 126, 127 |
 | Windows | 32, 34, 36, 38, 40, 42, 53, 54, 55, 56, 57, 59, 62, 67, 68, 69, 70, 71, 74, 91, 93, 98, 99, 100, 101, 103, 106, 111, 113, 114, 115, 116, 118, 121, 122, 125, 128 |
 | Release and signing | 44, 47, 49, 62, 85, 117, 118, 124, 129, 131 |
@@ -905,6 +905,16 @@ Two switches do the same for windows. `--stedding-welcome[=<step>]` forces the w
     `UpdatePinCloseButton` (patch 0110, pins H29). Stedding's sleep at home
     (`ReplaceWithHomeAsleep`) calls `NotifyTabChanged` after `DiscardWebContents`
     (patch 0083) and does not have this gap.
+
+136. **A capture under the resting pointer keeps its hover.** A window that opens
+    under a pointer that did not move still hovers what lies under it (trap 126), and
+    `tooling/capture-state` photographs that. Most of the README's stills from
+    2026-10-26 showed the sidebar edge's resize bar, which appears only while the
+    pointer rests on the edge, because the pointer had been left there. Before the
+    launch `capture-state` parks the pointer off the window's area with
+    `tooling/park-cursor` (only after ten idle seconds, so never from the operator's
+    hand), waits up to a minute while someone works, and refuses to capture while the
+    pointer is over the window.
 ## The Windows build
 
 Git for Windows runs the bash tooling. PowerShell runs the rest. The toolchain is the installed Visual Studio (`DEPOT_TOOLS_WIN_TOOLCHAIN=0`, set by the scripts). Three variables name the machine's paths, so none is in the repo: `STEDDING_CHROMIUM_SRC` (the checkout's `src`), `STEDDING_DEPOT_TOOLS` when depot_tools is not already on `PATH`, and `STEDDING_VPYTHON_ROOT`, a short directory for vpython's venv (trap 34). The bash tooling takes the checkout as `CHROMIUM_ROOT`, the folder that holds `src`, as a POSIX path.

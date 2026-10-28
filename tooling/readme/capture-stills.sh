@@ -19,6 +19,8 @@
 #   --with-new        also the stills of this round's features
 #                     file: the step lists that profile's Spaces and counts
 #   --keep-profiles   keep the seeded profiles (work/profiles/) for a look afterwards
+#   --settle S        wait S seconds for the pages before each capture (capture-state's
+#                     default, 18, can leave a tab's icon still loading on a slow page)
 #
 # Writes, under <out-dir>:
 #   raw/<still>.png      the window as captured (Retina size, transparent corners),
@@ -51,6 +53,7 @@ NEW_STILLS=(dark-pages local-tabs isolated-space web-app)
 
 SCHEME="light"
 KEEP_PROFILES=0
+SETTLE=""
 FAILED=""
 PROFILE=""
 RAW=""
@@ -67,7 +70,7 @@ shoot() {
     [ -f "$extra" ] && rm -f "$extra"
   done
   "$STEDDING_ROOT/tooling/capture-state" --out "$RAW/$name.png" --build "$BUILD" \
-    --size 1400x880 "$@" >"$LOGS/$name.txt" 2>&1 || status=$?
+    --size 1400x880 ${SETTLE:+--settle "$SETTLE"} "$@" >"$LOGS/$name.txt" 2>&1 || status=$?
   if [ -n "$PROFILE" ] && [ "$KEEP_PROFILES" -eq 0 ]; then
     remove_ours "$PROFILE"
   fi
@@ -154,7 +157,7 @@ still_pins() {
   seeded pins demo --scheme "$SCHEME"
   shoot pins demo --features "$FEATURE:space_pin_tabs/3/drift_tabs/1" \
     "--user-data-dir=$PROFILE" "${BROWSER_ARGS[@]}" \
-    "$URL_DJANGO" "$URL_MDN_JS" "$URL_REPO" "$URL_MDN_CSS" "$URL_TRENDING"
+    "$URL_DJANGO" "$URL_PY_TUTORIAL" "$URL_REPO" "$URL_MDN_CSS" "$URL_TRENDING"
 }
 
 # The sidebar closed to the rail, the address row still across the top.
@@ -190,20 +193,20 @@ still_welcome_import() {
   rm -rf "$home"
   python3 "$STEDDING_ROOT/tooling/readme/arc-demo-sidebar.py" "$home" >/dev/null ||
     { warn "welcome-import: could not write the demo Arc sidebar"; FAILED="$FAILED welcome-import"; return 0; }
-  # GitHub's home page behind the dialog, not the repository's, whose file list shows
-  # under the dialog.
-  STEDDING_LAUNCH_ENV="HOME=$home CFFIXED_USER_HOME=$home" welcome import "https://github.com/"
+  # GitHub's trending page behind the dialog: the repository's file list showed under
+  # the dialog, and GitHub's home page shows its advertising around it.
+  STEDDING_LAUNCH_ENV="HOME=$home CFFIXED_USER_HOME=$home" welcome import "$URL_TRENDING_FRONT"
   rm -rf "$home"
 }
 
 # This round's: dark pages on (Chromium's own preference is the switch). The page on
-# screen is Hacker News, white by design with no dark theme of its own, so what is dark
-# is dark pages' doing; GitHub would show its own dark theme.
+# screen is Hacker News (one day's front page, URL_HN_DAY), white by design with no dark
+# theme of its own, so what is dark is dark pages' doing; GitHub would show its own.
 still_dark_pages() {
   seeded dark-pages demo --scheme "$SCHEME" --dark-pages
   shoot dark-pages demo --features "$FEATURE:pin_tabs/4" \
     "--user-data-dir=$PROFILE" "${BROWSER_ARGS[@]}" \
-    "$URL_HN" "$URL_REPO" "$URL_MDN" "$URL_DDG" "$URL_DJANGO" "$URL_PYTHON" "$URL_TRENDING"
+    "$URL_HN_DAY" "$URL_REPO" "$URL_MDN" "$URL_DDG" "$URL_DJANGO" "$URL_PYTHON" "$URL_TRENDING"
 }
 
 # This round's: two pages on local servers, the first on screen (the outline shows
@@ -219,7 +222,7 @@ still_local_tabs() {
 still_isolated_space() {
   seeded isolated-space isolated --scheme "$SCHEME"
   shoot isolated-space isolated "--user-data-dir=$PROFILE" "${BROWSER_ARGS[@]}" \
-    "$URL_WIKI_COOKIE" "$URL_LOBSTERS" "$URL_DDG"
+    "$URL_OSM" "$URL_WIKI_COOKIE" "$URL_LOBSTERS"
 }
 
 # This round's: a page in a window of its own. Chromium's --app window stands in
@@ -242,7 +245,7 @@ main() {
     exit 0
   fi
   case "${1:-}" in
-    ''|-h|--help|-*) sed -n '2,42p' "$0"; exit 2 ;;
+    ''|-h|--help|-*) sed -n '2,44p' "$0"; exit 2 ;;
   esac
   set_out_dir "$1"
   shift
@@ -253,6 +256,7 @@ main() {
       --scheme) SCHEME="${2:-}"; shift 2 ;;
       --with-new) wanted+=("${STILLS[@]}" "${NEW_STILLS[@]}"); shift ;;
       --keep-profiles) KEEP_PROFILES=1; shift ;;
+      --settle) SETTLE="${2:-}"; shift 2 ;;
       -*) die "unknown option $1" ;;
       *) wanted+=("$1"); shift ;;
     esac

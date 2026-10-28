@@ -277,6 +277,46 @@ require_no_other_instance() {
      capture or type into the wrong browser. Quit that one first."
 }
 
+# The real pointer's position in global display points, origin at the main
+# display's top left, as "x y". Reading it is not input.
+pointer_position() {
+  python3 -c 'import Quartz; p = Quartz.CGEventGetLocation(Quartz.CGEventCreate(None)); print(int(p.x), int(p.y))'
+}
+
+# Whether the pointer rests where a window opened at the main display's top left
+# (--window-position=0,0) with the size "W,H" can lie. The margins take in the
+# menu bar the window opens under and a few points of shadow.
+pointer_over_window() {
+  local size="$1" w h x y
+  w="${size%%,*}"
+  h="${size##*,}"
+  read -r x y <<<"$(pointer_position)" || return 1
+  [ "$x" -ge 0 ] && [ "$y" -ge 0 ] && [ "$x" -lt $((w + 16)) ] && [ "$y" -lt $((h + 80)) ]
+}
+
+# Keeps the pointer off a window about to open there (docs/HANDOFF.md, trap 136):
+# a window that opens under a resting pointer hovers what lies under it, and a
+# capture keeps that hover. Parks the pointer with tooling/park-cursor, which moves
+# it only after ten seconds with no mouse or keyboard input, so it never takes the
+# pointer from the operator's hand; while they work it waits up to a minute for
+# them to move it or stop. Returns 1 when the pointer is still there.
+keep_pointer_off_window() {
+  local size="$1" waited=0
+  pointer_over_window "$size" || return 0
+  while [ "$waited" -le 60 ]; do
+    if "$STEDDING_ROOT/tooling/park-cursor" >/dev/null 2>&1; then
+      if pointer_over_window "$size"; then
+        return 1
+      fi
+      return 0
+    fi
+    sleep 5
+    waited=$((waited + 5))
+    pointer_over_window "$size" || return 0
+  done
+  return 1
+}
+
 # The window captures, the drive and the polite quit talk to the window server
 # through PyObjC. Checked before a launch, so a missing module does not leave a
 # browser starting for nothing.

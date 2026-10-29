@@ -44,16 +44,16 @@ embedder hook for page activation; the feature itself stays.
  chrome/browser/ui/stedding/blocker/BUILD.gn   |  90 +++
  chrome/browser/ui/stedding/blocker/DEPS       |   6 +
  chrome/browser/ui/stedding/blocker/blocker.cc | 117 ++++
- chrome/browser/ui/stedding/blocker/blocker.h  |  36 ++
+ chrome/browser/ui/stedding/blocker/blocker.h  |  36 +
  .../blocker/blocker_activation_throttle.cc    |  71 ++
  .../blocker/blocker_activation_throttle.h     |  52 ++
- .../ui/stedding/blocker/blocker_convert.cc    | 222 +++++++
+ .../ui/stedding/blocker/blocker_convert.cc    | 222 ++++++
  .../ui/stedding/blocker/blocker_convert.h     |  79 +++
  .../blocker/blocker_convert_unittest.cc       | 168 +++++
- .../ui/stedding/blocker/blocker_lists.cc      | 607 ++++++++++++++++++
+ .../ui/stedding/blocker/blocker_lists.cc      | 607 +++++++++++++++++
  .../ui/stedding/blocker/blocker_lists.h       | 226 +++++++
- .../blocker/blocker_lists_unittest.cc         | 250 ++++++++
- .../ui/stedding/blocker/blocker_rules.cc      | 216 +++++++
+ .../blocker/blocker_lists_unittest.cc         | 250 +++++++
+ .../ui/stedding/blocker/blocker_rules.cc      | 276 ++++++++
  .../ui/stedding/blocker/blocker_rules.h       | 107 +++
  .../blocker/blocker_rules_unittest.cc         | 160 +++++
  chrome/browser/ui/stedding/stedding_prefs.cc  |   7 +
@@ -84,10 +84,10 @@ embedder hook for page activation; the feature itself stays.
  .../data/stedding/blocker/easyprivacy.txt     |   6 +
  chrome/test/data/stedding/blocker/page.html   |  48 ++
  chrome/test/stedding/BUILD.gn                 |  10 +
- chrome/test/stedding/blocker_browsertest.cc   | 572 +++++++++++++++++
+ chrome/test/stedding/blocker_browsertest.cc   | 630 ++++++++++++++++++
  ...ent_subresource_filter_throttle_manager.cc |  46 +-
  ...tent_subresource_filter_throttle_manager.h |  15 +
- 52 files changed, 3961 insertions(+), 5 deletions(-)
+ 52 files changed, 4079 insertions(+), 5 deletions(-)
  create mode 100644 chrome/browser/ui/stedding/blocker/BUILD.gn
  create mode 100644 chrome/browser/ui/stedding/blocker/DEPS
  create mode 100644 chrome/browser/ui/stedding/blocker/blocker.cc
@@ -2425,10 +2425,10 @@ index 0000000000000..864b3da3d5216
 +}  // namespace stedding
 diff --git a/chrome/browser/ui/stedding/blocker/blocker_rules.cc b/chrome/browser/ui/stedding/blocker/blocker_rules.cc
 new file mode 100644
-index 0000000000000..c99b191e792c2
+index 0000000000000..5e04265509066
 --- /dev/null
 +++ b/chrome/browser/ui/stedding/blocker/blocker_rules.cc
-@@ -0,0 +1,216 @@
+@@ -0,0 +1,276 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -2438,6 +2438,7 @@ index 0000000000000..c99b191e792c2
 +#include <algorithm>
 +#include <optional>
 +#include <string>
++#include <utility>
 +
 +#include "base/strings/string_split.h"
 +#include "base/strings/string_util.h"
@@ -2452,8 +2453,12 @@ index 0000000000000..c99b191e792c2
 +#include "components/content_settings/core/common/content_settings_types.h"
 +#include "components/prefs/pref_service.h"
 +#include "content/public/browser/navigation_controller.h"
++#include "content/public/browser/navigation_entry.h"
++#include "content/public/browser/navigation_handle.h"
 +#include "content/public/browser/reload_type.h"
 +#include "content/public/browser/web_contents.h"
++#include "content/public/browser/web_contents_observer.h"
++#include "content/public/browser/web_contents_user_data.h"
 +#include "net/base/url_util.h"
 +
 +namespace stedding {
@@ -2471,6 +2476,52 @@ index 0000000000000..c99b191e792c2
 +  return contents ? Profile::FromBrowserContext(contents->GetBrowserContext())
 +                  : nullptr;
 +}
++
++// Bk5: a choice made on a page a form loaded. Its reload asks first whether
++// to send the form again, and the choice is written only once that reload
++// starts: cancelled, the page keeps the blocking it loaded with and the
++// shield still says so. Written first, the shield showed the new choice
++// over a page filtered by the old one. Any other navigation drops it.
++class BlockerChoiceOnReload
++    : public content::WebContentsObserver,
++      public content::WebContentsUserData<BlockerChoiceOnReload> {
++ public:
++  BlockerChoiceOnReload(const BlockerChoiceOnReload&) = delete;
++  BlockerChoiceOnReload& operator=(const BlockerChoiceOnReload&) = delete;
++  ~BlockerChoiceOnReload() override = default;
++
++  // content::WebContentsObserver:
++  void DidStartNavigation(content::NavigationHandle* navigation) override {
++    if (!navigation->IsInPrimaryMainFrame()) {
++      return;
++    }
++    if (navigation->GetReloadType() != content::ReloadType::NONE) {
++      // Before the reload's request: the filter reads the choice made.
++      if (Profile* const profile = ProfileOf(web_contents())) {
++        SetBlockingOnSiteInMap(MapFor(profile), profile->IsOffTheRecord(),
++                               url_, on_);
++      }
++    }
++    // Deletes this.
++    web_contents()->RemoveUserData(UserDataKey());
++  }
++
++ private:
++  friend class content::WebContentsUserData<BlockerChoiceOnReload>;
++
++  BlockerChoiceOnReload(content::WebContents* contents, GURL url, bool on)
++      : content::WebContentsObserver(contents),
++        content::WebContentsUserData<BlockerChoiceOnReload>(*contents),
++        url_(std::move(url)),
++        on_(on) {}
++
++  const GURL url_;
++  const bool on_;
++
++  WEB_CONTENTS_USER_DATA_KEY_DECL();
++};
++
++WEB_CONTENTS_USER_DATA_KEY_IMPL(BlockerChoiceOnReload);
 +
 +}  // namespace
 +
@@ -2581,7 +2632,16 @@ index 0000000000000..c99b191e792c2
 +  Profile* const profile = ProfileOf(contents);
 +  const GURL url = contents->GetLastCommittedURL();
 +  const bool on = !SiteHasBlockingOff(MapFor(profile), url);
-+  SetBlockingOnSiteInMap(MapFor(profile), profile->IsOffTheRecord(), url, !on);
++  // A choice already waiting on a resubmission question is replaced.
++  contents->RemoveUserData(BlockerChoiceOnReload::UserDataKey());
++  const content::NavigationEntry* const entry =
++      contents->GetController().GetLastCommittedEntry();
++  if (entry && entry->GetHasPostData()) {
++    BlockerChoiceOnReload::CreateForWebContents(contents, url, !on);
++  } else {
++    SetBlockingOnSiteInMap(MapFor(profile), profile->IsOffTheRecord(), url,
++                           !on);
++  }
 +  // A new decision reaches the page only with its next load.
 +  contents->GetController().Reload(content::ReloadType::NORMAL,
 +                                   /*check_for_repost=*/true);
@@ -3011,10 +3071,10 @@ index 55f5890b26871..2710b01d600a0 100644
      "//chrome/browser/ui/stedding:make_app",
      "//chrome/browser:browser_process",
 diff --git a/chrome/browser/ui/views/commandbar/command_bar_view.cc b/chrome/browser/ui/views/commandbar/command_bar_view.cc
-index 67c87f16a1b0d..e24ebc5c66cff 100644
+index 0d83de3e4a038..e04a75585083f 100644
 --- a/chrome/browser/ui/views/commandbar/command_bar_view.cc
 +++ b/chrome/browser/ui/views/commandbar/command_bar_view.cc
-@@ -48,6 +48,8 @@
+@@ -49,6 +49,8 @@
  #include "chrome/browser/ui/spaces/space_query.h"
  #include "chrome/browser/ui/stedding/app_updater.h"
  #include "chrome/browser/ui/stedding/bookmarks_to_pins_dialog.h"
@@ -3023,7 +3083,7 @@ index 67c87f16a1b0d..e24ebc5c66cff 100644
  #include "chrome/browser/ui/stedding/dark_pages.h"
  #include "chrome/browser/ui/stedding/make_app.h"
  #include "chrome/browser/ui/stedding/media_keys.h"
-@@ -990,6 +992,37 @@ void CommandBarView::BuildActions() {
+@@ -1028,6 +1030,37 @@ void CommandBarView::BuildActions() {
        }
      }
    }
@@ -3938,10 +3998,10 @@ index 3c9c6645df607..5dc465734bb07 100644
      "//chrome/browser/ui/stedding:motion",
 diff --git a/chrome/test/stedding/blocker_browsertest.cc b/chrome/test/stedding/blocker_browsertest.cc
 new file mode 100644
-index 0000000000000..b8f595887b641
+index 0000000000000..25fa552745fd2
 --- /dev/null
 +++ b/chrome/test/stedding/blocker_browsertest.cc
-@@ -0,0 +1,572 @@
+@@ -0,0 +1,630 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -3960,6 +4020,7 @@ index 0000000000000..b8f595887b641
 +#include "base/run_loop.h"
 +#include "base/synchronization/lock.h"
 +#include "base/task/sequenced_task_runner.h"
++#include "base/test/bind.h"
 +#include "base/test/run_until.h"
 +#include "chrome/app/chrome_command_ids.h"
 +#include "chrome/browser/browser_process.h"
@@ -3991,6 +4052,7 @@ index 0000000000000..b8f595887b641
 +#include "components/subresource_filter/content/browser/ruleset_service.h"
 +#include "content/public/browser/browsing_data_remover.h"
 +#include "content/public/browser/navigation_controller.h"
++#include "content/public/browser/navigation_entry.h"
 +#include "content/public/browser/web_contents.h"
 +#include "content/public/test/browser_test.h"
 +#include "content/public/test/browser_test_utils.h"
@@ -4009,6 +4071,10 @@ index 0000000000000..b8f595887b641
 +#include "ui/views/controls/textfield/textfield.h"
 +#include "ui/views/test/button_test_api.h"
 +#include "ui/views/view_utils.h"
++#include "ui/views/widget/any_widget_observer.h"
++#include "ui/views/widget/widget.h"
++#include "ui/views/widget/widget_delegate.h"
++#include "ui/views/window/dialog_delegate.h"
 +#include "url/gurl.h"
 +
 +namespace {
@@ -4241,6 +4307,58 @@ index 0000000000000..b8f595887b641
 +  EXPECT_TRUE(stedding::GetBlockerExceptions(profile()).empty());
 +  Open("a.test");
 +  EXPECT_EQ(kListedBlocked, Results(Active()));
++}
++
++// Bk5 (BACKLOG S-351): on a page a form loaded, the switch's reload asks
++// whether to send the form again. Cancelled, nothing is chosen: the shield
++// and the page both keep the blocking the page loaded with. Sent again, the
++// choice is made and the page reloads with it. The choice was written first,
++// and a cancel left the shield saying blocking was off over a filtered page.
++IN_PROC_BROWSER_TEST_F(BlockerTest, ACancelledResubmitChoosesNothing) {
++  TurnOnAndWait();
++  ASSERT_TRUE(ui_test_utils::NavigateToURL(
++      browser(), embedded_test_server()->GetURL("a.test", "/form.html")));
++  {
++    content::TestNavigationObserver posted(Active());
++    ASSERT_TRUE(content::ExecJs(Active(),
++                                "document.getElementById('form').submit()"));
++    posted.Wait();
++  }
++  ASSERT_TRUE(
++      Active()->GetController().GetLastCommittedEntry()->GetHasPostData());
++  ASSERT_TRUE(stedding::IsBlockingOnForSite(Active()));
++
++  views::Widget* question = nullptr;
++  views::AnyWidgetObserver questions(views::test::AnyWidgetTestPasskey{});
++  questions.set_shown_callback(
++      base::BindLambdaForTesting([&](views::Widget* widget) {
++        if (widget->widget_delegate() &&
++            widget->widget_delegate()->AsDialogDelegate()) {
++          question = widget;
++        }
++      }));
++  {
++    SCOPED_TRACE("cancelled");
++    stedding::ToggleBlockingOnSite(Active());
++    ASSERT_TRUE(base::test::RunUntil([&]() { return question != nullptr; }))
++        << "no question about sending the form again";
++    question->widget_delegate()->AsDialogDelegate()->CancelDialog();
++    base::RunLoop().RunUntilIdle();
++    EXPECT_TRUE(stedding::IsBlockingOnForSite(Active()))
++        << "the shield says off over the page as it loaded";
++    EXPECT_TRUE(stedding::GetBlockerExceptions(profile()).empty());
++  }
++  {
++    SCOPED_TRACE("sent again");
++    question = nullptr;
++    content::TestNavigationObserver reload(Active());
++    stedding::ToggleBlockingOnSite(Active());
++    ASSERT_TRUE(base::test::RunUntil([&]() { return question != nullptr; }));
++    question->widget_delegate()->AsDialogDelegate()->AcceptDialog();
++    reload.Wait();
++    EXPECT_FALSE(stedding::IsBlockingOnForSite(Active()));
++    EXPECT_EQ(1u, stedding::GetBlockerExceptions(profile()).size());
++  }
 +}
 +
 +// Bk7: blocking keeps no record of the sites visited: no ADS_DATA metadata

@@ -46,20 +46,21 @@ of its own (patches/README.md).
  .../policies/stedding_discard_veto.h          |  33 +
  .../performance_page_index.html.ts            |   4 +-
  .../stedding_page/stedding_page.html.ts       |  31 +
- chrome/browser/sessions/BUILD.gn              |   2 +
+ chrome/browser/sessions/BUILD.gn              |   6 +
  .../sessions/session_restore_delegate.cc      |  15 +-
  chrome/browser/ui/accelerator_table.cc        |   3 +
  chrome/browser/ui/archive/BUILD.gn            |   2 +
  chrome/browser/ui/archive/tab_archiver.cc     | 125 +++
  chrome/browser/ui/archive/tab_archiver.h      |  27 +
  .../ui/archive/tab_archiver_unittest.cc       | 144 ++++
+ chrome/browser/ui/browser.cc                  |  12 +-
  .../browser/ui/browser_command_controller.cc  |  30 +-
  .../browser/ui/browser_command_controller.h   |  12 +
  chrome/browser/ui/browser_commands.cc         |  17 +-
  chrome/browser/ui/browser_commands.h          |   4 +
  .../ui/browser_location_bar_model_delegate.cc |  12 +
  .../ui/browser_location_bar_model_delegate.h  |   8 +
- .../public/browser_window_features.h          |   6 +
+ .../public/browser_window_features.h          |  15 +
  chrome/browser/ui/cocoa/accelerators_cocoa.mm |   3 +
  chrome/browser/ui/cocoa/main_menu_builder.mm  |   5 +-
  .../ui/cocoa/main_menu_builder_unittest.mm    |  33 +
@@ -130,7 +131,7 @@ of its own (patches/README.md).
  .../test/stedding/space_switch_browsertest.cc |  25 +
  .../test/stedding/startup_load_browsertest.cc | 549 ++++++++++++++
  chrome/test/stedding/tab_drop_browsertest.cc  | 322 +++++++-
- 90 files changed, 6858 insertions(+), 117 deletions(-)
+ 91 files changed, 6881 insertions(+), 119 deletions(-)
  create mode 100644 chrome/browser/performance_manager/policies/stedding_discard_veto.h
  create mode 100644 chrome/browser/ui/stedding/startup_load.cc
  create mode 100644 chrome/browser/ui/stedding/startup_load.h
@@ -303,15 +304,19 @@ index f6813d178c4b8..af27c6d570c46 100644
      <h2 class="cr-title-text">$i18n{steddingPagesTitle}</h2>
    </div>
 diff --git a/chrome/browser/sessions/BUILD.gn b/chrome/browser/sessions/BUILD.gn
-index b4f8b48088e48..e4d70138da24e 100644
+index b4f8b48088e48..40881c288e56f 100644
 --- a/chrome/browser/sessions/BUILD.gn
 +++ b/chrome/browser/sessions/BUILD.gn
-@@ -158,6 +158,8 @@ source_set("impl") {
+@@ -158,6 +158,12 @@ source_set("impl") {
        "//chrome/browser/ui:ui_features",
        "//chrome/browser/ui/browser_window:create_browser_window",
        "//chrome/browser/ui/startup",
 +      # Stedding (BACKLOG S-110, tabs R46): what a restore loads at once.
 +      "//chrome/browser/ui/stedding:startup_load",
++      # Stedding (docs/features/little.md E8, BACKLOG S-326): a little window
++      # comes back little.
++      "//chrome/browser/ui/stedding:little_mark",
++      "//chrome/browser/ui/stedding:little_window",
        "//chrome/browser/ui/tabs:tab_strip",
        "//chrome/browser/ui/tabs/saved_tab_groups",
        "//chrome/browser/ui/waap:window_metrics_manager",
@@ -831,6 +836,37 @@ index 851c6ec9ad720..2bdce0cbd63dd 100644
  // A1: idle unpinned tabs go; the active tab stays.
  TEST_F(TabArchiverTest, ArchivesIdleUnpinnedTabs) {
    AddThreeTabs();
+diff --git a/chrome/browser/ui/browser.cc b/chrome/browser/ui/browser.cc
+index 99041fad5cbaa..0801df3303561 100644
+--- a/chrome/browser/ui/browser.cc
++++ b/chrome/browser/ui/browser.cc
+@@ -744,7 +744,12 @@ void Browser::RestoreFocusAfterTabModalPopupClose(
+ }
+ 
+ void Browser::OnTabDeactivated(WebContents* contents) {
+-  ExclusiveAccessManager::From(this)->OnTabDeactivated(contents);
++  // Stedding (tabs R61, BACKLOG S-350): a drag holds the page on screen;
++  // the row it selected is not on screen, and the page keeps full screen
++  // and its locks until the hold ends (BrowserView::ReleaseSteddingPageHold).
++  if (!features_ || !features_->stedding_page_held()) {
++    ExclusiveAccessManager::From(this)->OnTabDeactivated(contents);
++  }
+ 
+   // Save what the user's currently typing, so it can be restored when we
+   // switch back to this tab.
+@@ -757,8 +762,11 @@ void Browser::OnActiveTabChanged(const TabStripModelChange& change,
+ 
+   // The side panel state needs to be updated on active tab changed
+   // even if the tab strip is empty.
++  // Stedding (tabs R61, BACKLOG S-350): nor while a drag holds the page on
++  // screen, whose side panel stays with it until the hold ends.
+   if (change.type() != TabStripModelChange::kReplaced &&
+-      !tab_strip_model_->closing_all()) {
++      !tab_strip_model_->closing_all() &&
++      !(features_ && features_->stedding_page_held())) {
+     SidePanelUI* side_panel_ui = SidePanelUI::From(this);
+     if (side_panel_ui) {
+       side_panel_ui->OnActiveTabChanged(
 diff --git a/chrome/browser/ui/browser_command_controller.cc b/chrome/browser/ui/browser_command_controller.cc
 index 96d48216067ad..56d56b6ff956a 100644
 --- a/chrome/browser/ui/browser_command_controller.cc
@@ -1049,10 +1085,10 @@ index 95ea5d88f5428..877fafec5a99c 100644
  
  #endif  // CHROME_BROWSER_UI_BROWSER_LOCATION_BAR_MODEL_DELEGATE_H_
 diff --git a/chrome/browser/ui/browser_window/public/browser_window_features.h b/chrome/browser/ui/browser_window/public/browser_window_features.h
-index afbe3c60eff3c..da73ae07f6a9c 100644
+index afbe3c60eff3c..ea46594fd7464 100644
 --- a/chrome/browser/ui/browser_window/public/browser_window_features.h
 +++ b/chrome/browser/ui/browser_window/public/browser_window_features.h
-@@ -299,6 +299,12 @@ class BrowserWindowFeatures {
+@@ -299,6 +299,19 @@ class BrowserWindowFeatures {
    void set_little_window(bool little) { little_window_ = little; }
    bool little_window() const { return little_window_; }
  
@@ -1062,9 +1098,25 @@ index afbe3c60eff3c..da73ae07f6a9c 100644
 +    return location_bar_model_delegate_.get();
 +  }
 +
++  // Stedding (tabs R61, BACKLOG S-350): set while a drag holds the page on
++  // screen (BrowserView::HoldPageForSteddingDrag). The drag's selection of
++  // another row does not take that page out of full screen or its locks,
++  // nor the side panel from it; the hold's end does what is left.
++  void set_stedding_page_held(bool held) { stedding_page_held_ = held; }
++  bool stedding_page_held() const { return stedding_page_held_; }
++
    BrowserWindowFeatures();
    ~BrowserWindowFeatures();
  
+@@ -337,6 +350,8 @@ class BrowserWindowFeatures {
+   std::unique_ptr<stedding::ClosedTabsUndo> closed_tabs_undo_;
+   // docs/features/little.md E1: a popup opened for a link from another app.
+   bool little_window_ = false;
++  // tabs R61: see set_stedding_page_held().
++  bool stedding_page_held_ = false;
+   std::unique_ptr<stedding::FolderSessionService> folder_session_;
+   // docs/features/private.md V9 (PLAN.md WIN-6): the page's colour for the
+   // address row of a private or Guest window, which has no Space model to
 diff --git a/chrome/browser/ui/cocoa/accelerators_cocoa.mm b/chrome/browser/ui/cocoa/accelerators_cocoa.mm
 index 9ff0fc334d95d..8ba4e6d16b27f 100644
 --- a/chrome/browser/ui/cocoa/accelerators_cocoa.mm
@@ -3547,10 +3599,10 @@ index 0000000000000..830164b683d9f
 +
 +#endif  // CHROME_BROWSER_UI_VIEWS_COMMANDBAR_ADDRESS_ROW_CONTROLS_H_
 diff --git a/chrome/browser/ui/views/commandbar/command_bar_view.cc b/chrome/browser/ui/views/commandbar/command_bar_view.cc
-index ca356ad006bae..16c5a9968f8cf 100644
+index 71f6f61c37b65..b6a195d3d89ea 100644
 --- a/chrome/browser/ui/views/commandbar/command_bar_view.cc
 +++ b/chrome/browser/ui/views/commandbar/command_bar_view.cc
-@@ -58,6 +58,7 @@
+@@ -59,6 +59,7 @@
  #include "chrome/browser/ui/stedding/stedding_prefs.h"
  #include "chrome/browser/ui/stedding/tab_names.h"
  #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -3558,7 +3610,7 @@ index ca356ad006bae..16c5a9968f8cf 100644
  #include "chrome/browser/ui/views/frame/browser_view.h"
  #include "chrome/browser/ui/views/peek/peek_view.h"
  #include "chrome/browser/ui/views/stedding/isolation_mark_view.h"
-@@ -88,6 +89,8 @@
+@@ -89,6 +90,8 @@
  #include "ui/color/color_provider.h"
  #include "ui/compositor/layer.h"
  #include "ui/events/event.h"
@@ -3567,7 +3619,7 @@ index ca356ad006bae..16c5a9968f8cf 100644
  #include "ui/gfx/geometry/rect_conversions.h"
  #include "ui/gfx/geometry/rect_f.h"
  #include "ui/gfx/range/range.h"
-@@ -99,6 +102,7 @@
+@@ -100,6 +103,7 @@
  #include "ui/views/controls/scroll_view.h"
  #include "ui/views/controls/textfield/textfield.h"
  #include "ui/views/controls/webview/webview.h"
@@ -3575,7 +3627,7 @@ index ca356ad006bae..16c5a9968f8cf 100644
  #include "ui/views/layout/box_layout.h"
  #include "ui/views/layout/layout_manager_base.h"
  #include "ui/views/layout/proposed_layout.h"
-@@ -157,6 +161,30 @@ constexpr SkAlpha kSelectedRowAlpha = 0x1F;
+@@ -158,6 +162,30 @@ constexpr SkAlpha kSelectedRowAlpha = 0x1F;
  // Stands in for the BrowserView in a test window (SetHostForTesting).
  views::View* g_host_for_testing = nullptr;
  
@@ -3606,7 +3658,7 @@ index ca356ad006bae..16c5a9968f8cf 100644
  bool Matches(const std::u16string& haystack, const std::u16string& needle) {
    if (needle.empty()) {
      return true;
-@@ -410,6 +438,22 @@ class CommandBarView::ResultRow : public views::LabelButton {
+@@ -444,6 +472,22 @@ class CommandBarView::ResultRow : public views::LabelButton {
  BEGIN_METADATA(CommandBarView, ResultRow)
  END_METADATA
  
@@ -3629,7 +3681,7 @@ index ca356ad006bae..16c5a9968f8cf 100644
  // static
  void CommandBarView::Show(BrowserWindowInterface* browser) {
    Show(browser, Mode::kTabs);
-@@ -453,6 +497,35 @@ void CommandBarView::Show(BrowserWindowInterface* browser,
+@@ -491,6 +535,35 @@ void CommandBarView::Show(BrowserWindowInterface* browser,
    }
  }
  
@@ -3665,7 +3717,7 @@ index ca356ad006bae..16c5a9968f8cf 100644
  // static
  base::AutoReset<views::View*> CommandBarView::SetHostForTesting(
      views::View* host) {
-@@ -461,6 +534,11 @@ base::AutoReset<views::View*> CommandBarView::SetHostForTesting(
+@@ -499,6 +572,11 @@ base::AutoReset<views::View*> CommandBarView::SetHostForTesting(
  
  void CommandBarView::SetMode(Mode mode) {
    mode_ = mode;
@@ -3677,7 +3729,7 @@ index ca356ad006bae..16c5a9968f8cf 100644
    if (mode_ == Mode::kActions) {
      // K27: commands are not searched on a site; the query is the filter.
      ClearChip();
-@@ -487,6 +565,8 @@ void CommandBarView::Prefill(std::u16string text) {
+@@ -525,6 +603,8 @@ void CommandBarView::Prefill(std::u16string text) {
    field_->SelectAll(false);
    text_before_edit_ = text;
    selection_before_edit_ = field_->GetSelectedRange();
@@ -3686,7 +3738,7 @@ index ca356ad006bae..16c5a9968f8cf 100644
    UpdateResults(text, /*allow_inline=*/false);
  }
  
-@@ -599,6 +679,29 @@ void CommandBarView::BuildActions() {
+@@ -637,6 +717,29 @@ void CommandBarView::BuildActions() {
                   base::Unretained(browser_))});
        }
      }
@@ -3716,7 +3768,7 @@ index ca356ad006bae..16c5a9968f8cf 100644
      // folders F30: the Space's folders, all at once. Each row is listed only
      // while it changes something on screen, and the chord is drawn on the
      // row it would run: Collapse while that is listed, else Expand.
-@@ -817,6 +920,31 @@ void CommandBarView::BuildActions() {
+@@ -855,6 +958,31 @@ void CommandBarView::BuildActions() {
          break;
      }
    }
@@ -3748,7 +3800,7 @@ index ca356ad006bae..16c5a9968f8cf 100644
    // dark-pages Dk19: the switch, its state in the title, in normal and
    // private windows alike: the switch is the profile's, which a private
    // window follows (Dk21), so it is not one of kBools, which private windows
-@@ -1024,6 +1152,19 @@ void CommandBarView::BuildActions() {
+@@ -1062,6 +1190,19 @@ void CommandBarView::BuildActions() {
              {5, u"5 minutes"},
              {15, u"15 minutes"},
              {60, u"1 hour"}}},
@@ -3768,7 +3820,7 @@ index ca356ad006bae..16c5a9968f8cf 100644
        };
        for (const IntPref& pref : kInts) {
          const int value = prefs->GetInteger(pref.key);
-@@ -1052,6 +1193,10 @@ void CommandBarView::BuildActions() {
+@@ -1090,6 +1231,10 @@ void CommandBarView::BuildActions() {
  
  void CommandBarView::AddActionRows() {
    for (size_t i = 0; i < actions_.size(); ++i) {
@@ -3779,7 +3831,7 @@ index ca356ad006bae..16c5a9968f8cf 100644
      if (Matches(actions_[i].title, query_) ||
          MatchesKeywords(actions_[i].title, actions_[i].keywords, query_)) {
        rows_.push_back({.kind = RowKind::kAction,
-@@ -1061,6 +1206,19 @@ void CommandBarView::AddActionRows() {
+@@ -1099,6 +1244,19 @@ void CommandBarView::AddActionRows() {
                         .mark = actions_[i].mark});
      }
    }
@@ -3799,7 +3851,7 @@ index ca356ad006bae..16c5a9968f8cf 100644
  }
  
  void CommandBarView::Run(const Action& action) {
-@@ -1223,6 +1381,7 @@ void CommandBarView::Close() {
+@@ -1261,6 +1419,7 @@ void CommandBarView::Close() {
      return;
    }
    closing_ = true;
@@ -3807,7 +3859,7 @@ index ca356ad006bae..16c5a9968f8cf 100644
    views::FocusManager* const focus_manager = GetFocusManager();
    if (focus_manager) {
      focus_manager->RemoveFocusChangeListener(this);
-@@ -1266,6 +1425,7 @@ void CommandBarView::AddedToWidget() {
+@@ -1304,6 +1463,7 @@ void CommandBarView::AddedToWidget() {
  }
  
  void CommandBarView::RemovedFromWidget() {
@@ -3815,7 +3867,7 @@ index ca356ad006bae..16c5a9968f8cf 100644
    if (views::FocusManager* const focus_manager = GetFocusManager()) {
      focus_manager->RemoveFocusChangeListener(this);
    }
-@@ -1273,7 +1433,29 @@ void CommandBarView::RemovedFromWidget() {
+@@ -1311,7 +1471,29 @@ void CommandBarView::RemovedFromWidget() {
  }
  
  bool CommandBarView::AcceleratorPressed(const ui::Accelerator& accelerator) {
@@ -3845,7 +3897,7 @@ index ca356ad006bae..16c5a9968f8cf 100644
      // Escape takes a site search chip away first, the query kept (K27).
      if (chip_) {
        LeaveSiteSearch();
-@@ -1379,6 +1561,14 @@ void CommandBarView::UpdateResults(const std::u16string& query,
+@@ -1417,6 +1599,14 @@ void CommandBarView::UpdateResults(const std::u16string& query,
      // Before the omnibox starts: its first answer can arrive inside Start()
      // and complete this row (K23).
      typed_row_ = rows_.back();
@@ -3860,7 +3912,7 @@ index ca356ad006bae..16c5a9968f8cf 100644
      // K27: a site search the text names is offered under the typed row, so
      // Enter still does what K7 says; Tab, or Enter on this row, makes the
      // chip.
-@@ -1888,13 +2078,15 @@ bool CommandBarView::ActiveTabIsUntouchedNewTab() const {
+@@ -1929,13 +2119,15 @@ bool CommandBarView::ActiveTabIsUntouchedNewTab() const {
           contents->GetVisibleURL() == GURL(chrome::kChromeUINewTabURL);
  }
  
@@ -3879,7 +3931,7 @@ index ca356ad006bae..16c5a9968f8cf 100644
    if (next == selected_) {
      return;
    }
-@@ -2000,6 +2192,11 @@ void CommandBarView::RunRow(size_t index) {
+@@ -2041,6 +2233,11 @@ void CommandBarView::RunRow(size_t index) {
        // K27: the bar stays open, with the chip, for the query.
        EnterSiteSearch(row.keyword);
        return;
@@ -3891,7 +3943,7 @@ index ca356ad006bae..16c5a9968f8cf 100644
    }
  }
  
-@@ -2185,6 +2382,97 @@ void CommandBarView::OnBeforeUserAction(views::Textfield* sender) {
+@@ -2232,6 +2429,97 @@ void CommandBarView::OnBeforeUserAction(views::Textfield* sender) {
    selection_before_edit_ = sender->GetSelectedRange();
  }
  

@@ -25,15 +25,15 @@ Why: a review of the sidebar on the right (S-96) and of Export all Spaces
 (S-282).
 Removable when: never; to be folded into the patches that own the code.
 ---
- .../focus/browser_focus_controller_views.cc   | 12 ++-
- .../browser/ui/spaces/arc_sidebar_importer.cc | 85 ++++++++++++++-----
- .../spaces/arc_sidebar_importer_unittest.cc   | 24 ++++++
- .../ui/spaces/sidebar_backup_unittest.cc      | 29 +++++++
- .../layout/stedding_browser_view_layout.cc    | 14 +++
- .../frame/vertical_tab_strip_region_view.cc   | 47 ++++++----
- .../vertical_tab_strip_top_container.cc       |  7 ++
- .../stedding/sidebar_forms_browsertest.cc     | 17 +++-
- 8 files changed, 193 insertions(+), 42 deletions(-)
+ .../focus/browser_focus_controller_views.cc   |  12 +-
+ .../browser/ui/spaces/arc_sidebar_importer.cc | 218 ++++++++++++++----
+ .../spaces/arc_sidebar_importer_unittest.cc   | 116 ++++++++++
+ .../ui/spaces/sidebar_backup_unittest.cc      |  29 +++
+ .../layout/stedding_browser_view_layout.cc    |  14 ++
+ .../frame/vertical_tab_strip_region_view.cc   |  47 ++--
+ .../vertical_tab_strip_top_container.cc       |   7 +
+ .../stedding/sidebar_forms_browsertest.cc     |  17 +-
+ 8 files changed, 397 insertions(+), 63 deletions(-)
 
 diff --git a/chrome/browser/ui/focus/browser_focus_controller_views.cc b/chrome/browser/ui/focus/browser_focus_controller_views.cc
 index 22f7e9ce399f6..08cf5677d0ca4 100644
@@ -62,10 +62,15 @@ index 22f7e9ce399f6..08cf5677d0ca4 100644
          if (auto* dialog = view->GetProperty(views::kAnchoredDialogKey);
              dialog && !user_education::HelpBubbleView::IsHelpBubble(dialog)) {
 diff --git a/chrome/browser/ui/spaces/arc_sidebar_importer.cc b/chrome/browser/ui/spaces/arc_sidebar_importer.cc
-index 8d1a12e18eea9..21ffbbf1e2263 100644
+index 8d1a12e18eea9..3fe4f4c02ef30 100644
 --- a/chrome/browser/ui/spaces/arc_sidebar_importer.cc
 +++ b/chrome/browser/ui/spaces/arc_sidebar_importer.cc
-@@ -10,6 +10,7 @@
+@@ -6,10 +6,12 @@
+ 
+ #include <algorithm>
+ #include <cmath>
++#include <limits>
+ #include <map>
  #include <memory>
  #include <optional>
  #include <set>
@@ -73,7 +78,7 @@ index 8d1a12e18eea9..21ffbbf1e2263 100644
  #include <utility>
  #include <variant>
  
-@@ -56,8 +57,8 @@
+@@ -56,8 +58,8 @@
  #include "content/public/browser/web_contents.h"
  #include "content/public/common/referrer.h"
  #include "services/network/public/cpp/shared_url_loader_factory.h"
@@ -83,7 +88,7 @@ index 8d1a12e18eea9..21ffbbf1e2263 100644
  #include "url/url_constants.h"
  
  namespace spaces {
-@@ -228,17 +229,21 @@ std::optional<ArcItem> ParseItem(const base::DictValue& dict) {
+@@ -228,17 +230,21 @@ std::optional<ArcItem> ParseItem(const base::DictValue& dict) {
    return std::nullopt;
  }
  
@@ -108,7 +113,7 @@ index 8d1a12e18eea9..21ffbbf1e2263 100644
        continue;
      }
      const ArcItem& child = it->second;
-@@ -254,13 +259,19 @@ std::vector<Node> BuildChildren(const ArcItem& parent,
+@@ -254,13 +260,19 @@ std::vector<Node> BuildChildren(const ArcItem& parent,
        out.push_back(std::move(node));
      } else if (child.kind == ArcItem::Kind::kList) {
        node.kind = Node::Kind::kFolder;
@@ -129,7 +134,7 @@ index 8d1a12e18eea9..21ffbbf1e2263 100644
  // The Space's theme colour: Arc's snapped to the nearest swatch (I10); one
  // a file Stedding wrote, `exact`, as it is (sidebar-file Sf2).
  std::optional<SkColor> ThemeColor(const base::DictValue& space, bool exact) {
-@@ -452,18 +463,36 @@ std::set<std::string> OpenIds(BrowserWindowInterface* browser) {
+@@ -452,18 +464,36 @@ std::set<std::string> OpenIds(BrowserWindowInterface* browser) {
    return ids;
  }
  
@@ -168,7 +173,7 @@ index 8d1a12e18eea9..21ffbbf1e2263 100644
      ctx.ids->Add(id);
    }
  }
-@@ -473,7 +502,8 @@ void Remember(ApplyContext& ctx, const std::string& id) {
+@@ -473,7 +503,8 @@ void Remember(ApplyContext& ctx, const std::string& id) {
  void AdoptToken(const ApplyContext& ctx,
                  tabs::TabInterface* tab,
                  const std::string& id) {
@@ -178,7 +183,146 @@ index 8d1a12e18eea9..21ffbbf1e2263 100644
      return;
    }
    if (const std::string token = TokenOf(id); !token.empty()) {
-@@ -700,10 +730,17 @@ std::vector<tabs::TabInterface*> InsertNodes(
+@@ -588,6 +619,88 @@ tabs::FolderTabCollection* MakeFolder(
+ 
+ // Inserts `nodes` into `space`: loose tabs, and folders with their tabs, in
+ // order. Returns the loose tabs, for the pinned run.
++std::vector<tabs::TabInterface*> InsertNodes(
++    ApplyContext& ctx,
++    const std::vector<Node>& nodes,
++    const SpaceId& space,
++    tabs::FolderTabCollection* parent_folder);
++
++// Whether Arc's list `list` has a tab of its own that InsertDirectTabs would
++// insert: one not here already, of a page that can be opened.
++bool HasTabToInsert(const ApplyContext& ctx, const Node& list) {
++  return std::ranges::any_of(list.children, [&ctx](const Node& child) {
++    return child.kind == Node::Kind::kTab && !Present(ctx, child.arc_id) &&
++           IsImportablePage(child.url);
++  });
++}
++
++// I3: the lists from `list` down to the first list, in Arc's order, with a
++// tab of its own to insert -- `list` itself, or one of the lists under it, at
++// most `depth` lists down from `list` -- each list after the one before it.
++// Empty when there is none.
++std::vector<const Node*> PathToTabs(const ApplyContext& ctx,
++                                    const Node& list,
++                                    size_t depth) {
++  if (HasTabToInsert(ctx, list)) {
++    return {&list};
++  }
++  if (depth <= 1) {
++    return {};
++  }
++  for (const Node& child : list.children) {
++    if (child.kind != Node::Kind::kFolder || Present(ctx, child.arc_id)) {
++      continue;
++    }
++    std::vector<const Node*> path = PathToTabs(ctx, child, depth - 1);
++    if (!path.empty()) {
++      path.insert(path.begin(), &list);
++      return path;
++    }
++  }
++  return {};
++}
++
++// I3: makes `outer`, a list with no tab of its own, a folder inside `parent`
++// around the tabs of the last list of `path` -- the first list under it with
++// tabs of its own, reached through the others -- and each list of `path` a
++// folder inside the one before, around the same tabs (folders F2: the
++// command on tabs already in a folder nests a new one). What else a list of
++// `path` holds goes inside its folder. Null when no folder was made.
++tabs::FolderTabCollection* MakeFolderOfLists(
++    ApplyContext& ctx,
++    const Node& outer,
++    const std::vector<const Node*>& path,
++    const SpaceId& space,
++    tabs::FolderTabCollection* parent) {
++  const std::vector<tabs::TabInterface*> found =
++      InsertDirectTabs(ctx, *path.back(), space);
++  tabs::FolderTabCollection* const folder =
++      MakeFolder(ctx, found, parent, outer);
++  if (!folder) {
++    return nullptr;
++  }
++  std::vector<tabs::FolderTabCollection*> made;
++  tabs::FolderTabCollection* inside = folder;
++  for (const Node* const list : path) {
++    if (tabs::FolderTabCollection* const nested =
++            MakeFolder(ctx, found, inside, *list)) {
++      inside = nested;
++    }
++    made.push_back(inside);
++  }
++  // The deepest list's own lists first, then each list's others, outward.
++  for (size_t level = path.size(); level-- > 0;) {
++    const Node* const next =
++        level + 1 < path.size() ? path[level + 1] : nullptr;
++    for (const Node& child : path[level]->children) {
++      if (child.kind == Node::Kind::kFolder && &child != next) {
++        InsertNodes(ctx, {child}, space, made[level]);
++      }
++    }
++  }
++  return folder;
++}
++
+ std::vector<tabs::TabInterface*> InsertNodes(
+     ApplyContext& ctx,
+     const std::vector<Node>& nodes,
+@@ -659,29 +772,28 @@ std::vector<tabs::TabInterface*> InsertNodes(
+                    node);
+     // I3: a list that holds only lists. A folder is made around tabs, so it
+     // is made around its first list's own tabs, and that list's folder is
+-    // then made inside it (folders F2: the command on tabs already in a
+-    // folder nests a new one); the other lists go inside as before. It had
+-    // come out as its lists beside each other a level up (the owner's own
+-    // import, 2026-10-21: a folder of thirteen folders and one of two).
+-    for (size_t i = 0; !folder && i < subfolders.size(); ++i) {
+-      const Node& first = *subfolders[i];
+-      if (Present(ctx, first.arc_id)) {
+-        continue;
+-      }
+-      const std::vector<tabs::TabInterface*> first_tabs =
+-          InsertDirectTabs(ctx, first, space);
+-      folder = MakeFolder(ctx, first_tabs, parent_folder, node);
+-      if (!folder) {
+-        continue;
+-      }
+-      tabs::FolderTabCollection* const inner =
+-          MakeFolder(ctx, first_tabs, folder, first);
+-      for (const Node& child : first.children) {
+-        if (child.kind == Node::Kind::kFolder) {
+-          InsertNodes(ctx, {child}, space, inner ? inner : folder);
++    // then made inside it (MakeFolderOfLists); the other lists go inside as
++    // before. It had come out as its lists beside each other a level up (the
++    // owner's own import, 2026-10-21: a folder of thirteen folders and one of
++    // two). When none of its lists has a tab of its own, the first list
++    // further down that has one gives the tabs, and the lists on the way
++    // down are made inside, each in the one above: a list two lists above
++    // its first tab had been left out, its lists a level up (BACKLOG S-346).
++    for (const size_t depth : {size_t{1}, std::numeric_limits<size_t>::max()}) {
++      for (size_t i = 0; !folder && i < subfolders.size(); ++i) {
++        if (Present(ctx, subfolders[i]->arc_id)) {
++          continue;
++        }
++        const std::vector<const Node*> path =
++            PathToTabs(ctx, *subfolders[i], depth);
++        if (path.empty()) {
++          continue;
++        }
++        folder = MakeFolderOfLists(ctx, node, path, space, parent_folder);
++        if (folder) {
++          subfolders.erase(subfolders.begin() + static_cast<ptrdiff_t>(i));
+         }
+       }
+-      subfolders.erase(subfolders.begin() + static_cast<ptrdiff_t>(i));
+     }
+     // A folder with no tab anywhere to make it around cannot be made; its
+     // folders come out beside it.
+@@ -700,10 +812,17 @@ std::vector<tabs::TabInterface*> InsertNodes(
  // file that held it (docs/history/plan-2026-09-26.md WEB-F29).
  void InsertEssentials(ApplyContext& ctx,
                        const std::vector<Node>& nodes,
@@ -197,7 +341,7 @@ index 8d1a12e18eea9..21ffbbf1e2263 100644
    size_t in_row = 0;
    for (int i = 0; i < ctx.tabs->count(); ++i) {
      const tabs::TabInterface* const tab = ctx.tabs->GetTabAtIndex(i);
-@@ -856,7 +893,7 @@ std::optional<ArcImportPlan> ParseArcSidebar(std::string_view json) {
+@@ -856,7 +975,7 @@ std::optional<ArcImportPlan> ParseArcSidebar(std::string_view json) {
        space.isolated = own->FindBool("isolated").value_or(false);
        if (const auto it = items.find(StringAt(*own, "essentials"));
            it != items.end()) {
@@ -206,7 +350,7 @@ index 8d1a12e18eea9..21ffbbf1e2263 100644
            if (node.kind == Node::Kind::kTab) {
              space.essentials.push_back(std::move(node));
            }
-@@ -886,7 +923,7 @@ std::optional<ArcImportPlan> ParseArcSidebar(std::string_view json) {
+@@ -886,7 +1005,7 @@ std::optional<ArcImportPlan> ParseArcSidebar(std::string_view json) {
          if (it == items.end() || which.empty()) {
            continue;
          }
@@ -215,7 +359,7 @@ index 8d1a12e18eea9..21ffbbf1e2263 100644
          if (which == "pinned") {
            space.pinned = std::move(nodes);
          } else {
-@@ -913,7 +950,7 @@ std::optional<ArcImportPlan> ParseArcSidebar(std::string_view json) {
+@@ -913,7 +1032,7 @@ std::optional<ArcImportPlan> ParseArcSidebar(std::string_view json) {
        if (it == items.end() || !top_seen.insert(id).second) {
          continue;
        }
@@ -224,7 +368,7 @@ index 8d1a12e18eea9..21ffbbf1e2263 100644
          if (node.kind == Node::Kind::kTab) {
            plan.essentials.push_back(std::move(node));
          }
-@@ -1011,8 +1048,12 @@ std::optional<std::string> ReadArcSidebar(const base::FilePath& path,
+@@ -1011,8 +1130,12 @@ std::optional<std::string> ReadArcSidebar(const base::FilePath& path,
    if (read_from) {
      *read_from = copy.empty() ? path : copy;
    }
@@ -238,7 +382,7 @@ index 8d1a12e18eea9..21ffbbf1e2263 100644
      return std::nullopt;
    }
    return json;
-@@ -1221,16 +1262,18 @@ ArcSidebarInfo LoadInfoOnPool() {
+@@ -1221,16 +1344,18 @@ ArcSidebarInfo LoadInfoOnPool() {
    return info;
  }
  
@@ -264,7 +408,16 @@ index 8d1a12e18eea9..21ffbbf1e2263 100644
      std::move(done).Run(std::nullopt);
      return;
    }
-@@ -1295,7 +1338,7 @@ void ImportFromArcAsync(BrowserWindowInterface* browser,
+@@ -1247,6 +1372,8 @@ void ApplyRead(base::WeakPtr<BrowserWindowInterface> browser,
+                             ArcDataResult data) {
+                            result.history = data.history;
+                            result.passwords = data.passwords;
++                           result.passwords_past_the_cap =
++                               data.passwords_past_the_cap;
+                            result.keychain_denied = data.keychain_denied;
+                            std::move(done).Run(result);
+                          },
+@@ -1295,7 +1422,7 @@ void ImportFromArcAsync(BrowserWindowInterface* browser,
        FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
        // I27: where Arc is is found on the pool too: on Windows that lists
        // the Store's packages, which the UI thread may not wait for.
@@ -273,8 +426,22 @@ index 8d1a12e18eea9..21ffbbf1e2263 100644
        base::BindOnce(&ApplyRead, browser->GetWeakPtr(), options,
                       std::move(done)));
  }
+@@ -1325,6 +1452,13 @@ std::u16string DescribeArcImportResult(const ArcImportResult& result) {
+     text += base::StrCat({u" \u00B7 ", base::NumberToString16(result.skipped),
+                           u" already here"});
+   }
++  // I23 (BACKLOG S-346): the least recently used, past the 10,000 read.
++  if (result.passwords_past_the_cap) {
++    text += base::StrCat({u" \u00B7 ",
++                          count(result.passwords_past_the_cap, u"password",
++                                u"passwords"),
++                          u" past the limit of 10,000 left out"});
++  }
+   if (result.keychain_denied) {
+ #if BUILDFLAG(IS_WIN)
+     text += u" \u00B7 passwords skipped: Arc's key could not be read";
 diff --git a/chrome/browser/ui/spaces/arc_sidebar_importer_unittest.cc b/chrome/browser/ui/spaces/arc_sidebar_importer_unittest.cc
-index 4db4fdfde19aa..e96c84892cb52 100644
+index 4db4fdfde19aa..f10ba185f0d06 100644
 --- a/chrome/browser/ui/spaces/arc_sidebar_importer_unittest.cc
 +++ b/chrome/browser/ui/spaces/arc_sidebar_importer_unittest.cc
 @@ -5,6 +5,7 @@
@@ -315,6 +482,105 @@ index 4db4fdfde19aa..e96c84892cb52 100644
  // I2, I8: the summary before anything is applied.
  TEST(ArcSidebarImporterTest, SummaryCountsThePlan) {
    const std::optional<ArcImportPlan> plan = ParseArcSidebar(kSidebar);
+@@ -326,6 +350,98 @@ TEST_F(ArcSidebarImportWindowTest, AFolderOfFoldersKeepsItsShape) {
+   EXPECT_EQ(0u, again.folders);
+ }
+ 
++// I3 (BACKLOG S-346): a list whose first tab is several lists down keeps
++// every list above it. A, which holds only B, which holds C and F, came in as
++// B alone: A held no list with a tab of its own, so A was never made and its
++// list came out a level up.
++TEST_F(ArcSidebarImportWindowTest, ADeepFolderOfFoldersKeepsEveryFolder) {
++  constexpr char kDeep[] = R"json({
++  "version": 1,
++  "sidebar": {"containers": [
++    {"global": {}},
++    {
++      "spaces": ["space-work", {"id": "space-work", "title": "Work",
++        "containerIDs": ["unpinned", "cont-unpinned", "pinned", "cont-pinned"]}],
++      "items": [
++        "cont-pinned", {"id": "cont-pinned", "parentID": null,
++          "childrenIds": [], "title": "",
++          "data": {"itemContainer": {"containerType": {"spaceItems": {}}}}},
++        "cont-unpinned", {"id": "cont-unpinned", "parentID": null,
++          "childrenIds": ["list-a"], "title": "",
++          "data": {"itemContainer": {"containerType": {"spaceItems": {}}}}},
++        "list-a", {"id": "list-a", "parentID": "cont-unpinned",
++          "childrenIds": ["list-b"], "title": "A", "data": {"list": {}}},
++        "list-b", {"id": "list-b", "parentID": "list-a",
++          "childrenIds": ["list-c", "list-f"], "title": "B",
++          "data": {"list": {}}},
++        "list-c", {"id": "list-c", "parentID": "list-b",
++          "childrenIds": ["tab-c1", "list-e"], "title": "C",
++          "data": {"list": {}}},
++        "list-e", {"id": "list-e", "parentID": "list-c",
++          "childrenIds": ["tab-e1"], "title": "E", "data": {"list": {}}},
++        "list-f", {"id": "list-f", "parentID": "list-b",
++          "childrenIds": ["tab-f1"], "title": "F", "data": {"list": {}}},
++        "tab-c1", {"id": "tab-c1", "parentID": "list-c", "childrenIds": [],
++          "title": "", "data": {"tab": {"savedURL": "https://c1.example/", "savedTitle": "C1"}}},
++        "tab-e1", {"id": "tab-e1", "parentID": "list-e", "childrenIds": [],
++          "title": "", "data": {"tab": {"savedURL": "https://e1.example/", "savedTitle": "E1"}}},
++        "tab-f1", {"id": "tab-f1", "parentID": "list-f", "childrenIds": [],
++          "title": "", "data": {"tab": {"savedURL": "https://f1.example/", "savedTitle": "F1"}}}
++      ],
++      "topAppsContainerIDs": []
++    }
++  ]}
++})json";
++  const std::optional<ArcImportPlan> plan = ParseArcSidebar(kDeep);
++  ASSERT_TRUE(plan.has_value());
++  const ArcImportResult result =
++      ApplyArcImport(browser(), *plan, ArcImportOptions());
++  EXPECT_EQ(3u, result.tabs);
++  EXPECT_EQ(5u, result.folders);
++  const Space* const work = SpaceNamed("Work");
++  ASSERT_TRUE(work);
++  const auto folder_of = [](const tabs::TabCollection* collection) {
++    return collection && collection->type() == tabs::TabCollection::Type::FOLDER
++               ? static_cast<const tabs::FolderTabCollection*>(collection)
++               : nullptr;
++  };
++  const auto parent_of = [&](std::u16string_view title)
++      -> const tabs::FolderTabCollection* {
++    for (tabs::TabInterface* const tab : TabsIn(work->id())) {
++      if (tab->GetContents()->GetTitle() == title) {
++        return folder_of(tab->GetParentCollection());
++      }
++    }
++    return nullptr;
++  };
++  const tabs::FolderTabCollection* const c = parent_of(u"C1");
++  ASSERT_TRUE(c);
++  EXPECT_EQ("C", c->title());
++  const tabs::FolderTabCollection* const b =
++      folder_of(c->GetParentCollection());
++  ASSERT_TRUE(b);
++  EXPECT_EQ("B", b->title());
++  const tabs::FolderTabCollection* const a =
++      folder_of(b->GetParentCollection());
++  ASSERT_TRUE(a) << "the outer list was left out";
++  EXPECT_EQ("A", a->title());
++  EXPECT_FALSE(folder_of(a->GetParentCollection()));
++  const tabs::FolderTabCollection* const e = parent_of(u"E1");
++  ASSERT_TRUE(e);
++  EXPECT_EQ("E", e->title());
++  EXPECT_EQ(c, e->GetParentCollection());
++  const tabs::FolderTabCollection* const f = parent_of(u"F1");
++  ASSERT_TRUE(f);
++  EXPECT_EQ("F", f->title());
++  EXPECT_EQ(b, f->GetParentCollection());
++
++  // A second import adds nothing and finds the folders it made (I12).
++  const ArcImportResult again =
++      ApplyArcImport(browser(), *plan, ArcImportOptions());
++  EXPECT_EQ(0u, again.tabs);
++  EXPECT_EQ(0u, again.folders);
++}
++
+ // I3: a file that names one Arc Space twice makes one Space; its second
+ // entry's tabs join the first. Both became Spaces, and a later import filled
+ // only the one it remembered (BACKLOG S-183).
 diff --git a/chrome/browser/ui/spaces/sidebar_backup_unittest.cc b/chrome/browser/ui/spaces/sidebar_backup_unittest.cc
 index 31dd185c74de6..30d938ffc1380 100644
 --- a/chrome/browser/ui/spaces/sidebar_backup_unittest.cc

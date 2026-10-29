@@ -32,31 +32,31 @@ history and passwords, and Safari's own export is the one file it writes.
 Removable when: never; the Settings and command bar rows (planned in
 I32, I41) and Dia's sidebar (I33) build on this.
 ---
- .../browser/resources/stedding_welcome/app.ts | 231 +++++
- chrome/browser/ui/DEPS                        |   5 +
- chrome/browser/ui/spaces/BUILD.gn             |   8 +
- chrome/browser/ui/spaces/arc_data_importer.cc | 104 ++-
- chrome/browser/ui/spaces/arc_data_importer.h  |  32 +-
- .../ui/spaces/chromium_family_importer.cc     | 820 ++++++++++++++++
- .../ui/spaces/chromium_family_importer.h      | 197 ++++
- .../chromium_family_importer_unittest.cc      | 434 +++++++++
- chrome/browser/ui/stedding/BUILD.gn           |  83 ++
- .../browser/ui/stedding/imported_bookmarks.cc | 553 +++++++++++
- .../browser/ui/stedding/imported_bookmarks.h  | 228 +++++
- .../stedding/imported_bookmarks_unittest.cc   | 276 ++++++
- .../ui/stedding/safari_export_importer.cc     | 879 ++++++++++++++++++
- .../ui/stedding/safari_export_importer.h      | 267 ++++++
- .../safari_export_importer_unittest.cc        | 409 ++++++++
- chrome/browser/ui/stedding/stedding_prefs.cc  |   1 +
- chrome/browser/ui/stedding/stedding_prefs.h   |   5 +
- .../ui/webui/stedding_welcome/BUILD.gn        |   7 +
- .../stedding_welcome_handler.cc               | 223 ++++-
- .../stedding_welcome_handler.h                |  47 +-
- chrome/test/DEPS                              |   1 +
- chrome/test/stedding/BUILD.gn                 |  11 +
- .../stedding/safari_dia_import_browsertest.cc | 600 ++++++++++++
- .../user_data_importer/utility/BUILD.gn       |   3 +
- 24 files changed, 5389 insertions(+), 35 deletions(-)
+ .../browser/resources/stedding_welcome/app.ts |  231 ++++
+ chrome/browser/ui/DEPS                        |    5 +
+ chrome/browser/ui/spaces/BUILD.gn             |    8 +
+ chrome/browser/ui/spaces/arc_data_importer.cc |  173 ++-
+ chrome/browser/ui/spaces/arc_data_importer.h  |   40 +-
+ .../ui/spaces/chromium_family_importer.cc     |  829 +++++++++++++
+ .../ui/spaces/chromium_family_importer.h      |  199 ++++
+ .../chromium_family_importer_unittest.cc      |  444 +++++++
+ chrome/browser/ui/stedding/BUILD.gn           |   83 ++
+ .../browser/ui/stedding/imported_bookmarks.cc |  611 ++++++++++
+ .../browser/ui/stedding/imported_bookmarks.h  |  244 ++++
+ .../stedding/imported_bookmarks_unittest.cc   |  355 ++++++
+ .../ui/stedding/safari_export_importer.cc     | 1026 +++++++++++++++++
+ .../ui/stedding/safari_export_importer.h      |  267 +++++
+ .../safari_export_importer_unittest.cc        |  496 ++++++++
+ chrome/browser/ui/stedding/stedding_prefs.cc  |    1 +
+ chrome/browser/ui/stedding/stedding_prefs.h   |    5 +
+ .../ui/webui/stedding_welcome/BUILD.gn        |    7 +
+ .../stedding_welcome_handler.cc               |  223 +++-
+ .../stedding_welcome_handler.h                |   47 +-
+ chrome/test/DEPS                              |    1 +
+ chrome/test/stedding/BUILD.gn                 |   11 +
+ .../stedding/safari_dia_import_browsertest.cc |  661 +++++++++++
+ .../user_data_importer/utility/BUILD.gn       |    3 +
+ 24 files changed, 5914 insertions(+), 56 deletions(-)
  create mode 100644 chrome/browser/ui/spaces/chromium_family_importer.cc
  create mode 100644 chrome/browser/ui/spaces/chromium_family_importer.h
  create mode 100644 chrome/browser/ui/spaces/chromium_family_importer_unittest.cc
@@ -402,10 +402,18 @@ index a482dbf196f2c..e0e7d6d625086 100644
      "bookmarks_to_pins_unittest.cc",
      "folder_commands_unittest.cc",
 diff --git a/chrome/browser/ui/spaces/arc_data_importer.cc b/chrome/browser/ui/spaces/arc_data_importer.cc
-index 51a51dfc0293a..4665abca0410d 100644
+index 51a51dfc0293a..ed7cc1182eda1 100644
 --- a/chrome/browser/ui/spaces/arc_data_importer.cc
 +++ b/chrome/browser/ui/spaces/arc_data_importer.cc
-@@ -79,26 +79,17 @@ base::Time FromChromiumMicroseconds(int64_t value) {
+@@ -29,6 +29,7 @@
+ #include "chrome/browser/password_manager/factories/profile_password_store_factory.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/ui/spaces/arc_sidebar_importer.h"
++#include "chrome/browser/ui/stedding/imported_bookmarks.h"
+ #include "chrome/browser/ui/stedding/stedding_prefs.h"
+ #include "components/history/core/browser/history_service.h"
+ #include "components/history/core/browser/history_types.h"
+@@ -79,26 +80,17 @@ base::Time FromChromiumMicroseconds(int64_t value) {
    return base::Time::FromDeltaSinceWindowsEpoch(base::Microseconds(value));
  }
  
@@ -439,7 +447,78 @@ index 51a51dfc0293a..4665abca0410d 100644
  }
  
  struct ReadOutcome {
-@@ -197,6 +188,28 @@ void WriteOnUi(base::WeakPtr<Profile> profile,
+@@ -107,6 +99,7 @@ struct ReadOutcome {
+   ~ReadOutcome();
+   history::URLRows history;
+   std::vector<password_manager::PasswordForm> logins;
++  LoginsLeftOut logins_left_out;
+   bool keychain_denied = false;
+ };
+ 
+@@ -140,14 +133,17 @@ ReadOutcome ReadOnPool(std::optional<ArcDataPaths> given,
+         out.keychain_denied = true;
+       } else {
+         out.logins = ReadArcLogins(logins, *key, /*cap=*/10000,
+-                                   ArcSeal::kWindowsLocalState);
++                                   ArcSeal::kWindowsLocalState,
++                                   &out.logins_left_out);
+       }
+ #else
+       const std::optional<std::string> password = ReadArcKeychainPassword();
+       if (!password) {
+         out.keychain_denied = true;
+       } else {
+-        out.logins = ReadArcLogins(logins, DeriveArcKey(*password));
++        out.logins = ReadArcLogins(logins, DeriveArcKey(*password),
++                                   /*cap=*/10000, ArcSeal::kMacKeychain,
++                                   &out.logins_left_out);
+       }
+ #endif
+     }
+@@ -160,6 +156,7 @@ void WriteOnUi(base::WeakPtr<Profile> profile,
+                ReadOutcome read) {
+   ArcDataResult result;
+   result.keychain_denied = read.keychain_denied;
++  result.passwords_past_the_cap = read.logins_left_out.past_the_cap;
+   if (!profile) {
+     std::move(done).Run(result);
+     return;
+@@ -168,17 +165,24 @@ void WriteOnUi(base::WeakPtr<Profile> profile,
+     if (history::HistoryService* const service =
+             HistoryServiceFactory::GetForProfile(
+                 profile.get(), ServiceAccessType::EXPLICIT_ACCESS)) {
+-      service->AddPagesWithDetails(read.history, history::SOURCE_BROWSED);
+-      result.history = read.history.size();
+-      // I22: the rows are newest first. The next import reads only what Arc
+-      // visited after this one: the history service makes up a visit for
+-      // every row it is given, so each import added another visit to every
+-      // page an earlier one had brought over.
++      // I22: the next import reads only what Arc visited after this one: the
++      // history service makes up a visit for every row it is given, so each
++      // import added another visit to every page an earlier one had brought
++      // over. The mark is read again here, where it is written: two imports
++      // that started together both read past the mark as it was, and each
++      // added a visit to every page (BACKLOG S-346).
+       PrefService* const prefs = profile->GetPrefs();
+-      const base::Time newest = read.history.front().last_visit();
+-      if (newest >
+-          prefs->GetTime(stedding::prefs::kArcImportedHistoryThrough)) {
+-        prefs->SetTime(stedding::prefs::kArcImportedHistoryThrough, newest);
++      const base::Time through =
++          prefs->GetTime(stedding::prefs::kArcImportedHistoryThrough);
++      std::erase_if(read.history, [through](const history::URLRow& row) {
++        return row.last_visit() <= through;
++      });
++      if (!read.history.empty()) {
++        service->AddPagesWithDetails(read.history, history::SOURCE_BROWSED);
++        result.history = read.history.size();
++        // The rows are newest first.
++        prefs->SetTime(stedding::prefs::kArcImportedHistoryThrough,
++                       read.history.front().last_visit());
+       }
+     }
+   }
+@@ -197,6 +201,28 @@ void WriteOnUi(base::WeakPtr<Profile> profile,
  
  }  // namespace
  
@@ -468,7 +547,7 @@ index 51a51dfc0293a..4665abca0410d 100644
  ArcDataPaths ArcDataPathsFor(const base::FilePath& user_data_dir) {
    ArcDataPaths paths;
    if (user_data_dir.empty()) {
-@@ -276,18 +289,32 @@ std::optional<std::u16string> DecryptArcValue(base::span<const uint8_t> sealed,
+@@ -276,18 +302,32 @@ std::optional<std::u16string> DecryptArcValue(base::span<const uint8_t> sealed,
  }
  
  std::optional<std::string> ReadArcKeychainPassword() {
@@ -510,7 +589,7 @@ index 51a51dfc0293a..4665abca0410d 100644
    base::apple::ScopedCFTypeRef<CFTypeRef> result;
    if (SecItemCopyMatching(query.get(), result.InitializeInto()) !=
        errSecSuccess) {
-@@ -306,8 +333,13 @@ std::optional<std::string> ReadArcKeychainPassword() {
+@@ -306,8 +346,13 @@ std::optional<std::string> ReadArcKeychainPassword() {
  std::optional<std::vector<uint8_t>> ReadArcWindowsKey(
      const base::FilePath& local_state) {
  #if BUILDFLAG(IS_WIN)
@@ -525,7 +604,32 @@ index 51a51dfc0293a..4665abca0410d 100644
      return std::nullopt;
    }
    const std::optional<base::DictValue> state =
-@@ -417,7 +449,8 @@ std::vector<password_manager::PasswordForm> ReadArcLogins(
+@@ -383,15 +428,21 @@ history::URLRows ReadArcHistory(const base::FilePath& history_copy,
+   }
+   // The web pages alone, and no more of them than the cap, in the query:
+   // the rows the reader skipped did not count, so a file of other rows was
+-  // read to its end (BACKLOG S-183).
++  // read to its end (BACKLOG S-183). Nor a visit dated ahead of now: the
++  // newest first, those filled the cap ahead of every real visit, and the
++  // history kept them, as the newest pages, until long after the 90 days
++  // (BACKLOG S-346).
+   sql::Statement statement(db.GetUniqueStatement(
+       "SELECT url, title, visit_count, typed_count, last_visit_time FROM urls "
+-      "WHERE hidden = 0 AND last_visit_time > ? AND "
++      "WHERE hidden = 0 AND last_visit_time > ? AND last_visit_time <= ? AND "
+       "(url LIKE 'http://%' OR url LIKE 'https://%') "
+       "ORDER BY last_visit_time DESC LIMIT ?"));
+   // A null `after` is 0, which keeps every row with a visit time.
+   statement.BindInt64(0, after.ToDeltaSinceWindowsEpoch().InMicroseconds());
+-  statement.BindInt64(1, static_cast<int64_t>(cap));
++  statement.BindInt64(1, stedding::LatestKeptVisit(base::Time::Now())
++                             .ToDeltaSinceWindowsEpoch()
++                             .InMicroseconds());
++  statement.BindInt64(2, static_cast<int64_t>(cap));
+   while (rows.size() < cap && statement.Step()) {
+     const GURL url(statement.ColumnString(0));
+     if (!url.is_valid() || !url.SchemeIsHTTPOrHTTPS()) {
+@@ -417,7 +468,8 @@ std::vector<password_manager::PasswordForm> ReadArcLogins(
      const base::FilePath& logins_copy,
      base::span<const uint8_t> key,
      size_t cap,
@@ -535,7 +639,38 @@ index 51a51dfc0293a..4665abca0410d 100644
    std::vector<password_manager::PasswordForm> forms;
    if (logins_copy.empty() || !base::PathExists(logins_copy)) {
      return forms;
-@@ -466,11 +499,24 @@ std::vector<password_manager::PasswordForm> ReadArcLogins(
+@@ -427,15 +479,25 @@ std::vector<password_manager::PasswordForm> ReadArcLogins(
+   if (!db.Open(logins_copy)) {
+     return forms;
+   }
++  // At most `cap`: every row was kept, then added to the store one by one on
++  // the UI thread (BACKLOG S-183). The most recently used first, so the cap
++  // keeps the logins in use, and a row left out below takes no place: with
++  // the cap a LIMIT on an unordered query, which rows came was SQLite's
++  // choice, and each row left out cost a valid one (BACKLOG S-346).
+   sql::Statement statement(db.GetUniqueStatement(
+       "SELECT origin_url, action_url, username_element, username_value, "
+       "password_element, password_value, signon_realm, date_created, "
+       "blacklisted_by_user, scheme, date_last_used, date_password_modified "
+-      "FROM logins LIMIT ?"));
+-  // At most `cap`: every row was kept, then added to the store one by one on
+-  // the UI thread (BACKLOG S-183).
+-  statement.BindInt64(0, static_cast<int64_t>(cap));
+-  while (forms.size() < cap && statement.Step()) {
++      "FROM logins ORDER BY date_last_used DESC, date_created DESC"));
++  while (statement.Step()) {
++    if (forms.size() >= cap) {
++      // The rest are counted, not read, so the result line can say so.
++      if (!left_out) {
++        break;
++      }
++      ++left_out->past_the_cap;
++      continue;
++    }
+     password_manager::PasswordForm form;
+     form.url = GURL(statement.ColumnString(0));
+     if (!form.url.is_valid()) {
+@@ -466,11 +528,24 @@ std::vector<password_manager::PasswordForm> ReadArcLogins(
        form.username_element.clear();
        form.password_element.clear();
      } else {
@@ -563,7 +698,7 @@ index 51a51dfc0293a..4665abca0410d 100644
        }
        // M155 keeps the plaintext in a PasswordString, built from an rvalue.
 diff --git a/chrome/browser/ui/spaces/arc_data_importer.h b/chrome/browser/ui/spaces/arc_data_importer.h
-index 8bccf7a9889ee..c7e4bad3f8249 100644
+index 8bccf7a9889ee..0ef177829d1bf 100644
 --- a/chrome/browser/ui/spaces/arc_data_importer.h
 +++ b/chrome/browser/ui/spaces/arc_data_importer.h
 @@ -65,6 +65,23 @@ std::optional<std::u16string> DecryptArcValue(base::span<const uint8_t> sealed,
@@ -590,7 +725,13 @@ index 8bccf7a9889ee..c7e4bad3f8249 100644
  // import I27: how Arc sealed its passwords. On the Mac, "v10" and AES-128-CBC
  // under a key derived from its keychain item (I23); on Windows, as Chromium
  // seals them there: "v10", a 12-byte nonce, then AES-256-GCM's ciphertext and
-@@ -92,14 +109,23 @@ inline constexpr size_t kMaxArcHistoryRows = 100000;
+@@ -88,22 +105,37 @@ std::optional<std::u16string> DecryptArcWindowsValue(
+ inline constexpr size_t kMaxArcHistoryRows = 100000;
+ 
+ // The urls table of a History copy: http(s) rows that are not hidden, last
+-// visited after `after`, most recent first, at most `cap`.
++// visited after `after` and no later than now allows
++// (stedding::LatestKeptVisit), most recent first, at most `cap`.
  history::URLRows ReadArcHistory(const base::FilePath& history_copy,
                                  size_t cap = kMaxArcHistoryRows,
                                  base::Time after = base::Time());
@@ -600,13 +741,16 @@ index 8bccf7a9889ee..c7e4bad3f8249 100644
 +  size_t bound_to_its_browser = 0;
 +  // Any other value that would not unseal under the key, or was empty.
 +  size_t unreadable = 0;
++  // Rows past the cap, which were not read.
++  size_t past_the_cap = 0;
 +};
 +
  // The logins table of a Login Data copy, passwords unsealed with `key`, at
 -// most `cap` rows. A row whose value will not unseal is left out; a blocked
 -// site comes across as blocked.
-+// most `cap` rows. A row whose value will not unseal is left out, and counted
-+// in `left_out` when one is given; a blocked site comes across as blocked.
++// most `cap` of them, the most recently used first. A row whose value will
++// not unseal is left out, and counted in `left_out` when one is given, as are
++// the rows past the cap; a blocked site comes across as blocked.
  std::vector<password_manager::PasswordForm> ReadArcLogins(
      const base::FilePath& logins_copy,
      base::span<const uint8_t> key,
@@ -617,12 +761,18 @@ index 8bccf7a9889ee..c7e4bad3f8249 100644
  
  struct ArcDataResult {
    size_t history = 0;
+   size_t passwords = 0;
++  // I23: logins past the 10,000 read.
++  size_t passwords_past_the_cap = 0;
+   // The keychain item could not be read: refused, or no item.
+   bool keychain_denied = false;
+ };
 diff --git a/chrome/browser/ui/spaces/chromium_family_importer.cc b/chrome/browser/ui/spaces/chromium_family_importer.cc
 new file mode 100644
-index 0000000000000..774eb7efdafaf
+index 0000000000000..e9f43045d7353
 --- /dev/null
 +++ b/chrome/browser/ui/spaces/chromium_family_importer.cc
-@@ -0,0 +1,820 @@
+@@ -0,0 +1,829 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -1027,6 +1177,7 @@ index 0000000000000..774eb7efdafaf
 +    result_.key_denied = read_.key_denied;
 +    result_.passwords_bound = read_.left_out.bound_to_its_browser;
 +    result_.passwords_unreadable = read_.left_out.unreadable;
++    result_.passwords_past_the_cap = read_.left_out.past_the_cap;
 +    const bool bookmarks = !read_.bookmarks.entries.empty();
 +    const bool history = !read_.history.empty();
 +    const bool passwords = !read_.passwords.empty();
@@ -1382,6 +1533,14 @@ index 0000000000000..774eb7efdafaf
 +                          u"passwords") +
 +        u" could not be unsealed.");
 +  }
++  // The least recently used, past the 10,000 read (BACKLOG S-346).
++  if (result.passwords_past_the_cap > 0) {
++    add(stedding::CountOf(result.passwords_past_the_cap, u"password",
++                          u"passwords") +
++        u" past the limit of 10,000 " +
++        (result.passwords_past_the_cap == 1 ? u"was" : u"were") +
++        u" left out.");
++  }
 +  if (result.passwords.kept > 0) {
 +    add(stedding::CountOf(result.passwords.kept, u"password", u"passwords") +
 +        u" saved with another password " +
@@ -1445,10 +1604,10 @@ index 0000000000000..774eb7efdafaf
 +}  // namespace spaces
 diff --git a/chrome/browser/ui/spaces/chromium_family_importer.h b/chrome/browser/ui/spaces/chromium_family_importer.h
 new file mode 100644
-index 0000000000000..8e0a0fcb08f50
+index 0000000000000..4187fc58c83cb
 --- /dev/null
 +++ b/chrome/browser/ui/spaces/chromium_family_importer.h
-@@ -0,0 +1,197 @@
+@@ -0,0 +1,199 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -1613,6 +1772,8 @@ index 0000000000000..8e0a0fcb08f50
 +  // Values sealed to the browser itself ("v20") and other unreadable values.
 +  size_t passwords_bound = 0;
 +  size_t passwords_unreadable = 0;
++  // Logins past the 10,000 read (BACKLOG S-346).
++  size_t passwords_past_the_cap = 0;
 +  stedding::PasswordWriteResult passwords;
 +  bool bookmarks_blocked = false;
 +  bool history_blocked = false;
@@ -1648,10 +1809,10 @@ index 0000000000000..8e0a0fcb08f50
 +#endif  // CHROME_BROWSER_UI_SPACES_CHROMIUM_FAMILY_IMPORTER_H_
 diff --git a/chrome/browser/ui/spaces/chromium_family_importer_unittest.cc b/chrome/browser/ui/spaces/chromium_family_importer_unittest.cc
 new file mode 100644
-index 0000000000000..ca378e508afdb
+index 0000000000000..08e23c02006cf
 --- /dev/null
 +++ b/chrome/browser/ui/spaces/chromium_family_importer_unittest.cc
-@@ -0,0 +1,434 @@
+@@ -0,0 +1,444 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -2069,6 +2230,16 @@ index 0000000000000..ca378e508afdb
 +      u"with another password was kept as saved.",
 +      DescribeChromiumFamilyResult(result));
 +
++  // BACKLOG S-346: logins past the limit are named.
++  ChromiumFamilyResult capped;
++  capped.name = u"Dia";
++  capped.passwords.added = 10000;
++  capped.passwords_past_the_cap = 2;
++  EXPECT_EQ(
++      u"Brought in from Dia: 10000 passwords. 2 passwords past the limit of "
++      u"10,000 were left out.",
++      DescribeChromiumFamilyResult(capped));
++
 +  ChromiumFamilyResult denied;
 +  denied.name = u"Dia";
 +  denied.passwords_asked = true;
@@ -2189,10 +2360,10 @@ index 884847e27a38b..4153533f425f3 100644
      # Sparkle.
 diff --git a/chrome/browser/ui/stedding/imported_bookmarks.cc b/chrome/browser/ui/stedding/imported_bookmarks.cc
 new file mode 100644
-index 0000000000000..c93692f37d9b1
+index 0000000000000..53793d9000c7a
 --- /dev/null
 +++ b/chrome/browser/ui/stedding/imported_bookmarks.cc
-@@ -0,0 +1,553 @@
+@@ -0,0 +1,611 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -2369,12 +2540,16 @@ index 0000000000000..c93692f37d9b1
 +
 +  bool RunOnDBThread(history::HistoryBackend* backend,
 +                     history::HistoryDatabase* db) override {
-+    const base::Time oldest = OldestKeptVisit(base::Time::Now());
++    const base::Time now = base::Time::Now();
++    const base::Time oldest = OldestKeptVisit(now);
++    const base::Time latest = LatestKeptVisit(now);
 +    std::set<std::pair<GURL, base::Time>> seen;
 +    history::URLRows fresh;
 +    for (history::URLRow& row : rows_) {
-+      // The history service drops a visit it would not keep anyway.
-+      if (row.last_visit().is_null() || row.last_visit() < oldest) {
++      // The history service drops a visit it would not keep anyway; one
++      // dated ahead of now it would keep for good (BACKLOG S-346).
++      if (row.last_visit().is_null() || row.last_visit() < oldest ||
++          row.last_visit() > latest) {
 +        continue;
 +      }
 +      if (!seen.emplace(row.url(), row.last_visit()).second) {
@@ -2516,6 +2691,10 @@ index 0000000000000..c93692f37d9b1
 +  return now - base::Days(history::HistoryBackend::kExpireDaysThreshold);
 +}
 +
++base::Time LatestKeptVisit(base::Time now) {
++  return now + base::Minutes(10);
++}
++
 +void AddNewVisits(history::HistoryService& history,
 +                  history::URLRows rows,
 +                  history::VisitSource source,
@@ -2532,55 +2711,103 @@ index 0000000000000..c93692f37d9b1
 +      &tracker);
 +}
 +
-+PasswordWriteResult ClassifyIncomingPasswords(
-+    const std::vector<password_manager::CredentialUIEntry>& saved,
-+    const std::vector<password_manager::CSVPassword>& incoming) {
-+  using password_manager::CredentialUIEntry;
-+  using password_manager::CSVPassword;
-+  using password_manager::PasswordForm;
-+  std::multimap<std::u16string, const CredentialUIEntry*> by_username;
-+  for (const CredentialUIEntry& entry : saved) {
-+    if (entry.stored_in.contains(PasswordForm::Store::kProfileStore)) {
++namespace {
++
++// import I39: what an incoming row is, against the profile's saved logins.
++enum class IncomingLogin { kRefused, kAdded, kAlreadySaved, kKept };
++
++// The saved logins of the profile's own store, by username.
++using SavedByUsername =
++    std::multimap<std::u16string,
++                  const password_manager::CredentialUIEntry*>;
++
++SavedByUsername SavedLoginsByUsername(
++    const std::vector<password_manager::CredentialUIEntry>& saved) {
++  SavedByUsername by_username;
++  for (const password_manager::CredentialUIEntry& entry : saved) {
++    if (entry.stored_in.contains(
++            password_manager::PasswordForm::Store::kProfileStore)) {
 +      by_username.emplace(entry.username, &entry);
 +    }
 +  }
-+  PasswordWriteResult result;
-+  for (const CSVPassword& row : incoming) {
-+    if (row.GetParseStatus() != CSVPassword::Status::kOK ||
-+        !row.GetURL().has_value() || !row.GetURL().value().is_valid() ||
-+        row.GetPassword().empty()) {
-+      ++result.refused;
++  return by_username;
++}
++
++IncomingLogin SortIncomingLogin(const SavedByUsername& by_username,
++                                const password_manager::CSVPassword& row) {
++  using password_manager::CredentialUIEntry;
++  using password_manager::CSVPassword;
++  using password_manager::PasswordForm;
++  if (row.GetParseStatus() != CSVPassword::Status::kOK ||
++      !row.GetURL().has_value() || !row.GetURL().value().is_valid() ||
++      row.GetPassword().empty()) {
++    return IncomingLogin::kRefused;
++  }
++  const CredentialUIEntry in(row, PasswordForm::Store::kProfileStore);
++  const std::string realm = in.GetFirstSignonRealm();
++  bool same = false;
++  bool other = false;
++  const auto [first, last] = by_username.equal_range(in.username);
++  for (auto it = first; it != last; ++it) {
++    const CredentialUIEntry& entry = *it->second;
++    const bool same_site = std::ranges::any_of(
++        entry.facets, [&realm](const password_manager::CredentialFacet& f) {
++          return f.signon_realm == realm;
++        });
++    if (!same_site) {
 +      continue;
 +    }
-+    const CredentialUIEntry in(row, PasswordForm::Store::kProfileStore);
-+    const std::string realm = in.GetFirstSignonRealm();
-+    bool same = false;
-+    bool other = false;
-+    const auto [first, last] = by_username.equal_range(in.username);
-+    for (auto it = first; it != last; ++it) {
-+      const CredentialUIEntry& entry = *it->second;
-+      const bool same_site = std::ranges::any_of(
-+          entry.facets, [&realm](const password_manager::CredentialFacet& f) {
-+            return f.signon_realm == realm;
-+          });
-+      if (!same_site) {
-+        continue;
-+      }
-+      if (entry.password == in.password) {
-+        same = true;
-+      } else {
-+        other = true;
-+      }
-+    }
-+    if (same) {
-+      ++result.already_saved;
-+    } else if (other) {
-+      ++result.kept;
++    if (entry.password == in.password) {
++      same = true;
 +    } else {
-+      ++result.added;
++      other = true;
++    }
++  }
++  if (same) {
++    return IncomingLogin::kAlreadySaved;
++  }
++  return other ? IncomingLogin::kKept : IncomingLogin::kAdded;
++}
++
++}  // namespace
++
++PasswordWriteResult ClassifyIncomingPasswords(
++    const std::vector<password_manager::CredentialUIEntry>& saved,
++    const std::vector<password_manager::CSVPassword>& incoming) {
++  const SavedByUsername by_username = SavedLoginsByUsername(saved);
++  PasswordWriteResult result;
++  for (const password_manager::CSVPassword& row : incoming) {
++    switch (SortIncomingLogin(by_username, row)) {
++      case IncomingLogin::kRefused:
++        ++result.refused;
++        break;
++      case IncomingLogin::kAdded:
++        ++result.added;
++        break;
++      case IncomingLogin::kAlreadySaved:
++        ++result.already_saved;
++        break;
++      case IncomingLogin::kKept:
++        ++result.kept;
++        break;
 +    }
 +  }
 +  return result;
++}
++
++void DropNotesOfSavedLogins(
++    const std::vector<password_manager::CredentialUIEntry>& saved,
++    std::vector<password_manager::CSVPassword>& incoming) {
++  const SavedByUsername by_username = SavedLoginsByUsername(saved);
++  for (password_manager::CSVPassword& row : incoming) {
++    if (row.GetNote().empty() ||
++        SortIncomingLogin(by_username, row) != IncomingLogin::kAlreadySaved) {
++      continue;
++    }
++    row = password_manager::CSVPassword(
++        row.GetURL().value(), row.GetUsername(), row.GetPassword(),
++        /*note=*/std::string(), row.GetParseStatus());
++  }
 +}
 +
 +ImportedPasswordsWriter::ImportedPasswordsWriter(Profile& profile) {
@@ -2624,8 +2851,10 @@ index 0000000000000..c93692f37d9b1
 +}
 +
 +void ImportedPasswordsWriter::OnSavedPasswordsRead() {
-+  result_ =
-+      ClassifyIncomingPasswords(presenter_->GetSavedPasswords(), passwords_);
++  const std::vector<password_manager::CredentialUIEntry> saved =
++      presenter_->GetSavedPasswords();
++  result_ = ClassifyIncomingPasswords(saved, passwords_);
++  DropNotesOfSavedLogins(saved, passwords_);
 +  importer_ = std::make_unique<password_manager::PasswordImporter>(
 +      *presenter_, /*user_confirmation_required=*/true);
 +  importer_->Import(passwords_, password_manager::PasswordForm::Store::kProfileStore,
@@ -2748,10 +2977,10 @@ index 0000000000000..c93692f37d9b1
 +}  // namespace stedding
 diff --git a/chrome/browser/ui/stedding/imported_bookmarks.h b/chrome/browser/ui/stedding/imported_bookmarks.h
 new file mode 100644
-index 0000000000000..3549139a4549a
+index 0000000000000..59f2157b5d8c2
 --- /dev/null
 +++ b/chrome/browser/ui/stedding/imported_bookmarks.h
-@@ -0,0 +1,228 @@
+@@ -0,0 +1,244 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -2863,6 +3092,13 @@ index 0000000000000..3549139a4549a
 +// would be dropped as expired.
 +base::Time OldestKeptVisit(base::Time now);
 +
++// import I22, I30, I38 (BACKLOG S-346): the latest visit an import keeps:
++// `now`, and a few minutes more for another machine's clock. A visit dated
++// later is no visit yet. Kept, it listed as the newest page, the history's
++// expiry, which looks only for visits too old, never dropped it, and a read
++// of the newest visits first took it ahead of every real one.
++base::Time LatestKeptVisit(base::Time now);
++
 +// import I30, I38, I40: adds those of `rows` the profile's history does not
 +// already hold a visit for, at that row's time, to that row's URL, as
 +// `source`; `done` gets how many were added. Run on the history database's
@@ -2889,6 +3125,15 @@ index 0000000000000..3549139a4549a
 +  // The profile has no password store.
 +  bool unavailable = false;
 +};
++
++// import I39 (BACKLOG S-346): the rows of `incoming` ClassifyIncomingPasswords
++// counts as saved already -- the same site, username and password -- lose
++// their note, so Chromium's importer leaves the saved login as it is. It
++// adds a duplicate's note to the saved one's, and the login the result line
++// counted as saved already was changed.
++void DropNotesOfSavedLogins(
++    const std::vector<password_manager::CredentialUIEntry>& saved,
++    std::vector<password_manager::CSVPassword>& incoming);
 +
 +// import I39: sorts `incoming` against the logins `saved` in the profile's
 +// own store: the result's `already_saved` and `kept` count them (`added`
@@ -2982,10 +3227,10 @@ index 0000000000000..3549139a4549a
 +#endif  // CHROME_BROWSER_UI_STEDDING_IMPORTED_BOOKMARKS_H_
 diff --git a/chrome/browser/ui/stedding/imported_bookmarks_unittest.cc b/chrome/browser/ui/stedding/imported_bookmarks_unittest.cc
 new file mode 100644
-index 0000000000000..aa1c0892ad9f8
+index 0000000000000..1661938ac51b4
 --- /dev/null
 +++ b/chrome/browser/ui/stedding/imported_bookmarks_unittest.cc
-@@ -0,0 +1,276 @@
+@@ -0,0 +1,355 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -2997,21 +3242,32 @@ index 0000000000000..aa1c0892ad9f8
 +#include <vector>
 +
 +#include "base/location.h"
++#include "base/task/cancelable_task_tracker.h"
 +#include "base/test/task_environment.h"
++#include "base/test/test_future.h"
++#include "base/time/time.h"
++#include "chrome/browser/history/history_service_factory.h"
 +#include "chrome/browser/ui/stedding/stedding_prefs.h"
 +#include "chrome/common/pref_names.h"
++#include "chrome/test/base/testing_profile.h"
 +#include "components/bookmarks/browser/bookmark_model.h"
 +#include "components/bookmarks/browser/bookmark_node.h"
 +#include "components/bookmarks/common/bookmark_metrics.h"
 +#include "components/bookmarks/common/bookmark_pref_names.h"
 +#include "components/bookmarks/test/test_bookmark_client.h"
++#include "components/history/core/browser/history_service.h"
++#include "components/history/core/browser/history_types.h"
++#include "components/history/core/browser/url_row.h"
 +#include "components/history/core/common/pref_names.h"
++#include "components/history/core/test/history_service_test_util.h"
++#include "components/keyed_service/core/service_access_type.h"
 +#include "components/password_manager/core/browser/import/csv_password.h"
 +#include "components/password_manager/core/browser/password_form.h"
 +#include "components/password_manager/core/browser/ui/credential_ui_entry.h"
 +#include "components/password_manager/core/common/password_manager_pref_names.h"
 +#include "components/prefs/pref_registry_simple.h"
 +#include "components/prefs/testing_pref_service.h"
++#include "content/public/test/browser_task_environment.h"
 +#include "testing/gtest/include/gtest/gtest.h"
 +#include "url/gurl.h"
 +
@@ -3251,6 +3507,74 @@ index 0000000000000..aa1c0892ad9f8
 +  EXPECT_EQ(1u, result.refused);
 +}
 +
++// import I39 (BACKLOG S-346): a row saved already with the same password
++// loses its note before Chromium's importer sees it, which added the file's
++// note to the saved login's. Any other row keeps its note.
++TEST(ImportedPasswordsTest, ASavedLoginsRowLosesItsNote) {
++  const std::vector<CredentialUIEntry> saved = {
++      CredentialUIEntry(Login("https://a.example/", "ann", "one"),
++                        PasswordForm::Store::kProfileStore),
++      CredentialUIEntry(Login("https://b.example/", "bob", "two"),
++                        PasswordForm::Store::kProfileStore),
++  };
++  const auto with_note = [](std::string url, std::string username,
++                            std::string password) {
++    return CSVPassword(GURL(url), std::move(username), std::move(password),
++                       "from the file", CSVPassword::Status::kOK);
++  };
++  std::vector<CSVPassword> incoming = {
++      with_note("https://a.example/", "ann", "one"),
++      with_note("https://b.example/", "bob", "other"),
++      with_note("https://d.example/", "dan", "four"),
++  };
++  DropNotesOfSavedLogins(saved, incoming);
++  ASSERT_EQ(3u, incoming.size());
++  EXPECT_TRUE(incoming[0].GetNote().empty()) << "the saved login's row";
++  EXPECT_EQ(GURL("https://a.example/"), incoming[0].GetURL().value());
++  EXPECT_EQ("ann", incoming[0].GetUsername());
++  EXPECT_EQ("one", incoming[0].GetPassword());
++  EXPECT_EQ("from the file", incoming[1].GetNote()) << "another password";
++  EXPECT_EQ("from the file", incoming[2].GetNote()) << "a new login";
++  // The rows count as they did.
++  const PasswordWriteResult result = ClassifyIncomingPasswords(saved, incoming);
++  EXPECT_EQ(1u, result.already_saved);
++  EXPECT_EQ(1u, result.kept);
++  EXPECT_EQ(1u, result.added);
++}
++
++// import I30, I38 (BACKLOG S-346): a visit dated ahead of now is not added,
++// whatever imports it: the history lists it as the newest page and its
++// expiry, which looks only for visits too old, never drops it.
++TEST(ImportedHistoryTest, AVisitDatedAheadIsNotAdded) {
++  content::BrowserTaskEnvironment task_environment;
++  TestingProfile::Builder builder;
++  builder.AddTestingFactory(HistoryServiceFactory::GetInstance(),
++                            HistoryServiceFactory::GetDefaultFactory());
++  std::unique_ptr<TestingProfile> profile = builder.Build();
++  history::HistoryService* const history =
++      HistoryServiceFactory::GetForProfile(profile.get(),
++                                           ServiceAccessType::EXPLICIT_ACCESS);
++  ASSERT_TRUE(history);
++  const base::Time now = base::Time::Now();
++  history::URLRows rows;
++  history::URLRow ahead(GURL("https://ahead.example/"));
++  ahead.set_title(u"Ahead");
++  ahead.set_visit_count(1);
++  ahead.set_last_visit(now + base::Days(3 * 365));
++  rows.push_back(ahead);
++  history::URLRow seen(GURL("https://seen.example/"));
++  seen.set_title(u"Seen");
++  seen.set_visit_count(1);
++  seen.set_last_visit(now - base::Days(1));
++  rows.push_back(seen);
++  base::CancelableTaskTracker tracker;
++  base::test::TestFuture<size_t> added;
++  AddNewVisits(*history, std::move(rows), history::SOURCE_SAFARI_IMPORTED,
++               tracker, added.GetCallback());
++  EXPECT_EQ(1u, added.Get());
++  history::BlockUntilHistoryProcessesPendingRequests(history);
++}
++
 +TEST(ImportedWordsTest, CountsAndLists) {
 +  EXPECT_EQ(u"1 bookmark", CountOf(1, u"bookmark", u"bookmarks"));
 +  EXPECT_EQ(u"812 bookmarks", CountOf(812, u"bookmark", u"bookmarks"));
@@ -3264,10 +3588,10 @@ index 0000000000000..aa1c0892ad9f8
 +}  // namespace stedding
 diff --git a/chrome/browser/ui/stedding/safari_export_importer.cc b/chrome/browser/ui/stedding/safari_export_importer.cc
 new file mode 100644
-index 0000000000000..2a09ef99f61c7
+index 0000000000000..722a12dfceff6
 --- /dev/null
 +++ b/chrome/browser/ui/stedding/safari_export_importer.cc
-@@ -0,0 +1,879 @@
+@@ -0,0 +1,1026 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -3292,12 +3616,14 @@ index 0000000000000..2a09ef99f61c7
 +#include "base/json/json_reader.h"
 +#include "base/memory/raw_ref.h"
 +#include "base/memory/weak_ptr.h"
++#include "base/strings/string_util.h"
 +#include "base/strings/string_view_util.h"
 +#include "base/strings/utf_string_conversions.h"
 +#include "base/task/bind_post_task.h"
 +#include "base/task/sequenced_task_runner.h"
 +#include "base/task/thread_pool.h"
 +#include "base/values.h"
++#include "build/build_config.h"
 +#include "chrome/browser/bookmarks/bookmark_model_factory.h"
 +#include "chrome/browser/history/history_service_factory.h"
 +#include "chrome/browser/profiles/profile.h"
@@ -3314,6 +3640,12 @@ index 0000000000000..2a09ef99f61c7
 +#include "mojo/public/cpp/bindings/callback_helpers.h"
 +#include "url/gurl.h"
 +#include "url/url_constants.h"
++
++#if BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
++#include <sys/stat.h>
++#elif BUILDFLAG(IS_WIN)
++#include <windows.h>
++#endif
 +
 +namespace stedding {
 +
@@ -3351,27 +3683,159 @@ index 0000000000000..2a09ef99f61c7
 +  return !from.has_query() && to.has_query();
 +}
 +
-+// The value the metadata's "data_type" names in the first bytes of a JSON
-+// file, or nothing while its closing quote has not been read.
-+std::string JsonDataType(std::string_view head) {
-+  constexpr std::string_view kKey = "\"data_type\"";
-+  const size_t key = head.find(kKey);
-+  if (key == std::string_view::npos) {
-+    return std::string();
++// The first bytes of a JSON file, read as JSON as far as they go: enough to
++// follow the metadata object Safari writes first.
++class JsonHead {
++ public:
++  explicit JsonHead(std::string_view text) : text_(text) {}
++
++  // Whether the text ended before what was asked of it.
++  bool ran_out() const { return ran_out_; }
++
++  // Takes `c`, the next character after any whitespace.
++  bool Take(char c) {
++    if (!Space() || text_[at_] != c) {
++      return false;
++    }
++    ++at_;
++    return true;
 +  }
-+  const size_t colon = head.find(':', key + kKey.size());
-+  if (colon == std::string_view::npos) {
-+    return std::string();
++
++  // The next value as a string: its text, escapes as written.
++  std::optional<std::string_view> String() {
++    if (!Take('"')) {
++      return std::nullopt;
++    }
++    const size_t start = at_;
++    while (at_ < text_.size()) {
++      const char c = text_[at_++];
++      if (c == '\\') {
++        ++at_;
++      } else if (c == '"') {
++        return text_.substr(start, at_ - 1 - start);
++      }
++    }
++    ran_out_ = true;
++    return std::nullopt;
 +  }
-+  const size_t open = head.find('"', colon + 1);
-+  if (open == std::string_view::npos) {
-+    return std::string();
++
++  // Skips the next value, whatever it is, with what is nested in it.
++  bool SkipValue() {
++    if (!Space()) {
++      return false;
++    }
++    if (text_[at_] == '"') {
++      return String().has_value();
++    }
++    size_t depth = 0;
++    while (at_ < text_.size()) {
++      const char c = text_[at_];
++      if (c == '"') {
++        if (!String()) {
++          return false;
++        }
++        continue;
++      }
++      if (depth == 0 && (c == ',' || c == '}' || c == ']')) {
++        // The end of a number, true, false or null.
++        return true;
++      }
++      ++at_;
++      if (c == '{' || c == '[') {
++        ++depth;
++      } else if ((c == '}' || c == ']') && --depth == 0) {
++        return true;
++      }
++    }
++    ran_out_ = true;
++    return false;
 +  }
-+  const size_t close = head.find('"', open + 1);
-+  if (close == std::string_view::npos) {
-+    return std::string();
++
++ private:
++  // Skips whitespace; false at the end of the text.
++  bool Space() {
++    while (at_ < text_.size() && base::IsAsciiWhitespace(text_[at_])) {
++      ++at_;
++    }
++    if (at_ < text_.size()) {
++      return true;
++    }
++    ran_out_ = true;
++    return false;
 +  }
-+  return std::string(head.substr(open + 1, close - open - 1));
++
++  const std::string_view text_;
++  size_t at_ = 0;
++  bool ran_out_ = false;
++};
++
++// import I34 (BACKLOG S-346): the type a Safari JSON file's metadata names,
++// read from its first bytes as JSON. Safari writes the metadata first:
++// {"metadata": {..., "data_type": "...", ...}, ...}. Nullopt while `head`
++// ends before the answer; empty for a file not shaped that way, which is
++// read no further. Only the metadata's own "data_type" counts: found by a
++// plain search for the first "data_type" anywhere, a payment cards file with
++// another one ahead of its metadata had been read whole as history.
++std::optional<std::string> JsonDataType(std::string_view head) {
++  JsonHead json(head);
++  const auto answer =
++      [&json](std::string_view type) -> std::optional<std::string> {
++    if (json.ran_out()) {
++      return std::nullopt;
++    }
++    return std::string(type);
++  };
++  if (!json.Take('{')) {
++    return answer("");
++  }
++  const std::optional<std::string_view> first = json.String();
++  if (!first || *first != "metadata" || !json.Take(':') || !json.Take('{')) {
++    return answer("");
++  }
++  while (true) {
++    const std::optional<std::string_view> key = json.String();
++    if (!key || !json.Take(':')) {
++      return answer("");
++    }
++    if (*key == "data_type") {
++      const std::optional<std::string_view> type = json.String();
++      return answer(type.value_or(""));
++    }
++    if (!json.SkipValue() || !json.Take(',')) {
++      return answer("");
++    }
++  }
++}
++
++// import I34, I35 (BACKLOG S-346): the files of an unzipped export, sorted:
++// the folder's own plain files only. A link, a pipe or a device is none of
++// Safari's files: read, a link took in whatever it pointed to, and a pipe or
++// /dev/zero was read without end.
++std::vector<base::FilePath> ExportFilesIn(const base::FilePath& dir) {
++  std::vector<base::FilePath> files;
++#if BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
++  base::FileEnumerator list(
++      dir, /*recursive=*/false,
++      base::FileEnumerator::FILES | base::FileEnumerator::SHOW_SYM_LINKS);
++#else
++  base::FileEnumerator list(dir, /*recursive=*/false,
++                            base::FileEnumerator::FILES);
++#endif
++  for (base::FilePath file = list.Next(); !file.empty(); file = list.Next()) {
++#if BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
++    if (!S_ISREG(list.GetInfo().stat().st_mode)) {
++      continue;
++    }
++#elif BUILDFLAG(IS_WIN)
++    if (list.GetInfo().find_data().dwFileAttributes &
++        FILE_ATTRIBUTE_REPARSE_POINT) {
++      continue;
++    }
++#endif
++    files.push_back(file);
++  }
++  std::ranges::sort(files);
++  return files;
 +}
 +
 +// A history row kept from `visit`, onto `rows`; past twice the cap, the
@@ -3542,23 +4006,21 @@ index 0000000000000..2a09ef99f61c7
 +  // import I34: an unzipped export, file by file. Returns the bookmarks
 +  // file to parse, if there is one that is not too big.
 +  base::FilePath ReadFolder(const base::FilePath& dir, SafariExportRead& read) {
-+    std::vector<base::FilePath> files;
-+    base::FileEnumerator list(dir, /*recursive=*/false,
-+                              base::FileEnumerator::FILES);
-+    for (base::FilePath file = list.Next(); !file.empty(); file = list.Next()) {
-+      files.push_back(file);
-+    }
-+    std::ranges::sort(files);
 +    base::FilePath bookmarks;
 +    bool passwords_seen = false;
-+    for (const base::FilePath& file : files) {
-+      const int64_t size = base::GetFileSize(file).value_or(0);
++    for (const base::FilePath& file : ExportFilesIn(dir)) {
++      // A size that cannot be read is over every limit: read as 0, it let
++      // the read run without one (BACKLOG S-346).
++      const std::optional<int64_t> known = base::GetFileSize(file);
++      const uint64_t size = known && *known >= 0
++                                ? static_cast<uint64_t>(*known)
++                                : std::numeric_limits<uint64_t>::max();
 +      switch (KindOfSafariExportFile(file)) {
 +        case SafariExportFile::kBookmarks:
 +          if (!bookmarks.empty() || read.summary.bookmarks_too_big) {
 +            break;
 +          }
-+          if (static_cast<uint64_t>(size) > kMaxSafariBookmarksBytes) {
++          if (size > kMaxSafariBookmarksBytes) {
 +            read.summary.bookmarks_too_big = true;
 +          } else {
 +            bookmarks = file;
@@ -3569,14 +4031,22 @@ index 0000000000000..2a09ef99f61c7
 +            break;
 +          }
 +          passwords_seen = true;
-+          if (static_cast<uint64_t>(size) > kMaxSafariPasswordsBytes) {
++          if (size > kMaxSafariPasswordsBytes) {
 +            read.summary.passwords_too_big = true;
-+          } else if (!base::ReadFileToString(file, &read.passwords_csv)) {
-+            read.summary.passwords_unreadable = true;
++          } else if (!base::ReadFileToStringWithMaxSize(
++                         file, &read.passwords_csv,
++                         kMaxSafariPasswordsBytes)) {
++            // Grown past the limit since its size was read, or unreadable.
++            if (read.passwords_csv.size() >= kMaxSafariPasswordsBytes) {
++              read.summary.passwords_too_big = true;
++            } else {
++              read.summary.passwords_unreadable = true;
++            }
++            read.passwords_csv.clear();
 +          }
 +          break;
 +        case SafariExportFile::kHistory:
-+          if (static_cast<uint64_t>(size) > kMaxSafariHistoryFileBytes) {
++          if (size > kMaxSafariHistoryFileBytes) {
 +            ++read.summary.history_files_too_big;
 +          } else {
 +            read.summary.history = true;
@@ -3803,7 +4273,10 @@ index 0000000000000..2a09ef99f61c7
 +  const base::Time when =
 +      base::Time::UnixEpoch() +
 +      base::Microseconds(static_cast<int64_t>(visit.time_usec));
-+  if (when < OldestKeptVisit(now)) {
++  // Kept for 90 days, and not from ahead of now: such a visit sorted as the
++  // newest, filled the cap ahead of every real one, and outlived the expiry
++  // (BACKLOG S-346).
++  if (when < OldestKeptVisit(now) || when > LatestKeptVisit(now)) {
 +    return std::nullopt;
 +  }
 +  // A hop that redirected on to another page is not a page that was seen.
@@ -3846,24 +4319,22 @@ index 0000000000000..2a09ef99f61c7
 +                                          size_t cap,
 +                                          uint64_t max_file_bytes) {
 +  SafariHistoryRead read;
-+  std::vector<base::FilePath> files;
-+  base::FileEnumerator list(dir, /*recursive=*/false,
-+                            base::FileEnumerator::FILES);
-+  for (base::FilePath file = list.Next(); !file.empty(); file = list.Next()) {
-+    files.push_back(file);
-+  }
-+  std::ranges::sort(files);
-+  for (const base::FilePath& file : files) {
++  for (const base::FilePath& file : ExportFilesIn(dir)) {
 +    if (KindOfSafariExportFile(file) != SafariExportFile::kHistory) {
 +      continue;
 +    }
-+    const int64_t size = base::GetFileSize(file).value_or(0);
-+    if (size < 0 || static_cast<uint64_t>(size) > max_file_bytes) {
++    // A size that cannot be read is no size under the limit, and the read
++    // stops at the limit whatever the size said (BACKLOG S-346).
++    const std::optional<int64_t> size = base::GetFileSize(file);
++    if (!size || *size < 0 || static_cast<uint64_t>(*size) > max_file_bytes) {
 +      ++read.files_too_big;
 +      continue;
 +    }
 +    std::string json;
-+    if (!base::ReadFileToString(file, &json)) {
++    if (!base::ReadFileToStringWithMaxSize(file, &json, max_file_bytes)) {
++      if (json.size() >= max_file_bytes) {
++        ++read.files_too_big;
++      }
 +      continue;
 +    }
 +    const std::optional<base::DictValue> root =
@@ -3922,7 +4393,7 @@ index 0000000000000..2a09ef99f61c7
 +    return SafariExportFile::kOther;
 +  }
 +  std::string head;
-+  std::string type;
++  std::optional<std::string> type;
 +  std::array<uint8_t, kJsonChunkBytes> chunk = {};
 +  while (head.size() < kJsonHeadBytes) {
 +    const std::optional<size_t> read = json.ReadAtCurrentPos(chunk);
@@ -3932,7 +4403,7 @@ index 0000000000000..2a09ef99f61c7
 +    head.append(base::as_string_view(
 +        base::span<const uint8_t>(chunk).first(*read)));
 +    type = JsonDataType(head);
-+    if (!type.empty()) {
++    if (type) {
 +      break;
 +    }
 +  }
@@ -4422,10 +4893,10 @@ index 0000000000000..76c47b2355a8c
 +#endif  // CHROME_BROWSER_UI_STEDDING_SAFARI_EXPORT_IMPORTER_H_
 diff --git a/chrome/browser/ui/stedding/safari_export_importer_unittest.cc b/chrome/browser/ui/stedding/safari_export_importer_unittest.cc
 new file mode 100644
-index 0000000000000..0f0658fe7d8f6
+index 0000000000000..67a5aa77e8bcb
 --- /dev/null
 +++ b/chrome/browser/ui/stedding/safari_export_importer_unittest.cc
-@@ -0,0 +1,409 @@
+@@ -0,0 +1,496 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -4448,6 +4919,7 @@ index 0000000000000..0f0658fe7d8f6
 +#include "base/strings/strcat.h"
 +#include "base/strings/string_number_conversions.h"
 +#include "base/time/time.h"
++#include "build/build_config.h"
 +#include "components/password_manager/services/csv_password/fake_password_parser_service.h"
 +#include "components/user_data_importer/content/content_bookmark_parser.h"
 +#include "components/user_data_importer/content/fake_bookmark_html_parser.h"
@@ -4512,6 +4984,15 @@ index 0000000000000..0f0658fe7d8f6
 +  SafariVisit fragment = Visit("https://same.example/a", yesterday);
 +  fragment.destination_url = "https://same.example/a#part";
 +  EXPECT_TRUE(SafariHistoryRow(fragment, now));
++
++  // A visit dated ahead of now is no visit yet (BACKLOG S-346); a few
++  // minutes ahead is another machine's clock.
++  EXPECT_FALSE(SafariHistoryRow(
++      Visit("https://ahead.example/", UsecBefore(now, -base::Days(3 * 365))),
++      now));
++  EXPECT_TRUE(SafariHistoryRow(
++      Visit("https://skew.example/", UsecBefore(now, -base::Minutes(2))),
++      now));
 +}
 +
 +std::string HistoryJson(const std::vector<std::pair<std::string, uint64_t>>&
@@ -4552,6 +5033,50 @@ index 0000000000000..0f0658fe7d8f6
 +  const SafariHistoryRead all = ReadSafariHistoryFolder(dir.GetPath(), now);
 +  EXPECT_FALSE(all.capped);
 +  EXPECT_EQ(3u, all.rows.size());
++}
++
++// import I38 (BACKLOG S-346): visits dated ahead of now do not fill the cap
++// ahead of the real ones. Sorted as the newest, they had been the rows kept,
++// and the export's recent visits were dropped.
++TEST(SafariExportImporterTest, AVisitDatedAheadTakesNoPlace) {
++  base::ScopedTempDir dir;
++  ASSERT_TRUE(dir.CreateUniqueTempDir());
++  const base::Time now = base::Time::Now();
++  ASSERT_TRUE(base::WriteFile(
++      dir.GetPath().AppendASCII("History.json"),
++      HistoryJson(
++          {{"https://ahead.example/", UsecBefore(now, -base::Days(3 * 365))},
++           {"https://seen.example/", UsecBefore(now, base::Days(1))}})));
++  const SafariHistoryRead read =
++      ReadSafariHistoryFolder(dir.GetPath(), now, /*cap=*/1);
++  ASSERT_EQ(1u, read.rows.size());
++  EXPECT_EQ(GURL("https://seen.example/"), read.rows[0].url());
++}
++
++// import I34 (BACKLOG S-346): a JSON file is told by its metadata's own
++// "data_type", read as JSON. A "data_type" anywhere ahead of the metadata
++// names nothing: found by a plain search, it had a payment cards file read
++// whole, cards and all, as history.
++TEST(SafariExportImporterTest, AJsonFileIsToldByItsMetadataAlone) {
++  base::ScopedTempDir dir;
++  ASSERT_TRUE(dir.CreateUniqueTempDir());
++  const base::FilePath disguised = dir.GetPath().AppendASCII("Cards.json");
++  ASSERT_TRUE(base::WriteFile(
++      disguised,
++      R"({"data_type": "history", "metadata": {"data_type": "payment_cards"},)"
++      R"( "payment_cards": [{"card_number": "4111111111111111"}]})"));
++  EXPECT_EQ(SafariExportFile::kOther, KindOfSafariExportFile(disguised));
++
++  const base::FilePath quoted = dir.GetPath().AppendASCII("Quoted.json");
++  ASSERT_TRUE(base::WriteFile(
++      quoted,
++      R"({"metadata": {"browser_name": "\"data_type\": \"history\"",)"
++      R"( "schema_version": 1, "nested": {"data_type": "history"},)"
++      R"( "data_type": "payment_cards"}, "payment_cards": []})"));
++  EXPECT_EQ(SafariExportFile::kPaymentCards, KindOfSafariExportFile(quoted));
++
++  const base::Time now = base::Time::Now();
++  EXPECT_TRUE(ReadSafariHistoryFolder(dir.GetPath(), now).rows.empty());
 +}
 +
 +// The bookmarks page and the passwords file, parsed in this process by the
@@ -4779,6 +5304,39 @@ index 0000000000000..0f0658fe7d8f6
 +  EXPECT_EQ(1u, history.files_too_big);
 +  EXPECT_TRUE(history.rows.empty());
 +}
++
++#if BUILDFLAG(IS_POSIX)
++// import I34, I35 (BACKLOG S-346): an unzipped export's own files are read,
++// and a link in the folder is followed to nothing. A passwords file linked
++// from elsewhere had been read in when the folder was chosen, before
++// Passwords was ticked, and one linked to /dev/zero read without end.
++TEST_F(SafariExportImporterPrepareTest, AFolderFollowsNoLink) {
++  base::ScopedTempDir dir;
++  ASSERT_TRUE(dir.CreateUniqueTempDir());
++  const base::FilePath elsewhere = dir.GetPath().AppendASCII("elsewhere");
++  const base::FilePath folder = dir.GetPath().AppendASCII("export");
++  ASSERT_TRUE(base::CreateDirectory(elsewhere));
++  ASSERT_TRUE(base::CreateDirectory(folder));
++  ASSERT_TRUE(
++      base::WriteFile(elsewhere.AppendASCII("Passwords.csv"), kPasswordsCsv));
++  const base::Time now = base::Time::Now();
++  ASSERT_TRUE(base::WriteFile(
++      elsewhere.AppendASCII("History.json"),
++      HistoryJson({{"https://seen.example/", UsecBefore(now, base::Days(1))}})));
++  ASSERT_TRUE(base::CreateSymbolicLink(elsewhere.AppendASCII("Passwords.csv"),
++                                       folder.AppendASCII("Passwords.csv")));
++  ASSERT_TRUE(base::CreateSymbolicLink(elsewhere.AppendASCII("History.json"),
++                                       folder.AppendASCII("History.json")));
++
++  std::unique_ptr<SafariExportImporter> importer = MakeImporter();
++  const SafariExportSummary summary = Prepare(*importer, folder);
++  EXPECT_EQ(0u, summary.passwords) << "the linked passwords file was read";
++  EXPECT_TRUE(importer->passwords().empty());
++  EXPECT_FALSE(summary.history) << "the linked history file was counted";
++  EXPECT_TRUE(ReadSafariHistoryFolder(folder, now).rows.empty())
++      << "the linked history file was read";
++}
++#endif  // BUILDFLAG(IS_POSIX)
 +
 +// import I36: the summary names what comes in, and that cards do not.
 +TEST(SafariExportImporterTest, SummaryNamesPasswordsAndCards) {
@@ -5286,10 +5844,10 @@ index 7590467c35da8..3c9c6645df607 100644
      "//ui/actions",
 diff --git a/chrome/test/stedding/safari_dia_import_browsertest.cc b/chrome/test/stedding/safari_dia_import_browsertest.cc
 new file mode 100644
-index 0000000000000..380aa73f03924
+index 0000000000000..21cdd769048ea
 --- /dev/null
 +++ b/chrome/test/stedding/safari_dia_import_browsertest.cc
-@@ -0,0 +1,600 @@
+@@ -0,0 +1,661 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -5667,6 +6225,67 @@ index 0000000000000..380aa73f03924
 +  EXPECT_NE(std::u16string::npos,
 +            stedding::DescribeSafariExportResult(result).find(
 +                u"1 password saved with another password was kept as saved."));
++}
++
++// import I39 (BACKLOG S-346): a login saved already, with the same password,
++// keeps its note. Chromium's importer had added the file's note to it -- the
++// saved note, a new line, the file's -- while the result line counted the
++// login as saved already.
++IN_PROC_BROWSER_TEST_F(SafariExportImportTest, ASavedLoginKeepsItsNote) {
++  Profile* const profile = browser()->GetProfile();
++  scoped_refptr<password_manager::PasswordStoreInterface> store =
++      ProfilePasswordStoreFactory::GetForProfile(
++          profile, ServiceAccessType::EXPLICIT_ACCESS);
++  ASSERT_TRUE(store);
++  password_manager::PasswordForm saved;
++  saved.url = GURL("https://safari-login.example/");
++  saved.signon_realm = "https://safari-login.example/";
++  saved.username_value = u"ann";
++  saved.password_value =
++      password_manager::PasswordString(std::u16string(u"fromsafari"));
++  saved.SetNoteWithEmptyUniqueDisplayName(u"mine");
++  saved.in_store = password_manager::PasswordForm::Store::kProfileStore;
++  base::RunLoop added;
++  store->AddLogin(password_manager::FromPasswordForm(std::move(saved)),
++                  added.QuitClosure());
++  added.Run();
++
++  // An export folder whose row for that login, same password, has a note.
++  base::FilePath folder;
++  {
++    base::ScopedAllowBlockingForTesting allow_blocking;
++    folder = dir_.GetPath().AppendASCII("Noted Export");
++    ASSERT_TRUE(base::CreateDirectory(folder));
++    ASSERT_TRUE(base::WriteFile(
++        folder.AppendASCII("Passwords.csv"),
++        "Title,URL,Username,Password,Notes,OTPAuth\n"
++        "a,https://safari-login.example/,ann,fromsafari,from the file,\n"));
++  }
++  auto importer = std::make_unique<stedding::SafariExportImporter>();
++  base::test::TestFuture<stedding::SafariExportSummary> prepared;
++  importer->Prepare(
++      folder, prepared.GetCallback<const stedding::SafariExportSummary&>());
++  ASSERT_TRUE(prepared.Wait());
++  stedding::SafariExportParts parts;
++  parts.passwords = true;
++  base::test::TestFuture<stedding::SafariExportResult> done;
++  stedding::SafariExportImporter::Commit(
++      std::move(importer), *profile, parts,
++      done.GetCallback<const stedding::SafariExportResult&>());
++  const stedding::SafariExportResult result = done.Get();
++  EXPECT_EQ(1u, result.passwords.already_saved);
++  EXPECT_EQ(0u, result.passwords.added);
++
++  bool found = false;
++  for (const password_manager::StoredCredential& login : Logins(profile)) {
++    if (login.signon_realm == "https://safari-login.example/" &&
++        login.username_value == u"ann") {
++      found = true;
++      EXPECT_EQ(u"mine", login.GetPasswordNote())
++          << "the file's note was added to the saved login's";
++    }
++  }
++  EXPECT_TRUE(found) << "the saved login is gone";
 +}
 +
 +// import I40: the same export imported again adds no bookmark, no visit and

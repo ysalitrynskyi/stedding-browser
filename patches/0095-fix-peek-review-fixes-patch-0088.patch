@@ -29,8 +29,8 @@ Why: the review found clicks that were lost, peeks restored in the wrong jar, pa
 Removable when: never; these are fixes to shipped Peek behaviour.
 ---
  .../render_view_context_menu.cc               |   9 +-
- chrome/browser/ui/stedding/little_window.cc   |  67 +++-
- chrome/browser/ui/stedding/little_window.h    |  26 +-
+ chrome/browser/ui/stedding/little_window.cc   | 117 +++++-
+ chrome/browser/ui/stedding/little_window.h    |  36 +-
  chrome/browser/ui/stedding/peek.cc            | 114 +++---
  chrome/browser/ui/stedding/peek.h             |  31 +-
  .../views/frame/browser_native_widget_mac.mm  |   5 +-
@@ -40,7 +40,7 @@ Removable when: never; these are fixes to shipped Peek behaviour.
  chrome/browser/ui/views/peek/peek_unittest.cc |  73 +++-
  chrome/test/stedding/BUILD.gn                 |   2 +
  chrome/test/stedding/peek_browsertest.cc      | 343 ++++++++++++++++--
- 12 files changed, 578 insertions(+), 136 deletions(-)
+ 12 files changed, 638 insertions(+), 136 deletions(-)
 
 diff --git a/chrome/browser/renderer_context_menu/render_view_context_menu.cc b/chrome/browser/renderer_context_menu/render_view_context_menu.cc
 index 3fcac0fdd0bea..f712cfe229f57 100644
@@ -63,10 +63,92 @@ index 3fcac0fdd0bea..f712cfe229f57 100644
    }
  
 diff --git a/chrome/browser/ui/stedding/little_window.cc b/chrome/browser/ui/stedding/little_window.cc
-index c8fef7cecd3cf..3c0a6f77fc9ff 100644
+index c8fef7cecd3cf..25347dafff461 100644
 --- a/chrome/browser/ui/stedding/little_window.cc
 +++ b/chrome/browser/ui/stedding/little_window.cc
-@@ -83,7 +83,8 @@ BrowserWindowInterface* LastActiveNormalWindow(Profile* profile) {
+@@ -5,13 +5,20 @@
+ #include "chrome/browser/ui/stedding/little_window.h"
+ 
+ #include <algorithm>
++#include <map>
+ #include <memory>
+ #include <optional>
++#include <string>
++#include <tuple>
+ #include <vector>
+ 
++#include "base/functional/bind.h"
+ #include "base/memory/raw_ptr.h"
+ #include "base/no_destructor.h"
+ #include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/sessions/session_service.h"
++#include "chrome/browser/sessions/session_service_factory.h"
++#include "chrome/browser/sessions/stedding_session_rebuild.h"
+ #include "chrome/browser/ui/browser_tabstrip.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+@@ -28,6 +35,7 @@
+ #include "chrome/grit/branded_strings.h"
+ #include "chrome/grit/generated_resources.h"
+ #include "components/prefs/pref_service.h"
++#include "components/sessions/core/session_service_commands.h"
+ #include "components/tabs/public/tab_interface.h"
+ #include "content/public/browser/web_contents.h"
+ #include "third_party/blink/public/mojom/window_features/window_features.mojom.h"
+@@ -44,6 +52,19 @@ namespace {
+ constexpr int kLittleWidth = 1000;
+ constexpr int kLittleHeight = 700;
+ 
++// E8 (BACKLOG S-326): the mark again at every rewrite of the session's log,
++// which knows nothing of the extra data written into the old one
++// (stedding_session_rebuild.h). The rewrite asks only of windows the session
++// keeps.
++void AppendLittleWindowRebuildCommands(
++    BrowserWindowInterface* browser,
++    SessionRebuildCommands* commands) {
++  if (IsLittleWindow(browser)) {
++    commands->push_back(sessions::CreateAddWindowExtraDataCommand(
++        browser->GetSessionID(), kSessionLittleWindowKey, "1"));
++  }
++}
++
+ }  // namespace
+ 
+ bool ShouldOpenLittle(const PrefService* prefs, const GURL& url) {
+@@ -67,6 +88,32 @@ bool IsLittleWindow(const BrowserWindowInterface* window) {
+   return window && window->GetFeatures().little_window();
+ }
+ 
++bool IsLittleWindowSession(
++    const std::map<std::string, std::string>& extra_data) {
++  const auto it = extra_data.find(kSessionLittleWindowKey);
++  return it != extra_data.end() && it->second == "1";
++}
++
++void KeepLittleWindowInSession(BrowserWindowInterface* window) {
++  if (!IsLittleWindow(window)) {
++    return;
++  }
++  static const bool registered = [] {
++    AddSessionRebuildProvider(
++        "little_window",
++        base::BindRepeating(&AppendLittleWindowRebuildCommands));
++    return true;
++  }();
++  std::ignore = registered;
++  // A window the session does not keep (a peek, peek P17) is not tracked
++  // there, and the session writes nothing for it.
++  if (SessionService* const session =
++          SessionServiceFactory::GetForProfile(window->GetProfile())) {
++    session->AddWindowExtraData(window->GetSessionID(),
++                                kSessionLittleWindowKey, "1");
++  }
++}
++
+ BrowserWindowInterface* LastActiveNormalWindow(Profile* profile) {
+   BrowserWindowInterface* found = nullptr;
+   ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
+@@ -83,7 +130,8 @@ BrowserWindowInterface* LastActiveNormalWindow(Profile* profile) {
  }
  
  BrowserWindowInterface* CreateLittleWindow(Profile* profile,
@@ -76,7 +158,7 @@ index c8fef7cecd3cf..3c0a6f77fc9ff 100644
    // CreateBrowserWindow CHECKs a profile that may not open a window
    // (PLAN.md CMD-7): with private windows forced by policy, the profile Mail
    // hands a link to is one of those.
-@@ -94,6 +95,7 @@ BrowserWindowInterface* CreateLittleWindow(Profile* profile,
+@@ -94,6 +142,7 @@ BrowserWindowInterface* CreateLittleWindow(Profile* profile,
    BrowserWindowCreateParams params(BrowserWindowInterface::Type::TYPE_POPUP,
                                     *profile, /*from_user_gesture=*/true);
    params.initial_bounds = bounds;
@@ -84,7 +166,17 @@ index c8fef7cecd3cf..3c0a6f77fc9ff 100644
    // E8: marked as it is made, so its title bar and its row are a little
    // window's from its first frame; marked again after, for the code that
    // reads the mark from the window alone.
-@@ -129,7 +131,8 @@ BrowserWindowInterface* OpenLittleWindow(Profile* profile,
+@@ -104,6 +153,9 @@ BrowserWindowInterface* CreateLittleWindow(Profile* profile,
+     return nullptr;
+   }
+   MarkLittleWindow(window);
++  if (!keep_out_of_session) {
++    KeepLittleWindowInSession(window);
++  }
+   // E1: the bounds a popup is made with are a request the window sizer may
+   // set aside: on the Mac it took the last window's place and size, 22 DIP
+   // down and right, so a little window was never little. Set once it is
+@@ -129,7 +181,8 @@ BrowserWindowInterface* OpenLittleWindow(Profile* profile,
          gfx::Point(over.x() + (over.width() - bounds.width()) / 2,
                     over.y() + (over.height() - bounds.height()) / 2));
    }
@@ -94,7 +186,7 @@ index c8fef7cecd3cf..3c0a6f77fc9ff 100644
    if (!window) {
      return nullptr;
    }
-@@ -186,21 +189,60 @@ bool PromoteLittleWindow(BrowserWindowInterface* little,
+@@ -186,21 +239,60 @@ bool PromoteLittleWindow(BrowserWindowInterface* little,
    spaces::SpaceModel* const model = spaces::SpaceModel::From(target);
    std::optional<spaces::SpaceId> destination =
        model ? std::optional<spaces::SpaceId>(model->active_id()) : std::nullopt;
@@ -163,7 +255,7 @@ index c8fef7cecd3cf..3c0a6f77fc9ff 100644
                      (!model || model->IsTabInActiveSpace(pivot));
    std::unique_ptr<content::WebContents> contents =
        from->DetachWebContentsAtForInsertion(from->active_index());
-@@ -235,6 +277,11 @@ bool PromoteLittleWindow(BrowserWindowInterface* little,
+@@ -235,6 +327,11 @@ bool PromoteLittleWindow(BrowserWindowInterface* little,
    return true;
  }
  
@@ -176,10 +268,18 @@ index c8fef7cecd3cf..3c0a6f77fc9ff 100644
    return l10n_util::GetStringFUTF16(
        IDS_STEDDING_LITTLE_OPEN_IN, l10n_util::GetStringUTF16(IDS_PRODUCT_NAME));
 diff --git a/chrome/browser/ui/stedding/little_window.h b/chrome/browser/ui/stedding/little_window.h
-index c5d619b736cb5..94f06d4e67fc8 100644
+index c5d619b736cb5..61494cf563c1a 100644
 --- a/chrome/browser/ui/stedding/little_window.h
 +++ b/chrome/browser/ui/stedding/little_window.h
-@@ -42,10 +42,13 @@ BrowserWindowInterface* OpenLittleWindow(Profile* profile,
+@@ -5,6 +5,7 @@
+ #ifndef CHROME_BROWSER_UI_STEDDING_LITTLE_WINDOW_H_
+ #define CHROME_BROWSER_UI_STEDDING_LITTLE_WINDOW_H_
+ 
++#include <map>
+ #include <string>
+ 
+ class BrowserWindowInterface;
+@@ -42,10 +43,13 @@ BrowserWindowInterface* OpenLittleWindow(Profile* profile,
                                           bool untrusted_launch);
  
  // A little window of `profile` at `bounds`, marked, with no tab yet and not
@@ -196,7 +296,23 @@ index c5d619b736cb5..94f06d4e67fc8 100644
  
  // Marks `window` as little (a popup opened this way), and asks. Mark it
  // before its first tab: the window's commands re-read the mark when its tabs
-@@ -61,15 +64,22 @@ BrowserWindowInterface* LastActiveNormalWindow(Profile* profile);
+@@ -53,6 +57,15 @@ BrowserWindowInterface* CreateLittleWindow(Profile* profile,
+ void MarkLittleWindow(BrowserWindowInterface* window);
+ bool IsLittleWindow(const BrowserWindowInterface* window);
+ 
++// E8 (BACKLOG S-326): a little window the session keeps comes back little.
++// Whether a window's saved extra data says it was one; and, for a little
++// window the session keeps, writes that to the session, now and at every
++// rewrite of the session's log. A crash or a restored session had brought
++// it back as a plain popup.
++bool IsLittleWindowSession(
++    const std::map<std::string, std::string>& extra_data);
++void KeepLittleWindowInSession(BrowserWindowInterface* window);
++
+ // The last-active normal window of `profile`, the one a promotion targets;
+ // null when there is none.
+ BrowserWindowInterface* LastActiveNormalWindow(Profile* profile);
+@@ -61,15 +74,22 @@ BrowserWindowInterface* LastActiveNormalWindow(Profile* profile);
  // last-active normal window when null), as a tab or, with `split`, into a
  // split with the active tab, and closes the little window. A split needs a
  // tab it can pair with; otherwise the page gets a tab of its own. A peek's

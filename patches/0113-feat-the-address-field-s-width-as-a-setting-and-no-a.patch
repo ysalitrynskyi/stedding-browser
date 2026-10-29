@@ -22,7 +22,7 @@ toolbar grows its own width setting.
 ---
  .../api/settings_private/prefs_util.cc        |   2 +
  .../stedding_page/stedding_page.html.ts       |  16 +++
- .../ui/stedding/address_row_unittest.cc       |  15 +++
+ .../ui/stedding/address_row_unittest.cc       |  54 ++++++++
  .../ui/stedding/privacy_defaults_unittest.cc  |  11 ++
  chrome/browser/ui/stedding/stedding_prefs.cc  |   1 +
  chrome/browser/ui/stedding/stedding_prefs.h   |   4 +
@@ -35,7 +35,7 @@ toolbar grows its own width setting.
  .../browser/ui/webui/settings/settings_ui.cc  |  18 +++
  .../test/stedding/address_band_browsertest.cc |  34 +++++
  .../omnibox/common/omnibox_feature_configs.cc |   6 +-
- 15 files changed, 233 insertions(+), 39 deletions(-)
+ 15 files changed, 272 insertions(+), 39 deletions(-)
 
 diff --git a/chrome/browser/extensions/api/settings_private/prefs_util.cc b/chrome/browser/extensions/api/settings_private/prefs_util.cc
 index 743958674f75c..700e2635439c4 100644
@@ -51,7 +51,7 @@ index 743958674f75c..700e2635439c4 100644
        settings_api::PrefType::kBoolean;
    // privacy Q4, Q5: the rows Chromium's own pages do not carry.
 diff --git a/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts b/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
-index 198ae9cbb6cdd..f6f0fd9020e3b 100644
+index 647619060ce07..25a7229611a73 100644
 --- a/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
 +++ b/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
 @@ -130,6 +130,22 @@ export function getHtml(this: SettingsSteddingPageElement) {
@@ -78,10 +78,69 @@ index 198ae9cbb6cdd..f6f0fd9020e3b 100644
        id="holdCmdNumbers"
        class="hr"
 diff --git a/chrome/browser/ui/stedding/address_row_unittest.cc b/chrome/browser/ui/stedding/address_row_unittest.cc
-index 62006850fe7a4..7b3744ab6ad23 100644
+index 62006850fe7a4..330b528094e82 100644
 --- a/chrome/browser/ui/stedding/address_row_unittest.cc
 +++ b/chrome/browser/ui/stedding/address_row_unittest.cc
-@@ -162,6 +162,21 @@ TEST_F(AddressRowTest, TheWholeAddressIsShownByDefault) {
+@@ -10,12 +10,15 @@
+ #include "chrome/browser/ui/browser.h"
+ #include "chrome/browser/ui/stedding/stedding_prefs.h"
+ #include "chrome/browser/ui/stedding_ui_metrics.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "chrome/browser/ui/tabs/test_vertical_tab_strip_state_controller_delegate.h"
+ #include "chrome/browser/ui/tabs/vertical_tab_strip_state_controller.h"
+ #include "chrome/test/base/browser_with_test_window_test.h"
+ #include "components/omnibox/browser/omnibox_pref_names.h"
+ #include "components/prefs/pref_service.h"
++#include "content/public/browser/web_contents.h"
+ #include "testing/gtest/include/gtest/gtest.h"
++#include "url/gurl.h"
+ 
+ namespace stedding {
+ namespace {
+@@ -146,6 +149,42 @@ TEST_F(AddressRowTest, ToggleOverridesUntilTheSidebarChanges) {
+   EXPECT_FALSE(row->IsVisible()) << "T12: the toggle still works";
+ }
+ 
++// toolbar T8 (BACKLOG S-350): with the row hidden with the sidebar, a
++// localhost page on screen keeps it. While a drag holds a page on screen,
++// that page decides, not the row the drag selected: dragging an ordinary
++// row over a localhost page hid the row, and the other way round showed it.
++TEST_F(AddressRowTest, TheHeldPageDecidesTheLocalhostException) {
++  tabs::VerticalTabStripStateController* const state = controller();
++  ASSERT_TRUE(state);
++  AddressRow* const row = AddressRow::From(browser());
++  ASSERT_TRUE(row);
++  TabStripModel* const tabs = browser()->tab_strip_model();
++  AddTab(browser(), GURL("https://example.com/"));
++  content::WebContents* const plain = tabs->GetActiveWebContents();
++  AddTab(browser(), GURL("http://localhost:8000/"));
++  content::WebContents* const local = tabs->GetActiveWebContents();
++  ASSERT_NE(plain, local);
++  state->RequestCollapse(true);
++  ASSERT_TRUE(state->IsCollapsed());
++  ASSERT_TRUE(row->IsVisible()) << "a localhost page keeps the row";
++
++  // A drag of the ordinary row: the localhost page stays on screen.
++  row->SetSteddingHeldContents(local);
++  tabs->ActivateTabAt(tabs->GetIndexOfWebContents(plain));
++  EXPECT_TRUE(row->IsVisible())
++      << "the row followed the dragged row, not the page on screen";
++  row->SetSteddingHeldContents(nullptr);
++  EXPECT_FALSE(row->IsVisible()) << "the drop showed the ordinary page";
++
++  // A drag of the localhost row over the ordinary page.
++  row->SetSteddingHeldContents(plain);
++  tabs->ActivateTabAt(tabs->GetIndexOfWebContents(local));
++  EXPECT_FALSE(row->IsVisible())
++      << "the row followed the dragged row, not the page on screen";
++  row->SetSteddingHeldContents(nullptr);
++  EXPECT_TRUE(row->IsVisible());
++}
++
+ // toolbar T28: the address bar shows the whole address from a fresh profile,
+ // "Always show full URLs" on; the bare host is what a user gets by turning it
+ // off in the address bar's menu. The display itself is run in a real window
+@@ -162,6 +201,21 @@ TEST_F(AddressRowTest, TheWholeAddressIsShownByDefault) {
  // the row it is offered. With a width asked for (`location_bar_width`) it
  // holds that width where the row has the room and gives it back when the row
  // is tight, and it never goes under its own minimum (operator, 2026-09-05).
@@ -486,7 +545,7 @@ index 7bbdd154fbc84..1dfa55e1b9fd3 100644
    html_source->AddString(
        "steddingArchiveKeepSubLabel",
 diff --git a/chrome/test/stedding/address_band_browsertest.cc b/chrome/test/stedding/address_band_browsertest.cc
-index b64085ec43c22..be20f58f6b63e 100644
+index 742acf6f818c3..ea5fdc9f4c4ea 100644
 --- a/chrome/test/stedding/address_band_browsertest.cc
 +++ b/chrome/test/stedding/address_band_browsertest.cc
 @@ -286,6 +286,40 @@ IN_PROC_BROWSER_TEST_F(AddressBandTest, TheFieldIsWholeInEveryState) {

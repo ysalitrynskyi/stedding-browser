@@ -47,11 +47,11 @@ Removable when: never.
  chrome/browser/ui/views/peek/peek_unittest.cc |  28 +++-
  .../common/stedding_tab_row_rules_unittest.cc |  10 +-
  .../browser/ui/webui/settings/settings_ui.cc  |  11 +-
- .../stedding_welcome_handler.cc               |  36 ++++-
+ .../stedding_welcome_handler.cc               |  57 +++++++-
  .../stedding_welcome_handler_unittest.cc      |  25 ++++
  chrome/test/stedding/peek_browsertest.cc      |  53 +++++++
  chrome/test/stedding/welcome_browsertest.cc   |  77 +++++++---
- 24 files changed, 602 insertions(+), 55 deletions(-)
+ 24 files changed, 623 insertions(+), 55 deletions(-)
  create mode 100644 chrome/browser/ui/views/peek/peek_press.cc
  create mode 100644 chrome/browser/ui/views/peek/peek_press.h
 
@@ -870,7 +870,7 @@ index 05578cad5e9e1..01b46851aca75 100644
    html_source->AddString("steddingPrivacyTitle", "Privacy");
    html_source->AddString(
 diff --git a/chrome/browser/ui/webui/stedding_welcome/stedding_welcome_handler.cc b/chrome/browser/ui/webui/stedding_welcome/stedding_welcome_handler.cc
-index 7cf565082af76..2fc402bb9fee1 100644
+index 7cf565082af76..fba7987ce8361 100644
 --- a/chrome/browser/ui/webui/stedding_welcome/stedding_welcome_handler.cc
 +++ b/chrome/browser/ui/webui/stedding_welcome/stedding_welcome_handler.cc
 @@ -14,6 +14,7 @@
@@ -881,7 +881,24 @@ index 7cf565082af76..2fc402bb9fee1 100644
  #include "chrome/browser/profiles/profile.h"
  #include "chrome/browser/search_engine_choice/search_engine_choice_dialog_service.h"
  #include "chrome/browser/search_engine_choice/search_engine_choice_dialog_service_factory.h"
-@@ -639,6 +640,18 @@ void WelcomeHandler::HandleGetBehaviour(const base::ListValue& args) {
+@@ -572,6 +573,16 @@ void WelcomeHandler::HandleSetSearchEngine(const base::ListValue& args) {
+   if (!choice_recorded) {
+     if (SearchEngineChoiceDialogService* const service =
+             SearchEngineChoiceDialogServiceFactory::GetForProfile(profile)) {
++      // Only an engine of the list the tiles are drawn from: the service
++      // stops the browser on any other id (a CHECK), and on any id before
++      // the list was read. GetSearchEngines reads it.
++      if (std::ranges::none_of(service->GetSearchEngines(),
++                               [prepopulate_id](const auto& engine) {
++                                 return engine->prepopulate_id() ==
++                                        prepopulate_id;
++                               })) {
++        return;
++      }
+       service->NotifyChoiceMade(
+           prepopulate_id, /*save_guest_mode_selection=*/false,
+           SearchEngineChoiceDialogService::EntryPoint::kFirstRunExperience);
+@@ -639,6 +650,18 @@ void WelcomeHandler::HandleGetBehaviour(const base::ListValue& args) {
                  pref_service->GetInteger(prefs::kSidebarClosedForm));
    behaviour.Set("sleepMinutes",
                  pref_service->GetInteger(prefs::kSpaceSleepMinutes));
@@ -900,7 +917,7 @@ index 7cf565082af76..2fc402bb9fee1 100644
    ResolveJavascriptCallback(args[0], behaviour);
  }
  
-@@ -655,6 +668,27 @@ void WelcomeHandler::HandleSetBehaviour(const base::ListValue& args) {
+@@ -655,6 +678,27 @@ void WelcomeHandler::HandleSetBehaviour(const base::ListValue& args) {
    // The values Settings › Stedding, the command bar and the step offer, and
    // nothing else: auto-archive (archive A6), the closed sidebar (sidebar
    // Y19) and the Space sleep timer (tabs R6).
@@ -928,7 +945,7 @@ index 7cf565082af76..2fc402bb9fee1 100644
    const char* pref = nullptr;
    bool offered = false;
    if (*name == "archiveHours") {
-@@ -672,7 +706,7 @@ void WelcomeHandler::HandleSetBehaviour(const base::ListValue& args) {
+@@ -672,7 +716,7 @@ void WelcomeHandler::HandleSetBehaviour(const base::ListValue& args) {
    }
    // The archiver, the sidebar and the Space model watch these preferences,
    // so the choice takes effect now, as the appearance step's do.
@@ -937,6 +954,25 @@ index 7cf565082af76..2fc402bb9fee1 100644
  }
  
  void WelcomeHandler::HandleGetDefaultBrowserState(const base::ListValue& args) {
+@@ -716,7 +760,18 @@ void WelcomeHandler::HandleFinish(const base::ListValue& args) {
+   // Before the flow is marked seen: the tab helper asks for a choice on the
+   // next page once it is (search_engine_choice_tab_helper.cc).
+   KeepTheDefaultEngineIfNoneWasChosen(*profile);
++  const bool seen_before =
++      profile->GetPrefs()->GetBoolean(prefs::kWelcomeShown);
+   profile->GetPrefs()->SetBoolean(prefs::kWelcomeShown, true);
++  // The dialog that hosts this page closes when the preference flips. A flow
++  // opened again over a profile that has seen it (--stedding-welcome) flips
++  // nothing, so the dialog is told itself; Finish and Skip left it open.
++  if (seen_before) {
++    if (const WelcomeHost* const host =
++            WelcomeHost::FromWebContents(web_ui()->GetWebContents())) {
++      host->Finished();
++    }
++  }
+   // The dialog that hosts this page closes on this event.
+   FireWebUIListener("welcome-finished");
+ }
 diff --git a/chrome/browser/ui/webui/stedding_welcome/stedding_welcome_handler_unittest.cc b/chrome/browser/ui/webui/stedding_welcome/stedding_welcome_handler_unittest.cc
 index 32d1eac6018ab..29ae55a39dc46 100644
 --- a/chrome/browser/ui/webui/stedding_welcome/stedding_welcome_handler_unittest.cc
@@ -1064,7 +1100,7 @@ index 66321014b2f61..2e6f09da4558b 100644
  // keeps the page in that window.
  IN_PROC_BROWSER_TEST_F(PeekTest, APeekFromAPrivateWindowStaysPrivate) {
 diff --git a/chrome/test/stedding/welcome_browsertest.cc b/chrome/test/stedding/welcome_browsertest.cc
-index 6ad1581235bde..c694fc0d8eda0 100644
+index 988aba52f71d7..113edfb1953ad 100644
 --- a/chrome/test/stedding/welcome_browsertest.cc
 +++ b/chrome/test/stedding/welcome_browsertest.cc
 @@ -139,7 +139,8 @@ constexpr char kCheckedPills[] = R"(

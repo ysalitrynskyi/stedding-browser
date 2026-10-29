@@ -23,18 +23,18 @@ Removable when: not removable; the folder sync of S-282 is built on it.
  .../stedding_page/stedding_page.html.ts       |   1 +
  .../settings/stedding_page/stedding_page.ts   |   8 +
  .../browser/ui/spaces/arc_sidebar_importer.cc | 388 ++++++++++--
- .../browser/ui/spaces/arc_sidebar_importer.h  |  24 +-
+ .../browser/ui/spaces/arc_sidebar_importer.h  |  26 +-
  chrome/browser/ui/spaces/sidebar_backup.cc    | 289 ++++++---
  chrome/browser/ui/spaces/sidebar_backup.h     |  32 +-
  .../ui/spaces/sidebar_backup_unittest.cc      | 576 +++++++++++++++++-
- chrome/browser/ui/stedding/tab_parents.cc     |  33 +
- chrome/browser/ui/stedding/tab_parents.h      |  17 +-
+ chrome/browser/ui/stedding/tab_parents.cc     |  99 ++-
+ chrome/browser/ui/stedding/tab_parents.h      |  29 +-
  .../browser/ui/webui/settings/settings_ui.cc  |   6 +-
  .../webui/settings/stedding_spaces_handler.cc |  32 +
  .../webui/settings/stedding_spaces_handler.h  |   3 +
  chrome/test/stedding/BUILD.gn                 |   1 +
  .../test/stedding/sidebar_file_browsertest.cc | 272 +++++++++
- 14 files changed, 1518 insertions(+), 164 deletions(-)
+ 14 files changed, 1585 insertions(+), 177 deletions(-)
  create mode 100644 chrome/test/stedding/sidebar_file_browsertest.cc
 
 diff --git a/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts b/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
@@ -630,7 +630,7 @@ index 030592426b008..6fd52f83b1f58 100644
    const SpaceId space = model->active_id();
    for (tabs::TabInterface* const tab : InsertNodes(ctx, nodes, space, nullptr)) {
 diff --git a/chrome/browser/ui/spaces/arc_sidebar_importer.h b/chrome/browser/ui/spaces/arc_sidebar_importer.h
-index 3c9fca3d2b2d2..9cf496d894c43 100644
+index 3c9fca3d2b2d2..7b79ff61771ee 100644
 --- a/chrome/browser/ui/spaces/arc_sidebar_importer.h
 +++ b/chrome/browser/ui/spaces/arc_sidebar_importer.h
 @@ -51,12 +51,22 @@ struct ArcImportPlan {
@@ -672,7 +672,15 @@ index 3c9fca3d2b2d2..9cf496d894c43 100644
  
    // The counts the summary shows (I2).
    size_t pinned_tab_count() const;
-@@ -137,7 +154,10 @@ struct ArcImportResult {
+@@ -131,13 +148,18 @@ struct ArcImportResult {
+   // I22, I23.
+   size_t history = 0;
+   size_t passwords = 0;
++  // I23: logins past the 10,000 read (BACKLOG S-346).
++  size_t passwords_past_the_cap = 0;
+   bool keychain_denied = false;
+ };
+ 
  // Applies `plan` to `browser`'s window (I3): Spaces, essentials (capped at
  // twelve, I11), the pinned runs, folders, every tab inserted unloaded. A
  // second run adds nothing already present: Arc's ids are remembered in the
@@ -1835,10 +1843,39 @@ index 375242bac1228..31dd185c74de6 100644
    Space* const work = model().AddSpace("Work", kSpaceColors[3].color);
    model().SetActiveSpace(work->id());
 diff --git a/chrome/browser/ui/stedding/tab_parents.cc b/chrome/browser/ui/stedding/tab_parents.cc
-index 144b1604afd62..492d5d1f79797 100644
+index 144b1604afd62..f3ac0ef90363a 100644
 --- a/chrome/browser/ui/stedding/tab_parents.cc
 +++ b/chrome/browser/ui/stedding/tab_parents.cc
-@@ -93,6 +93,14 @@ void WritePlaces(tabs::TabHandle child, tabs::TabHandle parent) {
+@@ -13,6 +13,7 @@
+ 
+ #include "base/functional/bind.h"
+ #include "base/location.h"
++#include "base/no_destructor.h"
+ #include "base/task/single_thread_task_runner.h"
+ #include "base/uuid.h"
+ #include "chrome/browser/profiles/profile.h"
+@@ -20,6 +21,7 @@
+ #include "chrome/browser/sessions/session_service_factory.h"
+ #include "chrome/browser/sessions/stedding_session_rebuild.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "components/sessions/content/session_tab_helper.h"
+ #include "components/sessions/core/session_service_commands.h"
+@@ -62,6 +64,12 @@ TabParentData& DataFor(content::WebContents* contents) {
+   return *TabParentData::GetOrCreateForWebContents(contents);
+ }
+ 
++// The windows told that a tab of theirs has a new parent (R59).
++base::RepeatingClosureList& ParentsChangedCallbacks() {
++  static base::NoDestructor<base::RepeatingClosureList> callbacks;
++  return *callbacks;
++}
++
+ // Writes `key` = `value` for `contents` to its window's session; an empty
+ // value clears what an earlier write said.
+ void Write(BrowserWindowInterface* browser,
+@@ -93,6 +101,14 @@ void WritePlaces(tabs::TabHandle child, tabs::TabHandle parent) {
    }
  }
  
@@ -1853,7 +1890,7 @@ index 144b1604afd62..492d5d1f79797 100644
  void AppendRebuildCommands(BrowserWindowInterface* browser,
                             SessionRebuildCommands* commands) {
    TabStripModel* const tabs = browser->GetTabStripModel();
-@@ -127,6 +135,31 @@ std::string TabParentToken(const content::WebContents* contents) {
+@@ -127,6 +143,31 @@ std::string TabParentToken(const content::WebContents* contents) {
    return data ? data->parent() : std::string();
  }
  
@@ -1885,11 +1922,95 @@ index 144b1604afd62..492d5d1f79797 100644
  tabs::TabInterface* ParentOfNewTab(const TabStripModel& model, int index) {
    if (index < 0 || index >= model.count() || model.IsTabPinned(index)) {
      return nullptr;
+@@ -138,6 +179,16 @@ tabs::TabInterface* ParentOfNewTab(const TabStripModel& model, int index) {
+   }
+   tabs::TabInterface* parent = nullptr;
+   if (content::RenderFrameHost* const frame = contents->GetOpener()) {
++    // A duplicate keeps the opener of the tab it copies, and the page of
++    // that tab (R56, BACKLOG S-350): a copy is no one's child. A window a
++    // page has just opened has no page of its own yet, or the blank one it
++    // starts on.
++    const content::NavigationEntry* const committed =
++        contents->GetController().GetLastCommittedEntry();
++    if (committed && !committed->IsInitialEntry() &&
++        committed->GetURL().is_valid() && !committed->GetURL().IsAboutBlank()) {
++      return nullptr;
++    }
+     // A page's own window.open names its page. Chromium takes the tab on
+     // screen as the new tab's opener, which is another tab when a page in
+     // the background opens one.
+@@ -193,21 +244,45 @@ void ReparentChildrenOf(BrowserWindowInterface* browser,
+     return;
+   }
+   const std::string grandparent = TabParentToken(closed);
+-  TabStripModel* const tabs = browser->GetTabStripModel();
+-  for (int i = 0; i < tabs->count(); ++i) {
+-    content::WebContents* const contents = tabs->GetWebContentsAt(i);
+-    if (contents == closed || TabParentToken(contents) != token) {
+-      continue;
+-    }
+-    // Not written to the session here, so that tabs taken out as a window
+-    // closes never rewrite the places the next launch restores. The next
+-    // rewrite of the session log carries the new place
+-    // (AppendRebuildCommands); until then a restart finds the child under a
+-    // parent that is gone, at the left.
+-    DataFor(contents).set_parent(grandparent);
++  const Profile* const profile = browser->GetProfile();
++  bool changed_elsewhere = false;
++  // A parent moved to another window keeps the children it left behind
++  // (R57), so they are looked for in every window of the profile; they
++  // kept a token no tab has once the parent closed, and a restart did not
++  // put them back under its parent (BACKLOG S-348).
++  ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
++      [&](BrowserWindowInterface* window) {
++        TabStripModel* const tabs = window->GetProfile() == profile
++                                        ? window->GetTabStripModel()
++                                        : nullptr;
++        if (!tabs) {
++          return true;
++        }
++        for (int i = 0; i < tabs->count(); ++i) {
++          content::WebContents* const contents = tabs->GetWebContentsAt(i);
++          if (contents == closed || TabParentToken(contents) != token) {
++            continue;
++          }
++          // Not written to the session here, so that tabs taken out as a
++          // window closes never rewrite the places the next launch
++          // restores. The next rewrite of the session log carries the new
++          // place (AppendRebuildCommands); until then a restart finds the
++          // child under a parent that is gone, at the left.
++          DataFor(contents).set_parent(grandparent);
++          changed_elsewhere |= window != browser;
++        }
++        return true;
++      });
++  if (changed_elsewhere) {
++    ParentsChangedCallbacks().Notify();
+   }
+ }
+ 
++base::CallbackListSubscription AddTabParentsChangedCallback(
++    base::RepeatingClosure callback) {
++  return ParentsChangedCallbacks().Add(std::move(callback));
++}
++
+ void CarryTabParent(content::WebContents* from, content::WebContents* to) {
+   const std::string token = TabToken(from);
+   const std::string parent = TabParentToken(from);
 diff --git a/chrome/browser/ui/stedding/tab_parents.h b/chrome/browser/ui/stedding/tab_parents.h
-index 1f4d5d9daeb33..b14d12bcf3f37 100644
+index 1f4d5d9daeb33..b2adfc82df3ad 100644
 --- a/chrome/browser/ui/stedding/tab_parents.h
 +++ b/chrome/browser/ui/stedding/tab_parents.h
-@@ -34,9 +34,24 @@ inline constexpr char kSessionTabParentKey[] = "stedding.parent";
+@@ -10,6 +10,8 @@
+ #include <string>
+ #include <vector>
+ 
++#include "base/callback_list.h"
++
+ class BrowserWindowInterface;
+ class TabStripModel;
+ 
+@@ -34,9 +36,24 @@ inline constexpr char kSessionTabParentKey[] = "stedding.parent";
  // The deepest a row nests, folders and children together (R57).
  inline constexpr int kMaxNestDepth = 5;
  
@@ -1915,6 +2036,27 @@ index 1f4d5d9daeb33..b14d12bcf3f37 100644
  // The token of the tab `contents` was opened from, empty for a tab with no
  // parent.
  std::string TabParentToken(const content::WebContents* contents);
+@@ -55,11 +72,19 @@ void SetTabParent(BrowserWindowInterface* browser,
+ 
+ // R59: when a parent closes, each of its children takes the parent's own
+ // parent, or none, and moves up a level in its place. `closed` is the closing
+-// parent's contents, still alive while the strip reports the removal. The
++// parent's contents, still alive while the strip reports the removal, and
++// `browser` the window it closed in. A child left in another window of the
++// profile, when the parent was moved away from it, is one of them too. The
+ // session learns the new places with its next rewrite.
+ void ReparentChildrenOf(BrowserWindowInterface* browser,
+                         const content::WebContents* closed);
+ 
++// R59: `callback` runs whenever ReparentChildrenOf has given a tab in a
++// window other than the parent's a new parent, so that window lays its rows
++// out again; it is told nothing of its own strip's change.
++base::CallbackListSubscription AddTabParentsChangedCallback(
++    base::RepeatingClosure callback);
++
+ // sessions S9: the tokens ride on the WebContents, so when a tab's contents
+ // are replaced (a jar change, a pin's reset) they move to the new ones.
+ void CarryTabParent(content::WebContents* from, content::WebContents* to);
 diff --git a/chrome/browser/ui/webui/settings/settings_ui.cc b/chrome/browser/ui/webui/settings/settings_ui.cc
 index f831bd0495cd4..88db3a171ea16 100644
 --- a/chrome/browser/ui/webui/settings/settings_ui.cc

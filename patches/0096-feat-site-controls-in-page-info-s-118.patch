@@ -31,12 +31,12 @@ Chromium's page info gains the same controls.
  .../ui/page_info/chrome_page_info_delegate.cc |  14 +
  .../ui/page_info/chrome_page_info_delegate.h  |  10 +
  chrome/browser/ui/stedding/BUILD.gn           |  25 +
- chrome/browser/ui/stedding/copy_link.cc       |  30 +
+ chrome/browser/ui/stedding/copy_link.cc       |  56 +-
  chrome/browser/ui/stedding/copy_link.h        |  11 +
  .../browser/ui/stedding/copy_link_unittest.cc |  24 +
- chrome/browser/ui/stedding/site_controls.cc   | 123 +++
- chrome/browser/ui/stedding/site_controls.h    | 121 +++
- .../ui/stedding/site_controls_unittest.cc     | 162 ++++
+ chrome/browser/ui/stedding/site_controls.cc   | 135 +++
+ chrome/browser/ui/stedding/site_controls.h    | 128 +++
+ .../ui/stedding/site_controls_unittest.cc     | 220 +++++
  chrome/browser/ui/stedding/site_cookies.cc    |  76 +-
  chrome/browser/ui/stedding/site_cookies.h     |  30 +
  .../ui/stedding/site_cookies_unittest.cc      |  65 ++
@@ -44,7 +44,7 @@ Chromium's page info gains the same controls.
  chrome/browser/ui/toasts/api/toast_id.h       |   7 +-
  chrome/browser/ui/toasts/toast_service.cc     |  29 +-
  .../ui/toasts/toast_service_browsertest.cc    |   4 +-
- .../views/commandbar/address_row_controls.cc  |  23 +
+ .../views/commandbar/address_row_controls.cc  |  46 +-
  .../views/commandbar/address_row_controls.h   |   9 +
  .../extensions/extensions_toolbar_button.cc   |  15 +-
  .../views/location_bar/location_bar_view.cc   |   3 +
@@ -57,17 +57,17 @@ Chromium's page info gains the same controls.
  .../ui/views/page_info/page_info_main_view.h  |   3 +-
  .../views/page_info/page_info_view_factory.cc |   2 +-
  .../views/page_info/page_info_view_factory.h  |   6 +
- .../page_info/stedding_site_controls_view.cc  | 883 ++++++++++++++++++
+ .../page_info/stedding_site_controls_view.cc  | 892 ++++++++++++++++++
  .../page_info/stedding_site_controls_view.h   | 235 +++++
  .../stedding_site_controls_view_unittest.cc   | 274 ++++++
  chrome/test/stedding/BUILD.gn                 |  11 +
- .../hidden_row_controls_browsertest.cc        |  84 +-
+ .../hidden_row_controls_browsertest.cc        | 124 ++-
  .../stedding/isolation_mark_browsertest.cc    |  98 ++
  .../stedding/site_controls_browsertest.cc     | 656 +++++++++++++
  chrome/test/stedding/space_jar_browsertest.cc | 440 ++++++++-
  components/page_info/page_info.cc             |  11 +
  components/page_info/page_info_delegate.h     |   6 +
- 40 files changed, 3665 insertions(+), 42 deletions(-)
+ 40 files changed, 3835 insertions(+), 47 deletions(-)
  create mode 100644 chrome/browser/ui/stedding/site_controls.cc
  create mode 100644 chrome/browser/ui/stedding/site_controls.h
  create mode 100644 chrome/browser/ui/stedding/site_controls_unittest.cc
@@ -279,10 +279,50 @@ index 76ce2b7d38f10..884847e27a38b 100644
      ":sleep_tabs",
      ":startup_load",
 diff --git a/chrome/browser/ui/stedding/copy_link.cc b/chrome/browser/ui/stedding/copy_link.cc
-index 2047a157313f2..798526909cd78 100644
+index 2047a157313f2..461f703222cd2 100644
 --- a/chrome/browser/ui/stedding/copy_link.cc
 +++ b/chrome/browser/ui/stedding/copy_link.cc
-@@ -219,4 +219,34 @@ void CopyLink(BrowserWindowInterface* browser,
+@@ -95,6 +95,30 @@ std::optional<Link> LinkFor(const PrefService* prefs,
+   return link;
+ }
+ 
++// The link's destination as CommonMark reads it back (BACKLOG S-347). A
++// plain destination ends at the first ")" it cannot pair, so
++// "https://a.example/a)(https://b.example" linked to its first part alone,
++// and the rest showed beside it as text, as if it were a second link. An
++// address with a bracket, a space or a backslash goes between angle
++// brackets, where only "<", ">" and "\" need escaping, and are escaped; any
++// other is written as it is.
++std::u16string DestinationFor(const GURL& url) {
++  const std::u16string spec = base::UTF8ToUTF16(url.spec());
++  if (spec.find_first_of(u"()<> \\") == std::u16string::npos) {
++    return spec;
++  }
++  std::u16string destination(1, u'<');
++  destination.reserve(spec.size() + 2);
++  for (const char16_t c : spec) {
++    if (c == u'\\' || c == u'<' || c == u'>') {
++      destination.push_back(u'\\');
++    }
++    destination.push_back(c);
++  }
++  destination.push_back(u'>');
++  return destination;
++}
++
+ std::u16string MarkdownFor(const Link& link) {
+   // In Markdown a bracket in the label opens or closes a link of its own, and
+   // a backslash escapes what follows it. Each is escaped, so the label reads
+@@ -108,7 +132,7 @@ std::u16string MarkdownFor(const Link& link) {
+     }
+     label.push_back(c);
+   }
+-  return u"[" + label + u"](" + base::UTF8ToUTF16(link.url.spec()) + u")";
++  return u"[" + label + u"](" + DestinationFor(link.url) + u")";
+ }
+ 
+ }  // namespace
+@@ -219,4 +243,34 @@ void CopyLink(BrowserWindowInterface* browser,
    }
  }
  
@@ -347,10 +387,10 @@ index 49d40a6011310..19a91d333fab0 100644
  
  #endif  // CHROME_BROWSER_UI_STEDDING_COPY_LINK_H_
 diff --git a/chrome/browser/ui/stedding/copy_link_unittest.cc b/chrome/browser/ui/stedding/copy_link_unittest.cc
-index d256bd754288b..b535fcab5a5ba 100644
+index 444d7f56461b6..9bc02695b2cfd 100644
 --- a/chrome/browser/ui/stedding/copy_link_unittest.cc
 +++ b/chrome/browser/ui/stedding/copy_link_unittest.cc
-@@ -208,5 +208,29 @@ TEST_F(CopyLinkTest, PrivatePagesAreCopiedOffTheRecord) {
+@@ -224,5 +224,29 @@ TEST_F(CopyLinkTest, PrivatePagesAreCopiedOffTheRecord) {
    EXPECT_TRUE(clipboard()->last_write_off_the_record());
  }
  
@@ -382,10 +422,10 @@ index d256bd754288b..b535fcab5a5ba 100644
  }  // namespace stedding
 diff --git a/chrome/browser/ui/stedding/site_controls.cc b/chrome/browser/ui/stedding/site_controls.cc
 new file mode 100644
-index 0000000000000..7b205b86c0c39
+index 0000000000000..848f96f75a69f
 --- /dev/null
 +++ b/chrome/browser/ui/stedding/site_controls.cc
-@@ -0,0 +1,123 @@
+@@ -0,0 +1,135 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -400,6 +440,7 @@ index 0000000000000..7b205b86c0c39
 +#include "chrome/browser/ui/spaces/isolation_mark.h"
 +#include "chrome/grit/generated_resources.h"
 +#include "net/base/is_potentially_trustworthy.h"
++#include "net/base/registry_controlled_domains/registry_controlled_domain.h"
 +#include "ui/base/l10n/l10n_util.h"
 +#include "url/gurl.h"
 +
@@ -432,16 +473,25 @@ index 0000000000000..7b205b86c0c39
 +    return rows;
 +  }
 +  const bool web = context.url.is_valid() && context.url.SchemeIsHTTPOrHTTPS();
++  // Si8, Si9: page info names `url`; Clear site data and Darken <site> act
++  // on the page the tab holds, which is another while a navigation waits to
++  // commit. They are offered only while both are the same site: the panel
++  // named the address being loaded and cleared the site still on screen.
++  const bool same_site =
++      context.committed_url.SchemeIsHTTPOrHTTPS() &&
++      net::registry_controlled_domains::SameDomainOrHost(
++          context.url, context.committed_url,
++          net::registry_controlled_domains::INCLUDE_PRIVATE_REGISTRIES);
 +  rows.strip = true;
 +  // sessions S32: only a window with the profile's Spaces has jars to name.
 +  rows.session = context.window == SiteControlsWindow::kTab;
 +  // commandbar K24's rule: a site is a web page's registrable domain.
-+  rows.clear_data = web;
++  rows.clear_data = web && same_site;
 +  // dark-pages Dk9: the browser's own pages never reach this panel; page
 +  // info shows them its internal bubble.
 +  rows.dark_switch = true;
 +  // Dk15, Dk19: a site's choice, while the switch is on, for a web page.
-+  rows.dark_site = context.dark_pages_on && web;
++  rows.dark_site = context.dark_pages_on && web && same_site;
 +  return rows;
 +}
 +
@@ -457,12 +507,13 @@ index 0000000000000..7b205b86c0c39
 +  if (!space) {
 +    return {spaces::IsolationMarkName(), /*marked=*/false};
 +  }
++  const std::u16string name = spaces::NameInSentence(space->name);
 +  if (!space->isolated) {
 +    return {l10n_util::GetStringFUTF16(
-+                IDS_STEDDING_SITE_CONTROLS_PREVIOUS_SESSION, space->name),
++                IDS_STEDDING_SITE_CONTROLS_PREVIOUS_SESSION, name),
 +            /*marked=*/false};
 +  }
-+  return {spaces::NameWithIsolationMark(space->name), /*marked=*/true};
++  return {spaces::NameWithIsolationMark(name), /*marked=*/true};
 +}
 +
 +ClearSiteDataQuestion ClearSiteDataQuestionFor(
@@ -491,7 +542,8 @@ index 0000000000000..7b205b86c0c39
 +  // now: the data goes from the jar the page lives in (Si7).
 +  if (const SpaceJarEntry* const space = SpaceOwning(partition_name, spaces)) {
 +    question.body = l10n_util::GetStringFUTF16(
-+        IDS_STEDDING_SITE_CONTROLS_CLEAR_QUESTION_SPACE, site, space->name);
++        IDS_STEDDING_SITE_CONTROLS_CLEAR_QUESTION_SPACE, site,
++        spaces::NameInSentence(space->name));
 +    return question;
 +  }
 +  question.body = l10n_util::GetStringFUTF16(
@@ -511,10 +563,10 @@ index 0000000000000..7b205b86c0c39
 +}  // namespace stedding
 diff --git a/chrome/browser/ui/stedding/site_controls.h b/chrome/browser/ui/stedding/site_controls.h
 new file mode 100644
-index 0000000000000..2f50537d10f9e
+index 0000000000000..c0a7a547927cb
 --- /dev/null
 +++ b/chrome/browser/ui/stedding/site_controls.h
-@@ -0,0 +1,121 @@
+@@ -0,0 +1,128 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -560,6 +612,10 @@ index 0000000000000..2f50537d10f9e
 +  GURL url;
 +  // dark-pages Dk1: the profile's switch.
 +  bool dark_pages_on = false;
++  // The page the tab holds, which Clear site data and Darken <site> act on:
++  // its last committed address. While a navigation waits to commit, page
++  // info describes `url` and the tab still holds this page.
++  GURL committed_url;
 +};
 +
 +// Which of the controls the panel holds (Si1-Si9).
@@ -619,6 +675,9 @@ index 0000000000000..2f50537d10f9e
 +// Si8: names `domain` and the jar its data goes from, the same jar
 +// SessionNameFor names: the shared session, a Space's independent session,
 +// an independent session no Space names now, or a private window's session.
++// A Space's name goes in as spaces::NameInSentence gives it: the name is
++// whatever the sidebar sync file wrote, and a line break or a direction
++// override in it rewrote the warning the user confirms.
 +ClearSiteDataQuestion ClearSiteDataQuestionFor(
 +    std::u16string_view domain,
 +    bool off_the_record,
@@ -638,10 +697,10 @@ index 0000000000000..2f50537d10f9e
 +#endif  // CHROME_BROWSER_UI_STEDDING_SITE_CONTROLS_H_
 diff --git a/chrome/browser/ui/stedding/site_controls_unittest.cc b/chrome/browser/ui/stedding/site_controls_unittest.cc
 new file mode 100644
-index 0000000000000..e8d4ba22cf2ac
+index 0000000000000..f33fbfaafdcc0
 --- /dev/null
 +++ b/chrome/browser/ui/stedding/site_controls_unittest.cc
-@@ -0,0 +1,162 @@
+@@ -0,0 +1,220 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -651,6 +710,7 @@ index 0000000000000..e8d4ba22cf2ac
 +#include <string>
 +#include <vector>
 +
++#include "base/strings/utf_ostream_operators.h"
 +#include "chrome/browser/ui/spaces/isolation_mark.h"
 +#include "components/content_settings/core/common/content_settings_types.h"
 +#include "testing/gtest/include/gtest/gtest.h"
@@ -680,7 +740,7 @@ index 0000000000000..e8d4ba22cf2ac
 +  {
 +    SCOPED_TRACE("popups, app windows, little windows, peeks, side panels");
 +    const SiteControlsRows rows =
-+        RowsFor({SiteControlsWindow::kOther, web, /*dark_pages_on=*/true});
++        RowsFor({SiteControlsWindow::kOther, web, /*dark_pages_on=*/true, web});
 +    EXPECT_FALSE(rows.strip);
 +    EXPECT_FALSE(rows.session);
 +    EXPECT_FALSE(rows.clear_data);
@@ -690,20 +750,21 @@ index 0000000000000..e8d4ba22cf2ac
 +  {
 +    SCOPED_TRACE("a tab of a window with Spaces");
 +    const SiteControlsRows rows =
-+        RowsFor({SiteControlsWindow::kTab, web, /*dark_pages_on=*/false});
++        RowsFor({SiteControlsWindow::kTab, web, /*dark_pages_on=*/false, web});
 +    EXPECT_TRUE(rows.strip);
 +    EXPECT_TRUE(rows.session);
 +    EXPECT_TRUE(rows.clear_data);
 +    EXPECT_TRUE(rows.dark_switch);
 +    EXPECT_FALSE(rows.dark_site) << "Darken <site> waits for the switch";
-+    EXPECT_TRUE(RowsFor({SiteControlsWindow::kTab, web, /*dark_pages_on=*/true})
-+                    .dark_site);
++    EXPECT_TRUE(
++        RowsFor({SiteControlsWindow::kTab, web, /*dark_pages_on=*/true, web})
++            .dark_site);
 +  }
 +  for (const SiteControlsWindow window :
 +       {SiteControlsWindow::kPrivateTab,
 +        SiteControlsWindow::kTabWithoutSpaces}) {
 +    SCOPED_TRACE("a private window or a Blank Window");
-+    const SiteControlsRows rows = RowsFor({window, web, true});
++    const SiteControlsRows rows = RowsFor({window, web, true, web});
 +    EXPECT_TRUE(rows.strip);
 +    EXPECT_FALSE(rows.session) << "no Spaces, no jars to name (S32)";
 +    EXPECT_TRUE(rows.clear_data);
@@ -714,13 +775,69 @@ index 0000000000000..e8d4ba22cf2ac
 +       {"data:text/html,<p>x</p>", "about:blank", "blob:https://a.test/0f6a"}) {
 +    SCOPED_TRACE(spec);
 +    const SiteControlsRows rows =
-+        RowsFor({SiteControlsWindow::kTab, GURL(spec), true});
++        RowsFor({SiteControlsWindow::kTab, GURL(spec), true, GURL(spec)});
 +    EXPECT_TRUE(rows.strip);
 +    EXPECT_TRUE(rows.session);
 +    EXPECT_FALSE(rows.clear_data) << "not a web page: no site to clear";
 +    EXPECT_TRUE(rows.dark_switch);
 +    EXPECT_FALSE(rows.dark_site) << "not a web page: no site to darken";
 +  }
++}
++
++// site-controls Si8, Si9 (BACKLOG S-351): while a navigation waits to
++// commit, page info names the address being loaded and the tab still holds
++// the page before it. Clear site data and Darken <site> act on the page the
++// tab holds, so they are offered only while both are the same site: the
++// panel named other.example and cleared bank.example.
++TEST_F(SiteControlsRulesTest, ClearAndDarkenWaitForThePageThePanelNames) {
++  const GURL bank("https://bank.example/account");
++  const GURL other("https://other.example/");
++  const SiteControlsRows pending =
++      RowsFor({SiteControlsWindow::kTab, other, /*dark_pages_on=*/true, bank});
++  EXPECT_TRUE(pending.strip);
++  EXPECT_TRUE(pending.session);
++  EXPECT_FALSE(pending.clear_data) << "the panel names another site";
++  EXPECT_TRUE(pending.dark_switch);
++  EXPECT_FALSE(pending.dark_site) << "the panel names another site";
++
++  const SiteControlsRows same_site =
++      RowsFor({SiteControlsWindow::kTab, GURL("https://www.bank.example/x"),
++               /*dark_pages_on=*/true, bank});
++  EXPECT_TRUE(same_site.clear_data) << "another page of the same site";
++  EXPECT_TRUE(same_site.dark_site);
++
++  const SiteControlsRows first = RowsFor(
++      {SiteControlsWindow::kTab, other, /*dark_pages_on=*/true, GURL()});
++  EXPECT_FALSE(first.clear_data) << "nothing committed in the tab yet";
++  EXPECT_FALSE(first.dark_site);
++}
++
++// site-controls Si7, Si8 (BACKLOG S-351): a Space's name, as sidebar sync or
++// another computer wrote it, goes into the session row and the clear
++// question without its line breaks and without the characters that turn the
++// text around it: a name could add a sentence to the warning the user
++// confirms, or reorder it.
++TEST_F(SiteControlsRulesTest, ASpaceNameCannotRewriteTheQuestion) {
++  const std::vector<SpaceJarEntry> spaces = {
++      {u"Work\nNothing in Work is deleted.", "5f0c2d1e9a7b4c3d", true},
++      {u"Old\u202Eexplained", "0a1b2c3d4e5f6a7b", false},
++  };
++  const ClearSiteDataQuestion work = ClearSiteDataQuestionFor(
++      u"example.com", false, true, "5f0c2d1e9a7b4c3d", spaces);
++  EXPECT_EQ(std::u16string::npos, work.body.find(u'\n')) << work.body;
++  EXPECT_NE(std::u16string::npos,
++            work.body.find(u"Work Nothing in Work is deleted."))
++      << work.body;
++  const ClearSiteDataQuestion old = ClearSiteDataQuestionFor(
++      u"example.com", false, true, "0a1b2c3d4e5f6a7b", spaces);
++  EXPECT_EQ(std::u16string::npos, old.body.find(u'\u202E')) << old.body;
++  EXPECT_NE(std::u16string::npos, old.body.find(u"Oldexplained")) << old.body;
++
++  EXPECT_EQ(std::u16string::npos,
++            SessionNameFor(true, "5f0c2d1e9a7b4c3d", spaces).text.find(u'\n'));
++  EXPECT_EQ(
++      std::u16string::npos,
++      SessionNameFor(true, "0a1b2c3d4e5f6a7b", spaces).text.find(u'\u202E'));
 +}
 +
 +// site-controls Si7: the row names the jar the page lives in. The profile's
@@ -1193,10 +1310,53 @@ index 67dc333b1302a..24a4b17cd75fe 100644
  ToastIdEnumSet GetActiveToastIds() {
    auto result = ToastIdEnumSet::All();
 diff --git a/chrome/browser/ui/views/commandbar/address_row_controls.cc b/chrome/browser/ui/views/commandbar/address_row_controls.cc
-index c624df1eda84d..000e1e97602c7 100644
+index c624df1eda84d..d7a3c83e11cb9 100644
 --- a/chrome/browser/ui/views/commandbar/address_row_controls.cc
 +++ b/chrome/browser/ui/views/commandbar/address_row_controls.cc
-@@ -254,6 +254,29 @@ void ShowSiteInformation(BrowserWindowInterface* browser) {
+@@ -39,6 +39,7 @@
+ #include "extensions/common/command.h"
+ #include "extensions/common/extension.h"
+ #include "ui/base/accelerators/accelerator.h"
++#include "ui/gfx/geometry/rect.h"
+ #include "ui/views/bubble/bubble_border.h"
+ #include "ui/views/view.h"
+ #include "url/gurl.h"
+@@ -205,16 +206,30 @@ void ShowMediaControls(BrowserWindowInterface* browser) {
+         // the row's right end.
+         const views::BubbleAnchor without_the_row =
+             PopupAnchorWithoutTheRow(browser.get());
++        BrowserView* const browser_view =
++            BrowserView::GetBrowserViewForBrowser(browser.get());
+         views::View* button = MediaButtonView(browser.get());
+         if (button && !button->IsDrawn()) {
+-          BrowserView* const browser_view =
+-              BrowserView::GetBrowserViewForBrowser(browser.get());
+           button = browser_view ? browser_view->toolbar() : nullptr;
+         }
+-        if (!without_the_row && !button) {
++        Profile* const profile = browser->GetProfile();
++        // In full screen nothing of the toolbar is drawn, and a bubble hung
++        // from a view that is not drawn floats at the screen's corner: the
++        // dialog opens at the top of the window's middle instead, as with no
++        // anchor at all (BACKLOG S-351).
++        if (!without_the_row && (!button || !button->IsDrawn())) {
++          if (!browser_view) {
++            return;
++          }
++          const gfx::Rect window = browser_view->GetBoundsInScreen();
++          MediaDialogView::ShowDialogCentered(
++              gfx::Rect(window.x(), window.y(), window.width(), 0),
++              MediaNotificationServiceFactory::GetForProfile(profile), profile,
++              /*contents=*/nullptr,
++              global_media_controls::GlobalMediaControlsEntryPoint::
++                  kToolbarIcon);
+           return;
+         }
+-        Profile* const profile = browser->GetProfile();
+         MediaDialogView::ShowDialog(
+             without_the_row ? without_the_row : views::BubbleAnchor(button),
+             without_the_row ? views::BubbleBorder::TOP_LEFT
+@@ -254,6 +269,29 @@ void ShowSiteInformation(BrowserWindowInterface* browser) {
        browser->GetWeakPtr()));
  }
  
@@ -1681,10 +1841,10 @@ index f65908e54dea6..755bc13032ebc 100644
  #endif  // CHROME_BROWSER_UI_VIEWS_PAGE_INFO_PAGE_INFO_VIEW_FACTORY_H_
 diff --git a/chrome/browser/ui/views/page_info/stedding_site_controls_view.cc b/chrome/browser/ui/views/page_info/stedding_site_controls_view.cc
 new file mode 100644
-index 0000000000000..bce03cdada2a0
+index 0000000000000..4778d336bf240
 --- /dev/null
 +++ b/chrome/browser/ui/views/page_info/stedding_site_controls_view.cc
-@@ -0,0 +1,883 @@
+@@ -0,0 +1,892 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -1745,6 +1905,8 @@ index 0000000000000..bce03cdada2a0
 +#include "components/zoom/zoom_controller.h"
 +#include "components/zoom/zoom_observer.h"
 +#include "content/public/browser/browser_context.h"
++#include "content/public/browser/navigation_controller.h"
++#include "content/public/browser/navigation_entry.h"
 +#include "content/public/browser/storage_partition_config.h"
 +#include "content/public/browser/web_contents.h"
 +#include "content/public/browser/web_contents_observer.h"
@@ -1832,7 +1994,14 @@ index 0000000000000..bce03cdada2a0
 +  SiteControlsContext context;
 +  context.window = SiteControlsWindowFor(contents);
 +  if (contents) {
-+    context.url = contents->GetLastCommittedURL();
++    // The address page info describes, its visible entry's, as the site chip
++    // and the command bar open it (page_info_dialog.cc): during a typed
++    // navigation that is the address being loaded, while the tab still holds
++    // the committed page that Clear site data and Darken act on (Si8, Si9).
++    const content::NavigationEntry* const entry =
++        contents->GetController().GetVisibleEntry();
++    context.committed_url = contents->GetLastCommittedURL();
++    context.url = entry ? entry->GetVirtualURL() : context.committed_url;
 +    context.dark_pages_on = DarkPagesOn(ProfileFor(contents));
 +  }
 +  return context;
@@ -3119,7 +3288,7 @@ index 46ea0d23c092e..7590467c35da8 100644
      "//chrome/browser/ui/views/spaces",
      "//chrome/browser/ui/views/tabs:tab_strip",
 diff --git a/chrome/test/stedding/hidden_row_controls_browsertest.cc b/chrome/test/stedding/hidden_row_controls_browsertest.cc
-index 0a0fde1557f9a..0009176e7c088 100644
+index 0a0fde1557f9a..afcf50c688d16 100644
 --- a/chrome/test/stedding/hidden_row_controls_browsertest.cc
 +++ b/chrome/test/stedding/hidden_row_controls_browsertest.cc
 @@ -44,6 +44,7 @@
@@ -3178,7 +3347,54 @@ index 0a0fde1557f9a..0009176e7c088 100644
              : nullptr;
      return popup != widget() ? popup : nullptr;
    }
-@@ -644,7 +655,7 @@ IN_PROC_BROWSER_TEST_F(HiddenRowControlsTest, APinnedExtensionShowsAtOnce) {
+@@ -624,6 +635,46 @@ IN_PROC_BROWSER_TEST_F(HiddenRowControlsTest,
+ }
+ #endif  // BUILDFLAG(IS_MAC)
+ 
++#if !BUILDFLAG(IS_MAC)
++// toolbar T40, commandbar K32 (BACKLOG S-351): in full screen, where nothing
++// of the toolbar is drawn, Show Media Controls opens the dialog over the
++// window, hung from no view that is hidden. It hung from the hidden toolbar,
++// which put it at the screen's corner. The Mac's full screen keeps its
++// toolbar on reveal and is not this case.
++IN_PROC_BROWSER_TEST_F(HiddenRowControlsTest,
++                       InFullScreenTheMediaDialogHangsFromNothingHidden) {
++  ASSERT_TRUE(ui_test_utils::NavigateToURL(
++      browser(), embedded_test_server()->GetURL(
++                     "site.test", "/media/session/video-with-metadata.html")));
++  content::MediaStartStopObserver started(
++      page(), content::MediaStartStopObserver::Type::kStart);
++  page()->GetPrimaryMainFrame()->ExecuteJavaScriptForTests(
++      u"play()", base::NullCallback(), content::ISOLATED_WORLD_ID_GLOBAL);
++  started.Wait();
++  ASSERT_TRUE(base::test::RunUntil([&]() {
++    return stedding::MediaControlsAvailable(browser());
++  })) << "no media controls while the clip plays";
++  ui_test_utils::ToggleFullscreenModeAndWait(browser());
++  views::test::RunScheduledLayout(widget());
++  ASSERT_FALSE(browser_view()->toolbar()->IsDrawn())
++      << "full screen draws the toolbar here";
++
++  stedding::ShowMediaControls(browser());
++  ASSERT_TRUE(base::test::RunUntil([&]() {
++    MediaDialogView* const dialog = MediaDialogView::GetDialogViewForTesting();
++    return dialog && dialog->GetWidget() && dialog->GetWidget()->IsVisible();
++  })) << "no media dialog";
++  MediaDialogView* const dialog = MediaDialogView::GetDialogViewForTesting();
++  const views::View* const anchor = dialog->GetAnchorView();
++  EXPECT_TRUE(!anchor || anchor->IsDrawn())
++      << "the dialog hangs from a view that is not drawn";
++  EXPECT_TRUE(browser_view()->GetBoundsInScreen().Contains(
++      dialog->GetWidget()->GetWindowBoundsInScreen()))
++      << "the dialog is not over the window";
++  MediaDialogView::HideDialog();
++}
++#endif  // !BUILDFLAG(IS_MAC)
++
+ // toolbar T43; commandbar K31: an extension pinned -- as the extensions
+ // menu's pin does -- shows its button in the address row at once, its slide
+ // laid out part of the way through as well as at its end, and unpinned it
+@@ -644,7 +695,7 @@ IN_PROC_BROWSER_TEST_F(HiddenRowControlsTest, APinnedExtensionShowsAtOnce) {
    ASSERT_TRUE(ui_test_utils::NavigateToURL(
        browser(), embedded_test_server()->GetURL("site.test", "/title1.html")));
    ToolbarView* const row = browser_view()->toolbar();
@@ -3187,7 +3403,7 @@ index 0a0fde1557f9a..0009176e7c088 100644
    ASSERT_TRUE(container);
    ToolbarActionView* const button = container->GetViewForId(vault->id());
    ASSERT_TRUE(button);
-@@ -749,7 +760,7 @@ IN_PROC_BROWSER_TEST_F(HiddenRowControlsTest, APinFromTheMenuShowsAtOnce) {
+@@ -749,7 +800,7 @@ IN_PROC_BROWSER_TEST_F(HiddenRowControlsTest, APinFromTheMenuShowsAtOnce) {
        LoadAction("Stedding Vault Probe", /*popup=*/true, /*red_icon=*/true);
    ASSERT_TRUE(vault);
    ToolbarView* const row = browser_view()->toolbar();
@@ -3196,7 +3412,7 @@ index 0a0fde1557f9a..0009176e7c088 100644
    ASSERT_TRUE(container);
    ToolbarActionView* const button = container->GetViewForId(vault->id());
    ASSERT_TRUE(button);
-@@ -817,4 +828,71 @@ IN_PROC_BROWSER_TEST_F(HiddenRowControlsTest, APinFromTheMenuShowsAtOnce) {
+@@ -817,4 +868,71 @@ IN_PROC_BROWSER_TEST_F(HiddenRowControlsTest, APinFromTheMenuShowsAtOnce) {
        << "the button went with the page";
  }
  

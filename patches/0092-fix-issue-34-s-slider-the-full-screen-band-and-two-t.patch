@@ -18,8 +18,8 @@ Why: two bugs the owner and a user reported, and two flaky tests.
 Removable when: never; to be folded into the patches that own the code.
 ---
  .../stedding_page/stedding_page.html.ts       |  1 +
- chrome/browser/ui/stedding/address_row.cc     |  6 +++
- chrome/browser/ui/stedding/address_row.h      |  5 +++
+ chrome/browser/ui/stedding/address_row.cc     | 25 +++++++++++-
+ chrome/browser/ui/stedding/address_row.h      | 18 +++++++++
  .../browser/ui/stedding/address_row_rules.cc  |  3 ++
  .../browser/ui/stedding/address_row_rules.h   |  4 ++
  .../ui/stedding/address_row_rules_unittest.cc | 12 ++++++
@@ -28,7 +28,7 @@ Removable when: never; to be folded into the patches that own the code.
  .../stedding/settings_spaces_browsertest.cc   |  9 +++++
  .../stedding/sidebar_click_browsertest.cc     | 31 ++++++++++++++-
  .../stedding/window_buttons_browsertest.mm    | 38 +++++++++++++++++++
- 11 files changed, 129 insertions(+), 14 deletions(-)
+ 11 files changed, 159 insertions(+), 16 deletions(-)
 
 diff --git a/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts b/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
 index a294d62a81a94..d3ae2fd481981 100644
@@ -43,10 +43,24 @@ index a294d62a81a94..d3ae2fd481981 100644
          label-min="126" label-max="480">
      </settings-slider>
 diff --git a/chrome/browser/ui/stedding/address_row.cc b/chrome/browser/ui/stedding/address_row.cc
-index 36184f63774ae..f8b742c6aba74 100644
+index 36184f63774ae..cdb53ececceb0 100644
 --- a/chrome/browser/ui/stedding/address_row.cc
 +++ b/chrome/browser/ui/stedding/address_row.cc
-@@ -73,10 +73,16 @@ bool AddressRow::IsVisible() {
+@@ -67,20 +67,41 @@ bool AddressRow::IsVisible() {
+       prefs::kToolbarHideWithSidebar);
+   signals.sidebar_collapsed = sidebar == Sidebar::kCollapsed;
+   if (TabStripModel* const tabs = browser_->GetTabStripModel()) {
+-    if (content::WebContents* const active = tabs->GetActiveWebContents()) {
+-      signals.localhost = IsLocalPage(active->GetLastCommittedURL());
++    // The page on screen: the one a drag holds there, while it is still in
++    // this window, else the active tab's (BACKLOG S-350).
++    content::WebContents* page = held_contents_.get();
++    if (!page || tabs->GetIndexOfWebContents(page) == TabStripModel::kNoTab) {
++      page = tabs->GetActiveWebContents();
++    }
++    if (page) {
++      signals.localhost = IsLocalPage(page->GetLastCommittedURL());
+     }
    }
    signals.override = override_;
    signals.caption_buttons_over_row = caption_buttons_over_row_;
@@ -63,11 +77,42 @@ index 36184f63774ae..f8b742c6aba74 100644
    override_ = !IsVisible();
    Relayout();
  }
+ 
++void AddressRow::SetSteddingHeldContents(content::WebContents* contents) {
++  if (held_contents_.get() == contents) {
++    return;
++  }
++  held_contents_ =
++      contents ? contents->GetWeakPtr() : base::WeakPtr<content::WebContents>();
++  Relayout();
++}
++
+ void AddressRow::OnTabStripModelChanged(
+     TabStripModel* tab_strip_model,
+     const TabStripModelChange& change,
 diff --git a/chrome/browser/ui/stedding/address_row.h b/chrome/browser/ui/stedding/address_row.h
-index aa26b516dd3bf..53f3df3409fe1 100644
+index aa26b516dd3bf..d434f0147f449 100644
 --- a/chrome/browser/ui/stedding/address_row.h
 +++ b/chrome/browser/ui/stedding/address_row.h
-@@ -48,6 +48,10 @@ class AddressRow : public TabStripModelObserver {
+@@ -8,12 +8,17 @@
+ #include <optional>
+ 
+ #include "base/memory/raw_ref.h"
++#include "base/memory/weak_ptr.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
+ #include "components/prefs/pref_change_registrar.h"
+ #include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
+ 
+ class BrowserWindowInterface;
+ 
++namespace content {
++class WebContents;
++}  // namespace content
++
+ namespace stedding {
+ 
+ // docs/features/toolbar.md T8, T10-T12: the window's answer to "is the
+@@ -48,6 +53,16 @@ class AddressRow : public TabStripModelObserver {
      caption_buttons_over_row_ = over;
    }
  
@@ -75,14 +120,22 @@ index aa26b516dd3bf..53f3df3409fe1 100644
 +  // where the row stays (it shows only when the pointer reaches the top).
 +  void set_in_full_screen_title_bar(bool in) { in_full_screen_title_bar_ = in; }
 +
++  // tabs R61 (BACKLOG S-350): while a drag holds the page on screen
++  // (BrowserView::HoldPageForSteddingDrag), the localhost exception follows
++  // that page, not the row the drag selected; null follows the active tab
++  // again.
++  void SetSteddingHeldContents(content::WebContents* contents);
++
    // TabStripModelObserver: the localhost exception follows the active tab.
    void OnTabStripModelChanged(
        TabStripModel* tab_strip_model,
-@@ -67,6 +71,7 @@ class AddressRow : public TabStripModelObserver {
+@@ -67,6 +82,9 @@ class AddressRow : public TabStripModelObserver {
    std::optional<bool> override_;
    std::optional<Sidebar> last_sidebar_;
    bool caption_buttons_over_row_ = false;
 +  bool in_full_screen_title_bar_ = false;
++  // The page a drag holds on screen; see SetSteddingHeldContents().
++  base::WeakPtr<content::WebContents> held_contents_;
    PrefChangeRegistrar pref_registrar_;
    std::optional<ui::ScopedUnownedUserData<AddressRow>> scoped_user_data_;
  };
@@ -158,10 +211,10 @@ index 4135c5aaffc4b..80e06daffeeb2 100644
        return false;
      }
 diff --git a/chrome/test/stedding/address_band_browsertest.cc b/chrome/test/stedding/address_band_browsertest.cc
-index aac4fe928f5d9..b64085ec43c22 100644
+index 07448eec64eda..742acf6f818c3 100644
 --- a/chrome/test/stedding/address_band_browsertest.cc
 +++ b/chrome/test/stedding/address_band_browsertest.cc
-@@ -1579,18 +1579,15 @@ IN_PROC_BROWSER_TEST_F(AddressBandTest, EveryChipFitsTheField) {
+@@ -1698,18 +1698,15 @@ IN_PROC_BROWSER_TEST_F(AddressBandTest, EveryChipFitsTheField) {
    page_actions::PageActionContainerView* const container =
        bar()->page_action_container();
    ASSERT_TRUE(container);
@@ -189,7 +242,7 @@ index aac4fe928f5d9..b64085ec43c22 100644
    ASSERT_TRUE(container->GetPageActionView(chip_id));
    const actions::ActionId icon_id = kActionBookmarkThisTab;
    ASSERT_NE(chip_id, icon_id);
-@@ -1606,6 +1603,9 @@ IN_PROC_BROWSER_TEST_F(AddressBandTest, EveryChipFitsTheField) {
+@@ -1725,6 +1722,9 @@ IN_PROC_BROWSER_TEST_F(AddressBandTest, EveryChipFitsTheField) {
    actions->Show(chip_id);
    actions->ShowSuggestionChip(chip_id, {.should_animate = false});
    actions->Show(icon_id);
@@ -199,7 +252,7 @@ index aac4fe928f5d9..b64085ec43c22 100644
    page_actions::PageActionView* const chip =
        container->GetPageActionView(chip_id);
    page_actions::PageActionView* const icon =
-@@ -1779,7 +1779,7 @@ IN_PROC_BROWSER_TEST_F(PageColourRowTest, TheRowsButtonsShowAHoverAndAPress) {
+@@ -1898,7 +1898,7 @@ IN_PROC_BROWSER_TEST_F(PageColourRowTest, TheRowsButtonsShowAHoverAndAPress) {
      actions->SetActionVisibility(probe->id(), true);
    }
    ExtensionsToolbarDesktop* const extensions =

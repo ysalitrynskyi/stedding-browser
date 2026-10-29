@@ -31,16 +31,16 @@ Removable when: never; to be folded into the patches that own the code.
  .../browser/ui/spaces/sidebar_sync_service.cc | 449 +++++++++++++-----
  .../ui/spaces/sidebar_sync_unittest.cc        | 176 +++++++
  chrome/browser/ui/stedding/BUILD.gn           |   5 +
- chrome/browser/ui/stedding/peek.cc            |  78 ++-
+ chrome/browser/ui/stedding/peek.cc            | 170 ++++++-
  chrome/browser/ui/stedding/peek_notice.cc     | 136 ++++++
  chrome/browser/ui/stedding/peek_notice.h      |  34 ++
  chrome/browser/ui/stedding/stedding_prefs.cc  |   3 +
  chrome/browser/ui/stedding/stedding_prefs.h   |   7 +
  .../ui/stedding/stedding_prefs_unittest.cc    |   5 +
  .../browser/ui/webui/settings/settings_ui.cc  |  13 +-
- chrome/test/stedding/peek_browsertest.cc      | 122 +++++
+ chrome/test/stedding/peek_browsertest.cc      | 229 +++++++++
  components/infobars/core/infobar_delegate.h   |   2 +
- 18 files changed, 1041 insertions(+), 136 deletions(-)
+ 18 files changed, 1230 insertions(+), 146 deletions(-)
  create mode 100644 chrome/browser/ui/stedding/peek_notice.cc
  create mode 100644 chrome/browser/ui/stedding/peek_notice.h
 
@@ -1345,7 +1345,7 @@ index 2110db9ef7af3..ff0daee67c43f 100644
      "//components/tabs:public",
      "//content/public/browser",
 diff --git a/chrome/browser/ui/stedding/peek.cc b/chrome/browser/ui/stedding/peek.cc
-index 812f71b301126..44a687160fb1b 100644
+index 812f71b301126..f0c19c8702349 100644
 --- a/chrome/browser/ui/stedding/peek.cc
 +++ b/chrome/browser/ui/stedding/peek.cc
 @@ -8,6 +8,7 @@
@@ -1364,15 +1364,83 @@ index 812f71b301126..44a687160fb1b 100644
  #include "chrome/browser/ui/tabs/tab_strip_model.h"
  #include "chrome/grit/generated_resources.h"
  #include "components/tabs/public/tab_interface.h"
-@@ -27,6 +29,7 @@
+@@ -26,7 +28,9 @@
+ #include "content/public/browser/site_instance.h"
  #include "content/public/browser/storage_partition_config.h"
  #include "content/public/browser/web_contents.h"
++#include "content/public/browser/web_contents_observer.h"
  #include "content/public/browser/web_contents_user_data.h"
 +#include "content/public/common/content_features.h"
  #include "third_party/blink/public/mojom/window_features/window_features.mojom.h"
  #include "ui/base/base_window.h"
  #include "ui/base/l10n/l10n_util.h"
-@@ -164,6 +167,33 @@ gfx::Rect BoundsOver(BrowserWindowInterface* window) {
+@@ -73,22 +77,37 @@ bool IsClosing(BrowserWindowInterface* window) {
+ 
+ // What makes a page a peek's: the pinned tab it came from, and the watch on
+ // that tab's window, whose activation closes the peek (P14).
+-class PeekPage : public content::WebContentsUserData<PeekPage> {
++class PeekPage : public content::WebContentsUserData<PeekPage>,
++                 public content::WebContentsObserver {
+  public:
+   PeekPage(const PeekPage&) = delete;
+   PeekPage& operator=(const PeekPage&) = delete;
+-  ~PeekPage() override = default;
++  ~PeekPage() override {
++    // P13: the page has gone with its window; the link that waited for it
++    // opens now, outside the close.
++    if (next_) {
++      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
++          FROM_HERE, std::move(next_));
++    }
++  }
+ 
+   tabs::TabInterface* source() const { return source_.get(); }
+   BrowserWindowInterface* source_window() const {
+     return source_ ? source_->GetBrowserWindowInterface() : nullptr;
+   }
+ 
++  // P13 (BACKLOG S-347): `next` opens the next peek once this page has gone.
++  // Its window was asked to close and is still asking the page, which has a
++  // beforeunload handler and may ask "Leave site?". Stay drops `next`; a
++  // later link's open takes its place.
++  void OpenNextOnceGone(base::OnceClosure next) { next_ = std::move(next); }
++
+  private:
+   friend class content::WebContentsUserData<PeekPage>;
+ 
+   PeekPage(content::WebContents* contents, tabs::TabInterface* source)
+       : content::WebContentsUserData<PeekPage>(*contents),
++        content::WebContentsObserver(contents),
+         source_(source->GetWeakPtr()),
+         opened_(base::TimeTicks::Now()) {
+     if (BrowserWindowInterface* const window =
+@@ -131,16 +150,24 @@ class PeekPage : public content::WebContentsUserData<PeekPage> {
+     }
+   }
+ 
++  // content::WebContentsObserver: the page's answer to its window's close.
++  void BeforeUnloadFired(bool proceed) override {
++    if (!proceed) {
++      next_.Reset();
++    }
++  }
++
+   base::WeakPtr<tabs::TabInterface> source_;
+   const base::TimeTicks opened_;
+   base::CallbackListSubscription activated_;
++  base::OnceClosure next_;
+ 
+   WEB_CONTENTS_USER_DATA_KEY_DECL();
+ };
+ 
+ WEB_CONTENTS_USER_DATA_KEY_IMPL(PeekPage);
+ 
+-const PeekPage* PageOf(const BrowserWindowInterface* window) {
++PeekPage* PageOf(const BrowserWindowInterface* window) {
+   if (!window || !IsLittleWindow(window)) {
+     return nullptr;
+   }
+@@ -164,8 +191,60 @@ gfx::Rect BoundsOver(BrowserWindowInterface* window) {
    return bounds;
  }
  
@@ -1403,10 +1471,64 @@ index 812f71b301126..44a687160fb1b 100644
 +             : nullptr;
 +}
 +
++// P13: one peek over a window; the next link replaces it. Closes the peek
++// over `source`'s window, if one is open, and returns its page when the peek
++// is still up after that: the page has a beforeunload handler, and the
++// window waits for its answer, which may be the user's "Leave site?". The
++// next peek waits for it too (PeekPage::OpenNextOnceGone). Made at once, it
++// stood beside the first, and Stay kept both (BACKLOG S-347).
++PeekPage* CloseThePeekOver(tabs::TabInterface* source) {
++  BrowserWindowInterface* const open =
++      PeekOver(source->GetBrowserWindowInterface());
++  if (!open || !open->GetWindow()) {
++    return nullptr;
++  }
++  open->GetWindow()->Close();
++  return IsClosing(open) ? nullptr : PageOf(open);
++}
++
++// Whether a link from `source` may still open the peek it waited for: the
++// pinned tab is there, and its window is not closing (a quit).
++bool CanStillPeekFrom(tabs::TabInterface* source) {
++  BrowserWindowInterface* const over =
++      source ? source->GetBrowserWindowInterface() : nullptr;
++  return over && !IsClosing(over);
++}
++
  // The peek's window, `contents` its one tab, over the source's window; not
- // shown yet.
+-// shown yet.
++// shown yet. The caller has closed the peek that was there
++// (CloseThePeekOver).
  BrowserWindowInterface* MakePeek(tabs::TabInterface* source,
-@@ -218,16 +248,8 @@ BrowserWindowInterface* OpenPeek(tabs::TabInterface* source,
+                                  std::unique_ptr<content::WebContents> contents,
+                                  const GURL& url) {
+@@ -173,11 +252,6 @@ BrowserWindowInterface* MakePeek(tabs::TabInterface* source,
+   if (!over || !over->GetWindow()) {
+     return nullptr;
+   }
+-  // P13: one peek over a window; the next link replaces it.
+-  if (BrowserWindowInterface* const open = PeekOver(over);
+-      open && open->GetWindow()) {
+-    open->GetWindow()->Close();
+-  }
+   // A peek is never saved with the session: restored, its page would come
+   // back without the pin it belongs to, in the shared jar whatever jar it
+   // was in.
+@@ -214,20 +288,22 @@ BrowserWindowInterface* OpenPeek(tabs::TabInterface* source,
+   if (!source || !source->GetContents()) {
+     return nullptr;
+   }
++  if (PeekPage* const asking = CloseThePeekOver(source)) {
++    asking->OpenNextOnceGone(base::BindOnce(
++        [](base::WeakPtr<tabs::TabInterface> pin, const PeekLink& waiting) {
++          if (CanStillPeekFrom(pin.get())) {
++            OpenPeek(pin.get(), waiting);
++          }
++        },
++        source->GetWeakPtr(), link));
++    return nullptr;
++  }
+   // P11 (PLAN.md CMD-9): the page is made in the pinned tab's own jar, so a
    // pin in a Space with its own session peeks with that session's cookies.
    // The shared jar is the profile's own.
    content::WebContents* const from = source->GetContents();
@@ -1425,7 +1547,7 @@ index 812f71b301126..44a687160fb1b 100644
    std::unique_ptr<content::WebContents> contents =
        content::WebContents::Create(create);
    content::WebContents* const page = contents.get();
-@@ -249,9 +271,39 @@ BrowserWindowInterface* OpenPeek(tabs::TabInterface* source,
+@@ -249,9 +325,39 @@ BrowserWindowInterface* OpenPeek(tabs::TabInterface* source,
    load.has_user_gesture = link.user_gesture;
    page->GetController().LoadURLWithParams(load);
    ShowPeek(window, page);
@@ -1465,7 +1587,26 @@ index 812f71b301126..44a687160fb1b 100644
  BrowserWindowInterface* OpenPeekWithContents(
      tabs::TabInterface* source,
      std::unique_ptr<content::WebContents> contents,
-@@ -264,6 +316,7 @@ BrowserWindowInterface* OpenPeekWithContents(
+@@ -259,11 +365,26 @@ BrowserWindowInterface* OpenPeekWithContents(
+   if (!source || !contents) {
+     return nullptr;
+   }
++  if (PeekPage* const asking = CloseThePeekOver(source)) {
++    // The page made for the link waits with it, as AddNewContents holds a
++    // popup back while a full screen changes; dropped when the user keeps
++    // the peek, it closes.
++    asking->OpenNextOnceGone(base::BindOnce(
++        [](base::WeakPtr<tabs::TabInterface> pin,
++           std::unique_ptr<content::WebContents> page, const GURL& page_url) {
++          if (CanStillPeekFrom(pin.get())) {
++            OpenPeekWithContents(pin.get(), std::move(page), page_url);
++          }
++        },
++        source->GetWeakPtr(), std::move(contents), url));
++    return nullptr;
++  }
+   content::WebContents* const page = contents.get();
+   BrowserWindowInterface* const window =
        MakePeek(source, std::move(contents), url);
    if (window) {
      ShowPeek(window, page);
@@ -1473,7 +1614,20 @@ index 812f71b301126..44a687160fb1b 100644
    }
    return window;
  }
-@@ -305,6 +358,11 @@ void SetPeekOpeningGraceForTesting(base::TimeDelta grace) {
+@@ -290,7 +411,11 @@ BrowserWindowInterface* PeekOver(const BrowserWindowInterface* window) {
+   ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
+       [&](BrowserWindowInterface* candidate) {
+         const PeekPage* const page = PageOf(candidate);
+-        if (page && page->source_window() == window) {
++        // A peek on its way out is no longer the window's (P13): found again,
++        // it was closed again, and the peek made after it stayed up beside
++        // the next one (BACKLOG S-347).
++        if (page && page->source_window() == window &&
++            !IsClosing(candidate)) {
+           found = candidate;
+           return false;
+         }
+@@ -305,6 +430,11 @@ void SetPeekOpeningGraceForTesting(base::TimeDelta grace) {
  
  void ForgetPeek(content::WebContents* contents) {
    if (contents) {
@@ -1740,10 +1894,18 @@ index 01b46851aca75..dd407d6a131e4 100644
    html_source->AddString("steddingSyncDeviceLabel",
                           "This computer’s name");
 diff --git a/chrome/test/stedding/peek_browsertest.cc b/chrome/test/stedding/peek_browsertest.cc
-index 2e6f09da4558b..fa3a354bb0127 100644
+index 2e6f09da4558b..a5b314c30d703 100644
 --- a/chrome/test/stedding/peek_browsertest.cc
 +++ b/chrome/test/stedding/peek_browsertest.cc
-@@ -26,8 +26,10 @@
+@@ -10,6 +10,7 @@
+ #include <algorithm>
+ #include <memory>
+ #include <string>
++#include <vector>
+ 
+ #include "base/functional/bind.h"
+ #include "base/run_loop.h"
+@@ -26,8 +27,10 @@
  #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
  #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
  #include "chrome/browser/ui/spaces/space_model.h"
@@ -1754,7 +1916,7 @@ index 2e6f09da4558b..fa3a354bb0127 100644
  #include "chrome/browser/ui/stedding/stedding_command_ids.h"
  #include "chrome/browser/ui/stedding/stedding_prefs.h"
  #include "chrome/browser/ui/tabs/tab_strip_model.h"
-@@ -35,6 +37,9 @@
+@@ -35,7 +38,12 @@
  #include "chrome/browser/ui/views/toolbar/stedding_little_promote_button.h"
  #include "chrome/test/base/in_process_browser_test.h"
  #include "chrome/test/base/ui_test_utils.h"
@@ -1762,9 +1924,137 @@ index 2e6f09da4558b..fa3a354bb0127 100644
 +#include "components/infobars/core/confirm_infobar_delegate.h"
 +#include "components/infobars/core/infobar.h"
  #include "components/input/native_web_keyboard_event.h"
++#include "components/javascript_dialogs/app_modal_dialog_controller.h"
++#include "components/javascript_dialogs/app_modal_dialog_view.h"
  #include "components/prefs/pref_service.h"
  #include "components/tabs/public/tab_interface.h"
-@@ -377,6 +382,54 @@ IN_PROC_BROWSER_TEST_F(PeekTest, OpenAsTabMovesThePageAsItIs) {
+ #include "content/public/browser/context_menu_params.h"
+@@ -43,6 +51,7 @@
+ #include "content/public/browser/navigation_entry.h"
+ #include "content/public/browser/render_widget_host_view.h"
+ #include "content/public/browser/web_contents.h"
++#include "content/public/browser/web_contents_observer.h"
+ #include "content/public/test/browser_test.h"
+ #include "content/public/test/browser_test_utils.h"
+ #include "content/public/test/test_navigation_observer.h"
+@@ -63,6 +72,35 @@
+ 
+ namespace {
+ 
++// The page's answers to "Leave site?" when its window is closed: true for
++// Leave.
++class LeaveSiteAnswers : public content::WebContentsObserver {
++ public:
++  explicit LeaveSiteAnswers(content::WebContents* contents)
++      : content::WebContentsObserver(contents) {}
++
++  // content::WebContentsObserver:
++  void BeforeUnloadFired(bool proceed) override {
++    answers_.push_back(proceed);
++  }
++
++  const std::vector<bool>& answers() const { return answers_; }
++
++ private:
++  std::vector<bool> answers_;
++};
++
++// How many peeks are open, in every window.
++int PeekCount() {
++  int peeks = 0;
++  ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
++      [&](BrowserWindowInterface* window) {
++        peeks += stedding::IsPeekWindow(window) ? 1 : 0;
++        return true;
++      });
++  return peeks;
++}
++
+ class PeekTest : public InProcessBrowserTest {
+  protected:
+   void SetUpOnMainThread() override {
+@@ -322,6 +360,80 @@ IN_PROC_BROWSER_TEST_F(PeekTest, ALinkLeavingThePinOpensAPeekOverTheWindow) {
+   })) << "not one peek, the new one";
+ }
+ 
++// P13 (BACKLOG S-347): a link that comes while the peek's page is asking
++// "Leave site?" waits for the answer. Stay keeps that peek, and no other
++// opens, then or when it later closes; Leave closes it, and the link opens
++// in the next. Opened at once, the second peek stood beside the first, and
++// Stay kept both.
++IN_PROC_BROWSER_TEST_F(PeekTest, ALinkWaitsForThePeeksLeaveSiteAnswer) {
++  ASSERT_NO_FATAL_FAILURE(OpenPin(Url("b.test", "/title3.html")));
++  // The peek, its page asking before it is left: the user's activation
++  // "Leave site?" needs, and no hang timer.
++  const auto open_asking_peek = [&]() -> BrowserWindowInterface* {
++    ClickLink();
++    BrowserWindowInterface* const peek = WaitForPeek();
++    if (!peek) {
++      return nullptr;
++    }
++    content::WebContents* const page =
++        peek->GetTabStripModel()->GetActiveWebContents();
++    EXPECT_TRUE(content::ExecJs(
++        page,
++        "window.stay = e => { e.preventDefault(); e.returnValue = ''; };"
++        "window.addEventListener('beforeunload', window.stay);"));
++    content::PrepContentsForBeforeUnloadTest(page);
++    return peek;
++  };
++
++  {
++    SCOPED_TRACE("Stay");
++    BrowserWindowInterface* const first = open_asking_peek();
++    ASSERT_TRUE(first);
++    content::WebContents* const page =
++        first->GetTabStripModel()->GetActiveWebContents();
++    LeaveSiteAnswers answers(page);
++    ClickLink();
++    javascript_dialogs::AppModalDialogController* const dialog =
++        ui_test_utils::WaitForAppModalDialog();
++    ASSERT_TRUE(dialog);
++    ASSERT_TRUE(dialog->is_before_unload_dialog());
++    EXPECT_EQ(1, PeekCount()) << "a second peek opened beside the one asking";
++    dialog->view()->CancelAppModalDialog();  // Stay.
++    ASSERT_TRUE(
++        base::test::RunUntil([&]() { return !answers.answers().empty(); }))
++        << "the page's answer never reached the browser";
++    EXPECT_FALSE(answers.answers().back());
++    EXPECT_EQ(1, PeekCount());
++    EXPECT_EQ(first, stedding::PeekOver(browser())) << "Stay lost the peek";
++
++    // Closed later, it leaves nothing behind: the link was dropped with Stay.
++    ASSERT_TRUE(content::ExecJs(
++        page, "window.removeEventListener('beforeunload', window.stay);"));
++    first->GetWindow()->Close();
++    ASSERT_TRUE(base::test::RunUntil([&]() { return PeekCount() == 0; }))
++        << "the peek did not close";
++    base::RunLoop().RunUntilIdle();
++    EXPECT_EQ(0, PeekCount()) << "the link dropped with Stay opened later";
++  }
++
++  {
++    SCOPED_TRACE("Leave");
++    BrowserWindowInterface* const first = open_asking_peek();
++    ASSERT_TRUE(first);
++    ClickLink();
++    javascript_dialogs::AppModalDialogController* const dialog =
++        ui_test_utils::WaitForAppModalDialog();
++    ASSERT_TRUE(dialog);
++    ASSERT_TRUE(dialog->is_before_unload_dialog());
++    EXPECT_EQ(1, PeekCount()) << "a second peek opened beside the one asking";
++    dialog->view()->AcceptAppModalDialog();  // Leave.
++    EXPECT_TRUE(base::test::RunUntil([&]() {
++      BrowserWindowInterface* const now = stedding::PeekOver(browser());
++      return PeekCount() == 1 && now && now != first;
++    })) << "the link did not open once the peek had gone";
++  }
++}
++
+ // P2, P4, P11: a link on the pin's own site, or a script's click with no
+ // gesture from the user, goes on in the pinned tab.
+ IN_PROC_BROWSER_TEST_F(PeekTest, ASameSiteLinkOrAScriptsClickStaysInThePin) {
+@@ -377,6 +489,54 @@ IN_PROC_BROWSER_TEST_F(PeekTest, OpenAsTabMovesThePageAsItIs) {
    EXPECT_FALSE(page->IsLoading());
    EXPECT_EQ(requests, Requests()) << "the page was asked for again";
    EXPECT_FALSE(stedding::IsPeekWindow(browser()));
@@ -1819,7 +2109,7 @@ index 2e6f09da4558b..fa3a354bb0127 100644
  }
  
  // P7: Open as Tab from an essential shared by every Space puts the page in
-@@ -641,6 +694,34 @@ IN_PROC_BROWSER_TEST_F(PeekTest, WithAHoldSetOnlyAHeldPressPeeks) {
+@@ -641,6 +801,34 @@ IN_PROC_BROWSER_TEST_F(PeekTest, WithAHoldSetOnlyAHeldPressPeeks) {
    EXPECT_EQ(to, contents()->GetLastCommittedURL());
  }
  
@@ -1854,7 +2144,7 @@ index 2e6f09da4558b..fa3a354bb0127 100644
  // private V6: a peek from a private window is private, and Open as Tab
  // keeps the page in that window.
  IN_PROC_BROWSER_TEST_F(PeekTest, APeekFromAPrivateWindowStaysPrivate) {
-@@ -673,12 +754,19 @@ IN_PROC_BROWSER_TEST_F(PeekTest, APeekFromAPrivateWindowStaysPrivate) {
+@@ -673,12 +861,19 @@ IN_PROC_BROWSER_TEST_F(PeekTest, APeekFromAPrivateWindowStaysPrivate) {
    content::WebContents* const page =
        peek->GetTabStripModel()->GetActiveWebContents();
    ASSERT_TRUE(content::WaitForLoadStop(page));
@@ -1874,7 +2164,7 @@ index 2e6f09da4558b..fa3a354bb0127 100644
  }
  
  // P8: a link that asks for a new tab peeks too, and no tab is added.
-@@ -728,6 +816,40 @@ IN_PROC_BROWSER_TEST_F(PeekTest, ALinkForANewTabFromAPinWithItsOwnJarLoads) {
+@@ -728,6 +923,40 @@ IN_PROC_BROWSER_TEST_F(PeekTest, ALinkForANewTabFromAPinWithItsOwnJarLoads) {
    EXPECT_EQ(count, tabs().count());
  }
  

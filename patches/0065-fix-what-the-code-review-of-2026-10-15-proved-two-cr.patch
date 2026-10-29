@@ -47,27 +47,27 @@ its code (patches/README.md, the round-patch exception).
  chrome/browser/ui/spaces/arc_data_importer.cc |  16 +-
  .../ui/spaces/arc_data_importer_unittest.cc   |  42 ++++-
  chrome/browser/ui/spaces/sidebar_backup.cc    |  21 ++-
- .../ui/spaces/sidebar_backup_unittest.cc      |  18 +++
- chrome/browser/ui/spaces/space_model.cc       | 152 +++++++++++++++++-
+ .../ui/spaces/sidebar_backup_unittest.cc      |  18 ++
+ chrome/browser/ui/spaces/space_model.cc       | 152 +++++++++++++++-
  chrome/browser/ui/spaces/space_model.h        |  23 +++
  .../ui/spaces/space_model_window_unittest.cc  |  20 +++
  .../ui/spaces/tab_space_restore_data.cc       |  10 ++
  .../ui/spaces/tab_space_restore_data.h        |   6 +
  chrome/browser/ui/stedding/BUILD.gn           |   1 +
  .../ui/stedding/privacy_defaults_unittest.cc  |  10 ++
- .../ui/tabs/tab_strip_model_unittest.cc       |  38 +++++
- .../ui/views/commandbar/command_bar_view.cc   | 117 +++++++++++---
+ .../ui/tabs/tab_strip_model_unittest.cc       |  38 ++++
+ .../ui/views/commandbar/command_bar_view.cc   | 168 +++++++++++++++---
  .../ui/views/commandbar/command_bar_view.h    |   4 +
- .../commandbar/command_bar_view_unittest.cc   | 134 +++++++++++++++
- .../ui/views/frame/multi_contents_view.cc     |   9 ++
+ .../commandbar/command_bar_view_unittest.cc   | 134 ++++++++++++++
+ .../ui/views/frame/multi_contents_view.cc     |   9 +
  ...tab_collection_animating_layout_manager.cc |  20 ++-
- .../test/stedding/command_bar_browsertest.cc  |   9 ++
- .../stedding/sidebar_click_browsertest.cc     |  36 +++++
+ .../test/stedding/command_bar_browsertest.cc  |   9 +
+ .../stedding/sidebar_click_browsertest.cc     |  36 ++++
  .../stedding/sidebar_forms_browsertest.cc     |  15 ++
  chrome/test/stedding/space_jar_browsertest.cc |  80 +++++++++
  .../core/common/autofill_debug_features.cc    |   7 +-
  components/tabs/impl/tab_strip_collection.cc  |  20 +++
- 27 files changed, 804 insertions(+), 43 deletions(-)
+ 27 files changed, 853 insertions(+), 45 deletions(-)
 
 diff --git a/chrome/browser/ui/archive/closed_folder.cc b/chrome/browser/ui/archive/closed_folder.cc
 index d0ffb682f0ecd..3bdc8e3810e87 100644
@@ -733,10 +733,18 @@ index 27851c34f40ba..9ffe1da04bc03 100644
  // rows the user sees -- a folder beside it is one row to jump, and a row
  // inside a folder stays inside it.
 diff --git a/chrome/browser/ui/views/commandbar/command_bar_view.cc b/chrome/browser/ui/views/commandbar/command_bar_view.cc
-index a93b28e96a58e..71882207ed482 100644
+index a93b28e96a58e..0461576d1b266 100644
 --- a/chrome/browser/ui/views/commandbar/command_bar_view.cc
 +++ b/chrome/browser/ui/views/commandbar/command_bar_view.cc
-@@ -201,23 +201,28 @@ bool CompletesToSite(const AutocompleteMatch& match,
+@@ -17,6 +17,7 @@
+ #include "base/strings/string_util.h"
+ #include "base/strings/utf_string_conversions.h"
+ #include "base/task/single_thread_task_runner.h"
++#include "base/third_party/icu/icu_utf.h"
+ #include "build/build_config.h"
+ #include "chrome/app/chrome_command_ids.h"
+ #include "chrome/browser/autocomplete/autocomplete_classifier_factory.h"
+@@ -201,23 +202,28 @@ bool CompletesToSite(const AutocompleteMatch& match,
  // so Tab after one letter still filters the actions (K13).
  constexpr size_t kMinSiteSearchPrefix = 2;
  
@@ -774,7 +782,60 @@ index a93b28e96a58e..71882207ed482 100644
      return false;
    }
    // An extension's keyword is answered by the extension, not by a page.
-@@ -692,7 +697,7 @@ void CommandBarView::BuildActions() {
+@@ -231,6 +237,39 @@ bool OffersSiteSearch(const TemplateURL& site,
+          site.url_ref().SupportsReplacement(service.search_terms_data());
+ }
+ 
++// commandbar K4 (BACKLOG S-347): a page's title as a History or Bookmark row
++// draws it, before the address. The title is the page's own text: it is cut
++// to kMaxRowTitle characters, so the address after it always fits the row,
++// its explicit direction marks are dropped and the rest is set apart (a
++// first strong isolate), so nothing in it can reorder the address or the
++// row's kind around it.
++constexpr size_t kMaxRowTitle = 48;
++
++std::u16string IsolatedTitle(std::u16string_view title) {
++  const bool cut = title.size() > kMaxRowTitle;
++  if (cut) {
++    // Never between the two halves of a character outside the BMP.
++    const bool split = CBU16_IS_LEAD(title[kMaxRowTitle - 1]);
++    title = title.substr(0, kMaxRowTitle - (split ? 1 : 0));
++  }
++  std::u16string isolated(1, u'\u2068');
++  isolated.reserve(title.size() + 3);
++  for (const char16_t c : title) {
++    const bool direction_mark = c == u'\u061C' || c == u'\u200E' ||
++                                c == u'\u200F' ||
++                                (c >= u'\u202A' && c <= u'\u202E') ||
++                                (c >= u'\u2066' && c <= u'\u2069');
++    if (!direction_mark) {
++      isolated.push_back(c);
++    }
++  }
++  if (cut) {
++    isolated.push_back(u'\u2026');
++  }
++  isolated.push_back(u'\u2069');
++  return isolated;
++}
++
+ // commandbar K27: how well `typed`, in lower case, names `site`: 0 for the
+ // whole of its keyword, 1 for the start of it, 2 for the start of its name,
+ // 3 for the start of its domain; nothing when it names none of them.
+@@ -343,7 +382,11 @@ void CommandBarView::Show(BrowserWindowInterface* browser,
+     open->replace_current_tab_ = replace_current_tab;
+     open->field_->RequestFocus();
+     open->SetMode(mode);
+-    if (!prefill.empty()) {
++    // K12 (BACKLOG S-347): a bar that will load this tab shows what it was
++    // opened with -- Cmd-L's address, or nothing for the search chord. Text
++    // left in the field from before stayed, under "Go", and Enter loaded it
++    // into the tab being read.
++    if (!prefill.empty() || replace_current_tab) {
+       open->Prefill(std::move(prefill));
+     }
+     return;
+@@ -692,7 +735,7 @@ void CommandBarView::BuildActions() {
                 model->SetFocus(!model->in_focus());
               },
               base::Unretained(spaces)),
@@ -783,7 +844,7 @@ index a93b28e96a58e..71882207ed482 100644
      actions_.push_back(
          {spaces->share_coat() ? u"Show Other Spaces" : u"Hide Other Spaces",
           std::u16string(),
-@@ -701,7 +706,7 @@ void CommandBarView::BuildActions() {
+@@ -701,7 +744,7 @@ void CommandBarView::BuildActions() {
                 model->SetShareCoat(!model->share_coat());
               },
               base::Unretained(spaces)),
@@ -792,7 +853,7 @@ index a93b28e96a58e..71882207ed482 100644
    }
    // tabs R29, player Mp5, commandbar K25 (BACKLOG S-122): the tab's sound and
    // the page's video, each row named for what its key would do, wherever
-@@ -797,6 +802,7 @@ void CommandBarView::BuildActions() {
+@@ -797,6 +840,7 @@ void CommandBarView::BuildActions() {
          Action action;
          action.title = std::u16string(pref.label) + (on ? u": On" : u": Off");
          action.keeps_bar_open = true;
@@ -800,7 +861,7 @@ index a93b28e96a58e..71882207ed482 100644
          action.run = base::BindRepeating(
              [](PrefService* prefs, const char* key) {
                prefs->SetBoolean(key, !prefs->GetBoolean(key));
-@@ -839,6 +845,7 @@ void CommandBarView::BuildActions() {
+@@ -839,6 +883,7 @@ void CommandBarView::BuildActions() {
          Action action;
          action.title = std::u16string(pref.label) + u": " + name + u" \u25B8";
          action.keeps_bar_open = true;
@@ -808,7 +869,7 @@ index a93b28e96a58e..71882207ed482 100644
          action.run =
              base::BindRepeating([](PrefService* prefs, const char* key,
                                     int next) { prefs->SetInteger(key, next); },
-@@ -867,12 +874,44 @@ void CommandBarView::Run(const Action& action) {
+@@ -867,12 +912,44 @@ void CommandBarView::Run(const Action& action) {
      return;
    }
    if (action.keeps_bar_open) {
@@ -857,7 +918,7 @@ index a93b28e96a58e..71882207ed482 100644
      RebuildRows();
      return;
    }
-@@ -1261,6 +1300,15 @@ void CommandBarView::ShowSuggestions(const AutocompleteResult& result) {
+@@ -1261,6 +1338,15 @@ void CommandBarView::ShowSuggestions(const AutocompleteResult& result) {
    if (mode_ != Mode::kTabs) {
      return;
    }
@@ -873,7 +934,19 @@ index a93b28e96a58e..71882207ed482 100644
    std::erase_if(
        rows_, [](const Row& row) { return row.kind == RowKind::kSuggestion; });
    // The typed row as classified, not as drawn: a completion sends the drawn
-@@ -1308,6 +1356,18 @@ void CommandBarView::ShowSuggestions(const AutocompleteResult& result) {
+@@ -1300,7 +1386,10 @@ void CommandBarView::ShowSuggestions(const AutocompleteResult& result) {
+     std::u16string title = match.contents;
+     if (!match.description.empty() &&
+         !AutocompleteMatch::IsSearchType(match.type)) {
+-      title = match.description + u"  ·  " + match.contents;
++      // The title, cut short and set apart, then the address Enter opens:
++      // a title is the page's own text, and one long enough, or ending in a
++      // direction mark, hid that address, or reordered it.
++      title = IsolatedTitle(match.description) + u"  ·  " + match.contents;
+     }
+     rows_.push_back({.kind = RowKind::kSuggestion,
+                      .title = std::move(title),
+@@ -1308,6 +1397,18 @@ void CommandBarView::ShowSuggestions(const AutocompleteResult& result) {
                       .url = match.destination_url});
      ++suggestion_rows;
    }
@@ -892,7 +965,7 @@ index a93b28e96a58e..71882207ed482 100644
    // K23: the default match completes the field when it is a site and the
    // typed row is the chosen one; any other answer takes a completion away.
    const AutocompleteMatch* const best = result.default_match();
-@@ -1772,15 +1832,24 @@ CommandBarView::Classification CommandBarView::Classify(
+@@ -1772,15 +1873,30 @@ CommandBarView::Classification CommandBarView::Classify(
        const std::u16string keyword = text.substr(0, space);
        const std::u16string query = text.substr(space + 1);
        if (!query.empty()) {
@@ -909,7 +982,11 @@ index a93b28e96a58e..71882207ed482 100644
 +        // tabs and page scopes, whose addresses have no page -- and, as in
 +        // the omnibox, not the history scope in a private window, whose
 +        // history page is the normal profile's. Typed whole, they opened
-+        // (2026-10-15); now the text is a search like any other.
++        // (2026-10-15); now the text is a search like any other. Nor, as K27
++        // never offers them, an extension's keyword, whose address only
++        // names the extension, which the bar does not tell of the query, or
++        // an engine that searches by form post, whose address does not hold
++        // the query (BACKLOG S-347).
 +        const TemplateURL* const turl =
 +            service->GetTemplateURLForKeyword(keyword);
 +        const bool private_history =
@@ -917,6 +994,8 @@ index a93b28e96a58e..71882207ed482 100644
 +            turl->starter_pack_id() ==
 +                template_url_starter_pack_data::StarterPackId::kHistory;
 +        if (turl && !private_history && !IsRefusedScope(*turl) &&
++            turl->type() != TemplateURL::OMNIBOX_API_EXTENSION &&
++            turl->search_url_post_params().empty() &&
 +            turl->url_ref().SupportsReplacement(
 +                service->search_terms_data())) {
 +          return {GURL(turl->url_ref().ReplaceSearchTerms(

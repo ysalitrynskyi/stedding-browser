@@ -69,13 +69,13 @@ Removable when: Chromium's menus can be curated without a fork.
  .../common/tab_strip_collection_controller.h  |  8 ++
  .../browser/ui/views/tabs/common/tab_view.cc  | 75 +++++++++++++-
  .../browser/ui/views/tabs/common/tab_view.h   |  7 ++
- .../hovercard/hover_card_anchor_target.cc     | 11 ++-
- .../tab_hover_card_bubble_view_unittest.cc    | 41 ++++++++
+ .../hovercard/hover_card_anchor_target.cc     | 30 ++++++
+ .../tab_hover_card_bubble_view_unittest.cc    | 56 +++++++++++
  .../tabs/tab/tab_context_menu_controller.cc   | 10 ++
  .../tabs/tab/tab_context_menu_controller.h    |  5 +
  .../browser/ui/webui/settings/settings_ui.cc  |  5 +-
  .../tabs/public/tab_context_menu_command.h    |  6 ++
- 40 files changed, 950 insertions(+), 56 deletions(-)
+ 40 files changed, 986 insertions(+), 54 deletions(-)
  create mode 100644 chrome/browser/ui/stedding/menu_rules.cc
  create mode 100644 chrome/browser/ui/stedding/menu_rules.h
  create mode 100644 chrome/browser/ui/stedding/menu_rules_unittest.cc
@@ -1755,32 +1755,55 @@ index 3a7196e7179f1..b86404de16e6c 100644
    base::CallbackListSubscription node_destroyed_subscription_;
    base::CallbackListSubscription tab_state_changed_subscription_;
 diff --git a/chrome/browser/ui/views/tabs/hovercard/hover_card_anchor_target.cc b/chrome/browser/ui/views/tabs/hovercard/hover_card_anchor_target.cc
-index d36e0b20cb5dd..1c17cef430881 100644
+index d36e0b20cb5dd..9ff8364aff0c5 100644
 --- a/chrome/browser/ui/views/tabs/hovercard/hover_card_anchor_target.cc
 +++ b/chrome/browser/ui/views/tabs/hovercard/hover_card_anchor_target.cc
-@@ -121,11 +121,18 @@ void HoverCardAnchorTarget::SetHoverCardDataFrom(
+@@ -57,6 +57,26 @@ FadeLabelViewData GetTabTitleLabel(const tabs::TabGroupTabData& tab_data) {
+   return {title, is_filename};
+ }
+ 
++// Stedding (pins H8, BACKLOG S-347): the pin line as the domain row shows it,
++// ahead of the page's address. The Space name in it is the user's, or a sync
++// file's: its explicit direction marks are dropped and the line is set apart
++// (a first strong isolate), so nothing in it reorders the address.
++std::u16string IsolatedPinLine(std::u16string_view line) {
++  std::u16string isolated(1, u'\u2068');
++  isolated.reserve(line.size() + 2);
++  for (const char16_t c : line) {
++    const bool direction_mark = c == u'\u061C' || c == u'\u200E' ||
++                                c == u'\u200F' ||
++                                (c >= u'\u202A' && c <= u'\u202E') ||
++                                (c >= u'\u2066' && c <= u'\u2069');
++    if (!direction_mark) {
++      isolated.push_back(c);
++    }
++  }
++  isolated.push_back(u'\u2069');
++  return isolated;
++}
++
+ FadeLabelViewData GetTabTitleLabel(const tabs::TabData& tab_data) {
+   tabs::TabGroupTabData tab_group_tab_data;
+   tab_group_tab_data.last_committed_url = tab_data.last_committed_url;
+@@ -121,6 +141,16 @@ void HoverCardAnchorTarget::SetHoverCardDataFrom(
      }
    }
  
-+  // Stedding (pins H8): a pin's Space and home, on the domain line.
++  // Stedding (pins H8): a pin's Space and home, on the domain line, ahead of
++  // the page's address. The address stays an address, cut at its head, so
++  // its registrable domain is the last of the line to go: after the pin
++  // line, cut at its end, it lost that domain first, and drawn as plain text
++  // with the Space name, it could be reordered (BACKLOG S-347).
 +  if (!tab_data.stedding_pin_line.empty()) {
-+    domain = domain.empty() ? tab_data.stedding_pin_line
-+                            : domain + u" \u00B7 " + tab_data.stedding_pin_line;
-+    is_domain_url = false;
++    const std::u16string pin_line =
++        IsolatedPinLine(tab_data.stedding_pin_line);
++    domain = domain.empty() ? pin_line : pin_line + u" \u00B7 " + domain;
 +  }
    TabCardData& card_data = std::get<TabCardData>(hover_card_data_);
--
-   card_data.thumbnail = tab_data.thumbnail;
-   card_data.title_data = GetTabTitleLabel(tab_data);
--  card_data.domain_data = {domain, false, gfx::ELIDE_HEAD, is_domain_url};
-+  card_data.domain_data = {domain, false,
-+                           is_domain_url ? gfx::ELIDE_HEAD : gfx::ELIDE_TAIL,
-+                           is_domain_url};
  
-   // Now set the collaboration data.
-   using collaboration::messaging::CollaborationEvent;
+   card_data.thumbnail = tab_data.thumbnail;
 diff --git a/chrome/browser/ui/views/tabs/hovercard/tab_hover_card_bubble_view_unittest.cc b/chrome/browser/ui/views/tabs/hovercard/tab_hover_card_bubble_view_unittest.cc
-index d02ac3d5b0038..a14f3918bd69c 100644
+index d02ac3d5b0038..86922cc5f927e 100644
 --- a/chrome/browser/ui/views/tabs/hovercard/tab_hover_card_bubble_view_unittest.cc
 +++ b/chrome/browser/ui/views/tabs/hovercard/tab_hover_card_bubble_view_unittest.cc
 @@ -10,8 +10,10 @@
@@ -1804,7 +1827,7 @@ index d02ac3d5b0038..a14f3918bd69c 100644
  
  #if BUILDFLAG(IS_MAC)
  #include "base/mac/mac_util.h"
-@@ -398,3 +402,40 @@ TEST_F(TabHoverCardBubbleViewTest, AlertFooterRowAiModeSharing) {
+@@ -398,3 +402,55 @@ TEST_F(TabHoverCardBubbleViewTest, AlertFooterRowAiModeSharing) {
        l10n_util::GetStringUTF16(IDS_TOOLTIP_TAB_ALERT_STATE_AI_MODE_SHARING));
    EXPECT_FALSE(alert_row.icon()->GetImageModel().IsEmpty());
  }
@@ -1838,12 +1861,27 @@ index d02ac3d5b0038..a14f3918bd69c 100644
 +  EXPECT_EQ(u"example.com", plain.domain_data.text);
 +  EXPECT_EQ(gfx::ELIDE_HEAD, plain.domain_data.elide);
 +
++  // The pin line goes ahead of the address, set apart; the address stays an
++  // address, cut at its head, so its registrable domain is the last to go
++  // (BACKLOG S-347).
 +  data.stedding_pin_line = u"Pinned in Work \u00B7 home example.com";
 +  target.SetHoverCardDataFrom(data);
 +  const TabCardData& pinned = std::get<TabCardData>(target.data());
-+  EXPECT_EQ(u"example.com \u00B7 Pinned in Work \u00B7 home example.com",
-+            pinned.domain_data.text);
-+  EXPECT_EQ(gfx::ELIDE_TAIL, pinned.domain_data.elide);
++  EXPECT_EQ(
++      u"\u2068Pinned in Work \u00B7 home example.com\u2069 \u00B7 example.com",
++      pinned.domain_data.text);
++  EXPECT_EQ(gfx::ELIDE_HEAD, pinned.domain_data.elide);
++  EXPECT_TRUE(pinned.domain_data.is_domain_url);
++
++  // A Space name's direction marks are dropped: a right-to-left override in
++  // it had reordered the address after it.
++  data.stedding_pin_line =
++      u"Pinned in \u202EkroW\u2069 \u00B7 home example.com";
++  target.SetHoverCardDataFrom(data);
++  const TabCardData& marked = std::get<TabCardData>(target.data());
++  EXPECT_EQ(
++      u"\u2068Pinned in kroW \u00B7 home example.com\u2069 \u00B7 example.com",
++      marked.domain_data.text);
 +}
 diff --git a/chrome/browser/ui/views/tabs/tab/tab_context_menu_controller.cc b/chrome/browser/ui/views/tabs/tab/tab_context_menu_controller.cc
 index d0e6a244aa53d..e4b8ecf12352e 100644

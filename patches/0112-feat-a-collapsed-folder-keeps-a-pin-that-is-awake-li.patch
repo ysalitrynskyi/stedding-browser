@@ -15,18 +15,26 @@ Why: the owner asked for it on 2026-10-28.
 Removable when: Chromium's folders grow their own rule for what a
 collapsed folder keeps listed.
 ---
- chrome/browser/ui/spaces/space_model.cc       | 169 +++++++++++++++--
- .../ui/spaces/space_model_window_unittest.cc  | 175 ++++++++++++++++++
- chrome/browser/ui/tabs/tab_strip_model.cc     |  13 +-
+ chrome/browser/ui/spaces/space_model.cc       | 184 +++++++++++++--
+ .../ui/spaces/space_model_window_unittest.cc  | 216 ++++++++++++++++++
+ chrome/browser/ui/tabs/tab_strip_model.cc     |  49 +++-
  chrome/browser/ui/tabs/tab_strip_model.h      |   6 +
  .../test/stedding/pinned_run_browsertest.cc   |   7 +
- 5 files changed, 354 insertions(+), 16 deletions(-)
+ 5 files changed, 440 insertions(+), 22 deletions(-)
 
 diff --git a/chrome/browser/ui/spaces/space_model.cc b/chrome/browser/ui/spaces/space_model.cc
-index 98ff0493134e4..29cb19a20cb55 100644
+index 98ff0493134e4..1a37596b7b932 100644
 --- a/chrome/browser/ui/spaces/space_model.cc
 +++ b/chrome/browser/ui/spaces/space_model.cc
-@@ -124,16 +124,20 @@ void ForgetPendingWipe(Profile* profile, const std::string& jar) {
+@@ -9,6 +9,7 @@
+ #include <algorithm>
+ #include <map>
+ #include <optional>
++#include <set>
+ #include <string>
+ #include <string_view>
+ #include <tuple>
+@@ -124,16 +125,20 @@ void ForgetPendingWipe(Profile* profile, const std::string& jar) {
  }
  
  // What a wipe runs when it has finished: the jar leaves the pending list,
@@ -53,7 +61,7 @@ index 98ff0493134e4..29cb19a20cb55 100644
          if (done) {
            std::move(done).Run();
          }
-@@ -168,6 +172,58 @@ RegistryEntry RegistryEntryFor(const Space& space) {
+@@ -168,11 +173,67 @@ RegistryEntry RegistryEntryFor(const Space& space) {
    return entry;
  }
  
@@ -110,9 +118,29 @@ index 98ff0493134e4..29cb19a20cb55 100644
 +}
 +
  // The Spaces in a window's session data (`list`, as Serialize() wrote it), in
- // their order; an entry that cannot be read is left out.
+-// their order; an entry that cannot be read is left out.
++// their order; an entry that cannot be read is left out, and so is a second
++// entry with an id already read (BACKLOG S-348): a Blank Window, which never
++// meets the registry, kept both, and deleting that Space took every copy and
++// left the window pointing at no Space.
  std::vector<std::unique_ptr<Space>> SpacesFromSessionList(
-@@ -348,6 +404,17 @@ SpaceModel::SpaceModel(BrowserWindowInterface& browser) : SpaceModel() {
+     const base::ListValue& list) {
+   std::vector<std::unique_ptr<Space>> spaces;
++  std::set<SpaceId> seen;
+   for (const base::Value& item : list) {
+     if (!item.is_dict()) {
+       continue;
+@@ -187,6 +248,9 @@ std::vector<std::unique_ptr<Space>> SpacesFromSessionList(
+       continue;
+     }
+     const SpaceId id = SpaceId::FromRawToken(*token);
++    if (!seen.insert(id).second) {
++      continue;
++    }
+     const std::string* const name = entry.FindString("name");
+     const std::string* const icon = entry.FindString("icon");
+     auto space = std::make_unique<Space>(
+@@ -348,6 +412,17 @@ SpaceModel::SpaceModel(BrowserWindowInterface& browser) : SpaceModel() {
          return model->HidesTab(tab);
        },
        base::Unretained(this)));
@@ -130,7 +158,7 @@ index 98ff0493134e4..29cb19a20cb55 100644
    // B4: a close never leaves another Space's tab on screen. Unretained for
    // the same reason as the predicate.
    tab_strip_model_->SetBeforeCloseTabsCallback(
-@@ -419,6 +486,8 @@ SpaceModel::~SpaceModel() {
+@@ -419,6 +494,8 @@ SpaceModel::~SpaceModel() {
    if (tab_strip_model_) {
      tab_strip_model_->SetHiddenTabPredicate(
          TabStripModel::HiddenTabPredicate());
@@ -139,7 +167,19 @@ index 98ff0493134e4..29cb19a20cb55 100644
      tab_strip_model_->SetBeforeCloseTabsCallback(
          TabStripModel::BeforeCloseTabsCallback());
      // The detach callback holds this model unretained too: a tab leaving the
-@@ -539,8 +608,9 @@ void SpaceModel::SyncWithRegistry(bool seed) {
+@@ -497,6 +574,11 @@ void SpaceModel::SetNextWindowBlank() {
+   NextWindowIsBlank() = true;
+ }
+ 
++// static
++void SpaceModel::ClearNextWindowBlank() {
++  NextWindowIsBlank() = false;
++}
++
+ // static
+ void SpaceModel::SetNextWindowSpace(std::string space) {
+   NextWindowSpace() = std::move(space);
+@@ -539,8 +621,9 @@ void SpaceModel::SyncWithRegistry(bool seed) {
            space->icon().empty() && !space->color_chosen()) {
          continue;
        }
@@ -150,7 +190,7 @@ index 98ff0493134e4..29cb19a20cb55 100644
    }
    // Then the window is the registry: kept objects updated, new ones made,
    // gone ones dropped with their tabs moved, all in the registry's order.
-@@ -1422,6 +1492,7 @@ void SpaceModel::OnTabStripModelChanged(
+@@ -1422,6 +1505,7 @@ void SpaceModel::OnTabStripModelChanged(
        space_pin_homes_.erase(removed.tab->GetHandle());
        essential_homes_.erase(removed.tab->GetHandle());
        own_essentials_.erase(removed.tab->GetHandle());
@@ -158,7 +198,7 @@ index 98ff0493134e4..29cb19a20cb55 100644
        homes_before_commit_.erase(removed.tab->GetHandle());
        routed_on_insert_.erase(removed.tab->GetHandle());
        for (auto& [space, history] : history_) {
-@@ -2058,11 +2129,17 @@ bool SpaceModel::SpaceIsIsolated(const SpaceId& id) const {
+@@ -2058,11 +2142,17 @@ bool SpaceModel::SpaceIsIsolated(const SpaceId& id) const {
  
  std::optional<SpaceId> SpaceModel::SpaceKeepingJar(
      const content::StoragePartitionConfig& config) const {
@@ -177,7 +217,7 @@ index 98ff0493134e4..29cb19a20cb55 100644
        continue;
      }
      if (std::ranges::any_of(spaces_, [&](const std::unique_ptr<Space>& space) {
-@@ -2134,10 +2211,29 @@ void SpaceModel::ReloadTabsInSpace(const SpaceId& id) {
+@@ -2134,10 +2224,29 @@ void SpaceModel::ReloadTabsInSpace(const SpaceId& id) {
      if (SpaceForTab(tab) != id) {
        continue;
      }
@@ -187,7 +227,7 @@ index 98ff0493134e4..29cb19a20cb55 100644
 +    content::WebContents* const contents = tab->GetContents();
 +    if (!contents) {
 +      continue;
-     }
++    }
 +    content::NavigationController& controller = contents->GetController();
 +    // BACKLOG S-345: a page a form sent loads its address again, without the
 +    // form, in place of its entry. The form went again unasked, into a jar
@@ -201,7 +241,7 @@ index 98ff0493134e4..29cb19a20cb55 100644
 +      params.should_replace_current_entry = true;
 +      controller.LoadURLWithParams(params);
 +      continue;
-+    }
+     }
 +    // The reload skips the HTTP cache: a clear the network service dropped
 +    // (WipeIsolatedSpacePartition) must not serve a page fetched while
 +    // signed in.
@@ -210,7 +250,7 @@ index 98ff0493134e4..29cb19a20cb55 100644
    }
  }
  
-@@ -2306,7 +2402,12 @@ const SpaceId& SpaceModel::SpaceForTab(tabs::TabInterface* tab) {
+@@ -2306,7 +2415,12 @@ const SpaceId& SpaceModel::SpaceForTab(tabs::TabInterface* tab) {
    const SpaceId id = SpaceIdForNewTab(tab);
    const auto it = tab_spaces_.emplace(tab->GetHandle(), id).first;
    SaveTabToSession(tab, it->second);
@@ -224,7 +264,7 @@ index 98ff0493134e4..29cb19a20cb55 100644
    // A tab filed a Space pin by what it carried (another window's tab dropped
    // here, a restored one) is a pin from now; a view that drew its row before
    // the filing asked draws it again, over the Clear line. On Windows the row
-@@ -2395,6 +2496,11 @@ SpaceId SpaceModel::SpaceIdForNewTab(tabs::TabInterface* tab) {
+@@ -2395,6 +2509,11 @@ SpaceId SpaceModel::SpaceIdForNewTab(tabs::TabInterface* tab) {
          routed_on_insert_.insert_or_assign(tab->GetHandle(),
                                             *made_for->routed_from);
        }
@@ -236,7 +276,7 @@ index 98ff0493134e4..29cb19a20cb55 100644
        if (tab->IsPinned() && SpaceIsIsolated(made_for->space)) {
          own_essentials_.insert(tab->GetHandle());
        }
-@@ -2501,6 +2607,9 @@ void SpaceModel::SetSpaceForOneTab(tabs::TabInterface* tab, const SpaceId& id) {
+@@ -2501,6 +2620,9 @@ void SpaceModel::SetSpaceForOneTab(tabs::TabInterface* tab, const SpaceId& id) {
      return;
    }
    tab_spaces_.insert_or_assign(tab->GetHandle(), id);
@@ -246,7 +286,7 @@ index 98ff0493134e4..29cb19a20cb55 100644
    SaveTabToSession(tab, id);
    observers_.Notify(&Observer::OnTabSpaceChanged, tab);
    MaybeRebindTabJar(tab);
-@@ -2800,6 +2909,14 @@ bool SpaceModel::IsSharedEssential(const tabs::TabInterface* tab) const {
+@@ -2800,6 +2922,14 @@ bool SpaceModel::IsSharedEssential(const tabs::TabInterface* tab) const {
    return tab && tab->IsPinned() && !own_essentials_.contains(tab->GetHandle());
  }
  
@@ -261,7 +301,7 @@ index 98ff0493134e4..29cb19a20cb55 100644
  void SpaceModel::SettleOwnEssentials() {
    if (!tab_strip_model_) {
      return;
-@@ -3025,6 +3142,12 @@ void SpaceModel::OnTabChangedAt(tabs::TabInterface* tab,
+@@ -3025,6 +3155,12 @@ void SpaceModel::OnTabChangedAt(tabs::TabInterface* tab,
    if (!tab) {
      return;
    }
@@ -274,7 +314,7 @@ index 98ff0493134e4..29cb19a20cb55 100644
    // pins H1 (the owner, 2026-10-22): a pin made on a page that is no home --
    // the new tab page, or a tab still loading from it -- takes the first web
    // page it shows as its home, once. It had none for good, so Cmd-W left it
-@@ -3084,6 +3207,12 @@ void SpaceModel::MaybeRebindTabJar(tabs::TabInterface* tab) {
+@@ -3084,6 +3220,12 @@ void SpaceModel::MaybeRebindTabJar(tabs::TabInterface* tab) {
                                         tab) == TabStripModel::kNoTab) {
                           return;
                         }
@@ -287,7 +327,7 @@ index 98ff0493134e4..29cb19a20cb55 100644
                         content::WebContents* const contents =
                             tab->GetContents();
                         const SpaceId id = model->SpaceForTab(tab);
-@@ -3536,6 +3665,14 @@ std::string SpaceModel::Serialize() const {
+@@ -3536,6 +3678,14 @@ std::string SpaceModel::Serialize() const {
        entry.Set("dark_color", static_cast<int>(*space->dark_color()));
      }
      entry.Set("pins_collapsed", space->pins_collapsed());
@@ -302,7 +342,7 @@ index 98ff0493134e4..29cb19a20cb55 100644
      list.Append(std::move(entry));
    }
    base::DictValue root;
-@@ -3573,8 +3710,10 @@ void SpaceModel::RestoreFrom(const std::string& data) {
+@@ -3573,8 +3723,10 @@ void SpaceModel::RestoreFrom(const std::string& data) {
    }
  
    spaces_ = std::move(restored);
@@ -314,7 +354,7 @@ index 98ff0493134e4..29cb19a20cb55 100644
  
    // The active Space must be one that came back; a session naming a Space that
    // failed to parse would otherwise leave the window pointing at nothing.
-@@ -3653,8 +3792,10 @@ void SpaceModel::AddSpacesFromSession(
+@@ -3653,8 +3805,10 @@ void SpaceModel::AddSpacesFromSession(
    // A Space the registry already has stays as it is. One it lacks goes at
    // the end, and the registry's change makes it a Space of this window and
    // of every other window that follows the registry (OnRegistryChanged).
@@ -327,7 +367,7 @@ index 98ff0493134e4..29cb19a20cb55 100644
  }
  
 diff --git a/chrome/browser/ui/spaces/space_model_window_unittest.cc b/chrome/browser/ui/spaces/space_model_window_unittest.cc
-index c6756adf89585..d88b763347a98 100644
+index c6756adf89585..0a81e4dc14462 100644
 --- a/chrome/browser/ui/spaces/space_model_window_unittest.cc
 +++ b/chrome/browser/ui/spaces/space_model_window_unittest.cc
 @@ -18,9 +18,11 @@
@@ -408,7 +448,55 @@ index c6756adf89585..d88b763347a98 100644
  // B3: coming back to a Space lands on the tab the user left there, whatever
  // its place in the strip. The tab left is neither the Space's first tab nor
  // its last, and it arrived in the foreground before another one did, so no
-@@ -2373,6 +2415,107 @@ TEST_F(SpaceWindowTest, WipeIsolatedSessionKeepsTheSpaceAndTheId) {
+@@ -2062,6 +2104,47 @@ TEST_F(SpaceWindowTest, ASearchIsNotRoutedByAContainsRule) {
+   EXPECT_EQ(work->id(), model().SpaceForTab(fresh));
+ }
+ 
++// routing D11 (BACKLOG S-347): a search opened in a new tab -- Alt+Enter, or
++// a middle click on a search suggestion -- is not routed by a "contains" rule
++// either. It was: the tab was made in that Space's jar, and its first request
++// carried that Space's cookies. A typed address in a new tab still follows
++// the rule.
++TEST_F(SpaceWindowTest, ASearchInANewTabIsNotRoutedByAContainsRule) {
++  const SpaceId home = model().active_id();
++  Space* const work = model().AddSpace("Work", kBlue);
++  model().SetSpaceIsolated(work->id(), true);
++  Route contains;
++  contains.match = Route::Match::kContains;
++  contains.pattern = "github";
++  contains.space = work->id().ToString();
++  AddRoute(profile()->GetPrefs(), contains);
++
++  NavigateParams search(browser(),
++                        GURL("https://duckduckgo.com/?q=github+actions"),
++                        ui::PAGE_TRANSITION_GENERATED);
++  search.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
++  Navigate(&search);
++  ASSERT_TRUE(search.navigated_or_inserted_contents);
++  tabs::TabInterface* const searched = tabs::TabInterface::MaybeGetFromContents(
++      search.navigated_or_inserted_contents);
++  ASSERT_TRUE(searched);
++  task_environment()->RunUntilIdle();
++  EXPECT_EQ(home, model().SpaceForTab(searched));
++  EXPECT_FALSE(IsSpaceStoragePartition(PartitionOf(searched)))
++      << "made in the routed Space's jar";
++
++  NavigateParams typed(browser(), GURL("https://github.com/typed"),
++                       ui::PAGE_TRANSITION_TYPED);
++  typed.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
++  Navigate(&typed);
++  ASSERT_TRUE(typed.navigated_or_inserted_contents);
++  tabs::TabInterface* const address = tabs::TabInterface::MaybeGetFromContents(
++      typed.navigated_or_inserted_contents);
++  ASSERT_TRUE(address);
++  task_environment()->RunUntilIdle();
++  EXPECT_EQ(work->id(), model().SpaceForTab(address));
++}
++
+ // PLAN.md CMD-8: only a tab made for a route is routed. One that arrives any
+ // other way -- dragged in, moved, restored -- stays where it lands and has
+ // nothing to undo.
+@@ -2373,6 +2456,107 @@ TEST_F(SpaceWindowTest, WipeIsolatedSessionKeepsTheSpaceAndTheId) {
    EXPECT_FALSE(model().WipeIsolatedSession(home));
  }
  
@@ -516,7 +604,7 @@ index c6756adf89585..d88b763347a98 100644
  // A split still pins and renames as one pair. Session extra data does not
  // carry a split token, and restoring two tabs does not reassemble the pair.
  TEST_F(SpaceWindowTest, SplitDoesNotRestoreFromSessionExtraData) {
-@@ -2576,6 +2719,38 @@ TEST_F(SpaceWindowTest, HorizontalStripKeepsSpacePinAndFolder) {
+@@ -2576,6 +2760,38 @@ TEST_F(SpaceWindowTest, HorizontalStripKeepsSpacePinAndFolder) {
    EXPECT_EQ(folder->id(), parent->id());
  }
  
@@ -556,10 +644,29 @@ index c6756adf89585..d88b763347a98 100644
  // collapsed ones included, and leaves a tab moved to another Space open.
  TEST_F(SpaceWindowTest, CloseFolderTabsLeavesAnotherSpacesTabOpen) {
 diff --git a/chrome/browser/ui/tabs/tab_strip_model.cc b/chrome/browser/ui/tabs/tab_strip_model.cc
-index 593e95a98b2ca..97d1003082e8d 100644
+index 593e95a98b2ca..a25be75e4510f 100644
 --- a/chrome/browser/ui/tabs/tab_strip_model.cc
 +++ b/chrome/browser/ui/tabs/tab_strip_model.cc
-@@ -1483,7 +1483,10 @@ bool TabStripModel::IsTabHidden(int index) const {
+@@ -200,6 +200,18 @@ void RecordToggleFocusGroupMetrics(bool is_unfocus,
+   }
+ }
+ 
++// Stedding (folders F39, tabs R57): how many folders hold `collection`,
++// itself included.
++int FoldersFrom(const tabs::TabCollection* collection) {
++  int folders = 0;
++  for (; collection; collection = collection->GetParentCollection()) {
++    if (collection->type() == tabs::TabCollection::Type::FOLDER) {
++      ++folders;
++    }
++  }
++  return folders;
++}
++
+ }  // namespace
+ 
+ TabGroupModelFactory::TabGroupModelFactory() {
+@@ -1483,7 +1495,10 @@ bool TabStripModel::IsTabHidden(int index) const {
    // A collapsed folder hides everything inside it, nested folders included,
    // except what is on screen: the active tab and, in a split, the pane beside
    // it. Collapsing the folder that holds the page the user is looking at keeps
@@ -571,7 +678,7 @@ index 593e95a98b2ca..97d1003082e8d 100644
    tabs::TabInterface* const tab = GetTabAtIndex(index);
    bool collapsed_folder = false;
    for (const tabs::TabCollection* collection = tab->GetParentCollection();
-@@ -1500,7 +1503,8 @@ bool TabStripModel::IsTabHidden(int index) const {
+@@ -1500,7 +1515,8 @@ bool TabStripModel::IsTabHidden(int index) const {
      const bool on_screen =
          tab == active ||
          (active && tab->IsSplit() && tab->GetSplit() == active->GetSplit());
@@ -581,7 +688,7 @@ index 593e95a98b2ca..97d1003082e8d 100644
        return true;
      }
    }
-@@ -1511,6 +1515,11 @@ void TabStripModel::SetHiddenTabPredicate(HiddenTabPredicate predicate) {
+@@ -1511,6 +1527,11 @@ void TabStripModel::SetHiddenTabPredicate(HiddenTabPredicate predicate) {
    hidden_tab_predicate_ = std::move(predicate);
  }
  
@@ -593,6 +700,44 @@ index 593e95a98b2ca..97d1003082e8d 100644
  void TabStripModel::SetNewTabIndexCallback(NewTabIndexCallback callback) {
    new_tab_index_callback_ = std::move(callback);
  }
+@@ -2837,11 +2858,17 @@ bool TabStripModel::IsContextMenuCommandEnabled(
+     case CommandSpacePin:
+     case CommandSpaceUnpin:
+       return false;
+-    case CommandMoveTabToNewFolder:
+-      // AddToNewFolder leaves essentials out (folders F21).
+-      return std::ranges::any_of(
+-          GetIndicesForCommand(context_index),
+-          [this](int index) { return !IsTabPinned(index); });
++    case CommandMoveTabToNewFolder: {
++      // AddToNewFolder leaves essentials out (folders F21), and makes no
++      // folder deeper than the cap (folders F39, BACKLOG S-350): one around
++      // a tab already in that many folders.
++      const std::vector<int> indices = GetIndicesForCommand(context_index);
++      const auto first = std::ranges::find_if(
++          indices, [this](int index) { return !IsTabPinned(index); });
++      return first != indices.end() &&
++             FoldersFrom(GetTabAtIndex(*first)->GetParentCollection()) <
++                 stedding::kMaxNestDepth;
++    }
+     case CommandNewTabToRight:
+     case CommandCloseTab:
+       return true;
+@@ -5265,6 +5292,14 @@ tabs::FolderTabCollection* TabStripModel::AddToNewFolder(
+     }
+   }
+ 
++  // Stedding (folders F39, tabs R57, BACKLOG S-350): no folder deeper than
++  // stedding::kMaxNestDepth, which a header's drag refuses and the sidebar
++  // file will not write. "Move to New Folder" on the innermost tab, and a
++  // restored folder path, nested past it.
++  if (FoldersFrom(parent_folder) >= stedding::kMaxNestDepth) {
++    return nullptr;
++  }
++
+   auto folder = std::make_unique<tabs::FolderTabCollection>(
+       id.value_or(tabs::FolderId::GenerateNew()), std::string(),
+       /*collapsed=*/false);
 diff --git a/chrome/browser/ui/tabs/tab_strip_model.h b/chrome/browser/ui/tabs/tab_strip_model.h
 index 92d97a40408a3..593abee7c0a33 100644
 --- a/chrome/browser/ui/tabs/tab_strip_model.h

@@ -15,18 +15,104 @@ Why: the owner asked for it on 2026-10-28.
 Removable when: Chromium's folders grow their own rule for what a
 collapsed folder keeps listed.
 ---
- chrome/browser/ui/spaces/space_model.cc       | 13 ++++++++
- .../ui/spaces/space_model_window_unittest.cc  | 32 +++++++++++++++++++
- chrome/browser/ui/tabs/tab_strip_model.cc     | 13 ++++++--
- chrome/browser/ui/tabs/tab_strip_model.h      |  6 ++++
- .../test/stedding/pinned_run_browsertest.cc   |  7 ++++
- 5 files changed, 69 insertions(+), 2 deletions(-)
+ chrome/browser/ui/spaces/space_model.cc       | 169 +++++++++++++++--
+ .../ui/spaces/space_model_window_unittest.cc  | 175 ++++++++++++++++++
+ chrome/browser/ui/tabs/tab_strip_model.cc     |  13 +-
+ chrome/browser/ui/tabs/tab_strip_model.h      |   6 +
+ .../test/stedding/pinned_run_browsertest.cc   |   7 +
+ 5 files changed, 354 insertions(+), 16 deletions(-)
 
 diff --git a/chrome/browser/ui/spaces/space_model.cc b/chrome/browser/ui/spaces/space_model.cc
-index 98ff0493134e4..d67428ae85a40 100644
+index 98ff0493134e4..29cb19a20cb55 100644
 --- a/chrome/browser/ui/spaces/space_model.cc
 +++ b/chrome/browser/ui/spaces/space_model.cc
-@@ -348,6 +348,17 @@ SpaceModel::SpaceModel(BrowserWindowInterface& browser) : SpaceModel() {
+@@ -124,16 +124,20 @@ void ForgetPendingWipe(Profile* profile, const std::string& jar) {
+ }
+ 
+ // What a wipe runs when it has finished: the jar leaves the pending list,
+-// then `done`.
+-base::OnceClosure ForgetPendingWipeThen(content::BrowserContext* context,
+-                                        std::string jar,
+-                                        base::OnceClosure done) {
++// then `done`. A jar whose HTTP cache the wipe could not clear stays on the
++// list, and the profile's next window wipes it again (ResumePendingWipes).
++base::OnceCallback<void(bool)> ForgetPendingWipeThen(
++    content::BrowserContext* context,
++    std::string jar,
++    base::OnceClosure done) {
+   Profile* const profile =
+       context ? Profile::FromBrowserContext(context) : nullptr;
+   return base::BindOnce(
+       [](base::WeakPtr<Profile> profile, const std::string& jar,
+-         base::OnceClosure done) {
+-        ForgetPendingWipe(profile.get(), jar);
++         base::OnceClosure done, bool cleared) {
++        if (cleared) {
++          ForgetPendingWipe(profile.get(), jar);
++        }
+         if (done) {
+           std::move(done).Run();
+         }
+@@ -168,6 +172,58 @@ RegistryEntry RegistryEntryFor(const Space& space) {
+   return entry;
+ }
+ 
++// sessions S2 (BACKLOG S-338): the jar each Space of a window's session data
++// (`list`, as Serialize() wrote it) had, by id: its token, and whether its
++// session was on. A token that is not one EnsureIsolated writes is left out.
++std::map<SpaceId, std::pair<std::string, bool>> JarsFromSessionList(
++    const base::ListValue& list) {
++  std::map<SpaceId, std::pair<std::string, bool>> jars;
++  for (const base::Value& item : list) {
++    if (!item.is_dict()) {
++      continue;
++    }
++    const base::DictValue& entry = item.GetDict();
++    const std::string* const id_text = entry.FindString("id");
++    const std::string* const profile_id = entry.FindString("profile_id");
++    if (!id_text || !profile_id || !base::Token::FromString(*profile_id)) {
++      continue;
++    }
++    const std::optional<base::Token> token = base::Token::FromString(*id_text);
++    if (!token) {
++      continue;
++    }
++    jars.insert_or_assign(
++        SpaceId::FromRawToken(*token),
++        std::make_pair(*profile_id,
++                       entry.FindBool("isolated").value_or(false)));
++  }
++  return jars;
++}
++
++// The registry's entry for `space`, with the jar `jars` names for it: a
++// Space the registry lacks comes back with its token and its session, so
++// its cookies and storage, rather than on the shared jar with a jar on disk
++// that nothing names and the next storage collection deletes.
++RegistryEntry RegistryEntryFor(
++    const Space& space,
++    const std::map<SpaceId, std::pair<std::string, bool>>& jars) {
++  RegistryEntry entry = RegistryEntryFor(space);
++  if (const auto it = jars.find(space.id()); it != jars.end()) {
++    const auto& [profile_id, isolated] = it->second;
++    entry.profile_id = profile_id;
++    entry.isolated = isolated;
++  }
++  return entry;
++}
++
++// sessions S11, S30: whether `contents` has yet to commit a page of its own:
++// nothing yet, or the blank page a script opens a window on before it sends
++// the window where it goes.
++bool HasNoPageOfItsOwnYet(content::WebContents* contents) {
++  const GURL& url = contents->GetLastCommittedURL();
++  return !url.is_valid() || url.IsAboutBlank();
++}
++
+ // The Spaces in a window's session data (`list`, as Serialize() wrote it), in
+ // their order; an entry that cannot be read is left out.
+ std::vector<std::unique_ptr<Space>> SpacesFromSessionList(
+@@ -348,6 +404,17 @@ SpaceModel::SpaceModel(BrowserWindowInterface& browser) : SpaceModel() {
          return model->HidesTab(tab);
        },
        base::Unretained(this)));
@@ -44,7 +130,7 @@ index 98ff0493134e4..d67428ae85a40 100644
    // B4: a close never leaves another Space's tab on screen. Unretained for
    // the same reason as the predicate.
    tab_strip_model_->SetBeforeCloseTabsCallback(
-@@ -419,6 +430,8 @@ SpaceModel::~SpaceModel() {
+@@ -419,6 +486,8 @@ SpaceModel::~SpaceModel() {
    if (tab_strip_model_) {
      tab_strip_model_->SetHiddenTabPredicate(
          TabStripModel::HiddenTabPredicate());
@@ -53,11 +139,384 @@ index 98ff0493134e4..d67428ae85a40 100644
      tab_strip_model_->SetBeforeCloseTabsCallback(
          TabStripModel::BeforeCloseTabsCallback());
      // The detach callback holds this model unretained too: a tab leaving the
+@@ -539,8 +608,9 @@ void SpaceModel::SyncWithRegistry(bool seed) {
+           space->icon().empty() && !space->color_chosen()) {
+         continue;
+       }
+-      registry_->AddExisting(RegistryEntryFor(*space));
++      registry_->AddExisting(RegistryEntryFor(*space, session_jars_));
+     }
++    session_jars_.clear();
+   }
+   // Then the window is the registry: kept objects updated, new ones made,
+   // gone ones dropped with their tabs moved, all in the registry's order.
+@@ -1422,6 +1492,7 @@ void SpaceModel::OnTabStripModelChanged(
+       space_pin_homes_.erase(removed.tab->GetHandle());
+       essential_homes_.erase(removed.tab->GetHandle());
+       own_essentials_.erase(removed.tab->GetHandle());
++      jars_kept_until_loaded_.erase(removed.tab->GetHandle());
+       homes_before_commit_.erase(removed.tab->GetHandle());
+       routed_on_insert_.erase(removed.tab->GetHandle());
+       for (auto& [space, history] : history_) {
+@@ -2058,11 +2129,17 @@ bool SpaceModel::SpaceIsIsolated(const SpaceId& id) const {
+ 
+ std::optional<SpaceId> SpaceModel::SpaceKeepingJar(
+     const content::StoragePartitionConfig& config) const {
++  const std::optional<SpaceId> id = SpaceNamingJar(config);
++  return id && SpaceIsIsolated(*id) ? id : std::nullopt;
++}
++
++std::optional<SpaceId> SpaceModel::SpaceNamingJar(
++    const content::StoragePartitionConfig& config) const {
+   if (!registry_ || !IsSpaceStoragePartition(config)) {
+     return std::nullopt;
+   }
+   for (const RegistryEntry& entry : registry_->entries()) {
+-    if (!entry.isolated || entry.profile_id != config.partition_name()) {
++    if (entry.profile_id != config.partition_name()) {
+       continue;
+     }
+     if (std::ranges::any_of(spaces_, [&](const std::unique_ptr<Space>& space) {
+@@ -2134,10 +2211,29 @@ void SpaceModel::ReloadTabsInSpace(const SpaceId& id) {
+     if (SpaceForTab(tab) != id) {
+       continue;
+     }
+-    if (content::WebContents* const contents = tab->GetContents()) {
+-      contents->GetController().Reload(content::ReloadType::NORMAL,
+-                                       /*check_for_repost=*/false);
++    content::WebContents* const contents = tab->GetContents();
++    if (!contents) {
++      continue;
+     }
++    content::NavigationController& controller = contents->GetController();
++    // BACKLOG S-345: a page a form sent loads its address again, without the
++    // form, in place of its entry. The form went again unasked, into a jar
++    // whose cookies were being deleted; a question per such page, in every
++    // window, would ask about a form nobody is sending.
++    const content::NavigationEntry* const entry =
++        controller.GetLastCommittedEntry();
++    if (entry && entry->GetHasPostData()) {
++      content::NavigationController::LoadURLParams params(entry->GetURL());
++      params.transition_type = ui::PAGE_TRANSITION_RELOAD;
++      params.should_replace_current_entry = true;
++      controller.LoadURLWithParams(params);
++      continue;
++    }
++    // The reload skips the HTTP cache: a clear the network service dropped
++    // (WipeIsolatedSpacePartition) must not serve a page fetched while
++    // signed in.
++    controller.Reload(content::ReloadType::BYPASSING_CACHE,
++                      /*check_for_repost=*/false);
+   }
+ }
+ 
+@@ -2306,7 +2402,12 @@ const SpaceId& SpaceModel::SpaceForTab(tabs::TabInterface* tab) {
+   const SpaceId id = SpaceIdForNewTab(tab);
+   const auto it = tab_spaces_.emplace(tab->GetHandle(), id).first;
+   SaveTabToSession(tab, it->second);
+-  MaybeRebindTabJar(tab);
++  // sessions S11, S30 (BACKLOG S-338): contents made in the jar their first
++  // page loads in are not moved by their filing, however soon that page
++  // comes.
++  if (!KeepsJarItWasMadeIn(tab)) {
++    MaybeRebindTabJar(tab);
++  }
+   // A tab filed a Space pin by what it carried (another window's tab dropped
+   // here, a restored one) is a pin from now; a view that drew its row before
+   // the filing asked draws it again, over the Clear line. On Windows the row
+@@ -2395,6 +2496,11 @@ SpaceId SpaceModel::SpaceIdForNewTab(tabs::TabInterface* tab) {
+         routed_on_insert_.insert_or_assign(tab->GetHandle(),
+                                            *made_for->routed_from);
+       }
++      // sessions S11, S30 (BACKLOG S-338): made in the jar its first page
++      // loads in, which is not its Space's; the filing does not move it.
++      if (made_for->keeps_jar) {
++        jars_kept_until_loaded_.insert(tab->GetHandle());
++      }
+       if (tab->IsPinned() && SpaceIsIsolated(made_for->space)) {
+         own_essentials_.insert(tab->GetHandle());
+       }
+@@ -2501,6 +2607,9 @@ void SpaceModel::SetSpaceForOneTab(tabs::TabInterface* tab, const SpaceId& id) {
+     return;
+   }
+   tab_spaces_.insert_or_assign(tab->GetHandle(), id);
++  // Moved to another Space, the tab takes that Space's jar, whatever it was
++  // made in.
++  jars_kept_until_loaded_.erase(tab->GetHandle());
+   SaveTabToSession(tab, id);
+   observers_.Notify(&Observer::OnTabSpaceChanged, tab);
+   MaybeRebindTabJar(tab);
+@@ -2800,6 +2909,14 @@ bool SpaceModel::IsSharedEssential(const tabs::TabInterface* tab) const {
+   return tab && tab->IsPinned() && !own_essentials_.contains(tab->GetHandle());
+ }
+ 
++bool SpaceModel::KeepsJarItWasMadeIn(const tabs::TabInterface* tab) const {
++  if (!tab || !jars_kept_until_loaded_.contains(tab->GetHandle())) {
++    return false;
++  }
++  content::WebContents* const contents = tab->GetContents();
++  return contents && HasNoPageOfItsOwnYet(contents);
++}
++
+ void SpaceModel::SettleOwnEssentials() {
+   if (!tab_strip_model_) {
+     return;
+@@ -3025,6 +3142,12 @@ void SpaceModel::OnTabChangedAt(tabs::TabInterface* tab,
+   if (!tab) {
+     return;
+   }
++  // sessions S11, S30 (BACKLOG S-338): the page a tab was made in another jar
++  // for has come; from here its navigations go by its Space's jar.
++  if (jars_kept_until_loaded_.contains(tab->GetHandle()) &&
++      !KeepsJarItWasMadeIn(tab)) {
++    jars_kept_until_loaded_.erase(tab->GetHandle());
++  }
+   // pins H1 (the owner, 2026-10-22): a pin made on a page that is no home --
+   // the new tab page, or a tab still loading from it -- takes the first web
+   // page it shows as its home, once. It had none for good, so Cmd-W left it
+@@ -3084,6 +3207,12 @@ void SpaceModel::MaybeRebindTabJar(tabs::TabInterface* tab) {
+                                        tab) == TabStripModel::kNoTab) {
+                          return;
+                        }
++                       // sessions S11, S30 (BACKLOG S-338): a tab made in
++                       // another jar for the page it opens keeps it until
++                       // that page has come.
++                       if (model->KeepsJarItWasMadeIn(tab)) {
++                         return;
++                       }
+                        content::WebContents* const contents =
+                            tab->GetContents();
+                        const SpaceId id = model->SpaceForTab(tab);
+@@ -3536,6 +3665,14 @@ std::string SpaceModel::Serialize() const {
+       entry.Set("dark_color", static_cast<int>(*space->dark_color()));
+     }
+     entry.Set("pins_collapsed", space->pins_collapsed());
++    // sessions S2 (BACKLOG S-338): the Space's jar goes with it, for a Space
++    // the registry has lost by the time this is read back (RestoreFrom).
++    if (const RegistryEntry* const kept =
++            registry_ ? registry_->Find(space->id()) : nullptr;
++        kept && !kept->profile_id.empty()) {
++      entry.Set("profile_id", kept->profile_id);
++      entry.Set("isolated", kept->isolated);
++    }
+     list.Append(std::move(entry));
+   }
+   base::DictValue root;
+@@ -3573,8 +3710,10 @@ void SpaceModel::RestoreFrom(const std::string& data) {
+   }
+ 
+   spaces_ = std::move(restored);
+-  // Every one of them joins the registry by id (SyncWithRegistry).
++  // Every one of them joins the registry by id (SyncWithRegistry), one the
++  // registry lacks with the jar it had.
+   restored_from_session_ = true;
++  session_jars_ = JarsFromSessionList(*list);
+ 
+   // The active Space must be one that came back; a session naming a Space that
+   // failed to parse would otherwise leave the window pointing at nothing.
+@@ -3653,8 +3792,10 @@ void SpaceModel::AddSpacesFromSession(
+   // A Space the registry already has stays as it is. One it lacks goes at
+   // the end, and the registry's change makes it a Space of this window and
+   // of every other window that follows the registry (OnRegistryChanged).
++  const std::map<SpaceId, std::pair<std::string, bool>> jars =
++      JarsFromSessionList(*list);
+   for (const std::unique_ptr<Space>& space : SpacesFromSessionList(*list)) {
+-    registry_->AddExisting(RegistryEntryFor(*space));
++    registry_->AddExisting(RegistryEntryFor(*space, jars));
+   }
+ }
+ 
 diff --git a/chrome/browser/ui/spaces/space_model_window_unittest.cc b/chrome/browser/ui/spaces/space_model_window_unittest.cc
-index c6756adf89585..ab2b049aa7764 100644
+index c6756adf89585..d88b763347a98 100644
 --- a/chrome/browser/ui/spaces/space_model_window_unittest.cc
 +++ b/chrome/browser/ui/spaces/space_model_window_unittest.cc
-@@ -2576,6 +2576,38 @@ TEST_F(SpaceWindowTest, HorizontalStripKeepsSpacePinAndFolder) {
+@@ -18,9 +18,11 @@
+ 
+ #include "base/functional/bind.h"
+ #include "base/json/json_writer.h"
++#include "base/memory/raw_ptr.h"
+ #include "base/run_loop.h"
+ #include "base/test/bind.h"
+ #include "base/test/run_until.h"
++#include "base/test/test_future.h"
+ #include "base/time/time.h"
+ #include "base/values.h"
+ #include "chrome/app/chrome_command_ids.h"
+@@ -35,6 +37,7 @@
+ #include "chrome/browser/ui/spaces/space_commands.h"
+ #include "chrome/browser/ui/spaces/space_model.h"
+ #include "chrome/browser/ui/spaces/space_registry.h"
++#include "chrome/browser/ui/spaces/space_registry_factory.h"
+ #include "chrome/browser/ui/spaces/space_router.h"
+ #include "chrome/browser/ui/spaces/space_storage_partition.h"
+ #include "chrome/browser/ui/spaces/tab_space_restore_data.h"
+@@ -61,11 +64,14 @@
+ #include "content/public/browser/storage_partition_config.h"
+ #include "content/public/browser/web_contents.h"
+ #include "content/public/test/web_contents_tester.h"
++#include "mojo/public/cpp/bindings/receiver.h"
+ #include "net/cookies/canonical_cookie.h"
+ #include "net/cookies/cookie_access_result.h"
+ #include "net/cookies/cookie_options.h"
+ #include "net/cookies/cookie_partition_key_collection.h"
+ #include "services/network/public/mojom/cookie_manager.mojom.h"
++#include "services/network/public/mojom/network_context.mojom.h"
++#include "services/network/test/test_network_context.h"
+ #include "testing/gtest/include/gtest/gtest.h"
+ #include "ui/base/models/list_selection_model.h"
+ #include "ui/base/window_open_disposition.h"
+@@ -258,6 +264,42 @@ TEST_F(SpaceWindowTest, ARestoredWindowKeepsAnUnnamedSpace) {
+   fresh->GetTabStripModel()->CloseAllTabs();
+ }
+ 
++// sessions S2, S25 (BACKLOG S-338): a Space with an Independent session that
++// the profile's list lost -- a kill after the window's session was written
++// and before the preferences were -- comes back from the session with its
++// jar: the same token, its session on. It came back on the shared jar, and
++// nothing named its jar's directory, which the next storage collection
++// deleted.
++TEST_F(SpaceWindowTest, ASpaceTheListLostComesBackWithItsJar) {
++  const SpaceId work = model().AddSpace("Work", kBlue)->id();
++  model().SetSpaceIsolated(work, true);
++  const RegistryEntry* const entry = model().registry()->Find(work);
++  ASSERT_TRUE(entry);
++  const std::string token = entry->profile_id;
++  ASSERT_FALSE(token.empty());
++  const std::string session = model().Serialize();
++
++  // The list as the preferences kept it: without Work.
++  SpaceRegistry* const registry =
++      SpaceRegistryFactory::GetForProfile(profile());
++  ASSERT_TRUE(registry->Remove(work));
++  ASSERT_FALSE(registry->Find(work));
++
++  BrowserWindowCreateParams params(profile(), /*user_gesture=*/false);
++  params.stedding_spaces = session;
++  std::unique_ptr<BrowserWindowInterface> restored =
++      CreateBrowserWithTestWindowForParams(std::move(params));
++  SpaceModel* const other = SpaceModel::From(restored.get());
++  ASSERT_TRUE(other);
++  ASSERT_TRUE(other->GetSpace(work)) << "the session's Space was dropped";
++  const RegistryEntry* const back = registry->Find(work);
++  ASSERT_TRUE(back);
++  EXPECT_EQ(token, back->profile_id) << "the Space came back without its jar";
++  EXPECT_TRUE(back->isolated) << "its Independent session came back off";
++  EXPECT_TRUE(other->SpaceIsIsolated(work));
++  restored->GetTabStripModel()->CloseAllTabs();
++}
++
+ // B3: coming back to a Space lands on the tab the user left there, whatever
+ // its place in the strip. The tab left is neither the Space's first tab nor
+ // its last, and it arrived in the foreground before another one did, so no
+@@ -2373,6 +2415,107 @@ TEST_F(SpaceWindowTest, WipeIsolatedSessionKeepsTheSpaceAndTheId) {
+   EXPECT_FALSE(model().WipeIsolatedSession(home));
+ }
+ 
++// A network context whose pipe closes as the HTTP cache clear arrives, as a
++// network service that restarts drops it: the clear's callback never runs.
++class DroppingNetworkContext : public network::TestNetworkContext {
++ public:
++  mojo::PendingRemote<network::mojom::NetworkContext> Bind() {
++    return receiver_.BindNewPipeAndPassRemote();
++  }
++
++  // network::TestNetworkContext:
++  void ClearHttpCache(base::Time start_time,
++                      base::Time end_time,
++                      network::mojom::ClearDataFilterPtr filter,
++                      ClearHttpCacheCallback callback) override {
++    receiver_.reset();
++  }
++
++ private:
++  mojo::Receiver<network::mojom::NetworkContext> receiver_{this};
++};
++
++// sessions S13 (BACKLOG S-345): Clear Independent Session finishes when the
++// network service's pipe drops before the HTTP cache is cleared, as it does
++// when the service restarts. It waited for the clear's callback, which a
++// dropped pipe never runs, and the Space's pages were never reloaded.
++TEST_F(SpaceWindowTest, ClearingASessionFinishesWhenTheCacheClearIsDropped) {
++  Space* const work = model().AddSpace("Work", kBlue);
++  model().SetSpaceIsolated(work->id(), true);
++  model().SetActiveSpace(work->id());
++  tabs::TabInterface* const tab = OpenTab();
++  const content::StoragePartitionConfig config = PartitionOf(tab);
++  ASSERT_TRUE(IsSpaceStoragePartition(config));
++  DroppingNetworkContext dropping;
++  profile()->GetStoragePartition(config)->SetNetworkContextForTesting(
++      dropping.Bind());
++
++  base::test::TestFuture<void> wiped;
++  EXPECT_TRUE(model().WipeIsolatedSession(work->id(), wiped.GetCallback()));
++  EXPECT_TRUE(wiped.Wait()) << "the clear never finished";
++  EXPECT_EQ(work->id(), model().SpaceForTab(tab));
++}
++
++// A network context that drops every HTTP cache clear, as a network service
++// that restarts each time it is asked: the partition is handed a new pipe to
++// it after each drop.
++class AlwaysDroppingNetworkContext : public network::TestNetworkContext {
++ public:
++  explicit AlwaysDroppingNetworkContext(content::StoragePartition* partition)
++      : partition_(partition) {}
++
++  void Attach() {
++    partition_->SetNetworkContextForTesting(
++        receiver_.BindNewPipeAndPassRemote());
++  }
++
++  int drops() const { return drops_; }
++
++  // network::TestNetworkContext:
++  void ClearHttpCache(base::Time start_time,
++                      base::Time end_time,
++                      network::mojom::ClearDataFilterPtr filter,
++                      ClearHttpCacheCallback callback) override {
++    ++drops_;
++    receiver_.reset();
++    Attach();
++  }
++
++ private:
++  const raw_ptr<content::StoragePartition> partition_;
++  mojo::Receiver<network::mojom::NetworkContext> receiver_{this};
++  int drops_ = 0;
++};
++
++// sessions S17 (BACKLOG S-345): a deleted Space's jar whose HTTP cache was
++// not cleared -- the clear dropped, and dropped again when asked once more --
++// stays on the profile's pending list for its next window to wipe, and the
++// deletion still finishes. The wipe was taken as done and the jar forgotten,
++// its cache still on disk.
++TEST_F(SpaceWindowTest, AJarWhoseCacheWasNotClearedStaysPending) {
++  const SpaceId home = model().active_id();
++  Space* const work = model().AddSpace("Work", kBlue);
++  model().SetSpaceIsolated(work->id(), true);
++  model().SetActiveSpace(work->id());
++  const content::StoragePartitionConfig config = PartitionOf(OpenTab());
++  ASSERT_TRUE(IsSpaceStoragePartition(config));
++  AlwaysDroppingNetworkContext dropping(
++      profile()->GetStoragePartition(config));
++  dropping.Attach();
++  model().SetActiveSpace(home);
++  const SpaceId work_id = work->id();
++
++  base::test::TestFuture<void> removed;
++  ASSERT_TRUE(model().RemoveSpace(work_id, removed.GetCallback()));
++  EXPECT_TRUE(removed.Wait()) << "the deletion never finished";
++  EXPECT_EQ(2, dropping.drops()) << "the clear was not asked again";
++  EXPECT_TRUE(profile()
++                  ->GetPrefs()
++                  ->GetList(stedding::prefs::kPendingJarWipes)
++                  .contains(config.partition_name()))
++      << "the jar left the pending list with its cache";
++}
++
+ // A split still pins and renames as one pair. Session extra data does not
+ // carry a split token, and restoring two tabs does not reassemble the pair.
+ TEST_F(SpaceWindowTest, SplitDoesNotRestoreFromSessionExtraData) {
+@@ -2576,6 +2719,38 @@ TEST_F(SpaceWindowTest, HorizontalStripKeepsSpacePinAndFolder) {
    EXPECT_EQ(folder->id(), parent->id());
  }
  

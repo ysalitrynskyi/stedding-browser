@@ -64,10 +64,10 @@ Chromium's page info gains the same controls.
  .../hidden_row_controls_browsertest.cc        |  84 +-
  .../stedding/isolation_mark_browsertest.cc    |  98 ++
  .../stedding/site_controls_browsertest.cc     | 656 +++++++++++++
- chrome/test/stedding/space_jar_browsertest.cc | 211 +++++
+ chrome/test/stedding/space_jar_browsertest.cc | 440 ++++++++-
  components/page_info/page_info.cc             |  11 +
  components/page_info/page_info_delegate.h     |   6 +
- 40 files changed, 3438 insertions(+), 40 deletions(-)
+ 40 files changed, 3665 insertions(+), 42 deletions(-)
  create mode 100644 chrome/browser/ui/stedding/site_controls.cc
  create mode 100644 chrome/browser/ui/stedding/site_controls.h
  create mode 100644 chrome/browser/ui/stedding/site_controls_unittest.cc
@@ -77,10 +77,10 @@ Chromium's page info gains the same controls.
  create mode 100644 chrome/test/stedding/site_controls_browsertest.cc
 
 diff --git a/chrome/app/stedding_strings.grdp b/chrome/app/stedding_strings.grdp
-index 5c542cba99323..ac0cfbf2ed8b5 100644
+index 3325d32cbcdb3..c7acbf93457a5 100644
 --- a/chrome/app/stedding_strings.grdp
 +++ b/chrome/app/stedding_strings.grdp
-@@ -141,6 +141,80 @@
+@@ -144,6 +144,80 @@
      Cookies cleared for <ph name="SITE">$1<ex>example.com</ex></ph>
    </message>
  
@@ -4061,7 +4061,7 @@ index 0000000000000..99291a162656c
 +
 +}  // namespace
 diff --git a/chrome/test/stedding/space_jar_browsertest.cc b/chrome/test/stedding/space_jar_browsertest.cc
-index 326c29e639aa7..e466aa666f33f 100644
+index 326c29e639aa7..dcc97428c44f6 100644
 --- a/chrome/test/stedding/space_jar_browsertest.cc
 +++ b/chrome/test/stedding/space_jar_browsertest.cc
 @@ -27,6 +27,7 @@
@@ -4072,7 +4072,7 @@ index 326c29e639aa7..e466aa666f33f 100644
  #include "chrome/browser/extensions/chrome_test_extension_loader.h"
  #include "chrome/browser/profiles/profile.h"
  #include "chrome/browser/ui/browser_commands.h"
-@@ -48,11 +49,18 @@
+@@ -48,21 +49,31 @@
  #include "chrome/browser/ui/toasts/api/toast_id.h"
  #include "chrome/browser/ui/toasts/toast_controller.h"
  #include "chrome/browser/ui/views/commandbar/command_bar_view.h"
@@ -4091,7 +4091,20 @@ index 326c29e639aa7..e466aa666f33f 100644
  #include "components/prefs/pref_service.h"
  #include "components/tabs/public/tab_interface.h"
  #include "content/public/browser/browsing_data_remover.h"
-@@ -77,10 +85,21 @@
+ #include "content/public/browser/navigation_controller.h"
+ #include "content/public/browser/navigation_entry.h"
+ #include "content/public/browser/reload_type.h"
++#include "content/public/browser/render_frame_host.h"
+ #include "content/public/browser/storage_partition.h"
+ #include "content/public/browser/storage_partition_config.h"
+ #include "content/public/browser/web_contents.h"
++#include "content/public/browser/web_contents_observer.h"
+ #include "content/public/common/page_type.h"
++#include "content/public/common/url_constants.h"
+ #include "content/public/test/browser_test.h"
+ #include "content/public/test/browser_test_utils.h"
+ #include "content/public/test/browsing_data_remover_test_util.h"
+@@ -77,10 +88,21 @@
  #include "third_party/skia/include/core/SkColor.h"
  #include "ui/base/page_transition_types.h"
  #include "ui/base/window_open_disposition.h"
@@ -4113,7 +4126,67 @@ index 326c29e639aa7..e466aa666f33f 100644
  #include "ui/views/widget/any_widget_observer.h"
  #include "ui/views/widget/widget.h"
  #include "ui/views/widget/widget_delegate.h"
-@@ -384,6 +403,34 @@ IN_PROC_BROWSER_TEST_F(SpaceJarTest, TheFirstRequestCarriesTheSpacesJar) {
+@@ -156,11 +178,17 @@ class SpaceJarTest : public InProcessBrowserTest {
+     const std::string path = request.GetURL().PathForRequest();
+     base::AutoLock lock(lock_);
+     ++requests_[path];
++    if (request.method == net::test_server::METHOD_POST) {
++      ++posts_[path];
++    }
++    const auto cookie = request.headers.find("Cookie");
++    const std::string sent =
++        cookie == request.headers.end() ? "" : cookie->second;
++    every_cookie_[path].push_back(sent);
+     if (cookies_.contains(path)) {
+       return;
+     }
+-    const auto cookie = request.headers.find("Cookie");
+-    cookies_[path] = cookie == request.headers.end() ? "" : cookie->second;
++    cookies_[path] = sent;
+   }
+ 
+   // The Cookie header of the first request for `path` (with its query), once
+@@ -174,6 +202,14 @@ class SpaceJarTest : public InProcessBrowserTest {
+     return cookies_[path];
+   }
+ 
++  // The Cookie header of every request for `path` (with its query) so far.
++  std::vector<std::string> CookiesFor(const std::string& path) {
++    base::AutoLock lock(lock_);
++    const auto it = every_cookie_.find(path);
++    return it == every_cookie_.end() ? std::vector<std::string>()
++                                     : it->second;
++  }
++
+   // How many requests for `path` (with its query) the server has had.
+   int RequestsFor(const std::string& path) {
+     base::AutoLock lock(lock_);
+@@ -181,6 +217,13 @@ class SpaceJarTest : public InProcessBrowserTest {
+     return it == requests_.end() ? 0 : it->second;
+   }
+ 
++  // How many of them sent a form (POST).
++  int PostsFor(const std::string& path) {
++    base::AutoLock lock(lock_);
++    const auto it = posts_.find(path);
++    return it == posts_.end() ? 0 : it->second;
++  }
++
+   content::StoragePartitionConfig JarOf(tabs::TabInterface* tab) {
+     return spaces::StoragePartitionConfigForWebContents(tab->GetContents());
+   }
+@@ -247,7 +290,10 @@ class SpaceJarTest : public InProcessBrowserTest {
+  private:
+   base::Lock lock_;
+   std::map<std::string, std::string> cookies_ GUARDED_BY(lock_);
++  std::map<std::string, std::vector<std::string>> every_cookie_
++      GUARDED_BY(lock_);
+   std::map<std::string, int> requests_ GUARDED_BY(lock_);
++  std::map<std::string, int> posts_ GUARDED_BY(lock_);
+ };
+ 
+ 
+@@ -384,6 +430,34 @@ IN_PROC_BROWSER_TEST_F(SpaceJarTest, TheFirstRequestCarriesTheSpacesJar) {
      chrome::CloseWindow(params.browser);
      ui_test_utils::WaitForBrowserToClose(params.browser);
    }
@@ -4148,7 +4221,7 @@ index 326c29e639aa7..e466aa666f33f 100644
  }
  
  // A routed tab dragged to another window is not routed again, a slept tab of
-@@ -532,6 +579,37 @@ IN_PROC_BROWSER_TEST_F(SpaceJarTest,
+@@ -532,6 +606,37 @@ IN_PROC_BROWSER_TEST_F(SpaceJarTest,
      EXPECT_EQ("jar=work", FirstCookieFor("/echo?after-the-form"));
    }
  
@@ -4186,7 +4259,7 @@ index 326c29e639aa7..e466aa666f33f 100644
    {
      // A page that could ask "Leave site?" keeps its jar when it moves to an
      // independent Space. Leaving it runs the next page in the new jar. Its
-@@ -896,6 +974,139 @@ IN_PROC_BROWSER_TEST_F(SpaceJarTest, ClearingASitesCookiesStaysInThatJar) {
+@@ -896,6 +1001,139 @@ IN_PROC_BROWSER_TEST_F(SpaceJarTest, ClearingASitesCookiesStaysInThatJar) {
    }
  }
  
@@ -4326,6 +4399,211 @@ index 326c29e639aa7..e466aa666f33f 100644
  // With Work open in two windows, turning its independent session off and on
  // moves Work's tabs in both, and clearing the session signs both out. The
  // toggle reloads. It does not delete the partition's cookies.
+@@ -1232,6 +1470,204 @@ IN_PROC_BROWSER_TEST_F(SpaceJarTest, DeletingASpaceWaitsForAPopupInItsJar) {
+       << "the jar was never wiped";
+ }
+ 
++// sessions S8, S11 (BACKLOG S-338): with every Space on a session of its own,
++// the shared essentials show in each. A page one opens -- a target=_blank
++// link, a window.open -- lands in the essential's jar, the shared one, though
++// it is filed in the Space on screen, and keeps its opener; its next page
++// goes by that Space's jar. It had been made in, or moved to, that Space's
++// jar: the Space's cookies went to an address a page outside that session
++// chose.
++IN_PROC_BROWSER_TEST_F(SpaceJarTest,
++                       APageASharedEssentialOpensLandsInTheSharedJar) {
++  // Home's tab, on b.test with the shared jar's cookie, made an essential
++  // while Home shares the profile's session: a shared one. Then Home gets a
++  // session of its own too.
++  tabs::TabInterface* const essential = home_tab_.Get();
++  tabs()->SetTabPinned(tabs()->GetIndexOfTab(essential), true);
++  ASSERT_TRUE(model_->IsSharedEssential(essential));
++  model_->SetSpaceIsolated(home_, true);
++  base::RunLoop().RunUntilIdle();
++  ASSERT_TRUE(model_->IsSharedEssential(essential));
++  ASSERT_FALSE(spaces::IsSpaceStoragePartition(JarOf(essential)));
++  ASSERT_TRUE(model_->SetActiveSpace(work_));
++  tabs()->ActivateTabAt(tabs()->GetIndexOfTab(essential));
++  ASSERT_EQ(essential, tabs()->GetActiveTab());
++  ASSERT_EQ(work_, model_->active_id())
++      << "the shared essentials show in every Space";
++  content::WebContents* const page = essential->GetContents();
++
++  {
++    SCOPED_TRACE("ABlankTargetLink");
++    ui_test_utils::TabAddedWaiter added(browser());
++    ASSERT_TRUE(content::ExecJs(
++        page, content::JsReplace("const a = document.createElement('a');"
++                                 "a.href = $1; a.target = '_blank';"
++                                 "document.body.appendChild(a); a.click();",
++                                 Url("b.test", "/echo?from-essential"))));
++    const tabs::TabHandle opened =
++        tabs::TabInterface::GetFromContents(added.Wait())->GetHandle();
++    EXPECT_EQ("jar=shared", FirstCookieFor("/echo?from-essential"))
++        << "the page took Work's cookies";
++    ASSERT_TRUE(opened.Get());
++    ASSERT_TRUE(content::WaitForLoadStop(opened.Get()->GetContents()));
++    base::RunLoop().RunUntilIdle();
++    ASSERT_TRUE(opened.Get());
++    EXPECT_EQ(work_, model_->FindSpaceForTab(opened.Get()));
++    EXPECT_FALSE(spaces::IsSpaceStoragePartition(JarOf(opened.Get())))
++        << "the page was moved into Work's jar";
++    EXPECT_EQ(1, RequestsFor("/echo?from-essential"));
++
++    // From its next page on the tab is a tab of Work's.
++    content::ExecuteScriptAsync(
++        opened.Get()->GetContents(),
++        content::JsReplace("location.href = $1;",
++                           Url("b.test", "/echo?after-the-first-page")));
++    EXPECT_EQ("jar=work", FirstCookieFor("/echo?after-the-first-page"));
++  }
++
++  {
++    SCOPED_TRACE("AWindowOpenWithItsOpener");
++    ui_test_utils::TabAddedWaiter added(browser());
++    ASSERT_TRUE(content::ExecJs(
++        page, content::JsReplace("window.open($1, '_blank');",
++                                 Url("b.test", "/echo?opened-by-essential"))));
++    const tabs::TabHandle opened =
++        tabs::TabInterface::GetFromContents(added.Wait())->GetHandle();
++    EXPECT_EQ("jar=shared", FirstCookieFor("/echo?opened-by-essential"));
++    ASSERT_TRUE(opened.Get());
++    ASSERT_TRUE(content::WaitForLoadStop(opened.Get()->GetContents()));
++    base::RunLoop().RunUntilIdle();
++    ASSERT_TRUE(opened.Get());
++    EXPECT_FALSE(spaces::IsSpaceStoragePartition(JarOf(opened.Get())))
++        << "the page was loaded again in Work's jar";
++    EXPECT_EQ(1, RequestsFor("/echo?opened-by-essential"));
++    EXPECT_EQ(true, content::EvalJs(opened.Get()->GetContents(),
++                                    "window.opener !== null"))
++        << "the page lost its opener";
++  }
++}
++
++// sessions S20 (BACKLOG S-338): a blob: page a page of Work makes loads in
++// Work's jar, where the blob is, in the tab that asked for it. The tab was
++// made again in the profile's jar, which cannot read the blob, and the page
++// that made it was gone.
++IN_PROC_BROWSER_TEST_F(SpaceJarTest, ABlobPageStaysInItsSpacesJar) {
++  ASSERT_TRUE(model_->SetActiveSpace(work_));
++  tabs::TabInterface* const tab = work_tab_.Get();
++  content::WebContents* const page = tab->GetContents();
++  const content::StoragePartitionConfig jar = JarOf(tab);
++  ASSERT_TRUE(spaces::IsSpaceStoragePartition(jar));
++  content::TestNavigationObserver loaded(page);
++  ASSERT_TRUE(content::ExecJs(
++      page,
++      "location = URL.createObjectURL("
++      "    new Blob(['<p>hello</p>'], {type: 'text/html'}));"));
++  loaded.Wait();
++  base::RunLoop().RunUntilIdle();
++  ASSERT_EQ(page, tab->GetContents()) << "the tab was made again";
++  EXPECT_TRUE(loaded.last_navigation_succeeded());
++  EXPECT_TRUE(page->GetLastCommittedURL().SchemeIsBlob());
++  EXPECT_EQ("hello", content::EvalJs(page, "document.body.innerText"));
++  EXPECT_EQ(jar, JarOf(tab));
++}
++
++// sessions S20 (BACKLOG S-338): View Page Source of a page of Work shows the
++// source in a tab of Work, in Work's jar, and whatever it fetches goes with
++// Work's cookies. Content makes the source's tab in the profile's jar; its
++// load was stopped to move it, and the move then took the source page for
++// one of the browser's own and left it there, with nothing loaded.
++IN_PROC_BROWSER_TEST_F(SpaceJarTest, ViewSourceOfAPageOfASpaceIsInItsJar) {
++  ASSERT_TRUE(model_->SetActiveSpace(work_));
++  content::WebContents* const page = work_tab_.Get()->GetContents();
++  // A page of a site with a cookie in both jars.
++  const GURL url = Url("b.test", "/echo?source-of-work");
++  ASSERT_TRUE(content::NavigateToURL(page, url));
++  ASSERT_EQ("jar=work", FirstCookieFor("/echo?source-of-work"));
++  ui_test_utils::TabAddedWaiter added(browser());
++  page->GetPrimaryMainFrame()->ViewSource();
++  const tabs::TabHandle source =
++      tabs::TabInterface::GetFromContents(added.Wait())->GetHandle();
++  // A source page commits the page's own address in its frame; the tab's
++  // address is the view-source: one.
++  EXPECT_TRUE(base::test::RunUntil([&]() {
++    tabs::TabInterface* const tab = source.Get();
++    return tab &&
++           tab->GetContents()->GetPrimaryMainFrame()->GetLastCommittedURL() ==
++               url &&
++           !tab->GetContents()->IsLoading();
++  })) << "the source never loaded";
++  ASSERT_TRUE(source.Get());
++  content::WebContents* const shown = source.Get()->GetContents();
++  const content::NavigationEntry* const entry =
++      shown->GetController().GetLastCommittedEntry();
++  ASSERT_TRUE(entry);
++  EXPECT_TRUE(entry->IsViewSourceMode()) << "the page, not its source";
++  EXPECT_EQ(GURL(std::string(content::kViewSourceScheme) + ":" + url.spec()),
++            shown->GetLastCommittedURL());
++  EXPECT_EQ(work_, model_->FindSpaceForTab(source.Get()));
++  EXPECT_EQ(JarOf(work_tab_.Get()), JarOf(source.Get()))
++      << "the source is not in Work's jar";
++  for (const std::string& cookie : CookiesFor("/echo?source-of-work")) {
++    EXPECT_EQ("jar=work", cookie) << "the source was fetched in another jar";
++  }
++}
++
++// Sees whether a page asked before it sent a form again: Chromium's Confirm
++// Form Resubmission.
++class RepostWarningWatch : public content::WebContentsObserver {
++ public:
++  explicit RepostWarningWatch(content::WebContents* contents)
++      : content::WebContentsObserver(contents) {}
++
++  bool shown() const { return shown_; }
++
++  // content::WebContentsObserver:
++  void BeforeFormRepostWarningShow() override { shown_ = true; }
++
++ private:
++  bool shown_ = false;
++};
++
++// sessions S13 (BACKLOG S-345): Clear Independent Session loads the Space's
++// pages again in the empty jar, and a page a form sent loads its address
++// again without the form, asking nothing, in place of its history entry. The
++// form went again unasked, into the jar being cleared.
++IN_PROC_BROWSER_TEST_F(SpaceJarTest,
++                       ClearingTheSessionLoadsAFormsPageWithoutTheForm) {
++  ASSERT_TRUE(model_->SetActiveSpace(work_));
++  ASSERT_EQ(work_tab_.Get(), tabs()->GetActiveTab());
++  content::WebContents* const page = work_tab_.Get()->GetContents();
++  content::TestNavigationObserver posted(page);
++  const std::string path = "/echo?posted-in-work";
++  ASSERT_TRUE(content::ExecJs(
++      page, content::JsReplace(
++                "document.body.innerHTML = '<form method=post action=' + $1 +"
++                "    '><input name=note value=typed></form>';"
++                "document.forms[0].submit();",
++                Url("b.test", path))));
++  posted.Wait();
++  ASSERT_EQ(page, work_tab_.Get()->GetContents());
++  ASSERT_EQ(1, PostsFor(path));
++  content::NavigationController& controller = page->GetController();
++  ASSERT_TRUE(controller.GetLastCommittedEntry()->GetHasPostData());
++  const int entries = controller.GetEntryCount();
++
++  RepostWarningWatch warning(page);
++  base::test::TestFuture<void> wiped;
++  ASSERT_TRUE(model_->WipeIsolatedSession(work_, wiped.GetCallback()));
++  ASSERT_TRUE(wiped.Wait());
++  ASSERT_TRUE(base::test::RunUntil([&]() {
++    return warning.shown() || RequestsFor(path) > 1;
++  })) << "the page was not loaded again";
++  EXPECT_TRUE(content::WaitForLoadStop(page));
++  EXPECT_FALSE(warning.shown()) << "the reload asked about the form";
++  EXPECT_EQ(1, PostsFor(path)) << "the form was sent again";
++  EXPECT_EQ(Url("b.test", path), page->GetLastCommittedURL());
++  EXPECT_FALSE(controller.GetLastCommittedEntry()->GetHasPostData());
++  EXPECT_EQ(entries, controller.GetEntryCount())
++      << "the page's address was added to its history";
++}
++
+ // The Space menu's own rows -- Independent session, Clear Independent
+ // Session, Delete Space -- run as a click on them runs them, and answered at
+ // the question the window asks first (PLAN.md TST-17, SPC-9, SPC-20), and the
 diff --git a/components/page_info/page_info.cc b/components/page_info/page_info.cc
 index e56071dd2f9f0..6d373bd461012 100644
 --- a/components/page_info/page_info.cc

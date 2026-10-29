@@ -77,9 +77,9 @@ stays while Stedding ships more than one release on a Chromium build.
  chrome/browser/ui/stedding/BUILD.gn           |  44 ++
  chrome/browser/ui/stedding/app_updater.cc     |   5 +-
  chrome/browser/ui/stedding/app_updater.h      |  17 +
- chrome/browser/ui/stedding/app_updater_win.cc | 635 ++++++++++++++++++
- chrome/browser/ui/stedding/app_updater_win.h  |  64 ++
- .../ui/stedding/app_updater_win_unittest.cc   | 375 +++++++++++
+ chrome/browser/ui/stedding/app_updater_win.cc | 643 ++++++++++++++++++
+ chrome/browser/ui/stedding/app_updater_win.h  |  72 ++
+ .../ui/stedding/app_updater_win_unittest.cc   | 409 +++++++++++
  chrome/browser/ui/stedding/stedding_prefs.cc  |   2 +
  chrome/browser/ui/stedding/stedding_prefs.h   |   7 +
  .../ui/stedding/stedding_prefs_unittest.cc    |   3 +
@@ -104,7 +104,7 @@ stays while Stedding ships more than one release on a Chromium build.
  .../webstore_private/webstore_private_api.cc  |   4 +-
  net/cert/cert_verify_proc_builtin.cc          |   6 +-
  .../cert_verifier_service_factory.cc          |   7 +-
- 41 files changed, 1944 insertions(+), 46 deletions(-)
+ 41 files changed, 1994 insertions(+), 46 deletions(-)
  create mode 100644 chrome/browser/ui/stedding/app_updater_win.cc
  create mode 100644 chrome/browser/ui/stedding/app_updater_win.h
  create mode 100644 chrome/browser/ui/stedding/app_updater_win_unittest.cc
@@ -456,10 +456,10 @@ index b052078444575..6a8e5fe86f0dc 100644
  #endif  // CHROME_BROWSER_UI_STEDDING_APP_UPDATER_H_
 diff --git a/chrome/browser/ui/stedding/app_updater_win.cc b/chrome/browser/ui/stedding/app_updater_win.cc
 new file mode 100644
-index 0000000000000..fd14a4c65ccb4
+index 0000000000000..e24128e26faad
 --- /dev/null
 +++ b/chrome/browser/ui/stedding/app_updater_win.cc
-@@ -0,0 +1,635 @@
+@@ -0,0 +1,643 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -533,7 +533,6 @@ index 0000000000000..fd14a4c65ccb4
 +constexpr base::TimeDelta kQuitGrace = base::Seconds(20);
 +// The feed is a few kilobytes; the installer about 170 MB.
 +constexpr size_t kMaxFeedSize = 1024 * 1024;
-+constexpr base::TimeDelta kInstallTimeout = base::Minutes(10);
 +// A request that stalls ends, so the next check can run: the feed in a
 +// minute, the installer within two hours (170 MB at under 0.2 Mbit/s).
 +constexpr base::TimeDelta kFeedTimeout = base::Minutes(1);
@@ -683,26 +682,9 @@ index 0000000000000..fd14a4c65ccb4
 +  return result;
 +}
 +
-+// Off the UI thread: the installer, hidden, per user, beside the running
-+// browser; its exit code, or -1. It shows no window (mini_installer and
-+// setup.exe are windowed programs with no UI of their own).
++// The downloaded installer, through RunUpdateInstaller.
 +int RunInstaller(const base::FilePath& installer) {
-+  base::CommandLine command(installer);
-+  command.AppendSwitch("do-not-launch-chrome");
-+  command.AppendSwitch("verbose-logging");
-+  command.AppendSwitchPath("log-file",
-+                           installer.ReplaceExtension(FILE_PATH_LITERAL(".log")));
-+  base::LaunchOptions options;
-+  options.start_hidden = true;
-+  // A per-user install: never a system one, whatever the environment says.
-+  options.environment[L"GoogleUpdateIsMachine"] = std::wstring();
-+  base::Process process = base::LaunchProcess(command, options);
-+  int exit_code = -1;
-+  if (!process.IsValid() ||
-+      !process.WaitForExitWithTimeout(kInstallTimeout, &exit_code)) {
-+    return -1;
-+  }
-+  return exit_code;
++  return RunUpdateInstaller(base::CommandLine(installer));
 +}
 +
 +class WinAppUpdater : public AppUpdater {
@@ -915,6 +897,8 @@ index 0000000000000..fd14a4c65ccb4
 +    }
 +    // CONTINUE_ON_SHUTDOWN: a quit during the install must not wait for it;
 +    // the installer finishes on its own, and the next start finds its work.
++    // Until then the check stays busy, so no second installer starts over
++    // this one (RunUpdateInstaller).
 +    base::ThreadPool::PostTaskAndReplyWithResult(
 +        FROM_HERE,
 +        {base::MayBlock(), base::WithBaseSyncPrimitives(),
@@ -1044,6 +1028,30 @@ index 0000000000000..fd14a4c65ccb4
 +
 +}  // namespace
 +
++// The installer shows no window: mini_installer and setup.exe are windowed
++// programs with no UI of their own. It is waited for however long it runs
++// (BACKLOG S-343). An install slowed by a virus scan still finishes, and only
++// then is its result said and its folder deleted. Giving up after ten minutes
++// called a running install failed, deleted its folder under it, and let the
++// next check start a second installer beside it.
++int RunUpdateInstaller(base::CommandLine command) {
++  const base::FilePath installer = command.GetProgram();
++  command.AppendSwitch("do-not-launch-chrome");
++  command.AppendSwitch("verbose-logging");
++  command.AppendSwitchPath("log-file",
++                           installer.ReplaceExtension(FILE_PATH_LITERAL(".log")));
++  base::LaunchOptions options;
++  options.start_hidden = true;
++  // A per-user install: never a system one, whatever the environment says.
++  options.environment[L"GoogleUpdateIsMachine"] = std::wstring();
++  base::Process process = base::LaunchProcess(command, options);
++  int exit_code = -1;
++  if (!process.IsValid() || !process.WaitForExit(&exit_code)) {
++    return -1;
++  }
++  return exit_code;
++}
++
 +WinUpdaterEnvironment::WinUpdaterEnvironment() = default;
 +WinUpdaterEnvironment::WinUpdaterEnvironment(WinUpdaterEnvironment&&) = default;
 +WinUpdaterEnvironment& WinUpdaterEnvironment::operator=(
@@ -1097,10 +1105,10 @@ index 0000000000000..fd14a4c65ccb4
 +}  // namespace stedding
 diff --git a/chrome/browser/ui/stedding/app_updater_win.h b/chrome/browser/ui/stedding/app_updater_win.h
 new file mode 100644
-index 0000000000000..2693a93e4c2ce
+index 0000000000000..d21c80ed4faf9
 --- /dev/null
 +++ b/chrome/browser/ui/stedding/app_updater_win.h
-@@ -0,0 +1,64 @@
+@@ -0,0 +1,72 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -1111,6 +1119,7 @@ index 0000000000000..2693a93e4c2ce
 +#include <memory>
 +#include <string>
 +
++#include "base/command_line.h"
 +#include "base/files/file_path.h"
 +#include "base/functional/callback.h"
 +#include "base/memory/scoped_refptr.h"
@@ -1154,6 +1163,13 @@ index 0000000000000..2693a93e4c2ce
 +  bool allow_local_http = false;
 +};
 +
++// Off the UI thread: runs `command`, an update installer, hidden, per user and
++// beside the running browser, telling it not to launch the browser and to log
++// next to itself. Waits until it has exited, however long that takes; its exit
++// code, or -1 when it did not start (updates Up17, BACKLOG S-343). The
++// browser's run_installer runs the downloaded installer through it.
++int RunUpdateInstaller(base::CommandLine command);
++
 +// The updater, made with `environment`; it is AppUpdater::Get() while it
 +// lives. For tests: the browser makes it through StartAppUpdater.
 +std::unique_ptr<AppUpdater> CreateWinAppUpdater(
@@ -1167,10 +1183,10 @@ index 0000000000000..2693a93e4c2ce
 +#endif  // CHROME_BROWSER_UI_STEDDING_APP_UPDATER_WIN_H_
 diff --git a/chrome/browser/ui/stedding/app_updater_win_unittest.cc b/chrome/browser/ui/stedding/app_updater_win_unittest.cc
 new file mode 100644
-index 0000000000000..2c8f60d81a9e2
+index 0000000000000..b5b9d0a12b3a6
 --- /dev/null
 +++ b/chrome/browser/ui/stedding/app_updater_win_unittest.cc
-@@ -0,0 +1,375 @@
+@@ -0,0 +1,409 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -1184,6 +1200,8 @@ index 0000000000000..2c8f60d81a9e2
 +#include <vector>
 +
 +#include "base/base64.h"
++#include "base/base_switches.h"
++#include "base/command_line.h"
 +#include "base/files/file_util.h"
 +#include "base/files/scoped_temp_dir.h"
 +#include "base/functional/bind.h"
@@ -1191,8 +1209,11 @@ index 0000000000000..2c8f60d81a9e2
 +#include "base/strings/string_number_conversions.h"
 +#include "base/synchronization/lock.h"
 +#include "base/test/bind.h"
++#include "base/test/multiprocess_test.h"
 +#include "base/test/task_environment.h"
++#include "base/threading/platform_thread.h"
 +#include "base/time/time.h"
++#include "base/timer/elapsed_timer.h"
 +#include "chrome/browser/ui/stedding/app_updater.h"
 +#include "chrome/browser/ui/stedding/stedding_prefs.h"
 +#include "components/prefs/testing_pref_service.h"
@@ -1203,6 +1224,7 @@ index 0000000000000..2c8f60d81a9e2
 +#include "services/network/public/mojom/url_response_head.mojom.h"
 +#include "services/network/test/test_url_loader_factory.h"
 +#include "testing/gtest/include/gtest/gtest.h"
++#include "testing/multiprocess_func_list.h"
 +#include "third_party/boringssl/src/include/openssl/curve25519.h"
 +
 +namespace stedding {
@@ -1542,6 +1564,34 @@ index 0000000000000..2c8f60d81a9e2
 +  EXPECT_EQ(u"0.2.0-beta.19", updater_->version());
 +  task_environment_.FastForwardBy(base::Days(2));
 +  EXPECT_EQ(0u, loader_factory_.total_requests());
++}
++
++// A stand-in update installer for RunUpdateInstaller: it runs for a while,
++// then exits with a code of its own.
++MULTIPROCESS_TEST_MAIN(SteddingSlowInstaller) {
++  base::PlatformThread::Sleep(base::Seconds(3));
++  return 7;
++}
++
++// updates Up17 (BACKLOG S-343): the installer is waited for until it has
++// exited, and its own exit code is the result; -1 only when it never started.
++// The wait used to give up after ten minutes while setup went on, and the
++// updater then called the install failed and deleted its folder under it.
++// Ten minutes are too long for a test: this one pins that the wait ends when
++// the installer does, and with its code.
++TEST(WinUpdateInstallerTest, TheInstallerIsWaitedForUntilItExits) {
++  base::CommandLine installer = base::GetMultiProcessTestChildBaseCommandLine();
++  installer.AppendSwitchASCII(switches::kTestChildProcess,
++                              "SteddingSlowInstaller");
++  const base::ElapsedTimer timer;
++  EXPECT_EQ(7, RunUpdateInstaller(installer));
++  EXPECT_GE(timer.Elapsed(), base::Seconds(3)) << "it did not wait";
++
++  base::ScopedTempDir dir;
++  ASSERT_TRUE(dir.CreateUniqueTempDir());
++  EXPECT_EQ(-1, RunUpdateInstaller(base::CommandLine(
++                    dir.GetPath().Append(FILE_PATH_LITERAL("missing.exe")))))
++      << "an installer that does not start";
 +}
 +
 +}  // namespace

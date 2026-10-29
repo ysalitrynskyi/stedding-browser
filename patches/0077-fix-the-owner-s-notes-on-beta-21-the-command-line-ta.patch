@@ -92,11 +92,11 @@ its own (patches/README.md).
  chrome/browser/ui/stedding/motion.cc          |   68 +
  chrome/browser/ui/stedding/motion.h           |   77 +
  chrome/browser/ui/stedding/motion_unittest.cc |   96 ++
- chrome/browser/ui/stedding/pin_lifecycle.cc   |  283 +++-
+ chrome/browser/ui/stedding/pin_lifecycle.cc   |  294 +++-
  chrome/browser/ui/stedding/pin_lifecycle.h    |   63 +-
- .../ui/stedding/pin_lifecycle_unittest.cc     |   37 +-
- .../browser/ui/stedding/pin_unload_request.cc |   56 +
- .../browser/ui/stedding/pin_unload_request.h  |   57 +
+ .../ui/stedding/pin_lifecycle_unittest.cc     |   95 +-
+ .../browser/ui/stedding/pin_unload_request.cc |   63 +
+ .../browser/ui/stedding/pin_unload_request.h  |   63 +
  chrome/browser/ui/stedding/sleep_tabs.cc      |   30 +-
  chrome/browser/ui/stedding/sleep_tabs.h       |   12 +-
  .../ui/stedding/sleep_tabs_unittest.cc        |   75 +-
@@ -117,7 +117,7 @@ its own (patches/README.md).
  chrome/browser/ui/tabs/tab_menu_model.cc      |   14 +
  chrome/browser/ui/tabs/tab_strip_model.cc     |   40 +
  chrome/browser/ui/tabs/tab_strip_model.h      |    6 +
- chrome/browser/ui/unload_controller.cc        |    8 +
+ chrome/browser/ui/unload_controller.cc        |   14 +
  chrome/browser/ui/views/animations/BUILD.gn   |    1 +
  .../views/animations/tab_strip_animations.cc  |   19 +-
  .../ui/views/commandbar/command_bar_view.cc   |   37 +
@@ -171,7 +171,7 @@ its own (patches/README.md).
  .../toolbar/stedding_little_promote_button.h  |   66 +
  .../browser/ui/views/toolbar/toolbar_view.cc  |  104 +-
  chrome/test/stedding/BUILD.gn                 |   13 +
- .../test/stedding/address_band_browsertest.cc |  582 ++++++-
+ .../test/stedding/address_band_browsertest.cc |  587 ++++++-
  .../test/stedding/dock_reopen_browsertest.mm  |  126 ++
  .../test/stedding/folder_tabs_browsertest.cc  |  183 +-
  .../hidden_row_controls_browsertest.cc        |  289 +++-
@@ -204,7 +204,7 @@ its own (patches/README.md).
  .../cert_verifier/cert_verifier_service.h     |    4 +
  .../cert_verifier_service_factory_unittest.cc |    7 +
  .../cert_verifier_service_unittest.cc         |   10 +-
- 133 files changed, 11450 insertions(+), 445 deletions(-)
+ 133 files changed, 11543 insertions(+), 445 deletions(-)
  create mode 100644 chrome/browser/ui/stedding/little_mark.cc
  create mode 100644 chrome/browser/ui/stedding/little_mark.h
  create mode 100644 chrome/browser/ui/stedding/pin_unload_request.cc
@@ -1439,7 +1439,7 @@ index e0fb09992cfdf..15021ae9f968c 100644
 +
  }  // namespace stedding
 diff --git a/chrome/browser/ui/stedding/pin_lifecycle.cc b/chrome/browser/ui/stedding/pin_lifecycle.cc
-index be58ee17c713d..5b4d9541451a6 100644
+index be58ee17c713d..c5f71c616b2f7 100644
 --- a/chrome/browser/ui/stedding/pin_lifecycle.cc
 +++ b/chrome/browser/ui/stedding/pin_lifecycle.cc
 @@ -5,23 +5,39 @@
@@ -1493,7 +1493,7 @@ index be58ee17c713d..5b4d9541451a6 100644
  CloseAction CloseActionForTabs(BrowserWindowInterface* browser,
                                 const PrefService* prefs,
                                 const std::vector<tabs::TabInterface*>& taken) {
-@@ -92,30 +108,122 @@ CloseAction CloseActionForTabs(BrowserWindowInterface* browser,
+@@ -92,30 +108,133 @@ CloseAction CloseActionForTabs(BrowserWindowInterface* browser,
        (prefs && !prefs->GetBoolean(prefs::kPinsCloseSleeps))) {
      return CloseAction::kClose;
    }
@@ -1527,12 +1527,18 @@ index be58ee17c713d..5b4d9541451a6 100644
 -  if (CloseActionForTabs(browser, profile ? profile->GetPrefs() : nullptr,
 -                         doomed) == CloseAction::kClose) {
 -    return false;
++// Whether `url` is the pin's home page as H4 tells it, the drift mark's
++// measure: a trailing slash, the query and the fragment aside.
++bool IsHomePage(const GURL& home, const GURL& url) {
++  return url.is_valid() && !HasDriftedFromHome(home, url);
++}
++
 +// Whether `tab` is asleep at `home` already: nothing is left to unload or to
 +// send home.
 +bool IsAsleepAt(const tabs::TabInterface* tab, const GURL& home) {
 +  content::WebContents* const contents = tab->GetContents();
 +  return contents && contents->WasDiscarded() &&
-+         contents->GetLastCommittedURL() == home;
++         IsHomePage(home, contents->GetLastCommittedURL());
 +}
 +
 +// The title the pin's history gives its home, for the row while it sleeps.
@@ -1598,10 +1604,11 @@ index be58ee17c713d..5b4d9541451a6 100644
 +  }
 +}
 +
-+// pins H3: unloads `tab` and sends it home. A pin with a web home that is
-+// not asleep there gets contents asleep at home; one on its home's exact
-+// address is unloaded as Sleep Tab does, keeping its history, and reloads
-+// home. A pin without a web home (H13) is unloaded where it is.
++// pins H3: unloads `tab` and sends it home. A pin that left its home page
++// (H4) gets contents asleep at home; one on its home page -- a trailing
++// slash, the query and the fragment aside, a frame of it still loading or
++// not -- is unloaded as Sleep Tab does, keeping its history, and reloads that
++// page. A pin without a web home (H13) is unloaded where it is.
 +void UnloadAtHome(BrowserWindowInterface* browser, tabs::TabInterface* tab) {
 +  content::WebContents* const contents = tab ? tab->GetContents() : nullptr;
 +  spaces::SpaceModel* const model = spaces::SpaceModel::From(browser);
@@ -1616,8 +1623,12 @@ index be58ee17c713d..5b4d9541451a6 100644
 +  if (IsAsleepAt(tab, *home)) {
 +    return;
 +  }
-+  if (!contents->WasDiscarded() && contents->GetLastCommittedURL() == *home &&
-+      !contents->IsLoading()) {
++  // A navigation of the page itself, under way, could still commit somewhere
++  // else or hold the unload off: such a pin is sent home instead. A frame
++  // inside the page that is still loading changes nothing.
++  if (!contents->WasDiscarded() &&
++      IsHomePage(*home, contents->GetLastCommittedURL()) &&
++      !contents->HasUncommittedNavigationInPrimaryMainFrame()) {
 +    UnloadTabNow(tab);
 +    return;
 +  }
@@ -1633,7 +1644,7 @@ index be58ee17c713d..5b4d9541451a6 100644
    }
    TabStripModel* const tabs = browser->GetTabStripModel();
    // The active pin cannot sleep while it is on screen: move to another row
-@@ -137,9 +245,106 @@ bool SleepOrLeaveToClose(BrowserWindowInterface* browser,
+@@ -137,9 +256,106 @@ bool SleepOrLeaveToClose(BrowserWindowInterface* browser,
        tabs->delegate()->AddTabAt(GURL(chrome::kChromeUINewTabURL), -1, true);
      }
    }
@@ -1743,7 +1754,7 @@ index be58ee17c713d..5b4d9541451a6 100644
    return true;
  }
  
-@@ -152,6 +357,17 @@ CloseAction CloseActionFor(BrowserWindowInterface* browser,
+@@ -152,6 +368,17 @@ CloseAction CloseActionFor(BrowserWindowInterface* browser,
                : CloseAction::kClose;
  }
  
@@ -1761,7 +1772,7 @@ index be58ee17c713d..5b4d9541451a6 100644
  bool SleepInsteadOfClose(BrowserWindowInterface* browser) {
    TabStripModel* const tabs = browser ? browser->GetTabStripModel() : nullptr;
    return tabs && SleepOrLeaveToClose(browser, Selection(tabs));
-@@ -169,6 +385,11 @@ bool SleepInsteadOfClosingRow(BrowserWindowInterface* browser,
+@@ -169,6 +396,11 @@ bool SleepInsteadOfClosingRow(BrowserWindowInterface* browser,
    return SleepOrLeaveToClose(browser, model->SplitPeers(tab));
  }
  
@@ -1773,7 +1784,7 @@ index be58ee17c713d..5b4d9541451a6 100644
  void ResetToHome(BrowserWindowInterface* browser, tabs::TabInterface* tab) {
    spaces::SpaceModel* const model = spaces::SpaceModel::From(browser);
    const std::optional<GURL> home = model ? model->HomeUrl(tab) : std::nullopt;
-@@ -212,22 +433,4 @@ bool SetHomeAndGo(BrowserWindowInterface* browser,
+@@ -212,22 +444,4 @@ bool SetHomeAndGo(BrowserWindowInterface* browser,
    return true;
  }
  
@@ -1891,7 +1902,7 @@ index 6260b46539c61..8a46207879611 100644
  
  #endif  // CHROME_BROWSER_UI_STEDDING_PIN_LIFECYCLE_H_
 diff --git a/chrome/browser/ui/stedding/pin_lifecycle_unittest.cc b/chrome/browser/ui/stedding/pin_lifecycle_unittest.cc
-index b1bbe667672e2..9c00dd60d9dc6 100644
+index b1bbe667672e2..93bba197936ef 100644
 --- a/chrome/browser/ui/stedding/pin_lifecycle_unittest.cc
 +++ b/chrome/browser/ui/stedding/pin_lifecycle_unittest.cc
 @@ -274,10 +274,13 @@ TEST_F(PinHomeWindowTest, EditPinnedAddressTakesOnlyAWebPage) {
@@ -1912,7 +1923,7 @@ index b1bbe667672e2..9c00dd60d9dc6 100644
    tabs::TabInterface* const plain = OpenTab(GURL("https://example.com/"));
    tabs::TabInterface* const space_pin =
        OpenTab(GURL("https://mail.example.com/"));
-@@ -293,17 +296,16 @@ TEST_F(PinHomeWindowTest, AMiddleClickSendsAPinHomeAndClosesOnlyAPlainTab) {
+@@ -293,17 +296,74 @@ TEST_F(PinHomeWindowTest, AMiddleClickSendsAPinHomeAndClosesOnlyAPlainTab) {
  
    for (const bool close_sleeps : {true, false}) {
      SCOPED_TRACE(close_sleeps ? "Cmd-W sleeps pins" : "Cmd-W closes pins");
@@ -1937,10 +1948,68 @@ index b1bbe667672e2..9c00dd60d9dc6 100644
 +    EXPECT_EQ(pin_action, CloseActionForRow(browser(), prefs, homeless));
 +    EXPECT_EQ(CloseAction::kClose,
 +              CloseActionForRow(browser(), prefs, nullptr));
++  }
++}
++
++// pins H3, H4 (BACKLOG S-340): Cmd-W on a pin on its home page as H4 tells
++// it -- a trailing slash, a query or a fragment of its own -- unloads it
++// where it is and keeps its history, as on the home's exact address. Asleep
++// there, it is asleep at home: its close button is the x, and another close
++// leaves it as it is. Each of these was sent home as if it had drifted, its
++// history gone, while its row showed no drift. A pin that left its page
++// still goes home without its history.
++TEST_F(PinHomeWindowTest, CmdWKeepsTheHistoryOfAPinOnItsHomePage) {
++  const GURL home("https://mail.example.com/inbox");
++  const GURL away("https://mail.example.com/settings");
++  // A row to show while a pin sleeps.
++  OpenTab(GURL("https://example.com/"));
++  // A pin of `home` on screen, back on `page` after a visit away: its
++  // history holds three pages.
++  const auto pin_on = [&](const GURL& page) {
++    tabs::TabInterface* const pin = OpenTab(home);
++    space_model().SetSpacePinned(pin, true);
++    NavigateAndCommit(pin->GetContents(), away);
++    NavigateAndCommit(pin->GetContents(), page);
++    return pin;
++  };
++  const auto history = [](tabs::TabInterface* pin) {
++    return pin->GetContents()->GetController().GetEntryCount();
++  };
++
++  for (const GURL& page : {GURL("https://mail.example.com/inbox/"),
++                           GURL("https://mail.example.com/inbox?thread=7"),
++                           GURL("https://mail.example.com/inbox#thread-7")}) {
++    SCOPED_TRACE(page.spec());
++    tabs::TabInterface* const pin = pin_on(page);
++    ASSERT_EQ(std::optional<GURL>(home), space_model().HomeUrl(pin));
++    ASSERT_EQ(pin, tabs().GetActiveTab());
++    ASSERT_EQ(3, history(pin));
++
++    EXPECT_TRUE(SleepInsteadOfClose(browser()));
++    ASSERT_TRUE(pin->GetContents()->WasDiscarded()) << "the pin stayed awake";
++    EXPECT_EQ(page, pin->GetContents()->GetLastCommittedURL())
++        << "sent home as if it had drifted";
++    EXPECT_EQ(3, history(pin)) << "Cmd-W emptied the pin's history";
++
++    EXPECT_EQ(RowClose::kAskToRemove, RowCloseFor(browser(), pin))
++        << "the pin asleep on its home page is not asleep at home";
++    EXPECT_TRUE(SleepInsteadOfClosingTabs(browser(), {pin}));
++    EXPECT_EQ(page, pin->GetContents()->GetLastCommittedURL());
++    EXPECT_EQ(3, history(pin)) << "a second close emptied the pin's history";
++  }
++
++  {
++    SCOPED_TRACE("a pin that left its page");
++    tabs::TabInterface* const pin = pin_on(away);
++    EXPECT_TRUE(SleepInsteadOfClose(browser()));
++    ASSERT_TRUE(pin->GetContents()->WasDiscarded()) << "the pin stayed awake";
++    EXPECT_EQ(home, pin->GetContents()->GetLastCommittedURL())
++        << "the pin did not go back home";
++    EXPECT_EQ(1, history(pin));
    }
  }
  
-@@ -335,8 +337,9 @@ TEST_F(PinHomeWindowTest, CmdWClosesAPinnedTabOutsideAWindowWithSpaces) {
+@@ -335,8 +395,9 @@ TEST_F(PinHomeWindowTest, CmdWClosesAPinnedTabOutsideAWindowWithSpaces) {
              CloseActionFor(app.get(), profile()->GetPrefs()));
    EXPECT_FALSE(SleepInsteadOfClose(app.get()));
    EXPECT_EQ(2, app_tabs->count()) << "nothing was closed or slept here";
@@ -1954,10 +2023,10 @@ index b1bbe667672e2..9c00dd60d9dc6 100644
    tabs::TabInterface* const pin = OpenTab(GURL("https://mail.example.com/"));
 diff --git a/chrome/browser/ui/stedding/pin_unload_request.cc b/chrome/browser/ui/stedding/pin_unload_request.cc
 new file mode 100644
-index 0000000000000..5fd3f04970314
+index 0000000000000..bba00506bc34a
 --- /dev/null
 +++ b/chrome/browser/ui/stedding/pin_unload_request.cc
-@@ -0,0 +1,56 @@
+@@ -0,0 +1,63 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -2011,15 +2080,22 @@ index 0000000000000..5fd3f04970314
 +  return true;
 +}
 +
++// static
++void PinUnloadRequest::Drop(content::WebContents* contents) {
++  if (IsAsking(contents)) {
++    contents->RemoveUserData(UserDataKey());
++  }
++}
++
 +WEB_CONTENTS_USER_DATA_KEY_IMPL(PinUnloadRequest);
 +
 +}  // namespace stedding
 diff --git a/chrome/browser/ui/stedding/pin_unload_request.h b/chrome/browser/ui/stedding/pin_unload_request.h
 new file mode 100644
-index 0000000000000..67f07b18fc033
+index 0000000000000..94dea86df1bbb
 --- /dev/null
 +++ b/chrome/browser/ui/stedding/pin_unload_request.h
-@@ -0,0 +1,57 @@
+@@ -0,0 +1,63 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -2064,6 +2140,12 @@ index 0000000000000..67f07b18fc033
 +  // The unload controller's hook: true when `proceed` answers a question
 +  // asked here. The caller then neither unloads nor closes the page.
 +  static bool TakeAnswer(content::WebContents* contents, bool proceed);
++
++  // The unload controller's hook when a window close or a quit that started
++  // while the question showed waits for the same page: the page answers only
++  // once, and that answer is the close's. Forgets the question asked for
++  // `contents`; its `answered` never runs, so the pin is kept as it is.
++  static void Drop(content::WebContents* contents);
 +
 + private:
 +  friend class content::WebContentsUserData<PinUnloadRequest>;
@@ -3347,7 +3429,7 @@ index f002d9cc2ab59..ccdde11b930de 100644
    // The tabs take on the pinnedness of the tabs already in the group. Tabs
    // before the group will move to the start, while tabs after the group will
 diff --git a/chrome/browser/ui/unload_controller.cc b/chrome/browser/ui/unload_controller.cc
-index 78eeb71679153..eb99addd7e54f 100644
+index 78eeb71679153..336c0b3ce27e7 100644
 --- a/chrome/browser/ui/unload_controller.cc
 +++ b/chrome/browser/ui/unload_controller.cc
 @@ -30,6 +30,7 @@
@@ -3358,14 +3440,20 @@ index 78eeb71679153..eb99addd7e54f 100644
  #include "chrome/browser/ui/tabs/tab_enums.h"
  #include "chrome/browser/ui/tabs/tab_group_model.h"
  #include "chrome/browser/ui/tabs/tab_strip_model.h"
-@@ -257,6 +258,13 @@ bool UnloadController::RunUnloadListenerBeforeClosing(
+@@ -257,6 +258,19 @@ bool UnloadController::RunUnloadListenerBeforeClosing(
  void UnloadController::BeforeUnloadFired(content::WebContents* web_contents,
                                           bool proceed,
                                           bool* proceed_to_fire_unload) {
 +  // Stedding (pins H3): a pin's page was asked before the pin is unloaded,
 +  // not closed. Its answer goes back to the pin, and the page is neither
-+  // unloaded nor closed here: Leave would have closed the tab.
-+  if (stedding::PinUnloadRequest::TakeAnswer(web_contents, proceed)) {
++  // unloaded nor closed here: Leave would have closed the tab. A window close
++  // or a quit that began while the question showed waits for this page too,
++  // which answers once: the answer is the close's, so Stay cancels it and
++  // Leave goes on, and the pin's question is dropped.
++  if (is_attempting_to_close_browser() &&
++      tabs_needing_before_unload_fired_.contains(web_contents)) {
++    stedding::PinUnloadRequest::Drop(web_contents);
++  } else if (stedding::PinUnloadRequest::TakeAnswer(web_contents, proceed)) {
 +    *proceed_to_fire_unload = false;
 +    return;
 +  }
@@ -3440,7 +3528,7 @@ index fc93de593316a..0183c9a2e99d6 100644
               Animate(kTopCorner, FromValue(-1.0), ToValue(DefaultValue())),
               Animate(kBottomCorner, FromValue(-1.0), ToValue(1.0)),
 diff --git a/chrome/browser/ui/views/commandbar/command_bar_view.cc b/chrome/browser/ui/views/commandbar/command_bar_view.cc
-index 3402ce3e7149c..99f706aa1b20a 100644
+index 16c5a9968f8cf..677d9d94be82d 100644
 --- a/chrome/browser/ui/views/commandbar/command_bar_view.cc
 +++ b/chrome/browser/ui/views/commandbar/command_bar_view.cc
 @@ -110,6 +110,12 @@
@@ -3456,7 +3544,7 @@ index 3402ce3e7149c..99f706aa1b20a 100644
  namespace stedding {
  namespace {
  
-@@ -2452,6 +2458,22 @@ void CommandBarView::HoldChord() {
+@@ -2444,6 +2450,22 @@ void CommandBarView::HoldChord() {
    for (const ui::Accelerator& accelerator : HeldChordAccelerators()) {
      AddAccelerator(accelerator);
    }
@@ -3479,7 +3567,7 @@ index 3402ce3e7149c..99f706aa1b20a 100644
  #if BUILDFLAG(IS_MAC)
    // Ahead of the main menu: the window's key equivalents ask the focus
    // manager's priority handlers before the menu, whose Stop has Cmd-Period.
-@@ -2479,7 +2501,22 @@ void CommandBarView::EndHold() {
+@@ -2471,7 +2493,22 @@ void CommandBarView::EndHold() {
      cancel_chord_manager_ = nullptr;
    }
  #endif
@@ -7399,7 +7487,7 @@ index e95a51469d691..4d92c6c3bfaa5 100644
      frameworks = [ "Carbon.framework" ]
      data_deps += [
 diff --git a/chrome/test/stedding/address_band_browsertest.cc b/chrome/test/stedding/address_band_browsertest.cc
-index d6b80c83659c2..03d7dfd3efc02 100644
+index d6b80c83659c2..479ee632c836c 100644
 --- a/chrome/test/stedding/address_band_browsertest.cc
 +++ b/chrome/test/stedding/address_band_browsertest.cc
 @@ -21,6 +21,7 @@
@@ -7813,7 +7901,7 @@ index d6b80c83659c2..03d7dfd3efc02 100644
  // toolbar T23: a bubble asked for before its window is shown, with the
  // address row hidden -- the crashed-session "Restore pages?" bubble at
  // startup -- anchors to the top container. The app menu button is not drawn,
-@@ -1281,4 +1569,294 @@ IN_PROC_BROWSER_TEST_F(AddressBandTest, TheAppMenusChipIsAButtonsHeight) {
+@@ -1281,4 +1569,299 @@ IN_PROC_BROWSER_TEST_F(AddressBandTest, TheAppMenusChipIsAButtonsHeight) {
        << "the chip runs past the row";
  }
  
@@ -7986,8 +8074,13 @@ index d6b80c83659c2..03d7dfd3efc02 100644
 +      extensions::ChromeTestExtensionLoader(browser()->GetProfile())
 +          .LoadExtension(dir.UnpackedPath());
 +  ASSERT_TRUE(probe);
-+  ToolbarActionsModel::Get(browser()->GetProfile())
-+      ->SetActionVisibility(probe->id(), true);
++  // Chromium 157 pins an extension's button when it is installed
++  // (docs/HANDOFF.md trap 134); pinning it again fails a DCHECK.
++  ToolbarActionsModel* const actions =
++      ToolbarActionsModel::Get(browser()->GetProfile());
++  if (!actions->IsActionPinned(probe->id())) {
++    actions->SetActionVisibility(probe->id(), true);
++  }
 +  ExtensionsToolbarDesktop* const extensions =
 +      view()->toolbar()->extensions_container();
 +  ASSERT_TRUE(extensions);

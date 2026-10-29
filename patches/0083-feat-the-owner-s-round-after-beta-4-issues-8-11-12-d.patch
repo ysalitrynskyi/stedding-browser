@@ -92,11 +92,11 @@ the hover card).
  .../ui/page_action/page_action_triggers.h     |   7 +
  chrome/browser/ui/spaces/folder_commands.cc   |   9 +-
  .../ui/spaces/folder_commands_unittest.cc     |  30 +
- chrome/browser/ui/spaces/new_tab_space.cc     |  17 +-
- chrome/browser/ui/spaces/new_tab_space.h      |   3 +-
- .../spaces/space_jar_navigation_throttle.cc   |  10 +-
+ chrome/browser/ui/spaces/new_tab_space.cc     |  45 +-
+ chrome/browser/ui/spaces/new_tab_space.h      |  26 +-
+ .../spaces/space_jar_navigation_throttle.cc   |  28 +-
  chrome/browser/ui/spaces/space_model.cc       | 396 +++++++----
- chrome/browser/ui/spaces/space_model.h        |  79 ++-
+ chrome/browser/ui/spaces/space_model.h        | 101 ++-
  .../ui/spaces/space_model_window_unittest.cc  | 440 +++++++++---
  .../ui/spaces/space_storage_partition.cc      |  30 +-
  .../ui/spaces/tab_space_restore_data.cc       |  15 +-
@@ -118,8 +118,8 @@ the hover card).
  .../ui/views/page_action/page_action_view.cc  |  17 +-
  ...edding_copy_link_page_action_controller.cc | 153 ++++
  ...tedding_copy_link_page_action_controller.h | 115 +++
- .../ui/views/spaces/space_drag_target.cc      | 127 +++-
- .../ui/views/spaces/space_drag_target.h       |  47 +-
+ .../ui/views/spaces/space_drag_target.cc      | 165 ++++-
+ .../ui/views/spaces/space_drag_target.h       |  53 +-
  .../ui/views/spaces/space_switcher_rules.cc   |  26 +
  .../ui/views/spaces/space_switcher_rules.h    |  17 +
  .../spaces/space_switcher_rules_unittest.cc   |  44 ++
@@ -172,7 +172,7 @@ the hover card).
  components/tabs/impl/tab_strip_collection.cc  |  98 +++
  .../tab_collection_observer_unittest.cc       | 161 +++++
  components/tabs/public/tab_strip_collection.h |  22 +
- 92 files changed, 6436 insertions(+), 752 deletions(-)
+ 92 files changed, 6558 insertions(+), 765 deletions(-)
  create mode 100644 chrome/browser/ui/views/page_action/stedding_copy_link_page_action_controller.cc
  create mode 100644 chrome/browser/ui/views/page_action/stedding_copy_link_page_action_controller.h
  create mode 100644 chrome/browser/ui/views/tabs/hovercard/tab_resource_line.cc
@@ -484,7 +484,7 @@ index dedc5dacd5399..0a9b27a3eab3f 100644
  // row -- after a nested folder, not inside it -- in the active Space, makes
  // it the active tab and expands the folder. A folder that is not there takes
 diff --git a/chrome/browser/ui/spaces/new_tab_space.cc b/chrome/browser/ui/spaces/new_tab_space.cc
-index 90bff3f9f19a7..14b7adbe6d03e 100644
+index 90bff3f9f19a7..b8fed757a1849 100644
 --- a/chrome/browser/ui/spaces/new_tab_space.cc
 +++ b/chrome/browser/ui/spaces/new_tab_space.cc
 @@ -31,16 +31,17 @@ const ScopedServiceWorkerWindow* g_service_worker_window = nullptr;
@@ -520,22 +520,71 @@ index 90bff3f9f19a7..14b7adbe6d03e 100644
    // web apps Wa14: a link leaving an app's window opens in the Space whose
    // jar the app's page lives in, so the page it opens keeps that session. An
    // app window has no Spaces of its own to name one.
-@@ -81,7 +86,9 @@ std::optional<NewTabSpaceChoice> ChooseSpaceForNewTab(
+@@ -64,6 +69,19 @@ std::optional<SpaceId> SourceSpace(SpaceModel& model,
+   return id;
+ }
+ 
++// Whether `source` is a shared essential: a Chromium pin every Space shares,
++// on the profile's shared jar (sessions S8).
++bool IsSharedEssentialSource(content::WebContents* source) {
++  tabs::TabInterface* const tab =
++      source ? tabs::TabInterface::MaybeGetFromContents(source) : nullptr;
++  if (!tab || !tab->IsPinned()) {
++    return false;
++  }
++  BrowserWindowInterface* const window = tab->GetBrowserWindowInterface();
++  const SpaceModel* const model = window ? SpaceModel::From(window) : nullptr;
++  return model && model->IsSharedEssential(tab);
++}
++
+ }  // namespace
+ 
+ std::optional<NewTabSpaceChoice> ChooseSpaceForNewTab(
+@@ -81,7 +99,15 @@ std::optional<NewTabSpaceChoice> ChooseSpaceForNewTab(
        .space = essential ? model->active_id()
                           : SourceSpace(*model, window, source, opened_by_page)
                                 .value_or(model->active_id()),
 -      .essential = essential};
 +      // spaces B6: an essential made in a Space with its own session is
 +      // that Space's own, in its jar; any other is in the shared jar.
-+      .essential = essential && !model->SpaceIsIsolated(model->active_id())};
++      .essential = essential && !model->SpaceIsIsolated(model->active_id()),
++      // sessions S8, S11 (BACKLOG S-338): a page a shared essential opens
++      // lands in the essential's jar, the shared one, in whichever Space it
++      // is filed: made in the jar of the Space on screen, it took that
++      // Space's cookies to an address a page outside that session chose.
++      .keeps_jar =
++          !essential && opened_by_page && IsSharedEssentialSource(source)};
    if (essential || !may_route) {
      return choice;
    }
+@@ -90,6 +116,8 @@ std::optional<NewTabSpaceChoice> ChooseSpaceForNewTab(
+       routed && *routed != choice.space) {
+     choice.routed_from = choice.space;
+     choice.space = *routed;
++    // A route names its Space's jar (routing D2).
++    choice.keeps_jar = false;
+   }
+   return choice;
+ }
+@@ -160,8 +188,11 @@ std::unique_ptr<content::WebContents> PlaceOpenedContents(
+     return contents;
+   }
+   SpaceModel* const model = SpaceModel::From(window);
+-  if (may_remake && NeedsOtherJar(contents.get(), url, model->registry(),
+-                                  choice->space, /*essential=*/false)) {
++  // A page a shared essential opens is in the essential's jar as content
++  // made it: the profile's shared one, or its opener's.
++  if (may_remake && !choice->keeps_jar &&
++      NeedsOtherJar(contents.get(), url, model->registry(), choice->space,
++                    /*essential=*/false)) {
+     remake(SiteInstanceForSpaceTab(context, url, model->registry(),
+                                    choice->space, /*essential=*/false));
+   }
 diff --git a/chrome/browser/ui/spaces/new_tab_space.h b/chrome/browser/ui/spaces/new_tab_space.h
-index 46593bd33fe4c..e77a7cdc91fa7 100644
+index 46593bd33fe4c..ee7029d094e23 100644
 --- a/chrome/browser/ui/spaces/new_tab_space.h
 +++ b/chrome/browser/ui/spaces/new_tab_space.h
-@@ -31,7 +31,8 @@ struct NewTabSpaceChoice {
+@@ -31,8 +31,17 @@ struct NewTabSpaceChoice {
    // Set when a route named `space`: the Space the tab would have opened in
    // without it, so the window can say where the tab went and undo it.
    std::optional<SpaceId> routed_from;
@@ -543,21 +592,91 @@ index 46593bd33fe4c..e77a7cdc91fa7 100644
 +  // A shared essential (a Chromium pin) lives on the profile's shared jar; a
 +  // Space's own essential (spaces B6) is false here, in its Space's jar.
    bool essential = false;
++  // Set when the contents are made in a jar other than `space`'s, the one
++  // the page they open must load in: a page a shared essential opens, in the
++  // essential's shared jar (sessions S8, S11), and a service worker's window
++  // while its Space's session is off, in the worker's jar (S7, S30). The
++  // window files the tab without moving it; its next navigation after that
++  // page moves it to its Space's jar (SpaceJarNavigationThrottle), as a page
++  // left with unsaved changes moves (S21; BACKLOG S-338).
++  bool keeps_jar = false;
  };
  
+ // Chooses the Space for a tab about to be made in `window` to open `url`,
+@@ -47,7 +56,8 @@ struct NewTabSpaceChoice {
+ // a Space switch is making one for the Space coming on screen, so the source
+ // alone decides nothing there. `may_route`: false for a page that shares a
+ // browsing instance with its opener, which must stay in its opener's jar.
+-// Nullopt in a window without Spaces.
++// A page a shared essential opens keeps the essential's jar unless a route
++// names a Space for it (`keeps_jar`). Nullopt in a window without Spaces.
+ std::optional<NewTabSpaceChoice> ChooseSpaceForNewTab(
+     BrowserWindowInterface* window,
+     content::WebContents* source,
+@@ -81,8 +91,10 @@ class NewTabSpace : public content::WebContentsUserData<NewTabSpace> {
+ // noopener popup -- goes where a route names, if one does, and content made
+ // it in the profile's shared jar: when its Space keeps a jar of its own, it
+ // is made again there before it loads anything, and the contents returned
+-// are the ones to add; content loads the page into those. `disposition` is
+-// where it opens. The contents returned carry the choice.
++// are the ones to add; content loads the page into those. A page a shared
++// essential opens stays in the shared jar, the essential's, wherever it is
++// filed (sessions S11). `disposition` is where it opens. The contents
++// returned carry the choice.
+ std::unique_ptr<content::WebContents> PlaceOpenedContents(
+     BrowserWindowInterface* window,
+     content::WebContents* source,
+@@ -92,8 +104,10 @@ std::unique_ptr<content::WebContents> PlaceOpenedContents(
+ 
+ // sessions S30: while one is alive, the tab Navigate() makes for a service
+ // worker's window (clients.openWindow) is made in the worker's own jar,
+-// `worker_partition`, and filed in the Space that keeps that jar, whichever
+-// Space is on screen and whatever a route says (BACKLOG S-180).
++// `worker_partition`, and filed in the Space whose jar it is, whichever
++// Space is on screen and whatever a route says (BACKLOG S-180). A Space whose
++// session is off keeps its jar and the workers in it (S7), so the window
++// still opens there (BACKLOG S-338).
+ // ChromeContentBrowserClient::OpenURL holds one around its Navigate(), which
+ // makes the tab before it returns. UI thread only.
+ class ScopedServiceWorkerWindow {
 diff --git a/chrome/browser/ui/spaces/space_jar_navigation_throttle.cc b/chrome/browser/ui/spaces/space_jar_navigation_throttle.cc
-index 9cb917131b6fe..dfcf9a3178c2b 100644
+index 9cb917131b6fe..4f5e3db5ebbd3 100644
 --- a/chrome/browser/ui/spaces/space_jar_navigation_throttle.cc
 +++ b/chrome/browser/ui/spaces/space_jar_navigation_throttle.cc
-@@ -74,14 +74,18 @@ SpaceJarNavigationThrottle::WillStartRequest() {
+@@ -15,6 +15,7 @@
+ #include "chrome/browser/ui/spaces/space_id.h"
+ #include "chrome/browser/ui/spaces/space_model.h"
+ #include "chrome/browser/ui/spaces/space_storage_partition.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "components/tabs/public/tab_interface.h"
+ #include "content/public/browser/navigation_controller.h"
+ #include "content/public/browser/navigation_handle.h"
+@@ -72,16 +73,33 @@ SpaceJarNavigationThrottle::WillStartRequest() {
+   tabs::TabInterface* const tab =
+       tabs::TabInterface::MaybeGetFromContents(contents);
    SpaceModel* const model = ModelOf(tab);
-   const std::optional<SpaceId> space =
+-  const std::optional<SpaceId> space =
++  std::optional<SpaceId> space =
        model ? model->FindSpaceForTab(tab) : std::nullopt;
-+  // spaces B6: a Space's own essential follows its Space's jar; a shared one
-+  // stays in the shared jar.
-   if (!space || !NeedsOtherJar(contents, handle->GetURL(), model->registry(),
+-  if (!space || !NeedsOtherJar(contents, handle->GetURL(), model->registry(),
 -                               *space, tab->IsPinned())) {
-+                               *space, model->IsSharedEssential(tab))) {
++  // A tab whose page starts as the tab arrives -- the one View Page Source
++  // makes, which the strip loads as it shows it -- is filed now, as the
++  // model files it a moment later. Not yet filed, its page went to the
++  // network in the jar content made the tab in, the profile's (sessions
++  // S20, BACKLOG S-338).
++  if (model && !space &&
++      tab->GetBrowserWindowInterface()->GetTabStripModel()->GetIndexOfTab(
++          tab) != TabStripModel::kNoTab) {
++    space = model->SpaceForTab(tab);
++  }
++  // spaces B6: a Space's own essential follows its Space's jar; a shared one
++  // stays in the shared jar. A tab made in another jar for the page it opens
++  // -- a page a shared essential opened, a service worker's window -- loads
++  // that page there (sessions S11, S30; BACKLOG S-338).
++  if (!space || model->KeepsJarItWasMadeIn(tab) ||
++      !NeedsOtherJar(contents, handle->GetURL(), model->registry(), *space,
++                     model->IsSharedEssential(tab))) {
      return PROCEED;
    }
    // A form a web page sends goes with the session the page was filled in:
@@ -1207,7 +1326,7 @@ index 8a55fde57239a..7f67370fc5976 100644
  }
  
 diff --git a/chrome/browser/ui/spaces/space_model.h b/chrome/browser/ui/spaces/space_model.h
-index d7da9ae8c7b7f..a49a6392611d9 100644
+index d7da9ae8c7b7f..11a7d25798116 100644
 --- a/chrome/browser/ui/spaces/space_model.h
 +++ b/chrome/browser/ui/spaces/space_model.h
 @@ -120,12 +120,6 @@ class SpaceModel : public TabStripModelObserver,
@@ -1238,7 +1357,20 @@ index d7da9ae8c7b7f..a49a6392611d9 100644
    // tabs R33, R37: what TabStripModel shows when the tab on screen leaves
    // the strip with `leaving`: RowToShowAfter(), and when the Space has no
    // row of its own left, the essential used most recently in it, else the
-@@ -440,12 +442,6 @@ class SpaceModel : public TabStripModelObserver,
+@@ -344,6 +346,12 @@ class SpaceModel : public TabStripModelObserver,
+   // (BACKLOG S-180).
+   std::optional<SpaceId> SpaceKeepingJar(
+       const content::StoragePartitionConfig& config) const;
++  // sessions S7, S30: the Space of this window whose token names `config`,
++  // its session on or off -- off, the Space keeps its jar and the service
++  // workers in it (BACKLOG S-338). Nullopt for the shared jar and for a jar
++  // no Space names.
++  std::optional<SpaceId> SpaceNamingJar(
++      const content::StoragePartitionConfig& config) const;
+   // PLAN.md SPC-9: the open pages of Space `id` that a change of its jar
+   // reloads -- awake web pages, not essentials nor new-tab pages -- in this
+   // window and every window that shares its Spaces. The question before an
+@@ -440,12 +448,6 @@ class SpaceModel : public TabStripModelObserver,
    // D4: puts the last routed tab back in the Space it opened in and shows
    // that Space. False when there is nothing to undo.
    bool UndoLastRoute();
@@ -1251,7 +1383,7 @@ index d7da9ae8c7b7f..a49a6392611d9 100644
  
    // PLAN.md SPC-9: `tab` kept its jar for changes the user had not saved,
    // and has just been left. It moves to its Space's jar and goes where it was
-@@ -464,6 +460,20 @@ class SpaceModel : public TabStripModelObserver,
+@@ -464,6 +466,26 @@ class SpaceModel : public TabStripModelObserver,
    // line there, and skipped by Clear -- unlike Chromium-pinned tabs, which are
    // the essentials row and sit above every Space.
    bool IsSpacePinned(const tabs::TabInterface* tab) const;
@@ -1265,6 +1397,12 @@ index d7da9ae8c7b7f..a49a6392611d9 100644
 +  // profile's shared jar. The Space is the tab's (FindSpaceForTab).
 +  bool IsOwnEssential(const tabs::TabInterface* tab) const;
 +  bool IsSharedEssential(const tabs::TabInterface* tab) const;
++  // sessions S11, S30 (BACKLOG S-338): `tab` was made in a jar other than its
++  // Space's for the page it opens first -- a page a shared essential opened,
++  // or a service worker's window (NewTabSpaceChoice::keeps_jar) -- and that
++  // page has not come yet. No rebind moves it until then; its next
++  // navigation moves it to its Space's jar (SpaceJarNavigationThrottle).
++  bool KeepsJarItWasMadeIn(const tabs::TabInterface* tab) const;
 +  // The first Space, in the switcher's order, without a session of its own:
 +  // the one that shows the shared essentials. None when every Space has one,
 +  // and then every Space shows them.
@@ -1272,7 +1410,7 @@ index d7da9ae8c7b7f..a49a6392611d9 100644
    // The session extra data that describes `tab`'s place in Spaces: its Space
    // and, when set, its per-Space pin. Both the incremental writes and the
    // startup rebuild of the session log emit exactly this, so the two cannot
-@@ -477,6 +487,10 @@ class SpaceModel : public TabStripModelObserver,
+@@ -477,6 +499,10 @@ class SpaceModel : public TabStripModelObserver,
    // under the line (pins H14). Every caller (menu, Cmd-D) gets the same
    // result. To unpin several tabs in their order, unpin the last first.
    void SetSpacePinned(tabs::TabInterface* tab, bool pinned);
@@ -1283,7 +1421,7 @@ index d7da9ae8c7b7f..a49a6392611d9 100644
  
    // folders F38, pins H14 (the owner, 2026-10-20): a folder in the pinned
    // run, as in Arc. A top-level folder whose tabs are all Space-pinned is a
-@@ -498,6 +512,15 @@ class SpaceModel : public TabStripModelObserver,
+@@ -498,6 +524,15 @@ class SpaceModel : public TabStripModelObserver,
                                size_t slot);
    // Whether `folder` has a tab and every one of its tabs is Space-pinned.
    bool IsFolderSpacePinned(const tabs::FolderTabCollection* folder) const;
@@ -1299,7 +1437,7 @@ index d7da9ae8c7b7f..a49a6392611d9 100644
  
    // The home URL of a pinned tab (either tier), or nothing for an unpinned
    // tab or a pin that predates homes (pins H1).
-@@ -615,6 +638,11 @@ class SpaceModel : public TabStripModelObserver,
+@@ -615,6 +650,11 @@ class SpaceModel : public TabStripModelObserver,
    std::string IsolatedJarOf(const SpaceId& id) const;
    // Moves every tab of `from` to `to`, saving and rebinding each.
    void RefileTabs(const SpaceId& from, const SpaceId& to);
@@ -1311,16 +1449,33 @@ index d7da9ae8c7b7f..a49a6392611d9 100644
    // SetActiveSpace's tail once `active_id_` has changed from `previous`: the
    // visible tab, the observers, the session and the sleep timers.
    // `tell_registry` is false inside the registry's own notification.
-@@ -696,6 +724,8 @@ class SpaceModel : public TabStripModelObserver,
+@@ -677,6 +717,12 @@ class SpaceModel : public TabStripModelObserver,
+   // spaces B2 (PLAN.md SPC-25): this window's Spaces came from its session
+   // (RestoreFrom), so every one of them joins the registry by id.
+   bool restored_from_session_ = false;
++  // sessions S2 (BACKLOG S-338): the jar each of those Spaces had when the
++  // session was written, by id -- its token, and whether its session was on
++  // -- for a Space the registry lacks to come back with. The registry's copy
++  // is in the preferences, which a kill can lose after the session was
++  // written. Spent by the first SyncWithRegistry.
++  std::map<SpaceId, std::pair<std::string, bool>> session_jars_;
+   base::ScopedObservation<SpaceRegistry, SpaceRegistry::Observer>
+       registry_observation_{this};
+ 
+@@ -696,6 +742,12 @@ class SpaceModel : public TabStripModelObserver,
    // during its first load -- so it is the address asked for, not the page it
    // lands on (PLAN.md TAB-26). The first commit settles each, once.
    std::set<tabs::TabHandle> homes_before_commit_;
 +  // IsOwnEssential(): the essentials that are their Space's own.
 +  std::set<tabs::TabHandle> own_essentials_;
++  // KeepsJarItWasMadeIn(): the tabs made in another jar than their Space's
++  // for their first page. Each leaves once that page has come
++  // (OnTabChangedAt), or when the user moves the tab to another Space.
++  std::set<tabs::TabHandle> jars_kept_until_loaded_;
    // Records, or forgets, that `tab`'s home was just taken before a commit.
    void NoteHomeTakenBeforeCommit(const tabs::TabInterface* tab);
    // The tab the user last had active in each Space, so coming back to a Space
-@@ -708,6 +738,8 @@ class SpaceModel : public TabStripModelObserver,
+@@ -708,6 +760,8 @@ class SpaceModel : public TabStripModelObserver,
    void RecordActivation(tabs::TabInterface* tab);
    void AddToHistory(tabs::TabInterface* tab);
    std::map<SpaceId, std::vector<tabs::TabHandle>> history_;
@@ -1329,7 +1484,7 @@ index d7da9ae8c7b7f..a49a6392611d9 100644
    // tabs R34: the restore is over; the tab on screen is the first the user
    // has.
    void OnSessionRestored(Profile* profile, int tabs_restored);
-@@ -776,29 +808,6 @@ class SpaceModel : public TabStripModelObserver,
+@@ -776,29 +830,6 @@ class SpaceModel : public TabStripModelObserver,
    std::optional<LastRoute> last_route_;
    int routing_paused_ = 0;
  
@@ -2020,7 +2175,7 @@ index 81a27efeb89be..ac10b1be85587 100644
    WEB_CONTENTS_USER_DATA_KEY_DECL();
  };
 diff --git a/chrome/browser/ui/stedding/pin_lifecycle.cc b/chrome/browser/ui/stedding/pin_lifecycle.cc
-index a9ff93b92918f..4c7ca186755c0 100644
+index 8990b6a44a1f3..dca20d3c6cdda 100644
 --- a/chrome/browser/ui/stedding/pin_lifecycle.cc
 +++ b/chrome/browser/ui/stedding/pin_lifecycle.cc
 @@ -23,6 +23,7 @@
@@ -2031,7 +2186,7 @@ index a9ff93b92918f..4c7ca186755c0 100644
  #include "chrome/browser/ui/tabs/tab_strip_model.h"
  #include "chrome/browser/ui/tabs/tab_strip_model_delegate.h"
  #include "chrome/browser/ui/tabs/tab_strip_user_gesture_details.h"
-@@ -186,6 +187,11 @@ void ReplaceWithHomeAsleep(TabStripModel* tabs,
+@@ -192,6 +193,11 @@ void ReplaceWithHomeAsleep(TabStripModel* tabs,
    std::unique_ptr<content::WebContents> gone =
        tabs->DiscardWebContents(old_contents, std::move(fresh));
    gone.reset();
@@ -3080,7 +3235,7 @@ index 0000000000000..081bfa068dbcb
 +
 +#endif  // CHROME_BROWSER_UI_VIEWS_PAGE_ACTION_STEDDING_COPY_LINK_PAGE_ACTION_CONTROLLER_H_
 diff --git a/chrome/browser/ui/views/spaces/space_drag_target.cc b/chrome/browser/ui/views/spaces/space_drag_target.cc
-index c2a387d0d0e28..99f9020ceb809 100644
+index c2a387d0d0e28..510e00675327f 100644
 --- a/chrome/browser/ui/views/spaces/space_drag_target.cc
 +++ b/chrome/browser/ui/views/spaces/space_drag_target.cc
 @@ -8,6 +8,7 @@
@@ -3122,7 +3277,7 @@ index c2a387d0d0e28..99f9020ceb809 100644
  void SpaceDragTarget::SetHoveredSpace(std::optional<SpaceId> id) {
    hovered_ = id;
    // PLAN.md SPC-4: the chip that would take the drop is lit, and only one
-@@ -34,9 +50,30 @@ void SpaceDragTarget::SetHoveredSpace(std::optional<SpaceId> id) {
+@@ -34,9 +50,42 @@ void SpaceDragTarget::SetHoveredSpace(std::optional<SpaceId> id) {
    if (switcher_) {
      switcher_->SetDropTarget(CanDropTab() ? hovered_ : std::nullopt);
    }
@@ -3146,6 +3301,18 @@ index c2a387d0d0e28..99f9020ceb809 100644
  }
  
 -void SpaceDragTarget::OnTabDragEntered() {}
++void SpaceDragTarget::SetDraggedTabsForTesting(
++    const std::vector<content::WebContents*>& dragged) {
++  dragged_tabs_.clear();
++  for (content::WebContents* const contents : dragged) {
++    if (tabs::TabInterface* const tab =
++            contents ? tabs::TabInterface::MaybeGetFromContents(contents)
++                     : nullptr) {
++      dragged_tabs_.push_back(tab->GetHandle());
++    }
++  }
++}
++
 +void SpaceDragTarget::OnTabDragEntered() {
 +  if (switcher_) {
 +    switcher_->SetTabDragOverRow(true);
@@ -3154,7 +3321,7 @@ index c2a387d0d0e28..99f9020ceb809 100644
  
  TabDragContext* SpaceDragTarget::OnTabDragUpdated(
      TabDragTarget::DragController& controller,
-@@ -45,7 +82,22 @@ TabDragContext* SpaceDragTarget::OnTabDragUpdated(
+@@ -45,7 +94,22 @@ TabDragContext* SpaceDragTarget::OnTabDragUpdated(
    dragged_pinned_ = std::ranges::any_of(
        session.tab_drag_data_,
        [](const TabDragData& data) { return data.contents && data.pinned; });
@@ -3177,7 +3344,7 @@ index c2a387d0d0e28..99f9020ceb809 100644
    // After what is dragged is known, so the chip is lit only for a drop it
    // would take.
    SetHoveredSpace(switcher_ ? switcher_->SpaceAtScreenPoint(point_in_screen)
-@@ -57,12 +109,20 @@ TabDragContext* SpaceDragTarget::OnTabDragUpdated(
+@@ -57,19 +121,97 @@ TabDragContext* SpaceDragTarget::OnTabDragUpdated(
  
  void SpaceDragTarget::OnTabDragExited(const gfx::Point& point_in_screen) {
    SetHoveredSpace(std::nullopt);
@@ -3198,10 +3365,27 @@ index c2a387d0d0e28..99f9020ceb809 100644
  }
  
  bool SpaceDragTarget::CanDropTab() {
-@@ -72,6 +132,63 @@ bool SpaceDragTarget::CanDropTab() {
-          !dragged_group_header_;
- }
- 
+   // Essentials are the row above every Space; there is nowhere to move one.
+-  // A tab group's header is refused as a whole.
++  // A tab group's header is refused as a whole. A tab of another window is
++  // that window's: taken here, the drop filed it in this window's Space --
++  // in the session too, so a later drag of it here showed it in that Space,
++  // in its old jar -- and the tab stayed where it was (BACKLOG S-338).
+   return hovered_ && model_->GetSpace(*hovered_) && !dragged_pinned_ &&
+-         !dragged_group_header_;
++         !dragged_group_header_ && !DraggingAnotherWindowsTab();
++}
++
++bool SpaceDragTarget::DraggingAnotherWindowsTab() const {
++  TabStripModel* const strip = browser_->GetTabStripModel();
++  return std::ranges::any_of(
++      dragged_tabs_, [strip](const tabs::TabHandle& handle) {
++        tabs::TabInterface* const tab = handle.Get();
++        return tab &&
++               (!strip || strip->GetIndexOfTab(tab) == TabStripModel::kNoTab);
++      });
++}
++
 +bool SpaceDragTarget::CanSwitchOnHover() const {
 +  // Not for a tab group's header: the drag moves the group as a whole along
 +  // the strip, and would go on moving it in a Space no longer on screen.
@@ -3257,12 +3441,33 @@ index c2a387d0d0e28..99f9020ceb809 100644
 +    model_->MoveTabsToSpace(dragged, target);
 +  }
 +  model_->SetActiveSpace(target, show);
-+}
-+
+ }
+ 
  void SpaceDragTarget::HandleTabDrop(DragController& controller) {
-   std::vector<content::WebContents*> dragged;
-   for (const TabDragData& data : controller.GetSessionData().tab_drag_data_) {
-@@ -111,6 +228,14 @@ void SpaceDragTarget::DropContents(
+@@ -87,15 +229,20 @@ void SpaceDragTarget::DropContents(
+     const std::vector<content::WebContents*>& dragged) {
+   const std::optional<SpaceId> target = hovered_;
+   SetHoveredSpace(std::nullopt);
++  TabStripModel* const strip = browser_->GetTabStripModel();
+   if (!target || !model_->GetSpace(*target) || dragged_pinned_ ||
+-      dragged_group_header_) {
++      dragged_group_header_ || !strip) {
+     return;
+   }
+   std::vector<tabs::TabInterface*> moving;
+   for (content::WebContents* const contents : dragged) {
+     tabs::TabInterface* const tab =
+         contents ? tabs::TabInterface::MaybeGetFromContents(contents) : nullptr;
+-    if (!tab || tab->IsPinned() || model_->SpaceForTab(tab) == *target) {
++    // A tab in another window's strip is that window's; asking this model
++    // its Space would file it here (BACKLOG S-338).
++    if (!tab || tab->IsPinned() ||
++        strip->GetIndexOfTab(tab) == TabStripModel::kNoTab ||
++        model_->SpaceForTab(tab) == *target) {
+       continue;
+     }
+     moving.push_back(tab);
+@@ -111,6 +258,14 @@ void SpaceDragTarget::DropContents(
    }
  }
  
@@ -3278,7 +3483,7 @@ index c2a387d0d0e28..99f9020ceb809 100644
      base::OnceClosure callback) {
    return will_destroy_callbacks_.Add(std::move(callback));
 diff --git a/chrome/browser/ui/views/spaces/space_drag_target.h b/chrome/browser/ui/views/spaces/space_drag_target.h
-index 5d1701568eaa5..c912a29717e78 100644
+index 5d1701568eaa5..5792c6eb2809b 100644
 --- a/chrome/browser/ui/views/spaces/space_drag_target.h
 +++ b/chrome/browser/ui/views/spaces/space_drag_target.h
 @@ -8,11 +8,15 @@
@@ -3338,10 +3543,13 @@ index 5d1701568eaa5..c912a29717e78 100644
    // Remembers which Space the pointer is over. Called before the drag machinery
    // asks whether the drop can be taken.
    void SetHoveredSpace(std::optional<SpaceId> id);
-@@ -55,6 +74,10 @@ class SpaceDragTarget : public TabDragTarget {
+@@ -55,6 +74,13 @@ class SpaceDragTarget : public TabDragTarget {
    void SetDraggedGroupHeaderForTesting(bool header) {
      dragged_group_header_ = header;
    }
++  // The tabs the drag carries, as an update gives them.
++  void SetDraggedTabsForTesting(
++      const std::vector<content::WebContents*>& dragged);
 +  // Whether a switch to the chip under the drag waits on its delay.
 +  bool hover_switch_pending_for_testing() const {
 +    return hover_switch_timer_.IsRunning();
@@ -3349,7 +3557,7 @@ index 5d1701568eaa5..c912a29717e78 100644
  
    // TabDragTarget:
    void OnTabDragEntered() override;
-@@ -64,19 +87,35 @@ class SpaceDragTarget : public TabDragTarget {
+@@ -64,19 +90,38 @@ class SpaceDragTarget : public TabDragTarget {
    void OnTabDragEnded() override;
    bool CanDropTab() override;
    void HandleTabDrop(DragController& controller) override;
@@ -3360,6 +3568,9 @@ index 5d1701568eaa5..c912a29717e78 100644
   private:
 +  // Whether a rest on the hovered chip would switch the window to its Space.
 +  bool CanSwitchOnHover() const;
++  // Whether a dragged tab is in another window's strip: dragged over this
++  // window's chips, it is still that window's (BACKLOG S-338).
++  bool DraggingAnotherWindowsTab() const;
 +  // The switch, once the drag has rested on the chip for the delay: the
 +  // dragged tabs are filed under the chip's Space, and it is shown.
 +  void SwitchToHoveredSpace();

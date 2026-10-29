@@ -41,29 +41,29 @@ Removable when: never; the remaining WIN-14 work (area cap, the
 clipboard's own UI-thread encode, the 100 ms test) stays in BACKLOG
 S-156.
 ---
- chrome/app/stedding_strings.grdp              |  10 +
+ chrome/app/stedding_strings.grdp              |  13 +
  chrome/browser/ui/stedding/BUILD.gn           |   2 +
- .../browser/ui/stedding/screenshot/BUILD.gn   |  35 +-
- .../stedding/screenshot/screenshot_capture.cc | 315 ++++++++++++------
- .../stedding/screenshot/screenshot_capture.h  |  38 ++-
- .../stedding/screenshot/screenshot_codec.cc   | 136 ++++++++
- .../ui/stedding/screenshot/screenshot_codec.h | 100 ++++++
- .../screenshot/screenshot_codec_unittest.cc   | 295 ++++++++++++++++
+ .../browser/ui/stedding/screenshot/BUILD.gn   |  38 +-
+ .../stedding/screenshot/screenshot_capture.cc | 570 ++++++++++++++----
+ .../stedding/screenshot/screenshot_capture.h  |  45 +-
+ .../stedding/screenshot/screenshot_codec.cc   | 197 ++++++
+ .../ui/stedding/screenshot/screenshot_codec.h | 124 ++++
+ .../screenshot/screenshot_codec_unittest.cc   | 399 ++++++++++++
  chrome/browser/ui/toasts/api/toast_id.cc      |   2 +
  chrome/browser/ui/toasts/api/toast_id.h       |   5 +-
  chrome/browser/ui/toasts/toast_service.cc     |  33 +-
  .../test/stedding/command_bar_browsertest.cc  |   7 +
- .../test/stedding/screenshot_browsertest.cc   | 263 ++++++++++++++-
- 13 files changed, 1118 insertions(+), 123 deletions(-)
+ .../test/stedding/screenshot_browsertest.cc   | 382 +++++++++++-
+ 13 files changed, 1672 insertions(+), 145 deletions(-)
  create mode 100644 chrome/browser/ui/stedding/screenshot/screenshot_codec.cc
  create mode 100644 chrome/browser/ui/stedding/screenshot/screenshot_codec.h
  create mode 100644 chrome/browser/ui/stedding/screenshot/screenshot_codec_unittest.cc
 
 diff --git a/chrome/app/stedding_strings.grdp b/chrome/app/stedding_strings.grdp
-index e4968f81b049f..5c542cba99323 100644
+index e4968f81b049f..3325d32cbcdb3 100644
 --- a/chrome/app/stedding_strings.grdp
 +++ b/chrome/app/stedding_strings.grdp
-@@ -119,6 +119,16 @@
+@@ -119,6 +119,19 @@
        Show in folder
      </message>
    </if>
@@ -76,6 +76,9 @@ index e4968f81b049f..5c542cba99323 100644
 +  </message>
 +  <message name="IDS_STEDDING_CAPTURE_NOT_COPIED_TOAST_BODY" desc="Toast text when a full-page screenshot was saved to the Downloads folder but could not be copied to the clipboard. The toast's button reveals the saved file.">
 +    Saved to Downloads · Couldn't copy
++  </message>
++  <message name="IDS_STEDDING_CAPTURE_CROPPED_TOAST_BODY" desc="Toast text after a full-page screenshot of a page too long for one picture: only the top of the page was captured, copied to the clipboard and saved to the Downloads folder. The toast's button reveals the saved file.">
++    Copied the top of the page · Saved to Downloads
 +  </message>
    <message name="IDS_STEDDING_ROUTED_TOAST_BODY" desc="Toast text after a new tab was moved to the Space its site is routed to. SPACE is that Space's name.">
      Opened in <ph name="SPACE">$1<ex>Work</ex></ph>
@@ -94,10 +97,10 @@ index 2d4de471724e7..76ce2b7d38f10 100644
      "//chrome/browser/ui/tabs:tab_menu",
      "//chrome/browser/ui/tabs:tab_strip",
 diff --git a/chrome/browser/ui/stedding/screenshot/BUILD.gn b/chrome/browser/ui/stedding/screenshot/BUILD.gn
-index 1c7d9937f0c13..e2e6a0ecc49ef 100644
+index 1c7d9937f0c13..1799bde07399c 100644
 --- a/chrome/browser/ui/stedding/screenshot/BUILD.gn
 +++ b/chrome/browser/ui/stedding/screenshot/BUILD.gn
-@@ -3,24 +3,33 @@
+@@ -3,24 +3,35 @@
  # found in the LICENSE file.
  
  # Built-in screenshots: the visible page, a region of it, or the full page
@@ -127,6 +130,8 @@ index 1c7d9937f0c13..e2e6a0ecc49ef 100644
      "//base",
      "//chrome/browser/ui/browser_window",
 +    "//skia",
++    # screenshot_codec.h: the full page's budget is a gfx::Size.
++    "//ui/gfx/geometry",
    ]
    deps = [
      "//base:i18n",
@@ -134,7 +139,7 @@ index 1c7d9937f0c13..e2e6a0ecc49ef 100644
      "//chrome/browser/download",
      "//chrome/browser/image_editor",
      "//chrome/browser/profiles:profile",
-@@ -30,7 +39,6 @@ source_set("screenshot") {
+@@ -30,7 +41,6 @@ source_set("screenshot") {
      "//components/tabs:public",
      "//components/viz/common",
      "//content/public/browser",
@@ -142,7 +147,7 @@ index 1c7d9937f0c13..e2e6a0ecc49ef 100644
      "//ui/base",
      "//ui/base/clipboard",
      "//ui/gfx",
-@@ -38,3 +46,22 @@ source_set("screenshot") {
+@@ -38,3 +48,23 @@ source_set("screenshot") {
      "//url",
    ]
  }
@@ -163,32 +168,35 @@ index 1c7d9937f0c13..e2e6a0ecc49ef 100644
 +    "//testing/gtest",
 +    "//ui/base",
 +    "//ui/gfx/codec",
++    "//ui/gfx/geometry",
 +  ]
 +}
 diff --git a/chrome/browser/ui/stedding/screenshot/screenshot_capture.cc b/chrome/browser/ui/stedding/screenshot/screenshot_capture.cc
-index 0b2d36976ad37..040872347c28f 100644
+index 0b2d36976ad37..1fce77c32bc4a 100644
 --- a/chrome/browser/ui/stedding/screenshot/screenshot_capture.cc
 +++ b/chrome/browser/ui/stedding/screenshot/screenshot_capture.cc
-@@ -11,16 +11,16 @@
+@@ -11,16 +11,19 @@
  #include <utility>
  #include <vector>
  
 -#include "base/base64.h"
++#include "base/callback_list.h"
  #include "base/files/file_path.h"
  #include "base/functional/bind.h"
  #include "base/functional/callback.h"
  #include "base/functional/callback_helpers.h"
--#include "base/json/json_reader.h"
+ #include "base/json/json_reader.h"
  #include "base/json/json_writer.h"
 +#include "base/json/values_util.h"
  #include "base/memory/scoped_refptr.h"
  #include "base/memory/weak_ptr.h"
  #include "base/no_destructor.h"
++#include "base/numerics/safe_conversions.h"
 +#include "base/strings/string_view_util.h"
  #include "base/task/bind_post_task.h"
  #include "base/task/lazy_thread_pool_task_runner.h"
  #include "base/task/sequenced_task_runner.h"
-@@ -32,10 +32,12 @@
+@@ -32,21 +35,24 @@
  #include "chrome/browser/image_editor/screenshot_flow.h"
  #include "chrome/browser/profiles/profile.h"
  #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
@@ -201,7 +209,11 @@ index 0b2d36976ad37..040872347c28f 100644
  #include "components/tabs/public/tab_interface.h"
  #include "components/viz/common/frame_sinks/copy_output_result.h"
  #include "content/public/browser/devtools_agent_host.h"
-@@ -46,7 +48,7 @@
+ #include "content/public/browser/devtools_agent_host_client.h"
++#include "content/public/browser/render_frame_host.h"
+ #include "content/public/browser/render_widget_host_view.h"
+ #include "content/public/browser/web_contents.h"
+ #include "content/public/browser/web_contents_user_data.h"
  #include "third_party/skia/include/core/SkBitmap.h"
  #include "ui/base/clipboard/clipboard_buffer.h"
  #include "ui/base/clipboard/scoped_clipboard_writer.h"
@@ -210,12 +222,28 @@ index 0b2d36976ad37..040872347c28f 100644
  #include "ui/gfx/geometry/rect.h"
  #include "ui/gfx/geometry/size.h"
  
-@@ -59,8 +61,10 @@ namespace {
- // capture again after it (PLAN.md WIN-2).
+@@ -54,13 +60,24 @@ namespace stedding {
+ 
+ namespace {
+ 
+-// A capture that has not answered by now never will: the full page's
++// A capture that has not answered by now is given up on: the full page's
+ // DevTools reply, or the copy of a page whose surface went away. The tab can
+-// capture again after it (PLAN.md WIN-2).
++// capture again after it (PLAN.md WIN-2); a full page's client may stay
++// attached until Chromium answers (FullPageCapturer::OnTimeout).
  constexpr base::TimeDelta kCaptureTimeout = base::Seconds(15);
  
 -// Every capture's file is written on this one sequence, in order. The name
 -// itself is taken by an exclusive create (WriteNewScreenshotFile), so two
++// The full page's two requests: the document's size, then its picture.
++constexpr int kSizeRequestId = 1;
++constexpr int kCaptureRequestId = 2;
++// The largest message on the full page's session read on the UI thread: the
++// size's answer, an event, an error. The picture's answer is larger and is
++// read on the writer's sequence (screenshot C9).
++constexpr size_t kMaxSmallMessage = 64 * 1024;
++
 +// Every capture's work after its picture arrives runs on this one sequence,
 +// in order: the DevTools reply's parse, the PNG encode or decode and the file
 +// write, as one task per capture (screenshot C9), never on the UI thread. The
@@ -223,13 +251,19 @@ index 0b2d36976ad37..040872347c28f 100644
  // captures in the same second can never write over each other (screenshot
  // C4). A user's file is written even when the browser is quitting.
  base::LazyThreadPoolSequencedTaskRunner g_screenshot_writer =
-@@ -69,9 +73,10 @@ base::LazyThreadPoolSequencedTaskRunner g_screenshot_writer =
+@@ -69,9 +86,16 @@ base::LazyThreadPoolSequencedTaskRunner g_screenshot_writer =
                           base::TaskPriority::USER_VISIBLE,
                           base::TaskShutdownBehavior::BLOCK_SHUTDOWN));
  
 -base::FilePath& LastCapturePathStorage() {
 -  static base::NoDestructor<base::FilePath> path;
 -  return *path;
++// Each full-page capture's time-out, for TimeOutFullPageCapturesForTesting.
++base::RepeatingClosureList& FullPageTimeOuts() {
++  static base::NoDestructor<base::RepeatingClosureList> time_outs;
++  return *time_outs;
++}
++
 +base::RepeatingCallback<void(const base::FilePath&)>& RevealForTesting() {
 +  static base::NoDestructor<base::RepeatingCallback<void(const base::FilePath&)>>
 +      reveal;
@@ -237,7 +271,7 @@ index 0b2d36976ad37..040872347c28f 100644
  }
  
  // Where a capture goes, fixed when it starts: the folder, the file's name
-@@ -86,51 +91,49 @@ struct Destination {
+@@ -86,125 +110,170 @@ struct Destination {
    bool off_the_record = false;
  };
  
@@ -254,12 +288,14 @@ index 0b2d36976ad37..040872347c28f 100644
 -                  const base::FilePath& path) {
 -  if (path.empty()) {
 +// Back on the UI thread with a capture's outcome: the picture onto the
-+// clipboard, then the toast that says what happened (screenshot C5, C10).
-+// Endings arrive in the order the writer's sequence ran them, so the
-+// clipboard ends holding the picture whose toast shows last. With its tab
++// clipboard, then the toast that says what happened (screenshot C5, C10), and
++// that it is the top of the page when the page was larger than the budget
++// (`cropped`). Endings arrive in the order the writer's sequence ran them, so
++// the clipboard ends holding the picture whose toast shows last. With its tab
 +// gone there is no toast; a private window's picture is then not copied
 +// either, so nothing from a closed private window reaches the clipboard.
 +void EndCapture(bool off_the_record,
++                bool cropped,
 +                base::WeakPtr<content::WebContents> contents,
 +                CaptureOutcome outcome) {
 +  const bool copied =
@@ -283,7 +319,7 @@ index 0b2d36976ad37..040872347c28f 100644
 +  // A little window or a peek has no toasts (screenshot C12).
 +  if (ToastController* const toasts =
 +          ToastController::MaybeGetForWebContents(contents.get())) {
-+    toasts->MaybeShowToast(CaptureToastParams(copied, outcome.path));
++    toasts->MaybeShowToast(CaptureToastParams(copied, outcome.path, cropped));
    }
  }
  
@@ -316,22 +352,50 @@ index 0b2d36976ad37..040872347c28f 100644
 -      base::BindOnce(&OnPngWritten, std::move(contents)));
 +      FROM_HERE, std::move(step),
 +      base::BindOnce(&EndCapture, destination.off_the_record,
-+                     std::move(contents)));
++                     /*cropped=*/false, std::move(contents)));
 +}
 +
 +CaptureOutcome NothingCaptured() {
 +  return CaptureOutcome();
  }
  
++// Set on a tab while a full-page capture that gave up waiting is still
++// attached (FullPageCapturer::OnTimeout). Chromium holds that tab's page
++// resized, its scrollbars hidden, until the capture's request answers, and
++// puts it back then. No other full page starts on the tab meanwhile: it would
++// take the changed page for the page's own, and put that back after it
++// (BACKLOG S-344).
++class FullPageOutstanding
++    : public content::WebContentsUserData<FullPageOutstanding> {
++ public:
++  FullPageOutstanding(const FullPageOutstanding&) = delete;
++  FullPageOutstanding& operator=(const FullPageOutstanding&) = delete;
++  ~FullPageOutstanding() override = default;
++
++ private:
++  friend class content::WebContentsUserData<FullPageOutstanding>;
++
++  explicit FullPageOutstanding(content::WebContents* contents)
++      : content::WebContentsUserData<FullPageOutstanding>(*contents) {}
++
++  WEB_CONTENTS_USER_DATA_KEY_DECL();
++};
++
++WEB_CONTENTS_USER_DATA_KEY_IMPL(FullPageOutstanding);
++
  // The full document through the DevTools protocol: attach a trusted client,
-@@ -138,11 +141,18 @@ void Deliver(const Destination& destination,
- // this is the browser itself, not an extension or a remote debugger.
+-// ask for Page.captureScreenshot beyond the viewport, detach. No infobar:
+-// this is the browser itself, not an extension or a remote debugger.
++// read the document's size (Page.getLayoutMetrics), ask for
++// Page.captureScreenshot beyond the viewport, cut to the budget when the
++// document is larger (FullPageClip, BACKLOG S-344), detach. No infobar: this
++// is the browser itself, not an extension or a remote debugger.
  class FullPageCapturer : public content::DevToolsAgentHostClient {
   public:
 -  using Done = base::OnceCallback<void(std::vector<uint8_t>)>;
-+  // Runs once when the capture is over: `answered` when the reply came and
-+  // its ending was delivered, false when there was none (the attach failed,
-+  // the page's host closed, or nothing came within kCaptureTimeout).
++  // Runs once when the capture is over for its job: `answered` when the reply
++  // came and its ending was delivered, false when there was none (the attach
++  // failed, the page's host closed, or nothing came within kCaptureTimeout).
 +  using Done = base::OnceCallback<void(bool answered)>;
  
    // Nothing is attached or sent until Begin().
@@ -345,32 +409,55 @@ index 0b2d36976ad37..040872347c28f 100644
          done_(std::move(done)) {}
    FullPageCapturer(const FullPageCapturer&) = delete;
    FullPageCapturer& operator=(const FullPageCapturer&) = delete;
-@@ -152,13 +162,10 @@ class FullPageCapturer : public content::DevToolsAgentHostClient {
-   // after kCaptureTimeout with nothing. `done` runs once, and the capturer
-   // is deleted in a task of its own, never inside a call from the host.
+ 
+-  // Attaches and asks for the capture. From here the capturer owns itself,
+-  // and it always finishes: with the reply, when the page's host closes, or
+-  // after kCaptureTimeout with nothing. `done` runs once, and the capturer
+-  // is deleted in a task of its own, never inside a call from the host.
++  // Attaches and asks for the document's size, then for the capture. From
++  // here the capturer owns itself, and it always finishes: with the reply,
++  // when the page's host closes, or after kCaptureTimeout with nothing, unless
++  // Chromium still holds the page changed for it (OnTimeout). `done` runs
++  // once, by kCaptureTimeout at the latest, and the capturer is deleted in a
++  // task of its own, never inside a call from the host.
    void Begin() {
 -    timeout_.Start(
 -        FROM_HERE, kCaptureTimeout,
 -        base::BindOnce(&FullPageCapturer::Finish, base::Unretained(this),
 -                       std::vector<uint8_t>()));
+-    if (!host_ || !host_->AttachClient(this)) {
 +    StartTimeout();
-     if (!host_ || !host_->AttachClient(this)) {
++    time_out_for_testing_ = FullPageTimeOuts().Add(
++        base::BindRepeating(&FullPageCapturer::TimeOutNowForTesting,
++                            base::Unretained(this)));
++    // A crashed page answers nothing, not even its size: it fails at once,
++    // as it did when the picture was the first thing asked (screenshot C10).
++    if (!host_ || !contents_ ||
++        !contents_->GetPrimaryMainFrame()->IsRenderFrameLive() ||
++        !host_->AttachClient(this)) {
        host_ = nullptr;
 -      PostFinish({});
 +      PostFinish();
        return;
      }
-     base::DictValue params;
-@@ -171,7 +178,7 @@ class FullPageCapturer : public content::DevToolsAgentHostClient {
-     request.Set("params", std::move(params));
-     const std::optional<std::string> json = base::WriteJson(request);
-     if (!json) {
+-    base::DictValue params;
+-    params.Set("format", "png");
+-    params.Set("captureBeyondViewport", true);
+-    params.Set("fromSurface", true);
+-    base::DictValue request;
+-    request.Set("id", kRequestId);
+-    request.Set("method", "Page.captureScreenshot");
+-    request.Set("params", std::move(params));
+-    const std::optional<std::string> json = base::WriteJson(request);
+-    if (!json) {
 -      PostFinish({});
+-      return;
++    if (!Send(kSizeRequestId, "Page.getLayoutMetrics", base::DictValue())) {
 +      PostFinish();
-       return;
      }
-     host_->DispatchProtocolMessage(this, base::as_byte_span(*json));
-@@ -180,31 +187,32 @@ class FullPageCapturer : public content::DevToolsAgentHostClient {
+-    host_->DispatchProtocolMessage(this, base::as_byte_span(*json));
+   }
+ 
    // content::DevToolsAgentHostClient:
    void DispatchProtocolMessage(content::DevToolsAgentHost* host,
                                 base::span<const uint8_t> message) override {
@@ -388,8 +475,21 @@ index 0b2d36976ad37..040872347c28f 100644
 -                base::Base64Decode(*data)) {
 -          png = std::move(*bytes);
 -        }
--      }
-+    if (!done_ || finish_posted_) {
++    if (finished_ || finish_posted_) {
++      return;
++    }
++    if (!capture_sent_) {
++      if (!size_read_) {
++        OnSize(base::as_string_view(message));
++      }
++      return;
++    }
++    if (!done_) {
++      // Given up on, and attached only so that Chromium can put the page
++      // back (OnTimeout): its answer means it has.
++      if (IsCaptureAnswer(base::as_string_view(message))) {
++        PostFinish();
+       }
 +      return;
      }
 -    // The reply may arrive inside the request's own dispatch (an error the
@@ -407,10 +507,12 @@ index 0b2d36976ad37..040872347c28f 100644
 +    g_screenshot_writer.Get()->PostTaskAndReplyWithResult(
 +        FROM_HERE,
 +        base::BindOnce(&ReadWriteAndDecode,
-+                       std::string(base::as_string_view(message)), kRequestId,
-+                       destination_.directory, destination_.name),
++                       std::string(base::as_string_view(message)),
++                       kCaptureRequestId, destination_.directory,
++                       destination_.name),
 +        base::BindOnce(&FullPageCapturer::OnRead, weak_factory_.GetWeakPtr(),
-+                       destination_.off_the_record, contents_));
++                       destination_.off_the_record, clip_.has_value(),
++                       contents_));
    }
    void AgentHostClosed(content::DevToolsAgentHost* host) override {
 -    // The page went away and the host has detached this client already.
@@ -424,16 +526,116 @@ index 0b2d36976ad37..040872347c28f 100644
    }
    bool IsTrusted() override { return true; }
    bool MayWriteLocalFiles() override { return false; }
-@@ -224,33 +232,80 @@ class FullPageCapturer : public content::DevToolsAgentHostClient {
+@@ -216,41 +285,222 @@ class FullPageCapturer : public content::DevToolsAgentHostClient {
+  private:
+   friend class base::DeleteHelper<FullPageCapturer>;
+ 
+-  static constexpr int kRequestId = 1;
+-
+   ~FullPageCapturer() override {
+     if (host_) {
+       host_->DetachClient(this);
      }
    }
  
 -  void PostFinish(std::vector<uint8_t> png) {
++  // Writes request `id` and hands it to the host; false when it could not be
++  // written. The host may answer inside the call.
++  bool Send(int id, const char* method, base::DictValue params) {
++    base::DictValue request;
++    request.Set("id", id);
++    request.Set("method", method);
++    request.Set("params", std::move(params));
++    const std::optional<std::string> json = base::WriteJson(request);
++    if (!json) {
++      return false;
++    }
++    host_->DispatchProtocolMessage(this, base::as_byte_span(*json));
++    return true;
++  }
++
++  // The answer to Page.getLayoutMetrics, a few hundred bytes, read here: the
++  // document's size in CSS pixels, and so how much of it the capture takes.
++  // An event before it is passed over; an answer with no size ends the
++  // capture.
++  void OnSize(std::string_view message) {
++    if (message.size() > kMaxSmallMessage) {
++      return;
++    }
++    const std::optional<base::DictValue> parsed =
++        base::JSONReader::ReadDict(message, base::JSON_PARSE_RFC);
++    if (!parsed || parsed->FindInt("id") != kSizeRequestId) {
++      return;  // an event, not the answer
++    }
++    size_read_ = true;
++    const base::DictValue* const size =
++        parsed->FindDictByDottedPath("result.cssContentSize");
++    const std::optional<double> width =
++        size ? size->FindDouble("width") : std::nullopt;
++    const std::optional<double> height =
++        size ? size->FindDouble("height") : std::nullopt;
++    if (!width || !height) {
++      PostFinish();
++      return;
++    }
++    content::RenderWidgetHostView* const view =
++        contents_ ? contents_->GetRenderWidgetHostView() : nullptr;
++    clip_ = FullPageClip(
++        gfx::Size(base::ClampFloor(*width), base::ClampFloor(*height)),
++        view ? view->GetDeviceScaleFactor() : 1.0f);
++    // Asked from a task of its own, never inside the host's dispatch.
++    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
++        FROM_HERE, base::BindOnce(&FullPageCapturer::AskForCapture,
++                                  weak_factory_.GetWeakPtr()));
++  }
++
++  // Page.captureScreenshot beyond the viewport, with the clip when the
++  // document is larger than the budget. A document that fits is asked for
++  // with no clip, as it always was.
++  void AskForCapture() {
++    if (finished_ || finish_posted_ || !host_ || !done_) {
++      return;
++    }
++    base::DictValue params;
++    params.Set("format", "png");
++    params.Set("captureBeyondViewport", true);
++    params.Set("fromSurface", true);
++    if (clip_) {
++      base::DictValue clip;
++      clip.Set("x", 0);
++      clip.Set("y", 0);
++      clip.Set("width", clip_->width());
++      clip.Set("height", clip_->height());
++      clip.Set("scale", 1);
++      params.Set("clip", std::move(clip));
++    }
++    // From here Chromium may hold the page changed for the capture until it
++    // answers (OnTimeout).
++    capture_sent_ = true;
++    if (!Send(kCaptureRequestId, "Page.captureScreenshot", std::move(params))) {
++      capture_sent_ = false;
++      PostFinish();
++    }
++  }
++
++  // Whether `message` answers Page.captureScreenshot. A small message is
++  // read here; a larger one can only be that answer, as the session enables
++  // no domain that would send more.
++  static bool IsCaptureAnswer(std::string_view message) {
++    if (message.size() > kMaxSmallMessage) {
++      return true;
++    }
++    const std::optional<base::DictValue> parsed =
++        base::JSONReader::ReadDict(message, base::JSON_PARSE_RFC);
++    return parsed && parsed->FindInt("id") == kCaptureRequestId;
++  }
++
 +  // A message read on the writer's sequence. The reply's ending is delivered
 +  // even when the capturer is gone, so a capture whose tab closed meanwhile
 +  // still lands on the clipboard (EndCapture decides).
 +  static void OnRead(base::WeakPtr<FullPageCapturer> capturer,
 +                     bool off_the_record,
++                     bool cropped,
 +                     base::WeakPtr<content::WebContents> contents,
 +                     FullPageResult read) {
 +    if (read.kind == ReplyKind::kNotTheReply) {
@@ -442,7 +644,8 @@ index 0b2d36976ad37..040872347c28f 100644
 +      }
 +      return;
 +    }
-+    EndCapture(off_the_record, std::move(contents), std::move(read.outcome));
++    EndCapture(off_the_record, cropped, std::move(contents),
++               std::move(read.outcome));
 +    if (capturer) {
 +      --capturer->pending_reads_;
 +      capturer->Finish(/*answered=*/true);
@@ -465,8 +668,32 @@ index 0b2d36976ad37..040872347c28f 100644
 +
 +  void StartTimeout() {
 +    timeout_.Start(FROM_HERE, kCaptureTimeout,
-+                   base::BindOnce(&FullPageCapturer::Finish,
-+                                  base::Unretained(this), /*answered=*/false));
++                   base::BindOnce(&FullPageCapturer::OnTimeout,
++                                  base::Unretained(this)));
++  }
++
++  // Nothing within kCaptureTimeout. Before the capture is asked for, the
++  // capturer ends. After, Chromium has resized the page and hidden its
++  // scrollbars for the capture, and puts them back only when its request
++  // answers: a detach now dropped that answer and left the page so, through
++  // reloads and later captures (BACKLOG S-344). So the job hears now -- the
++  // user is told, and the tab can take another picture -- while the client
++  // stays attached until the answer comes or the page's host closes. Until
++  // then the tab starts no other full page (FullPageOutstanding).
++  void OnTimeout() {
++    if (!capture_sent_ || !host_ || !contents_) {
++      Finish(/*answered=*/false);
++      return;
++    }
++    FullPageOutstanding::CreateForWebContents(contents_.get());
++    marked_ = true;
++    std::move(done_).Run(/*answered=*/false);
++  }
++
++  void TimeOutNowForTesting() {
++    if (timeout_.IsRunning()) {
++      timeout_.FireNow();
++    }
 +  }
 +
 +  // Ends with nothing, from a task of its own: an error the host answers
@@ -484,18 +711,28 @@ index 0b2d36976ad37..040872347c28f 100644
    }
  
 -  void Finish(std::vector<uint8_t> png) {
-+  void Finish(bool answered) {
-     if (!done_) {
+-    if (!done_) {
 -      return;  // Finished already: the timeout and a reply can both come.
-+      return;  // Finished already.
++  // Lets the page go: detaches, takes the tab's mark away, tells the job if
++  // it has not heard yet, and deletes the capturer in a task of its own.
++  void Finish(bool answered) {
++    if (finished_) {
++      return;
      }
++    finished_ = true;
      timeout_.Stop();
      if (host_) {
        host_->DetachClient(this);
        host_ = nullptr;
      }
 -    std::move(done_).Run(std::move(png));
-+    std::move(done_).Run(answered);
++    if (marked_ && contents_) {
++      contents_->RemoveUserData(FullPageOutstanding::UserDataKey());
++    }
++    marked_ = false;
++    if (done_) {
++      std::move(done_).Run(answered);
++    }
      base::SequencedTaskRunner::GetCurrentDefault()->DeleteSoon(FROM_HERE, this);
    }
  
@@ -505,12 +742,22 @@ index 0b2d36976ad37..040872347c28f 100644
    Done done_;
    base::OneShotTimer timeout_;
    bool finish_posted_ = false;
++  bool finished_ = false;
++  // The document's size has been read; the capture is asked for next.
++  bool size_read_ = false;
++  // Page.captureScreenshot has been sent.
++  bool capture_sent_ = false;
++  // The part of the document asked for, when the whole is past the budget.
++  std::optional<gfx::Size> clip_;
++  // This capturer marked its tab FullPageOutstanding.
++  bool marked_ = false;
 +  // Messages handed to the writer's sequence and not yet back.
 +  int pending_reads_ = 0;
++  base::CallbackListSubscription time_out_for_testing_;
    base::WeakPtrFactory<FullPageCapturer> weak_factory_{this};
  };
  
-@@ -305,10 +360,11 @@ class CaptureJob : public content::WebContentsUserData<CaptureJob> {
+@@ -305,10 +555,18 @@ class CaptureJob : public content::WebContentsUserData<CaptureJob> {
              base::BindOnce(&CaptureJob::OnRegion, weak_factory_.GetWeakPtr()));
          return;
        case CaptureMode::kFullPage:
@@ -518,6 +765,13 @@ index 0b2d36976ad37..040872347c28f 100644
 -        (new FullPageCapturer(
 -             GetWebContents(),
 -             base::BindOnce(&CaptureJob::OnPng, weak_factory_.GetWeakPtr())))
++        // A full page that gave up waiting holds this tab's page changed
++        // until Chromium answers it; one started over it would take the
++        // changed page for the page's own (BACKLOG S-344).
++        if (FullPageOutstanding::FromWebContents(&GetWebContents())) {
++          Fail();
++          return;
++        }
 +        // It owns itself from Begin(), and answers within kCaptureTimeout
 +        // of the request, or once the reply it has is read.
 +        (new FullPageCapturer(GetWebContents(), destination_,
@@ -526,7 +780,7 @@ index 0b2d36976ad37..040872347c28f 100644
              ->Begin();
          return;
      }
-@@ -328,7 +384,8 @@ class CaptureJob : public content::WebContentsUserData<CaptureJob> {
+@@ -328,7 +586,8 @@ class CaptureJob : public content::WebContentsUserData<CaptureJob> {
      content::RenderWidgetHostView* const view =
          contents.GetRenderWidgetHostView();
      if (!view) {
@@ -536,7 +790,7 @@ index 0b2d36976ad37..040872347c28f 100644
        return;
      }
      // Keep the renderer producing frames while we copy (the precedent in
-@@ -339,7 +396,7 @@ class CaptureJob : public content::WebContentsUserData<CaptureJob> {
+@@ -339,7 +598,7 @@ class CaptureJob : public content::WebContentsUserData<CaptureJob> {
          /*is_activity=*/false);
      // A page whose surface goes away may never answer.
      timeout_.Start(FROM_HERE, kCaptureTimeout,
@@ -545,7 +799,7 @@ index 0b2d36976ad37..040872347c28f 100644
      view->CopyFromSurface(
          region, gfx::Size(), base::TimeDelta(),
          base::BindPostTask(
-@@ -358,8 +415,9 @@ class CaptureJob : public content::WebContentsUserData<CaptureJob> {
+@@ -358,8 +617,9 @@ class CaptureJob : public content::WebContentsUserData<CaptureJob> {
  
    void OnRegion(const image_editor::RegionSelectionResult& result) {
      // Escape, a navigation, the tab hidden, or the tab going away: nothing
@@ -557,7 +811,7 @@ index 0b2d36976ad37..040872347c28f 100644
      if (result.selected_rect.IsEmpty() || GetWebContents().IsBeingDestroyed()) {
        Finish();
        return;
-@@ -371,26 +429,43 @@ class CaptureJob : public content::WebContentsUserData<CaptureJob> {
+@@ -371,26 +631,43 @@ class CaptureJob : public content::WebContentsUserData<CaptureJob> {
      if (finishing_) {
        return;  // It timed out; the copy came too late.
      }
@@ -597,7 +851,7 @@ index 0b2d36976ad37..040872347c28f 100644
 +    if (answered) {
 +      Finish();  // its ending is delivered already
 +      return;
-+    }
+     }
 +    Fail();
 +  }
 +
@@ -607,25 +861,30 @@ index 0b2d36976ad37..040872347c28f 100644
 +  void Fail() {
 +    if (finishing_) {
 +      return;
-     }
++    }
 +    Deliver(destination_, base::BindOnce(&NothingCaptured),
 +            GetWebContents().GetWeakPtr());
      Finish();
    }
  
-@@ -459,8 +534,46 @@ void CaptureScreenshot(BrowserWindowInterface* browser, CaptureMode mode) {
+@@ -459,8 +736,55 @@ void CaptureScreenshot(BrowserWindowInterface* browser, CaptureMode mode) {
    CaptureJob::Run(contents, mode, std::move(destination), {});
  }
  
 -const base::FilePath& LastCapturePath() {
 -  return LastCapturePathStorage();
-+ToastParams CaptureToastParams(bool copied, const base::FilePath& path) {
++ToastParams CaptureToastParams(bool copied,
++                               const base::FilePath& path,
++                               bool cropped) {
 +  if (!path.empty()) {
 +    ToastParams params(ToastId::kSteddingCaptureSaved);
 +    params.action_button_callback_data = base::FilePathToValue(path);
 +    if (!copied) {
 +      params.body_string_override =
 +          l10n_util::GetStringUTF16(IDS_STEDDING_CAPTURE_NOT_COPIED_TOAST_BODY);
++    } else if (cropped) {
++      params.body_string_override =
++          l10n_util::GetStringUTF16(IDS_STEDDING_CAPTURE_CROPPED_TOAST_BODY);
 +    }
 +    return params;
 +  }
@@ -654,6 +913,10 @@ index 0b2d36976ad37..040872347c28f 100644
 +  RevealForTesting() = std::move(reveal);
 +}
 +
++void TimeOutFullPageCapturesForTesting() {
++  FullPageTimeOuts().Notify();
++}
++
 +void FlushCapturesForTesting(base::OnceClosure done) {
 +  // Replies come back in the order the sequence ran their tasks, so this one
 +  // comes after every ending posted before it.
@@ -663,7 +926,7 @@ index 0b2d36976ad37..040872347c28f 100644
  
  }  // namespace stedding
 diff --git a/chrome/browser/ui/stedding/screenshot/screenshot_capture.h b/chrome/browser/ui/stedding/screenshot/screenshot_capture.h
-index b445120c6e563..a68445229f0c9 100644
+index b445120c6e563..8e0040e80ae15 100644
 --- a/chrome/browser/ui/stedding/screenshot/screenshot_capture.h
 +++ b/chrome/browser/ui/stedding/screenshot/screenshot_capture.h
 @@ -5,15 +5,24 @@
@@ -693,7 +956,7 @@ index b445120c6e563..a68445229f0c9 100644
  enum class CaptureMode {
    // The page as shown, viewport only.
    kVisible,
-@@ -30,9 +39,28 @@ enum class CaptureMode {
+@@ -30,9 +39,35 @@ enum class CaptureMode {
  // clipboard.
  void CaptureScreenshot(BrowserWindowInterface* browser, CaptureMode mode);
  
@@ -703,8 +966,11 @@ index b445120c6e563..a68445229f0c9 100644
 +// The toast a capture ends with (screenshot C5, C10), for a capture whose
 +// picture reached the clipboard when `copied` and was saved as `path` when
 +// that is not empty. A saved capture's toast carries its own path for the
-+// "Show in Finder" button (screenshot C11).
-+ToastParams CaptureToastParams(bool copied, const base::FilePath& path);
++// "Show in Finder" button (screenshot C11). A full page larger than the
++// budget is `cropped` to its top, and its toast says so (BACKLOG S-344).
++ToastParams CaptureToastParams(bool copied,
++                               const base::FilePath& path,
++                               bool cropped);
 +
 +// The "Show in Finder" / "Show in folder" button (screenshot C11): the file
 +// that button's own toast announced, read from the toast's `data`. Nothing
@@ -718,6 +984,10 @@ index b445120c6e563..a68445229f0c9 100644
 +void SetRevealCaptureForTesting(
 +    base::RepeatingCallback<void(const base::FilePath&)> reveal);
 +
++// Tests only: every full-page capture still waiting for its picture times out
++// now, as if 15 seconds had passed.
++void TimeOutFullPageCapturesForTesting();
++
 +// Tests only: runs `done` on this thread once every capture ending handed to
 +// the writer's sequence so far has come back here and finished: its file,
 +// its clipboard write and its toast.
@@ -727,23 +997,29 @@ index b445120c6e563..a68445229f0c9 100644
  
 diff --git a/chrome/browser/ui/stedding/screenshot/screenshot_codec.cc b/chrome/browser/ui/stedding/screenshot/screenshot_codec.cc
 new file mode 100644
-index 0000000000000..a27159ce8c9cd
+index 0000000000000..597f4ce7ea31e
 --- /dev/null
 +++ b/chrome/browser/ui/stedding/screenshot/screenshot_codec.cc
-@@ -0,0 +1,136 @@
+@@ -0,0 +1,197 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
 +
 +#include "chrome/browser/ui/stedding/screenshot/screenshot_codec.h"
 +
++#include <algorithm>
++#include <cmath>
 +#include <optional>
++#include <string_view>
 +#include <utility>
 +
 +#include "base/base64.h"
++#include "base/containers/span.h"
 +#include "base/functional/callback.h"
 +#include "base/json/json_reader.h"
 +#include "base/no_destructor.h"
++#include "base/numerics/byte_conversions.h"
++#include "base/numerics/safe_conversions.h"
 +#include "base/threading/thread_restrictions.h"
 +#include "base/values.h"
 +#include "chrome/browser/ui/stedding/screenshot/screenshot_file.h"
@@ -788,6 +1064,24 @@ index 0000000000000..a27159ce8c9cd
 +  return reply;
 +}
 +
++// A PNG's width and height from its header (the signature, then the IHDR
++// chunk), without decoding it; nothing when `png` does not start as a PNG.
++std::optional<gfx::Size> PngSize(base::span<const uint8_t> png) {
++  static constexpr uint8_t kStart[] = {0x89, 'P',  'N', 'G', '\r', '\n',
++                                       0x1a, '\n', 0,   0,   0,    13,
++                                       'I',  'H',  'D', 'R'};
++  if (png.size() < 24u || !std::ranges::equal(png.first<16u>(), kStart)) {
++    return std::nullopt;
++  }
++  const uint32_t width = base::U32FromBigEndian(png.subspan<16u, 4u>());
++  const uint32_t height = base::U32FromBigEndian(png.subspan<20u, 4u>());
++  if (!base::IsValueInRangeForNumericType<int>(width) ||
++      !base::IsValueInRangeForNumericType<int>(height)) {
++    return std::nullopt;
++  }
++  return gfx::Size(static_cast<int>(width), static_cast<int>(height));
++}
++
 +CaptureOutcome WriteThenDecode(std::vector<uint8_t> png,
 +                               const base::FilePath& directory,
 +                               const base::FilePath& name) {
@@ -798,11 +1092,48 @@ index 0000000000000..a27159ce8c9cd
 +  // The file first: it is the page's own PNG, good even when this decoder
 +  // cannot read it.
 +  outcome.path = WriteNewScreenshotFile(directory, name, png);
-+  outcome.bitmap = gfx::PNGCodec::Decode(png);
++  // No second bitmap past the budget (BACKLOG S-344): the capture asks for no
++  // more than it, but a page can grow between its size and its picture.
++  const std::optional<gfx::Size> size = PngSize(png);
++  if (size && FitsCaptureBudget(size->width(), size->height())) {
++    outcome.bitmap = gfx::PNGCodec::Decode(png);
++  }
 +  return outcome;
 +}
 +
 +}  // namespace
++
++bool FitsCaptureBudget(int64_t width, int64_t height) {
++  return width > 0 && height > 0 && width <= kMaxCaptureSide &&
++         height <= kMaxCaptureSide && width * height <= kMaxCaptureArea;
++}
++
++std::optional<gfx::Size> FullPageClip(const gfx::Size& css_size,
++                                      float device_scale_factor) {
++  if (css_size.IsEmpty()) {
++    return std::nullopt;  // nothing to cut; the capture says what it can
++  }
++  const double scale = device_scale_factor > 0 ? device_scale_factor : 1.0;
++  // Device pixels as Chromium sizes the picture: CSS pixels times the scale,
++  // rounded.
++  const auto device = [scale](int css) {
++    return static_cast<int64_t>(std::llround(css * scale));
++  };
++  if (FitsCaptureBudget(device(css_size.width()),
++                        device(css_size.height()))) {
++    return std::nullopt;
++  }
++  // Rounded down to whole CSS pixels, whose rounded device size then stays
++  // within the limit.
++  const auto css = [scale](int64_t device_pixels) {
++    return std::max(1, base::ClampFloor(device_pixels / scale));
++  };
++  const int width = std::min(css_size.width(), css(kMaxCaptureSide));
++  const int64_t height_left = std::min<int64_t>(
++      kMaxCaptureSide, kMaxCaptureArea / std::max<int64_t>(1, device(width)));
++  const int height = std::min(css_size.height(), css(height_left));
++  return gfx::Size(width, height);
++}
 +
 +CaptureReply::CaptureReply() = default;
 +CaptureReply::CaptureReply(CaptureReply&&) = default;
@@ -869,10 +1200,10 @@ index 0000000000000..a27159ce8c9cd
 +}  // namespace stedding
 diff --git a/chrome/browser/ui/stedding/screenshot/screenshot_codec.h b/chrome/browser/ui/stedding/screenshot/screenshot_codec.h
 new file mode 100644
-index 0000000000000..0906e57ff33af
+index 0000000000000..fa37683553c88
 --- /dev/null
 +++ b/chrome/browser/ui/stedding/screenshot/screenshot_codec.h
-@@ -0,0 +1,100 @@
+@@ -0,0 +1,124 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -881,6 +1212,7 @@ index 0000000000000..0906e57ff33af
 +#define CHROME_BROWSER_UI_STEDDING_SCREENSHOT_SCREENSHOT_CODEC_H_
 +
 +#include <cstdint>
++#include <optional>
 +#include <string>
 +#include <string_view>
 +#include <vector>
@@ -888,8 +1220,31 @@ index 0000000000000..0906e57ff33af
 +#include "base/files/file_path.h"
 +#include "base/functional/callback_forward.h"
 +#include "third_party/skia/include/core/SkBitmap.h"
++#include "ui/gfx/geometry/size.h"
 +
 +namespace stedding {
++
++// The largest picture a full-page capture takes, in device pixels (BACKLOG
++// S-344). 16,384 a side is the largest texture many GPUs draw, and the
++// compositor clamps a render pass to the largest texture, so rows of a taller
++// page came out wrong past it anyway. 64 megapixels is 256 MB as a bitmap,
++// which a capture holds more than once: the browser's own picture, the copy
++// decoded for the clipboard, the clipboard's. Chromium itself refuses only a
++// side of 131,072 or more, about a gigabyte a bitmap. Plain arithmetic, for
++// any thread.
++inline constexpr int kMaxCaptureSide = 16384;
++inline constexpr int64_t kMaxCaptureArea = int64_t{16384} * 4096;
++
++// Whether a picture `width` by `height` device pixels is within the budget.
++bool FitsCaptureBudget(int64_t width, int64_t height);
++
++// What a full-page capture of a document `css_size` CSS pixels large takes,
++// drawn at `device_scale_factor` device pixels to the CSS pixel: nothing when
++// the whole document fits the budget, else the largest part of it from the
++// top left that does, in CSS pixels. The width is kept up to the side limit,
++// and the height is cut to what is left.
++std::optional<gfx::Size> FullPageClip(const gfx::Size& css_size,
++                                      float device_scale_factor);
 +
 +// The CPU-heavy and blocking steps of a capture (docs/features/screenshot.md
 +// C9). Each runs as one task on the screenshot writer's sequence, never on the
@@ -946,9 +1301,9 @@ index 0000000000000..0906e57ff33af
 +                              const base::FilePath& name);
 +
 +// The full page: writes `png` as the page sent it, then decodes it for the
-+// clipboard. A picture that does not decode is still saved and comes back
-+// with nothing to copy; one that cannot be saved still comes back to be
-+// copied.
++// clipboard. A picture that does not decode, or whose header gives it more
++// pixels than the budget, is still saved and comes back with nothing to copy;
++// one that cannot be saved still comes back to be copied.
 +CaptureOutcome WriteAndDecode(std::vector<uint8_t> png,
 +                              const base::FilePath& directory,
 +                              const base::FilePath& name);
@@ -975,16 +1330,17 @@ index 0000000000000..0906e57ff33af
 +#endif  // CHROME_BROWSER_UI_STEDDING_SCREENSHOT_SCREENSHOT_CODEC_H_
 diff --git a/chrome/browser/ui/stedding/screenshot/screenshot_codec_unittest.cc b/chrome/browser/ui/stedding/screenshot/screenshot_codec_unittest.cc
 new file mode 100644
-index 0000000000000..3b6ec44823c85
+index 0000000000000..cd37f75b241f1
 --- /dev/null
 +++ b/chrome/browser/ui/stedding/screenshot/screenshot_codec_unittest.cc
-@@ -0,0 +1,295 @@
+@@ -0,0 +1,399 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
 +
 +#include "chrome/browser/ui/stedding/screenshot/screenshot_codec.h"
 +
++#include <cmath>
 +#include <cstdint>
 +#include <optional>
 +#include <string>
@@ -1008,6 +1364,7 @@ index 0000000000000..3b6ec44823c85
 +#include "third_party/skia/include/core/SkRect.h"
 +#include "ui/base/l10n/l10n_util.h"
 +#include "ui/gfx/codec/png_codec.h"
++#include "ui/gfx/geometry/size.h"
 +
 +namespace stedding {
 +namespace {
@@ -1204,6 +1561,84 @@ index 0000000000000..3b6ec44823c85
 +      << "only the picture was saved";
 +}
 +
++// BACKLOG S-344: a full page's PNG with more pixels than the budget is saved
++// as it came, but no second bitmap is made of it for the clipboard. 16,385
++// pixels wide and one tall is past the side limit and still cheap to make.
++TEST_F(ScreenshotCodecTest, APictureOverTheBudgetIsSavedButNotDecoded) {
++  SkBitmap wide;
++  wide.allocN32Pixels(kMaxCaptureSide + 1, 1);
++  wide.eraseColor(SK_ColorRED);
++  const std::optional<std::vector<uint8_t>> png =
++      gfx::PNGCodec::EncodeBGRASkBitmap(wide, /*discard_transparency=*/false);
++  ASSERT_TRUE(png);
++  ASSERT_FALSE(gfx::PNGCodec::Decode(*png).drawsNothing())
++      << "the PNG is good: only the budget keeps it from the clipboard";
++
++  const CaptureOutcome outcome =
++      WriteAndDecode(*png, Downloads(), base::FilePath(kName));
++  ASSERT_FALSE(outcome.path.empty());
++  EXPECT_EQ(*png, ReadBytes(outcome.path)) << "the page's own bytes";
++  EXPECT_TRUE(outcome.bitmap.drawsNothing()) << "decoded past the budget";
++
++  SkBitmap at_the_limit;
++  at_the_limit.allocN32Pixels(kMaxCaptureSide, 1);
++  at_the_limit.eraseColor(SK_ColorRED);
++  const std::optional<std::vector<uint8_t>> fits =
++      gfx::PNGCodec::EncodeBGRASkBitmap(at_the_limit,
++                                        /*discard_transparency=*/false);
++  ASSERT_TRUE(fits);
++  EXPECT_EQ(kMaxCaptureSide,
++            WriteAndDecode(*fits, Downloads(), base::FilePath(kName))
++                .bitmap.width())
++      << "a picture at the limit is copied";
++}
++
++// A full page's clip for a document `width` by `height` CSS pixels at
++// `scale`, as "WxH", or "none".
++std::string Clip(int width, int height, float scale) {
++  const std::optional<gfx::Size> clip =
++      FullPageClip(gfx::Size(width, height), scale);
++  return clip ? clip->ToString() : "none";
++}
++
++// BACKLOG S-344: a document that fits the budget is captured whole, with no
++// clip, as before; a larger one is cut to the largest part from its top left
++// that fits, in CSS pixels, at the screen's scale.
++TEST(ScreenshotBudgetTest, ALongPageIsCutToTheBudget) {
++  EXPECT_TRUE(FitsCaptureBudget(kMaxCaptureSide, 4096));
++  EXPECT_FALSE(FitsCaptureBudget(kMaxCaptureSide + 1, 1));
++  EXPECT_FALSE(FitsCaptureBudget(1, kMaxCaptureSide + 1));
++  EXPECT_FALSE(FitsCaptureBudget(kMaxCaptureSide, 4097)) << "the area";
++  EXPECT_FALSE(FitsCaptureBudget(0, 10));
++
++  // Fits: no clip.
++  EXPECT_EQ("none", Clip(1280, 5000, 2.0f));
++  EXPECT_EQ("none", Clip(1280, 8192, 2.0f));
++  EXPECT_EQ("none", Clip(1920, 16384, 1.0f));
++  EXPECT_EQ("none", Clip(0, 0, 2.0f));
++
++  // Too long: the width stays, the height stops at the side limit.
++  EXPECT_EQ("1280x8192", Clip(1280, 8193, 2.0f));
++  EXPECT_EQ("1920x16384", Clip(1920, 130000, 1.0f));
++  // A scale that does not divide the limit: 13,107 CSS pixels are 16,383.75
++  // device pixels, which round to the limit and no further.
++  EXPECT_EQ("1536x13107", Clip(1536, 20000, 1.25f));
++  // A wide window: the area stops it first. 3,008 CSS pixels at twice the
++  // scale are 6,016 device pixels, which leave 11,155 rows.
++  EXPECT_EQ("3008x5577", Clip(3008, 10000, 2.0f));
++  // Too wide: the width stops at the side limit.
++  EXPECT_EQ("16384x500", Clip(20000, 500, 1.0f));
++
++  for (const float scale : {1.0f, 1.25f, 1.5f, 2.0f, 3.0f}) {
++    const std::optional<gfx::Size> clip =
++        FullPageClip(gfx::Size(2000, 100000), scale);
++    ASSERT_TRUE(clip) << scale;
++    EXPECT_TRUE(FitsCaptureBudget(std::llround(clip->width() * scale),
++                                  std::llround(clip->height() * scale)))
++        << scale << ": " << clip->ToString();
++  }
++}
++
 +// screenshot C5, C10, C11: the toast says what happened, and a saved
 +// capture's toast carries its own file.
 +TEST(ScreenshotToastTest, SaysWhatHappened) {
@@ -1211,7 +1646,8 @@ index 0000000000000..3b6ec44823c85
 +      base::FilePath(FILE_PATH_LITERAL("downloads")).Append(kName);
 +  {
 +    SCOPED_TRACE("copied and saved");
-+    const ToastParams params = CaptureToastParams(/*copied=*/true, path);
++    const ToastParams params =
++        CaptureToastParams(/*copied=*/true, path, /*cropped=*/false);
 +    EXPECT_EQ(ToastId::kSteddingCaptureSaved, params.toast_id);
 +    EXPECT_FALSE(params.body_string_override) << "Copied · Saved to Downloads";
 +    ASSERT_TRUE(params.action_button_callback_data);
@@ -1219,7 +1655,8 @@ index 0000000000000..3b6ec44823c85
 +  }
 +  {
 +    SCOPED_TRACE("saved, not copied");
-+    const ToastParams params = CaptureToastParams(/*copied=*/false, path);
++    const ToastParams params =
++        CaptureToastParams(/*copied=*/false, path, /*cropped=*/false);
 +    EXPECT_EQ(ToastId::kSteddingCaptureSaved, params.toast_id);
 +    EXPECT_EQ(
 +        l10n_util::GetStringUTF16(IDS_STEDDING_CAPTURE_NOT_COPIED_TOAST_BODY),
@@ -1228,9 +1665,30 @@ index 0000000000000..3b6ec44823c85
 +    EXPECT_EQ(path, base::ValueToFilePath(*params.action_button_callback_data));
 +  }
 +  {
++    SCOPED_TRACE("the top of a long page, copied and saved");
++    const ToastParams params =
++        CaptureToastParams(/*copied=*/true, path, /*cropped=*/true);
++    EXPECT_EQ(ToastId::kSteddingCaptureSaved, params.toast_id);
++    EXPECT_EQ(
++        l10n_util::GetStringUTF16(IDS_STEDDING_CAPTURE_CROPPED_TOAST_BODY),
++        params.body_string_override);
++    ASSERT_TRUE(params.action_button_callback_data);
++    EXPECT_EQ(path, base::ValueToFilePath(*params.action_button_callback_data));
++  }
++  {
++    SCOPED_TRACE("the top of a long page, saved, not copied");
++    const ToastParams params =
++        CaptureToastParams(/*copied=*/false, path, /*cropped=*/true);
++    EXPECT_EQ(
++        l10n_util::GetStringUTF16(IDS_STEDDING_CAPTURE_NOT_COPIED_TOAST_BODY),
++        params.body_string_override)
++        << "what failed comes first";
++  }
++  {
 +    SCOPED_TRACE("copied, not saved");
 +    const ToastParams params =
-+        CaptureToastParams(/*copied=*/true, base::FilePath());
++        CaptureToastParams(/*copied=*/true, base::FilePath(),
++                           /*cropped=*/false);
 +    EXPECT_EQ(ToastId::kSteddingCaptureFailed, params.toast_id);
 +    EXPECT_EQ(
 +        l10n_util::GetStringUTF16(IDS_STEDDING_CAPTURE_NOT_SAVED_TOAST_BODY),
@@ -1241,7 +1699,8 @@ index 0000000000000..3b6ec44823c85
 +  {
 +    SCOPED_TRACE("nothing");
 +    const ToastParams params =
-+        CaptureToastParams(/*copied=*/false, base::FilePath());
++        CaptureToastParams(/*copied=*/false, base::FilePath(),
++                           /*cropped=*/false);
 +    EXPECT_EQ(ToastId::kSteddingCaptureFailed, params.toast_id);
 +    EXPECT_FALSE(params.body_string_override)
 +        << "Couldn't take the screenshot";
@@ -1373,10 +1832,10 @@ index ee19ab68e5127..08a0e3b4757d6 100644
      CommandBarTest::TearDownOnMainThread();
    }
 diff --git a/chrome/test/stedding/screenshot_browsertest.cc b/chrome/test/stedding/screenshot_browsertest.cc
-index a6c311cc82c91..4054a28ff105a 100644
+index a6c311cc82c91..22b8c346df49a 100644
 --- a/chrome/test/stedding/screenshot_browsertest.cc
 +++ b/chrome/test/stedding/screenshot_browsertest.cc
-@@ -5,34 +5,50 @@
+@@ -5,49 +5,97 @@
  // The screenshot commands on a real page (docs/features/screenshot.md,
  // PLAN.md WIN-2): a capture writes its PNG, and a tab or a private window
  // that goes away while a capture runs leaves the capture nothing to touch.
@@ -1387,6 +1846,7 @@ index a6c311cc82c91..4054a28ff105a 100644
  
 +#include <algorithm>
 +#include <atomic>
++#include <cmath>
  #include <optional>
 +#include <string>
  #include <vector>
@@ -1399,6 +1859,7 @@ index a6c311cc82c91..4054a28ff105a 100644
  #include "base/functional/callback.h"
  #include "base/location.h"
  #include "base/run_loop.h"
++#include "base/strings/stringprintf.h"
 +#include "base/strings/utf_string_conversions.h"
  #include "base/task/single_thread_task_runner.h"
  #include "base/test/run_until.h"
@@ -1425,10 +1886,12 @@ index a6c311cc82c91..4054a28ff105a 100644
  #include "chrome/test/base/ui_test_utils.h"
  #include "components/prefs/pref_service.h"
 +#include "content/public/browser/browser_thread.h"
++#include "content/public/browser/render_widget_host_view.h"
  #include "content/public/browser/web_contents.h"
  #include "content/public/test/browser_test.h"
  #include "content/public/test/browser_test_utils.h"
-@@ -40,10 +56,18 @@
+ #include "net/test/embedded_test_server/embedded_test_server.h"
++#include "third_party/blink/public/common/web_preferences/web_preferences.h"
  #include "third_party/skia/include/core/SkBitmap.h"
  #include "third_party/skia/include/core/SkColor.h"
  #include "ui/base/clipboard/clipboard.h"
@@ -1441,13 +1904,37 @@ index a6c311cc82c91..4054a28ff105a 100644
 +#include "ui/events/types/event_type.h"
  #include "ui/gfx/codec/png_codec.h"
  #include "ui/gfx/color_utils.h"
++#include "ui/gfx/geometry/size.h"
 +#include "ui/views/controls/button/md_text_button.h"
 +#include "ui/views/controls/label.h"
 +#include "ui/views/test/button_test_api.h"
  #include "url/gurl.h"
  
  namespace {
-@@ -70,10 +94,89 @@ class ScreenshotCaptureTest : public InProcessBrowserTest {
+ 
++// A page whose frames come slowly: each takes two and a half seconds of
++// script until `slow` is cleared, so an answer that waits for its next frame
++// waits that long -- long enough for a test to act first on a slow machine,
++// where half a second was not.
++constexpr char kSlowFramesPage[] =
++    "data:text/html,<body style='margin:0'><div style='height:3000px'></div>"
++    "<script>var slow=true;function frame(){if(!slow)return;"
++    "const end=performance.now()+2500;while(performance.now()<end){}"
++    "requestAnimationFrame(frame);}requestAnimationFrame(frame);</script>"
++    "</body>";
++
++// A plain page `height` CSS pixels long.
++GURL PageThisLong(int height) {
++  return GURL(base::StringPrintf(
++      "data:text/html,<body style='margin:0'><div style='height:%dpx;"
++      "background:red'></div></body>",
++      height));
++}
++
+ class ScreenshotCaptureTest : public InProcessBrowserTest {
+  protected:
+   // A capture's pixels are read. Off the Mac, a browser test draws nothing
+@@ -70,10 +118,89 @@ class ScreenshotCaptureTest : public InProcessBrowserTest {
    }
  
    void TearDownOnMainThread() override {
@@ -1537,7 +2024,7 @@ index a6c311cc82c91..4054a28ff105a 100644
    void UseTemporaryDownloads(Profile* profile) {
      profile->GetPrefs()->SetFilePath(prefs::kDownloadDefaultDirectory,
                                       downloads_.GetPath());
-@@ -101,6 +204,12 @@ class ScreenshotCaptureTest : public InProcessBrowserTest {
+@@ -101,6 +228,12 @@ class ScreenshotCaptureTest : public InProcessBrowserTest {
    }
  
    base::ScopedTempDir downloads_;
@@ -1550,7 +2037,7 @@ index a6c311cc82c91..4054a28ff105a 100644
  };
  
  // A capture writes its PNG, two close together stay two files, and a tab or
-@@ -213,4 +322,156 @@ IN_PROC_BROWSER_TEST_F(ScreenshotCaptureTest, ACaptureOfADarkenedPageIsDark) {
+@@ -213,4 +346,251 @@ IN_PROC_BROWSER_TEST_F(ScreenshotCaptureTest, ACaptureOfADarkenedPageIsDark) {
    EXPECT_NEAR(0x12, static_cast<int>(SkColorGetB(middle)), 3);
  }
  
@@ -1643,6 +2130,101 @@ index a6c311cc82c91..4054a28ff105a 100644
 +        l10n_util::GetStringUTF16(IDS_STEDDING_CAPTURE_NOT_SAVED_TOAST_BODY)));
 +    EXPECT_FALSE(ClipboardPicture().drawsNothing()) << "the copy was lost";
 +    EXPECT_EQ(before, PngCount());
++  }
++}
++
++// screenshot C8 (BACKLOG S-344): a full page that has not answered in time
++// says so and frees the tab, but Chromium holds the page resized, its
++// scrollbars hidden, until that request answers. The capture stays attached
++// until then, so the page is put back; a full page asked for meanwhile does
++// not take the changed page for the page's own, and one after it works.
++IN_PROC_BROWSER_TEST_F(ScreenshotCaptureTest,
++                       AFullPageThatTimesOutStillPutsThePageBack) {
++  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GURL(kSlowFramesPage)));
++  content::WebContents* const page =
++      browser()->GetTabStripModel()->GetActiveWebContents();
++  const gfx::Size view_size =
++      page->GetRenderWidgetHostView()->GetViewBounds().size();
++  // Its scrollbars shown, and the size of its view, not the whole document's.
++  const auto page_is_as_it_was = [page, view_size]() {
++    const blink::web_pref::WebPreferences& prefs =
++        page->GetOrCreateWebPreferences();
++    return !prefs.hide_scrollbars && !prefs.record_whole_document &&
++           page->GetRenderWidgetHostView()->GetViewBounds().size() ==
++               view_size;
++  };
++  ASSERT_TRUE(page_is_as_it_was());
++
++  stedding::CaptureScreenshot(browser(), stedding::CaptureMode::kFullPage);
++  // Chromium has changed the page for the capture, and its answer waits for
++  // the page's next frame, seconds away. The capture times out now.
++  ASSERT_TRUE(base::test::RunUntil([&]() {
++    return page->GetOrCreateWebPreferences().hide_scrollbars;
++  }));
++  stedding::TimeOutFullPageCapturesForTesting();
++  ASSERT_NO_FATAL_FAILURE(WaitForToast(
++      browser(), ToastId::kSteddingCaptureFailed,
++      l10n_util::GetStringUTF16(IDS_STEDDING_CAPTURE_FAILED_TOAST_BODY)));
++  // Asked for before the first has answered: it does not start over it.
++  stedding::CaptureScreenshot(browser(), stedding::CaptureMode::kFullPage);
++
++  ASSERT_TRUE(base::test::RunUntil(page_is_as_it_was))
++      << "the page kept the capture's hidden scrollbars or its size";
++
++  ASSERT_TRUE(content::ExecJs(page, "slow = false;"));
++  FlushCaptures();
++  const int before = PngCount();
++  stedding::CaptureScreenshot(browser(), stedding::CaptureMode::kFullPage);
++  EXPECT_TRUE(base::test::RunUntil([&]() { return PngCount() > before; }))
++      << "the tab takes a full page again";
++  EXPECT_TRUE(base::test::RunUntil(page_is_as_it_was));
++}
++
++// screenshot C3 (BACKLOG S-344): a full page within the budget is taken whole,
++// as before. A longer one is cut to the budget from its top, which its toast
++// says, and no picture of it is taller than the side limit.
++IN_PROC_BROWSER_TEST_F(ScreenshotCaptureTest,
++                       ALongPageIsCutToTheBudgetAndSaysSo) {
++  int width = 0;
++  {
++    SCOPED_TRACE("a page that fits is taken whole");
++    ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), PageThisLong(3000)));
++    const float scale = browser()
++                            ->GetTabStripModel()
++                            ->GetActiveWebContents()
++                            ->GetRenderWidgetHostView()
++                            ->GetDeviceScaleFactor();
++    stedding::CaptureScreenshot(browser(), stedding::CaptureMode::kFullPage);
++    ASSERT_NO_FATAL_FAILURE(WaitForToast(
++        browser(), ToastId::kSteddingCaptureSaved,
++        l10n_util::GetStringUTF16(IDS_STEDDING_CAPTURE_TOAST_BODY)));
++    const SkBitmap copied = ClipboardPicture();
++    ASSERT_FALSE(copied.drawsNothing());
++    EXPECT_EQ(std::lround(3000 * scale), copied.height());
++    width = copied.width();
++  }
++  {
++    SCOPED_TRACE("a page past the limit is cut to it");
++    ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), PageThisLong(20000)));
++    const float scale = browser()
++                            ->GetTabStripModel()
++                            ->GetActiveWebContents()
++                            ->GetRenderWidgetHostView()
++                            ->GetDeviceScaleFactor();
++    stedding::CaptureScreenshot(browser(), stedding::CaptureMode::kFullPage);
++    ASSERT_NO_FATAL_FAILURE(WaitForToast(
++        browser(), ToastId::kSteddingCaptureSaved,
++        l10n_util::GetStringUTF16(IDS_STEDDING_CAPTURE_CROPPED_TOAST_BODY)));
++    const SkBitmap copied = ClipboardPicture();
++    ASSERT_FALSE(copied.drawsNothing());
++    EXPECT_EQ(width, copied.width()) << "the page's whole width";
++    EXPECT_LE(copied.height(), stedding::kMaxCaptureSide);
++    EXPECT_GE(copied.height(),
++              stedding::kMaxCaptureSide - static_cast<int>(std::ceil(scale)))
++        << "as much of the page as the limit allows";
++  }
++  for (const SkBitmap& picture : Pictures()) {
++    EXPECT_LE(picture.height(), stedding::kMaxCaptureSide);
 +  }
 +}
 +

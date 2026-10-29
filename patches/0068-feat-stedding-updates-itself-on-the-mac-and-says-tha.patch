@@ -34,7 +34,7 @@ leaves its users behind.
 Removable when: never as a whole; the updater is Stedding's own, and a move to
 another mechanism (Chromium's updater, a Windows one) replaces the Sparkle half.
 ---
- build/apple/tweak_info_plist.py               |  43 ++
+ build/apple/tweak_info_plist.py               |  43 +
  chrome/BUILD.gn                               |  21 +
  chrome/app/app-Info.plist                     |  21 +
  chrome/browser/BUILD.gn                       |   3 +
@@ -47,7 +47,7 @@ another mechanism (Chromium's updater, a Windows one) replaces the Sparkle half.
  chrome/browser/ui/stedding/BUILD.gn           |  52 ++
  chrome/browser/ui/stedding/app_updater.cc     | 106 +++
  chrome/browser/ui/stedding/app_updater.h      | 114 +++
- chrome/browser/ui/stedding/app_updater_mac.mm | 723 ++++++++++++++++++
+ chrome/browser/ui/stedding/app_updater_mac.mm | 744 ++++++++++++++++++
  .../browser/ui/stedding/fake_app_updater.cc   |  25 +
  chrome/browser/ui/stedding/fake_app_updater.h |  44 ++
  chrome/browser/ui/stedding/stedding_prefs.cc  |   6 +
@@ -79,7 +79,7 @@ another mechanism (Chromium's updater, a Windows one) replaces the Sparkle half.
  chrome/test/stedding/BUILD.gn                 |   5 +
  chrome/test/stedding/updates_browsertest.cc   | 352 +++++++++
  third_party/.gitignore                        |   2 +
- 45 files changed, 2735 insertions(+), 22 deletions(-)
+ 45 files changed, 2756 insertions(+), 22 deletions(-)
  create mode 100644 chrome/browser/ui/stedding/app_updater.cc
  create mode 100644 chrome/browser/ui/stedding/app_updater.h
  create mode 100644 chrome/browser/ui/stedding/app_updater_mac.mm
@@ -817,10 +817,10 @@ index 0000000000000..b052078444575
 +#endif  // CHROME_BROWSER_UI_STEDDING_APP_UPDATER_H_
 diff --git a/chrome/browser/ui/stedding/app_updater_mac.mm b/chrome/browser/ui/stedding/app_updater_mac.mm
 new file mode 100644
-index 0000000000000..91ed9b176f58f
+index 0000000000000..dd4e61722dec5
 --- /dev/null
 +++ b/chrome/browser/ui/stedding/app_updater_mac.mm
-@@ -0,0 +1,723 @@
+@@ -0,0 +1,744 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -1046,6 +1046,11 @@ index 0000000000000..91ed9b176f58f
 +  void OnUpdateFound(id<SteddingSparkleItem> item,
 +                     id<SteddingSparkleUserState> found,
 +                     SteddingSparkleReply reply) {
++    // Each update Sparkle finds is an attempt of its own. A yes the user gave
++    // an earlier one, whose install was then cancelled at the administrator's
++    // password or failed, does not install this one without asking (BACKLOG
++    // S-343).
++    restart_when_ready_ = false;
 +    // updates Up12: an informational entry, or one from a feed whose
 +    // signature fails, is never offered: the feed is signed, so either means
 +    // the feed is not ours.
@@ -1063,7 +1068,7 @@ index 0000000000000..91ed9b176f58f
 +        // A check the user asked for downloads at once (Up5); one Sparkle
 +        // made on its schedule and could not finish alone (its install needs
 +        // the user's password, Up4) waits for the button.
-+        if (found.userInitiated || restart_when_ready_) {
++        if (found.userInitiated) {
 +          SetState(State::kDownloading);
 +          reply(SteddingSparkleChoiceInstall);
 +        } else {
@@ -1120,6 +1125,10 @@ index 0000000000000..91ed9b176f58f
 +  void OnNotFound() { FinishUserCheck(State::kUpToDate); }
 +
 +  void OnError(NSError* error) {
++    // The attempt the user said yes to is over, however it ended, the
++    // administrator's password cancelled included: a later one asks again
++    // (BACKLOG S-343).
++    restart_when_ready_ = false;
 +    if (error.code == kSparkleInstallationCanceledError) {
 +      FinishUserCheck(State::kIdle);
 +      return;
@@ -1129,7 +1138,6 @@ index 0000000000000..91ed9b176f58f
 +      return;
 +    }
 +    user_asked_ = false;
-+    restart_when_ready_ = false;
 +    SetError(base::SysNSStringToUTF16(error.localizedDescription));
 +    SetState(State::kFailed);
 +  }
@@ -1140,6 +1148,10 @@ index 0000000000000..91ed9b176f58f
 +      case State::kChecking:
 +      case State::kDownloading:
 +      case State::kAvailable:
++        // An attempt that ended with no error, a download cancelled: as in
++        // OnError, the yes was for it alone, and a version Sparkle later
++        // downloads on its schedule waits for the button (BACKLOG S-343).
++        restart_when_ready_ = false;
 +        SetState(State::kIdle);
 +        return;
 +      case State::kReady:
@@ -1183,6 +1195,8 @@ index 0000000000000..91ed9b176f58f
 +  }
 +
 +  void OnAborted(NSError* error) {
++    // As in OnError: the yes was for the attempt that stopped here.
++    restart_when_ready_ = false;
 +    if (state() == State::kChecking || user_asked_) {
 +      OnError(error);
 +      return;
@@ -1279,6 +1293,9 @@ index 0000000000000..91ed9b176f58f
 +  void OnQuitTookTooLong() {
 +    if (state() == State::kInstalling) {
 +      restart_prepared_ = false;
++      // The quit was refused ("Leave site?"): the button's next press asks
++      // Sparkle again, and nothing restarts without that press.
++      restart_when_ready_ = false;
 +      SetState(State::kReady);
 +    }
 +  }
@@ -1290,6 +1307,10 @@ index 0000000000000..91ed9b176f58f
 +  PrefChangeRegistrar registrar_;
 +  bool started_ = false;
 +  bool user_asked_ = false;
++  // The user pressed the button on a version that waited for it (kAvailable):
++  // once downloaded, it restarts into it without a second press. For that
++  // attempt only (OnUpdateFound, OnError, OnAborted, OnDismissed,
++  // OnQuitTookTooLong).
 +  bool restart_when_ready_ = false;
 +  bool restart_prepared_ = false;
 +  uint64_t expected_ = 0;

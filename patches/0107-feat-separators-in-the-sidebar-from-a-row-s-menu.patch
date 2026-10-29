@@ -19,7 +19,7 @@ Removable when: never; to be folded into the patches that own the code.
  chrome/app/stedding_strings.grdp              |   8 ++
  chrome/browser/ui/browser_tabrestore.cc       |   3 +
  chrome/browser/ui/spaces/space_model.cc       |  12 +-
- .../ui/spaces/space_storage_partition.cc      |   3 +
+ .../ui/spaces/space_storage_partition.cc      | 124 +++++++++++++++---
  chrome/browser/ui/stedding/BUILD.gn           |  13 +-
  chrome/browser/ui/stedding/menu_rules.cc      |   4 +
  chrome/browser/ui/stedding/pin_lifecycle.cc   |   2 +
@@ -39,15 +39,15 @@ Removable when: never; to be folded into the patches that own the code.
  .../stedding/sidebar_click_browsertest.cc     |   2 +
  chrome/test/stedding/tab_drop_browsertest.cc  |  21 +++
  .../tabs/public/tab_context_menu_command.h    |   4 +
- 23 files changed, 546 insertions(+), 6 deletions(-)
+ 23 files changed, 652 insertions(+), 21 deletions(-)
  create mode 100644 chrome/browser/ui/stedding/tab_separators.cc
  create mode 100644 chrome/browser/ui/stedding/tab_separators.h
 
 diff --git a/chrome/app/stedding_strings.grdp b/chrome/app/stedding_strings.grdp
-index bd11b31359865..93c867df2ac06 100644
+index a62981c81123f..d323d443ca76a 100644
 --- a/chrome/app/stedding_strings.grdp
 +++ b/chrome/app/stedding_strings.grdp
-@@ -267,6 +267,14 @@
+@@ -270,6 +270,14 @@
      Show this page beside the pinned tab it came from
    </message>
  
@@ -136,10 +136,26 @@ index 2c9c30840277f..98ff0493134e4 100644
    observers_.Notify(&Observer::OnTabRouted, tab, from, to);
  }
 diff --git a/chrome/browser/ui/spaces/space_storage_partition.cc b/chrome/browser/ui/spaces/space_storage_partition.cc
-index 84ad428da9677..8fc5bd703ec5b 100644
+index 84ad428da9677..06b88421e230e 100644
 --- a/chrome/browser/ui/spaces/space_storage_partition.cc
 +++ b/chrome/browser/ui/spaces/space_storage_partition.cc
-@@ -17,6 +17,7 @@
+@@ -4,10 +4,14 @@
+ 
+ #include "chrome/browser/ui/spaces/space_storage_partition.h"
+ 
++#include <algorithm>
+ #include <memory>
+ #include <vector>
+ 
+-#include "base/barrier_closure.h"
++#include "base/barrier_callback.h"
++#include "base/functional/bind.h"
++#include "base/memory/weak_ptr.h"
++#include "base/task/single_thread_task_runner.h"
+ #include "base/token.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/tab_contents/tab_util.h"
+@@ -17,6 +21,7 @@
  #include "chrome/browser/ui/spaces/space_registry.h"
  #include "chrome/browser/ui/spaces/tab_space_restore_data.h"
  #include "chrome/browser/ui/stedding/tab_names.h"
@@ -147,7 +163,86 @@ index 84ad428da9677..8fc5bd703ec5b 100644
  #include "chrome/browser/ui/stedding/tab_parents.h"
  #include "chrome/browser/ui/tabs/tab_strip_model.h"
  #include "components/sessions/content/content_serialized_navigation_builder.h"
-@@ -308,6 +309,7 @@ void RebindTab(TabStripModel* tabs,
+@@ -34,7 +39,10 @@
+ #include "content/public/common/referrer.h"
+ #include "url/url_constants.h"
+ #include "content/public/common/url_constants.h"
++#include "chrome/common/url_constants.h"
+ #include "chrome/common/webui_url_constants.h"
++#include "extensions/common/constants.h"
++#include "mojo/public/cpp/bindings/callback_helpers.h"
+ #include "services/network/public/mojom/clear_data_filter.mojom.h"
+ #include "services/network/public/mojom/cookie_manager.mojom.h"
+ #include "services/network/public/mojom/network_context.mojom.h"
+@@ -66,6 +74,24 @@ bool SameJar(const content::StoragePartitionConfig& a,
+   return a_space && a.partition_name() == b->partition_name();
+ }
+ 
++// The address that decides a page's jar: a view-source page's is the page it
++// shows the source of, which is fetched in the jar that page would be in.
++GURL JarUrlOf(const GURL& url) {
++  return url.SchemeIs(content::kViewSourceScheme) ? GURL(url.GetContent())
++                                                  : url;
++}
++
++// The browser's own pages, which keep the profile's jar where their data
++// lives (PLAN.md SPC-9, sessions S20): WebUI, the new tab page, DevTools and
++// extension pages.
++bool IsBrowsersOwnPage(const GURL& url) {
++  return url.SchemeIs(content::kChromeUIScheme) ||
++         url.SchemeIs(content::kChromeUIUntrustedScheme) ||
++         url.SchemeIs(content::kChromeDevToolsScheme) ||
++         url.SchemeIs(chrome::kChromeSearchScheme) ||
++         url.SchemeIs(extensions::kExtensionScheme);
++}
++
+ std::optional<SpaceId> SpaceIdFromExtraData(
+     const std::map<std::string, std::string>& extra_data) {
+   const auto it = extra_data.find(kSessionTabSpaceKey);
+@@ -82,6 +108,10 @@ std::optional<SpaceId> SpaceIdFromExtraData(
+ }  // namespace
+ 
+ bool PageBelongsInSpaceJar(const GURL& url) {
++  // A view-source page is fetched as the page it names (BACKLOG S-338).
++  if (url.SchemeIs(content::kViewSourceScheme)) {
++    return PageBelongsInSpaceJar(JarUrlOf(url));
++  }
+   // The web, and pages with no origin of their own yet.
+   if (url.is_empty() || url.IsAboutBlank() || url.SchemeIsHTTPOrHTTPS() ||
+       url.SchemeIsFile() || url.SchemeIs(url::kDataScheme)) {
+@@ -95,6 +125,13 @@ bool PageBelongsInSpaceJar(const GURL& url) {
+   return false;
+ }
+ 
++bool PageStaysInItsJar(const GURL& url) {
++  // Moved to the profile's jar, a blob: page was cancelled and loaded again
++  // where its blob is not, and the page that made it was gone; a mailto:
++  // link moved the page it was clicked on into the shared jar.
++  return !PageBelongsInSpaceJar(url) && !IsBrowsersOwnPage(JarUrlOf(url));
++}
++
+ std::optional<content::StoragePartitionConfig>
+ StoragePartitionConfigForProfileId(content::BrowserContext* browser_context,
+                                    std::string_view profile_id,
+@@ -151,7 +188,7 @@ scoped_refptr<content::SiteInstance> SiteInstanceForSpaceTab(
+     if (std::optional<content::StoragePartitionConfig> config =
+             StoragePartitionConfigForSpace(browser_context, registry, id)) {
+       return content::SiteInstance::CreateForFixedStoragePartition(
+-          browser_context, url, *config);
++          browser_context, JarUrlOf(url), *config);
+     }
+   }
+   Profile* const profile = Profile::FromBrowserContext(browser_context);
+@@ -197,7 +234,7 @@ scoped_refptr<content::SiteInstance> SiteInstanceForRestoredTab(
+           SpacePartitionForRestoredTab(browser_context, url, registry,
+                                        extra_data, essential)) {
+     return content::SiteInstance::CreateForFixedStoragePartition(
+-        browser_context, url, *config);
++        browser_context, JarUrlOf(url), *config);
+   }
+   return nullptr;
+ }
+@@ -308,6 +345,7 @@ void RebindTab(TabStripModel* tabs,
    }
    // The user's name for the tab rides on the contents (tabs R14).
    stedding::CarryTabName(old_contents, fresh.get());
@@ -155,7 +250,18 @@ index 84ad428da9677..8fc5bd703ec5b 100644
    stedding::CarryTabParent(old_contents, fresh.get());
    if (asleep) {
      fresh->SetWasDiscarded(true);
-@@ -385,6 +387,7 @@ bool MoveFreshTabToSpaceJar(TabStripModel* tabs,
+@@ -353,7 +391,9 @@ bool NeedsOtherJar(content::WebContents* contents,
+                    const SpaceRegistry* registry,
+                    const SpaceId& id,
+                    bool essential) {
+-  if (!contents) {
++  // A blob: page, or another app's address, stays where its tab is
++  // (sessions S20).
++  if (!contents || PageStaysInItsJar(url)) {
+     return false;
+   }
+   const std::optional<content::StoragePartitionConfig> target =
+@@ -385,6 +425,7 @@ bool MoveFreshTabToSpaceJar(TabStripModel* tabs,
    std::unique_ptr<content::WebContents> fresh =
        content::WebContents::Create(params);
    stedding::CarryTabName(old_contents, fresh.get());
@@ -163,6 +269,113 @@ index 84ad428da9677..8fc5bd703ec5b 100644
    stedding::CarryTabParent(old_contents, fresh.get());
    // The old contents showed a new-tab page at most; they go now, before the
    // address loads in their place.
+@@ -411,6 +452,47 @@ namespace {
+ // SpacePartitionWipesBegunForTesting's count.
+ int g_wipes_begun = 0;
+ 
++// sessions S13: clears the HTTP cache of the partition `config` names. `done`
++// runs once the clear has finished, with true, and also when the network
++// service's pipe drops first -- the service restarting -- which never runs
++// the clear's callback: Clear Independent Session waited for it and never
++// finished (BACKLOG S-345). A clear the drop cut short is asked once more, a
++// turn later, of the network context the partition makes in the lost one's
++// place; `done` has false when that one is dropped too, or there is no
++// network context to ask.
++void ClearHttpCacheOf(base::WeakPtr<Profile> profile,
++                      const content::StoragePartitionConfig& config,
++                      bool retry_if_dropped,
++                      base::OnceCallback<void(bool)> done) {
++  content::StoragePartition* const partition =
++      profile ? profile->GetStoragePartition(config) : nullptr;
++  network::mojom::NetworkContext* const network =
++      partition ? partition->GetNetworkContext() : nullptr;
++  if (!network) {
++    std::move(done).Run(false);
++    return;
++  }
++  base::OnceCallback<void(bool)> finished = base::BindOnce(
++      [](base::WeakPtr<Profile> profile,
++         const content::StoragePartitionConfig& config, bool retry_if_dropped,
++         base::OnceCallback<void(bool)> done, bool cleared) {
++        if (cleared || !retry_if_dropped) {
++          std::move(done).Run(cleared);
++          return;
++        }
++        base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
++            FROM_HERE,
++            base::BindOnce(&ClearHttpCacheOf, std::move(profile), config,
++                           /*retry_if_dropped=*/false, std::move(done)));
++      },
++      profile, config, retry_if_dropped, std::move(done));
++  network->ClearHttpCache(
++      base::Time(), base::Time::Max(), /*filter=*/nullptr,
++      base::BindOnce(mojo::WrapCallbackWithDefaultInvokeIfNotRun(
++                         std::move(finished), /*cleared=*/false),
++                     /*cleared=*/true));
++}
++
+ }  // namespace
+ 
+ int SpacePartitionWipesBegunForTesting() {
+@@ -420,9 +502,17 @@ int SpacePartitionWipesBegunForTesting() {
+ bool WipeIsolatedSpacePartition(content::BrowserContext* browser_context,
+                                 std::string_view profile_id,
+                                 base::OnceClosure done) {
++  return WipeIsolatedSpacePartition(browser_context, profile_id,
++                                    base::IgnoreArgs<bool>(std::move(done)));
++}
++
++bool WipeIsolatedSpacePartition(content::BrowserContext* browser_context,
++                                std::string_view profile_id,
++                                base::OnceCallback<void(bool)> done) {
++  // No jar: nothing of it is left to clear.
+   auto finish = [&](bool ok) {
+     if (done) {
+-      std::move(done).Run();
++      std::move(done).Run(/*cleared=*/true);
+     }
+     return ok;
+   };
+@@ -440,17 +530,20 @@ bool WipeIsolatedSpacePartition(content::BrowserContext* browser_context,
+     done = base::DoNothing();
+   }
+   ++g_wipes_begun;
+-  // `done` runs once both clears have finished (PLAN.md SPC-24).
+-  const base::RepeatingClosure both = base::BarrierClosure(2, std::move(done));
++  // `done` runs once both clears have finished (PLAN.md SPC-24), with
++  // whether both did: a deleted Space's jar whose HTTP cache was not cleared
++  // stays on the pending list (BACKLOG S-345).
++  const base::RepeatingCallback<void(bool)> both = base::BarrierCallback<bool>(
++      2, base::BindOnce(
++             [](base::OnceCallback<void(bool)> done, std::vector<bool> each) {
++               std::move(done).Run(
++                   std::ranges::all_of(each, [](bool ok) { return ok; }));
++             },
++             std::move(done)));
+   // The HTTP cache is not site data to ClearData, and a page fetched while
+   // signed in is the session too.
+-  if (network::mojom::NetworkContext* const network =
+-          partition->GetNetworkContext()) {
+-    network->ClearHttpCache(base::Time(), base::Time::Max(),
+-                            /*filter=*/nullptr, both);
+-  } else {
+-    both.Run();
+-  }
++  ClearHttpCacheOf(Profile::FromBrowserContext(browser_context)->GetWeakPtr(),
++                   *config, /*retry_if_dropped=*/true, both);
+   // Storage cleanup compacts the databases, so what was deleted is gone from
+   // the disk too, not only unreachable.
+   partition->ClearData(
+@@ -458,7 +551,8 @@ bool WipeIsolatedSpacePartition(content::BrowserContext* browser_context,
+       /*filter_builder=*/nullptr,
+       content::StoragePartition::StorageKeyPolicyMatcherFunction(),
+       network::mojom::CookieDeletionFilter::New(),
+-      /*perform_storage_cleanup=*/true, base::Time(), base::Time::Max(), both);
++      /*perform_storage_cleanup=*/true, base::Time(), base::Time::Max(),
++      base::BindOnce(both, true));
+   return true;
+ }
+ 
 diff --git a/chrome/browser/ui/stedding/BUILD.gn b/chrome/browser/ui/stedding/BUILD.gn
 index ff0daee67c43f..cb99c92b82505 100644
 --- a/chrome/browser/ui/stedding/BUILD.gn
@@ -217,7 +430,7 @@ index 2d22f17a9f7fe..51d408ab818b8 100644
      case TabStripModel::CommandSteddingMoveToSpaceMenu:
      case TabStripModel::CommandSteddingRouteToSpaceMenu:
 diff --git a/chrome/browser/ui/stedding/pin_lifecycle.cc b/chrome/browser/ui/stedding/pin_lifecycle.cc
-index 4c7ca186755c0..82fa940de9b92 100644
+index dca20d3c6cdda..c1847fbe98c4a 100644
 --- a/chrome/browser/ui/stedding/pin_lifecycle.cc
 +++ b/chrome/browser/ui/stedding/pin_lifecycle.cc
 @@ -22,6 +22,7 @@
@@ -228,7 +441,7 @@ index 4c7ca186755c0..82fa940de9b92 100644
  #include "chrome/browser/ui/stedding/tab_parents.h"
  #include "chrome/browser/ui/tabs/tab_change_type.h"
  #include "chrome/browser/ui/tabs/tab_strip_model.h"
-@@ -178,6 +179,7 @@ void ReplaceWithHomeAsleep(TabStripModel* tabs,
+@@ -184,6 +185,7 @@ void ReplaceWithHomeAsleep(TabStripModel* tabs,
    fresh->GetController().Restore(0, content::RestoreType::kRestored, &entries);
    // The name the user gave the pin rides on its contents (tabs R14).
    CarryTabName(old_contents, fresh.get());

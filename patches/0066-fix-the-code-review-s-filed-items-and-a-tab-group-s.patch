@@ -42,39 +42,39 @@ a test that could not fail.
 Removable when: never as a whole; the next rebase folds each fix into the patch that owns
 its code (patches/README.md, the round-patch exception).
 ---
- chrome/browser/app_controller_mac.mm          |  64 ++++++--
- .../browser/resources/stedding_welcome/app.ts |  89 +++++++++--
+ chrome/browser/app_controller_mac.mm          |  64 ++++--
+ .../browser/resources/stedding_welcome/app.ts |  89 ++++++--
  .../ssl/https_first_mode_settings_tracker.cc  |   4 +
  ...ps_first_mode_settings_tracker_unittest.cc |  25 ++-
- chrome/browser/ui/archive/closed_tabs_undo.cc |   9 ++
+ chrome/browser/ui/archive/closed_tabs_undo.cc |   9 +
  chrome/browser/ui/archive/closed_tabs_undo.h  |   2 +
  .../ui/spaces/arc_data_importer_unittest.cc   |   9 +-
  .../browser/ui/spaces/arc_sidebar_importer.cc |  10 +-
  .../browser/ui/spaces/arc_sidebar_importer.h  |   5 +-
  .../spaces/arc_sidebar_importer_unittest.cc   |   8 +-
- chrome/browser/ui/spaces/space_model.cc       | 117 +++++++++++++-
+ chrome/browser/ui/spaces/space_model.cc       | 117 ++++++++++-
  chrome/browser/ui/spaces/space_model.h        |   3 +
- .../ui/spaces/space_model_window_unittest.cc  |  79 ++++++++++
- chrome/browser/ui/spaces/space_router.cc      |  66 +++++++-
- .../ui/spaces/space_router_unittest.cc        |  21 +++
+ .../ui/spaces/space_model_window_unittest.cc  |  79 +++++++
+ chrome/browser/ui/spaces/space_router.cc      |  66 +++++-
+ .../ui/spaces/space_router_unittest.cc        |  21 ++
  chrome/browser/ui/stedding/stedding_prefs.cc  |   1 +
  chrome/browser/ui/stedding/stedding_prefs.h   |   3 +
- .../views/tabs/common/clear_tabs_separator.cc |  80 +++++++++-
- .../views/tabs/common/clear_tabs_separator.h  |   9 ++
- .../common/stedding_tab_row_rules_unittest.cc |  49 ++++++
- .../tabs/common/tab_group_header_view.cc      |  79 +++++++++-
- .../views/tabs/common/tab_group_header_view.h |  10 ++
- .../common/tab_group_header_view_unittest.cc  |  49 +++++-
- chrome/common/chrome_paths_internal.h         |  12 ++
- chrome/common/chrome_paths_mac.mm             |  22 ++-
- chrome/common/chrome_paths_unittest.cc        |  37 +++++
+ .../views/tabs/common/clear_tabs_separator.cc |  80 +++++++-
+ .../views/tabs/common/clear_tabs_separator.h  |   9 +
+ .../common/stedding_tab_row_rules_unittest.cc |  49 +++++
+ .../tabs/common/tab_group_header_view.cc      |  79 ++++++-
+ .../views/tabs/common/tab_group_header_view.h |  10 +
+ .../common/tab_group_header_view_unittest.cc  |  49 ++++-
+ chrome/common/chrome_paths_internal.h         |  31 ++-
+ chrome/common/chrome_paths_mac.mm             | 194 +++++++++++++++---
+ chrome/common/chrome_paths_unittest.cc        |  37 ++++
  chrome/test/stedding/BUILD.gn                 |   4 +
  .../test/stedding/command_bar_browsertest.cc  |  15 +-
- .../test/stedding/folder_tabs_browsertest.cc  |  47 ++++++
- .../test/stedding/media_keys_browsertest.cc   |  39 ++---
- .../stedding/shortcut_file_mac_browsertest.mm | 143 ++++++++++++++++++
+ .../test/stedding/folder_tabs_browsertest.cc  |  47 +++++
+ .../test/stedding/media_keys_browsertest.cc   |  39 ++--
+ .../stedding/shortcut_file_mac_browsertest.mm | 143 +++++++++++++
  chrome/test/stedding/welcome_browsertest.cc   |  14 ++
- 32 files changed, 1039 insertions(+), 85 deletions(-)
+ 32 files changed, 1203 insertions(+), 112 deletions(-)
  create mode 100644 chrome/test/stedding/shortcut_file_mac_browsertest.mm
 
 diff --git a/chrome/browser/app_controller_mac.mm b/chrome/browser/app_controller_mac.mm
@@ -1562,19 +1562,62 @@ index 4cca85eb84ee3..d4e65de8b2106 100644
    ON_CALL(delegate, IsGroupFocused()).WillByDefault(testing::Return(true));
  
 diff --git a/chrome/common/chrome_paths_internal.h b/chrome/common/chrome_paths_internal.h
-index 312925bde533f..0fab0f9c3ff6f 100644
+index 312925bde533f..d9b4d43396a29 100644
 --- a/chrome/common/chrome_paths_internal.h
 +++ b/chrome/common/chrome_paths_internal.h
-@@ -129,6 +129,18 @@ LegacyProfileMigration MoveLegacyProfileForLaunch(const base::FilePath& legacy,
+@@ -96,17 +96,31 @@ enum class LegacyProfileMigration {
+   kNotSteddingData,
+   // A running browser holds the legacy folder's process-singleton lock.
+   kLegacyInUse,
++  // No profile in the legacy folder is known to be Stedding's, and a file
++  // that would tell (a profile's Preferences, or Local State) is there but
++  // cannot be read. Never kept as the answer: a later launch looks again.
++  kLegacyUnreadable,
+   kFailed,
+ };
+ 
+ // Copies `legacy` to `target` when `target` holds no user data yet and a
+ // profile in `legacy` was created by Stedding. The copy is made beside
+ // `target` and renamed into place, so `target` is either untouched or
+-// complete. `legacy` is left as it was. Blocks on disk.
++// complete. `legacy` is left as it was. One move runs at a time: a lock on a
++// file beside `target`, held from the first look at the folders to the
++// rename, makes a second launch wait and then find the profile in place. A
++// profile that appears in `target` meanwhile is never replaced. Blocks on
++// disk.
+ LegacyProfileMigration MigrateLegacyUserDataDirectory(
+     const base::FilePath& legacy,
+     const base::FilePath& target);
+ 
++// For tests: runs during MigrateLegacyUserDataDirectory() once the copy is
++// made, while the move holds its lock and before it looks at `target` again
++// and replaces it. Null for none.
++using LegacyProfileCopiedHook = void (*)();
++void SetLegacyProfileCopiedHookForTesting(LegacyProfileCopiedHook hook);
++
+ // Whether Stedding data may exist that an earlier build encrypted with the
+ // "Chromium Safe Storage" keychain item: a profile in the default folder or
+ // in `launch_user_data_dir`, or a Stedding profile in `legacy`.
+@@ -115,7 +129,8 @@ bool SteddingDataMayUseLegacyKeychainKey(
+     const base::FilePath& default_user_data_dir,
+     const base::FilePath& launch_user_data_dir);
+ 
+-// Asked when the move cannot happen on this launch (kLegacyInUse, kFailed):
++// Asked when the move cannot happen on this launch (kLegacyInUse,
++// kLegacyUnreadable, kFailed):
+ // true to go on with a new profile, which leaves the old one in `legacy` for
+ // good, false to quit so that the next launch can try again.
+ using LegacyProfileQuestion = bool (*)(const base::FilePath& legacy,
+@@ -129,6 +144,18 @@ LegacyProfileMigration MoveLegacyProfileForLaunch(const base::FilePath& legacy,
                                                    LegacyProfileQuestion ask,
                                                    bool* go_on);
  
 +// The keychain answer once the move has run, from the one taken before it
 +// (`before_move`). A launch that goes on after a move that could not happen
-+// (kLegacyInUse, kFailed) starts an empty profile in `target`, with nothing
-+// sealed with Chromium's key, so it makes a key of its own, as a fresh
-+// install does; it had copied Chromium's (BACKLOG S-208). A profile another
-+// launch moved into `target` meanwhile keeps the answer.
++// (kLegacyInUse, kLegacyUnreadable, kFailed) starts an empty profile in
++// `target`, with nothing sealed with Chromium's key, so it makes a key of its
++// own, as a fresh install does; it had copied Chromium's (BACKLOG S-208). A
++// profile another launch moved into `target` meanwhile keeps the answer.
 +bool SteddingDataMayUseLegacyKeychainKeyAfterMove(
 +    bool before_move,
 +    LegacyProfileMigration outcome,
@@ -1585,10 +1628,241 @@ index 312925bde533f..0fab0f9c3ff6f 100644
  // user-data directory. Notes whether Stedding data existed before this launch
  // (for the keychain), then, for a launch that uses the default folder, moves a
 diff --git a/chrome/common/chrome_paths_mac.mm b/chrome/common/chrome_paths_mac.mm
-index 782a3287bef7a..cea5e18e05245 100644
+index 782a3287bef7a..c2aaaf045ff76 100644
 --- a/chrome/common/chrome_paths_mac.mm
 +++ b/chrome/common/chrome_paths_mac.mm
-@@ -316,6 +316,20 @@ LegacyProfileMigration MoveLegacyProfileForLaunch(const base::FilePath& legacy,
+@@ -4,10 +4,13 @@
+ 
+ #import <Foundation/Foundation.h>
+ #include <errno.h>
++#include <fcntl.h>
+ #include <signal.h>
+ #include <stdio.h>
+ #include <string.h>
+ #include <sys/clonefile.h>
++#include <sys/file.h>
++#include <sys/stat.h>
+ #include <unistd.h>
+ 
+ #include <memory>
+@@ -25,10 +28,12 @@
+ #include "base/compiler_specific.h"
+ #include "base/files/file_enumerator.h"
+ #include "base/files/file_util.h"
++#include "base/files/scoped_file.h"
+ #include "base/json/json_reader.h"
+ #include "base/logging.h"
+ #include "base/memory/free_deleter.h"
+ #include "base/path_service.h"
++#include "base/posix/eintr_wrapper.h"
+ #include "base/strings/string_number_conversions.h"
+ #include "base/strings/sys_string_conversions.h"
+ #include "base/values.h"
+@@ -119,39 +124,75 @@ NSString* const kLegacyProfileTargetInUse = @"target-has-profile";
+ // True until then, which is the safe answer for the keychain.
+ bool g_stedding_data_may_use_legacy_key = true;
+ 
++LegacyProfileCopiedHook g_copied_hook_for_testing = nullptr;
++
++// Who made a profile, as far as its files tell.
++enum class ProfileMaker {
++  kStedding,
++  kOther,
++  // A file that would tell is there but cannot be read: too large,
++  // unreadable, or not JSON. It may be Stedding's.
++  kUnreadable,
++};
++
++// Whether `path` is not there at all, as opposed to there and unreadable.
++bool IsMissing(const base::FilePath& path) {
++  struct stat info;
++  return stat(path.value().c_str(), &info) != 0 &&
++         (errno == ENOENT || errno == ENOTDIR);
++}
++
+ // Stedding names itself in a profile's GCM category ("com.stedding.macosx";
+ // Chromium writes "org.chromium.macosx", and the value is never rewritten).
+ // A profile whose user changed a Stedding setting also has a "stedding"
+-// dictionary; the earliest betas left only the category.
+-bool ProfileWasCreatedByStedding(const base::FilePath& profile_dir) {
++// dictionary; the earliest betas left only the category. A folder without
++// Preferences holds no profile of Stedding's.
++ProfileMaker MakerOfProfile(const base::FilePath& profile_dir) {
++  const base::FilePath path = profile_dir.Append("Preferences");
++  if (IsMissing(path)) {
++    return ProfileMaker::kOther;
++  }
+   std::string prefs;
+-  if (!base::ReadFileToStringWithMaxSize(profile_dir.Append("Preferences"),
+-                                         &prefs, 64 * 1024 * 1024)) {
+-    return false;
++  if (!base::ReadFileToStringWithMaxSize(path, &prefs, 64 * 1024 * 1024)) {
++    return ProfileMaker::kUnreadable;
+   }
+   const std::optional<base::DictValue> dict =
+       base::JSONReader::ReadDict(prefs, base::JSON_PARSE_RFC);
+   if (!dict) {
+-    return false;
++    return ProfileMaker::kUnreadable;
+   }
+   const std::string* const category =
+       dict->FindStringByDottedPath("gcm.product_category_for_subtypes");
+-  return (category && category->starts_with("com.stedding.")) ||
+-         dict->FindDict("stedding");
++  const bool by_stedding =
++      (category && category->starts_with("com.stedding.")) ||
++      dict->FindDict("stedding");
++  return by_stedding ? ProfileMaker::kStedding : ProfileMaker::kOther;
+ }
+ 
+ // Default, and every profile folder the directory's Local State lists.
+-std::vector<std::string> ProfileFolderNames(const base::FilePath& dir) {
++// `unreadable` is set when Local State is there but cannot be read, so the
++// other folders it lists are not known.
++std::vector<std::string> ProfileFolderNames(const base::FilePath& dir,
++                                            bool* unreadable) {
+   std::vector<std::string> names = {"Default"};
++  const base::FilePath path = dir.Append("Local State");
++  if (IsMissing(path)) {
++    return names;
++  }
+   std::string local_state;
+-  if (!base::ReadFileToStringWithMaxSize(dir.Append("Local State"),
+-                                         &local_state, 16 * 1024 * 1024)) {
++  if (!base::ReadFileToStringWithMaxSize(path, &local_state,
++                                         16 * 1024 * 1024)) {
++    *unreadable = true;
+     return names;
+   }
+   const std::optional<base::DictValue> dict =
+       base::JSONReader::ReadDict(local_state, base::JSON_PARSE_RFC);
++  if (!dict) {
++    *unreadable = true;
++    return names;
++  }
+   const base::DictValue* const cache =
+-      dict ? dict->FindDictByDottedPath("profile.info_cache") : nullptr;
++      dict->FindDictByDottedPath("profile.info_cache");
+   if (!cache) {
+     return names;
+   }
+@@ -166,13 +207,27 @@ std::vector<std::string> ProfileFolderNames(const base::FilePath& dir) {
+   return names;
+ }
+ 
+-bool HoldsSteddingProfile(const base::FilePath& dir) {
+-  for (const std::string& name : ProfileFolderNames(dir)) {
+-    if (ProfileWasCreatedByStedding(dir.Append(name))) {
+-      return true;
++// kStedding when a profile in `dir` is Stedding's. Otherwise kUnreadable when
++// a file that would tell could not be read, so that no launch takes the
++// folder for Chromium's on that alone (BACKLOG S-341).
++ProfileMaker SteddingProfileIn(const base::FilePath& dir) {
++  bool unreadable = false;
++  for (const std::string& name : ProfileFolderNames(dir, &unreadable)) {
++    switch (MakerOfProfile(dir.Append(name))) {
++      case ProfileMaker::kStedding:
++        return ProfileMaker::kStedding;
++      case ProfileMaker::kUnreadable:
++        unreadable = true;
++        break;
++      case ProfileMaker::kOther:
++        break;
+     }
+   }
+-  return false;
++  return unreadable ? ProfileMaker::kUnreadable : ProfileMaker::kOther;
++}
++
++bool HoldsSteddingProfile(const base::FilePath& dir) {
++  return SteddingProfileIn(dir) == ProfileMaker::kStedding;
+ }
+ 
+ bool HoldsProfile(const base::FilePath& dir) {
+@@ -229,6 +284,23 @@ base::FilePath StagingPathFor(const base::FilePath& target, pid_t pid) {
+                                  base::NumberToString(pid));
+ }
+ 
++// Locks the file beside `target` that a move holds from its first look at the
++// folders to the rename, waiting while another launch holds it. The lock goes
++// with the descriptor, so a launch that dies mid-move leaves none behind; the
++// empty file stays. Invalid when the file cannot be opened or locked (a
++// volume without locks): the move then goes on unlocked, as it did before.
++base::ScopedFD LockMoveInto(const base::FilePath& target) {
++  const base::FilePath path =
++      target.DirName().Append(target.BaseName().value() + ".move-lock");
++  base::ScopedFD lock(
++      HANDLE_EINTR(open(path.value().c_str(),
++                        O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0600)));
++  if (lock.is_valid() && HANDLE_EINTR(flock(lock.get(), LOCK_EX)) != 0) {
++    lock.reset();
++  }
++  return lock;
++}
++
+ // A launch that died mid-copy leaves its staging folder behind.
+ void DeleteAbandonedStaging(const base::FilePath& target) {
+   const std::string prefix = target.BaseName().value() + ".migrating-";
+@@ -254,11 +326,21 @@ LegacyProfileMigration MigrateLegacyUserDataDirectory(
+   if (legacy == target || !base::DirectoryExists(legacy)) {
+     return LegacyProfileMigration::kNoLegacyFolder;
+   }
++  // One move at a time (BACKLOG S-341). This runs before the process
++  // singleton exists: two launches at once both found the target empty, and
++  // the second deleted the profile the first had just moved in and started
++  // on. The second now waits here, then finds that profile and leaves it be.
++  const base::ScopedFD move_lock = LockMoveInto(target);
+   if (!HoldsNoUserData(target)) {
+     return LegacyProfileMigration::kTargetHasUserData;
+   }
+-  if (!HoldsSteddingProfile(legacy)) {
+-    return LegacyProfileMigration::kNotSteddingData;
++  switch (SteddingProfileIn(legacy)) {
++    case ProfileMaker::kStedding:
++      break;
++    case ProfileMaker::kOther:
++      return LegacyProfileMigration::kNotSteddingData;
++    case ProfileMaker::kUnreadable:
++      return LegacyProfileMigration::kLegacyUnreadable;
+   }
+   if (LockedByLiveProcess(legacy)) {
+     return LegacyProfileMigration::kLegacyInUse;
+@@ -278,6 +360,16 @@ LegacyProfileMigration MigrateLegacyUserDataDirectory(
+        {"SingletonLock", "SingletonSocket", "SingletonCookie"}) {
+     base::DeleteFile(staging.Append(name));
+   }
++  if (g_copied_hook_for_testing) {
++    g_copied_hook_for_testing();
++  }
++  // Looked at again before the target goes: a launch that went on with a new
++  // profile (kLegacyInUse, kLegacyUnreadable, kFailed) takes no lock, and may
++  // have started it there during the copy. That profile is never replaced.
++  if (!HoldsNoUserData(target)) {
++    base::DeletePathRecursively(staging);
++    return LegacyProfileMigration::kTargetHasUserData;
++  }
+   // Only regenerated files are in the target (HoldsNoUserData()).
+   if (base::PathExists(target) && !base::DeletePathRecursively(target)) {
+     base::DeletePathRecursively(staging);
+@@ -292,6 +384,10 @@ LegacyProfileMigration MigrateLegacyUserDataDirectory(
+   return LegacyProfileMigration::kMigrated;
+ }
+ 
++void SetLegacyProfileCopiedHookForTesting(LegacyProfileCopiedHook hook) {
++  g_copied_hook_for_testing = hook;
++}
++
+ bool SteddingDataMayUseLegacyKeychainKey(
+     const base::FilePath& legacy,
+     const base::FilePath& default_user_data_dir,
+@@ -310,12 +406,28 @@ LegacyProfileMigration MoveLegacyProfileForLaunch(const base::FilePath& legacy,
+       MigrateLegacyUserDataDirectory(legacy, target);
+   *go_on = true;
+   if (outcome == LegacyProfileMigration::kLegacyInUse ||
++      outcome == LegacyProfileMigration::kLegacyUnreadable ||
+       outcome == LegacyProfileMigration::kFailed) {
+     *go_on = ask(legacy, outcome);
+   }
    return outcome;
  }
  
@@ -1599,6 +1873,7 @@ index 782a3287bef7a..cea5e18e05245 100644
 +    const base::FilePath& target) {
 +  if (go_on &&
 +      (outcome == LegacyProfileMigration::kLegacyInUse ||
++       outcome == LegacyProfileMigration::kLegacyUnreadable ||
 +       outcome == LegacyProfileMigration::kFailed) &&
 +      !HoldsProfile(target)) {
 +    return false;
@@ -1609,7 +1884,50 @@ index 782a3287bef7a..cea5e18e05245 100644
  namespace {
  
  // What a person launching Stedding sees when their old profile cannot come
-@@ -391,8 +405,12 @@ bool PrepareUserDataDirectoryAtStartup(
+@@ -332,19 +444,36 @@ bool AskAboutLegacyProfile(const base::FilePath& legacy,
+     return command_line.GetSwitchValueASCII(kAnswerSwitch) == "new-profile";
+   }
+   const bool in_use = outcome == LegacyProfileMigration::kLegacyInUse;
++  const bool unreadable =
++      outcome == LegacyProfileMigration::kLegacyUnreadable;
+   NSString* const header =
+-      in_use ? @"Another browser is using your Stedding profile"
+-             : @"Stedding could not bring your profile across";
++      in_use       ? @"Another browser is using your Stedding profile"
++      : unreadable ? @"Stedding could not read your earlier profile"
++                   : @"Stedding could not bring your profile across";
+   NSString* const reason =
+       in_use ? @"A browser running now is using that folder. Quit that "
+                @"browser, then open Stedding again."
+-             : @"Copying it to Stedding's own folder failed. Check that the "
+-               @"disk has room, then open Stedding again.";
++      : unreadable
++          ? @"A file in it could not be read, so Stedding cannot tell whether "
++            @"an earlier Stedding made it. Check that the folder can be read, "
++            @"then open Stedding again."
++          : @"Copying it to Stedding's own folder failed. Check that the "
++            @"disk has room, then open Stedding again.";
++  NSString* const where = base::SysUTF8ToNSString(legacy.value());
++  NSString* const found =
++      unreadable
++          ? [NSString stringWithFormat:
++                          @"A profile in %@ may be from an earlier Stedding.",
++                          where]
++          : [NSString
++                stringWithFormat:@"Your profile from an earlier Stedding is "
++                                 @"in %@.",
++                                 where];
+   NSString* const message = [NSString
+-      stringWithFormat:@"Your profile from an earlier Stedding is in %@. %@\n\n"
++      stringWithFormat:@"%@ %@\n\n"
+                        @"If you start a new profile instead, the old one "
+                        @"stays where it is and is not brought across later.",
+-                       base::SysUTF8ToNSString(legacy.value()), reason];
++                       found, reason];
+   CFOptionFlags response = kCFUserNotificationCancelResponse;
+   CFUserNotificationDisplayAlert(
+       /*timeout=*/0, kCFUserNotificationCautionAlertLevel, /*iconURL=*/nullptr,
+@@ -391,8 +520,12 @@ bool PrepareUserDataDirectoryAtStartup(
    }
    DeleteAbandonedStaging(target);
    bool go_on = true;
@@ -1624,6 +1942,20 @@ index 782a3287bef7a..cea5e18e05245 100644
      case LegacyProfileMigration::kMigrated:
        LOG(WARNING) << "Moved the Stedding profile from " << legacy << " to "
                     << target;
+@@ -417,6 +550,13 @@ bool PrepareUserDataDirectoryAtStartup(
+                    << (go_on ? "Starting a new profile; the old one stays."
+                              : "Quitting, so the next launch can move it.");
+       break;
++    case LegacyProfileMigration::kLegacyUnreadable:
++      // Nothing is kept: the next launch looks again.
++      LOG(ERROR) << "Could not read the profiles in " << legacy
++                 << " to tell whether Stedding made one. "
++                 << (go_on ? "Starting a new profile; the old one stays."
++                           : "Quitting, so the next launch can look again.");
++      break;
+     case LegacyProfileMigration::kFailed:
+       LOG(ERROR) << "Could not move the Stedding profile from " << legacy
+                  << " to " << target << ". "
 diff --git a/chrome/common/chrome_paths_unittest.cc b/chrome/common/chrome_paths_unittest.cc
 index 2b211e4a6d7ba..42069619032dc 100644
 --- a/chrome/common/chrome_paths_unittest.cc

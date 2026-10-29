@@ -41,24 +41,24 @@ Removable when: not removable; it is product behaviour.
  .../stedding_page/stedding_sync_section.css   |   45 +
  .../stedding_sync_section.html.ts             |  160 ++
  .../stedding_page/stedding_sync_section.ts    |  480 +++++
- chrome/browser/ui/spaces/BUILD.gn             |   79 +
+ chrome/browser/ui/spaces/BUILD.gn             |   82 +
  .../browser/ui/spaces/arc_sidebar_importer.cc |   92 +-
- chrome/browser/ui/spaces/sidebar_backup.cc    |    5 +
+ chrome/browser/ui/spaces/sidebar_backup.cc    |   18 +-
  chrome/browser/ui/spaces/sidebar_backup.h     |    5 +
  chrome/browser/ui/spaces/sidebar_ids.cc       |  118 ++
  chrome/browser/ui/spaces/sidebar_ids.h        |   57 +
- .../browser/ui/spaces/sidebar_sync_apply.cc   |  709 +++++++
+ .../browser/ui/spaces/sidebar_sync_apply.cc   |  739 +++++++
  chrome/browser/ui/spaces/sidebar_sync_apply.h |   66 +
  chrome/browser/ui/spaces/sidebar_sync_file.cc |  447 ++++
  chrome/browser/ui/spaces/sidebar_sync_file.h  |  133 ++
- .../browser/ui/spaces/sidebar_sync_ledger.cc  |  375 ++++
+ .../browser/ui/spaces/sidebar_sync_ledger.cc  |  395 ++++
  .../browser/ui/spaces/sidebar_sync_ledger.h   |  156 ++
  .../browser/ui/spaces/sidebar_sync_service.cc | 1803 +++++++++++++++++
- .../browser/ui/spaces/sidebar_sync_service.h  |  278 +++
+ .../browser/ui/spaces/sidebar_sync_service.h  |  305 +++
  .../ui/spaces/sidebar_sync_service_factory.cc |   51 +
  .../ui/spaces/sidebar_sync_service_factory.h  |   41 +
- .../browser/ui/spaces/sidebar_sync_state.cc   |  941 +++++++++
- chrome/browser/ui/spaces/sidebar_sync_state.h |  278 +++
+ .../browser/ui/spaces/sidebar_sync_state.cc   |  971 +++++++++
+ chrome/browser/ui/spaces/sidebar_sync_state.h |  288 +++
  .../browser/ui/spaces/sidebar_sync_tracker.cc |  238 +++
  .../browser/ui/spaces/sidebar_sync_tracker.h  |   56 +
  .../ui/spaces/sidebar_sync_unittest.cc        |  729 +++++++
@@ -78,7 +78,7 @@ Removable when: not removable; it is product behaviour.
  chrome/test/stedding/BUILD.gn                 |    3 +
  .../test/stedding/sidebar_sync_browsertest.cc |  387 ++++
  .../tools/build/mac/infoplist_strings_util.cc |   16 +
- 45 files changed, 8243 insertions(+), 89 deletions(-)
+ 45 files changed, 8374 insertions(+), 91 deletions(-)
  create mode 100644 chrome/browser/resources/settings/stedding_page/stedding_sync_section.css
  create mode 100644 chrome/browser/resources/settings/stedding_page/stedding_sync_section.html.ts
  create mode 100644 chrome/browser/resources/settings/stedding_page/stedding_sync_section.ts
@@ -888,7 +888,7 @@ index 0000000000000..fa909cbe52401
 +customElements.define(
 +    SettingsSteddingSyncSectionElement.is, SettingsSteddingSyncSectionElement);
 diff --git a/chrome/browser/ui/spaces/BUILD.gn b/chrome/browser/ui/spaces/BUILD.gn
-index e0e7d6d625086..89ffef2b3d6fc 100644
+index e0e7d6d625086..55dd3cd42b467 100644
 --- a/chrome/browser/ui/spaces/BUILD.gn
 +++ b/chrome/browser/ui/spaces/BUILD.gn
 @@ -42,6 +42,10 @@ source_set("spaces") {
@@ -911,7 +911,17 @@ index e0e7d6d625086..89ffef2b3d6fc 100644
      "space_jar_navigation_throttle.cc",
      "space_query.cc",
      "space.cc",
-@@ -140,6 +146,76 @@ source_set("spaces") {
+@@ -127,6 +133,9 @@ source_set("spaces") {
+     "//components/sessions",
+     "//content/public/browser",
+     "//chrome/browser/ui/browser_window",
++    # sessions S20: extension pages keep the profile's jar
++    # (space_storage_partition.cc).
++    "//extensions/common:common_constants",
+     "//services/network/public/mojom",
+     "//url",
+   ]
+@@ -140,6 +149,76 @@ source_set("spaces") {
    }
  }
  
@@ -988,7 +998,7 @@ index e0e7d6d625086..89ffef2b3d6fc 100644
  source_set("unit_tests") {
    testonly = true
    sources = [
-@@ -152,6 +228,7 @@ source_set("unit_tests") {
+@@ -152,6 +231,7 @@ source_set("unit_tests") {
      "pin_home_import_unittest.cc",
      "session_rebuild_unittest.cc",
      "sidebar_backup_unittest.cc",
@@ -996,7 +1006,7 @@ index e0e7d6d625086..89ffef2b3d6fc 100644
      "space_commands_unittest.cc",
      "space_partitions_unittest.cc",
      "space_icon_unittest.cc",
-@@ -165,6 +242,8 @@ source_set("unit_tests") {
+@@ -165,6 +245,8 @@ source_set("unit_tests") {
    deps = [
      ":router",
      ":spaces",
@@ -1129,10 +1139,18 @@ index 6fd52f83b1f58..8d1a12e18eea9 100644
  
  struct ApplyContext {
 diff --git a/chrome/browser/ui/spaces/sidebar_backup.cc b/chrome/browser/ui/spaces/sidebar_backup.cc
-index 143c4c03d14da..b56078ecfd9d5 100644
+index 143c4c03d14da..2e5aef4add415 100644
 --- a/chrome/browser/ui/spaces/sidebar_backup.cc
 +++ b/chrome/browser/ui/spaces/sidebar_backup.cc
-@@ -326,6 +326,10 @@ ArcImportPlan SnapshotWindow(BrowserWindowInterface* browser) {
+@@ -19,6 +19,7 @@
+ #include "base/memory/raw_ptr.h"
+ #include "base/strings/stringprintf.h"
+ #include "base/strings/utf_string_conversions.h"
++#include "base/task/lazy_thread_pool_task_runner.h"
+ #include "base/task/thread_pool.h"
+ #include "base/uuid.h"
+ #include "base/values.h"
+@@ -326,6 +327,10 @@ ArcImportPlan SnapshotWindow(BrowserWindowInterface* browser) {
  }
  
  std::string PlanToJson(const ArcImportPlan& plan) {
@@ -1143,7 +1161,7 @@ index 143c4c03d14da..b56078ecfd9d5 100644
    base::ListValue spaces;
    base::ListValue items;
    for (const ArcImportPlan::Space& space : plan.spaces) {
-@@ -433,6 +437,7 @@ std::string PlanToJson(const ArcImportPlan& plan) {
+@@ -433,6 +438,7 @@ std::string PlanToJson(const ArcImportPlan& plan) {
    root.Set("version", 1);
    root.Set("sidebar", std::move(sidebar));
    root.Set("writer", "Stedding");
@@ -1151,6 +1169,32 @@ index 143c4c03d14da..b56078ecfd9d5 100644
    std::string json;
    base::JSONWriter::WriteWithOptions(
        root, base::JSONWriter::OPTIONS_PRETTY_PRINT, &json);
+@@ -445,6 +451,14 @@ namespace {
+ // and is not read whole into memory.
+ constexpr size_t kMaxSidebarFileBytes = 64 * 1024 * 1024;
+ 
++// sidebar-file Sf6: exports are written one after another, so a second one
++// in the same minute finds the first one's file and takes the next name.
++// Run side by side, both found the name free and the second replaced the
++// first.
++base::LazyThreadPoolSequencedTaskRunner g_export_runner =
++    LAZY_THREAD_POOL_SEQUENCED_TASK_RUNNER_INITIALIZER(
++        base::TaskTraits(base::MayBlock(), base::TaskPriority::USER_VISIBLE));
++
+ // Read and parsed off the UI thread: the file is not trusted, and a large
+ // one held the window up while it parsed (BACKLOG S-160).
+ std::optional<ArcImportPlan> ReadSidebarOnPool(const base::FilePath& path) {
+@@ -519,8 +533,8 @@ void ExportPlanAsync(const ArcImportPlan& plan,
+                      const base::FilePath& directory,
+                      const std::string& stem,
+                      base::OnceCallback<void(base::FilePath)> done) {
+-  base::ThreadPool::PostTaskAndReplyWithResult(
+-      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
++  g_export_runner.Get()->PostTaskAndReplyWithResult(
++      FROM_HERE,
+       base::BindOnce(&WriteExportOnPool, directory, stem, PlanToJson(plan)),
+       std::move(done));
+ }
 diff --git a/chrome/browser/ui/spaces/sidebar_backup.h b/chrome/browser/ui/spaces/sidebar_backup.h
 index 441ca573130c0..1d434dec2916c 100644
 --- a/chrome/browser/ui/spaces/sidebar_backup.h
@@ -1363,10 +1407,10 @@ index 0000000000000..45212b77bff2a
 +#endif  // CHROME_BROWSER_UI_SPACES_SIDEBAR_IDS_H_
 diff --git a/chrome/browser/ui/spaces/sidebar_sync_apply.cc b/chrome/browser/ui/spaces/sidebar_sync_apply.cc
 new file mode 100644
-index 0000000000000..97eb61f38aa34
+index 0000000000000..b0f5ed69322b1
 --- /dev/null
 +++ b/chrome/browser/ui/spaces/sidebar_sync_apply.cc
-@@ -0,0 +1,709 @@
+@@ -0,0 +1,739 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -1808,22 +1852,47 @@ index 0000000000000..97eb61f38aa34
 +      }
 +    }
 +    const std::optional<SpaceId> current = model->FindSpaceForTab(tab);
-+    if (space && current && *space != *current &&
-+        JarOf(*registry_, *space) != JarOf(*registry_, *current) &&
++    // The Space the tab is filed in once moved. The shared row is no Space's:
++    // a tab joining it from a Space with a session of its own is filed in the
++    // Space that shows the shared row (spaces B6), else it stays where it is.
++    std::optional<SpaceId> filed = space;
++    if (!filed && parent == kEssentialsList) {
++      if (const std::optional<SpaceId> shared =
++              model->SpaceForSharedEssentials();
++          shared && current && model->SpaceIsIsolated(*current)) {
++        filed = shared;
++      }
++    }
++    if (!filed) {
++      filed = current;
++    }
++    // Sf25: the session the page is in now against the one it is in once
++    // moved. A shared essential is in the profile's, whatever Space it is
++    // filed in; a pin, or a Space's own essential, is in its Space's -- and
++    // the Space that shows the shared row has none of its own, so the shared
++    // row is the profile's session too.
++    if (current && filed &&
++        (model->IsSharedEssential(tab) ? std::string()
++                                       : JarOf(*registry_, *current)) !=
++            JarOf(*registry_, *filed) &&
 +        !tab->GetContents()->WasDiscarded() && !move_now_->contains(id)) {
 +      out_->held_moves.push_back(id);
 +      return false;
 +    }
 +    if (IsEssentialsContainer(parent)) {
++      // spaces B6: whether a pinned tab is its Space's own essential or a
++      // shared one is settled when it is pinned, by the Space it is filed in
++      // then. A pinned tab whose part changes is let go first and pinned
++      // again in its new Space; refiling it while pinned kept the old part.
++      const bool own = filed && model->SpaceIsIsolated(*filed);
++      if (tab->IsPinned() && model->IsOwnEssential(tab) != own) {
++        strip->SetTabPinned(strip->GetIndexOfTab(tab), false);
++      }
 +      if (!tab->IsPinned()) {
 +        strip->MoveTabOutOfFolders(strip->GetIndexOfTab(tab));
 +      }
-+      if (space) {
-+        model->SetSpaceForTab(tab, *space);
-+      } else if (const std::optional<SpaceId> shared =
-+                     model->SpaceForSharedEssentials();
-+                 shared && current && model->SpaceIsIsolated(*current)) {
-+        model->SetSpaceForTab(tab, *shared);
++      if (filed) {
++        model->SetSpaceForTab(tab, *filed);
 +      }
 +      if (!tab->IsPinned()) {
 +        strip->SetTabPinned(strip->GetIndexOfTab(tab), true);
@@ -1855,13 +1924,18 @@ index 0000000000000..97eb61f38aa34
 +    TabStripModel* const strip = window->GetTabStripModel();
 +    SpaceModel* const model = SpaceModel::From(window);
 +    std::vector<std::string> chain;
-+    for (std::string up = folder_id;
-+         IsFolder(up) && chain.size() <= static_cast<size_t>(
-+                                             stedding::kMaxNestDepth);) {
-+      chain.insert(chain.begin(), up);
++    std::string up = folder_id;
++    for (int depth = 0; IsFolder(up) && depth <= stedding::kMaxNestDepth;
++         ++depth) {
 +      const auto it = desired_->records.find(up);
 +      if (it == desired_->records.end()) {
 +        return false;
++      }
++      // Sf21: a folder removed elsewhere is not made again around a live
++      // one; what was in it sits in its place, as EffectiveParent puts a
++      // tab.
++      if (it->second.Alive()) {
++        chain.insert(chain.begin(), up);
 +      }
 +      up = it->second.Get(kFieldParent);
 +    }
@@ -2742,10 +2816,10 @@ index 0000000000000..0a59368dbebf0
 +#endif  // CHROME_BROWSER_UI_SPACES_SIDEBAR_SYNC_FILE_H_
 diff --git a/chrome/browser/ui/spaces/sidebar_sync_ledger.cc b/chrome/browser/ui/spaces/sidebar_sync_ledger.cc
 new file mode 100644
-index 0000000000000..b73ef2ae37d7c
+index 0000000000000..18e3237899013
 --- /dev/null
 +++ b/chrome/browser/ui/spaces/sidebar_sync_ledger.cc
-@@ -0,0 +1,375 @@
+@@ -0,0 +1,395 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -2773,13 +2847,22 @@ index 0000000000000..b73ef2ae37d7c
 +constexpr size_t kMaxLedgerBytes = 64 * 1024 * 1024;
 +constexpr int64_t kJournalKeepMs = base::Days(30).InMilliseconds();
 +
-+std::optional<int64_t> WholeNumber(const base::DictValue& dict,
-+                                   std::string_view key) {
-+  const std::optional<double> number = dict.FindDouble(key);
-+  if (!number || !std::isfinite(*number) || std::trunc(*number) != *number) {
++// A whole number a double holds exactly, as the sidebar file reads one
++// (Sf33); anything else is as if absent. A number past int64_t would be
++// undefined to cast.
++std::optional<int64_t> WholeNumber(const base::Value& value) {
++  const std::optional<double> number = value.GetIfDouble();
++  if (!number || !std::isfinite(*number) || std::trunc(*number) != *number ||
++      std::fabs(*number) > static_cast<double>(kMaxTime)) {
 +    return std::nullopt;
 +  }
 +  return static_cast<int64_t>(*number);
++}
++
++std::optional<int64_t> WholeNumber(const base::DictValue& dict,
++                                   std::string_view key) {
++  const base::Value* const value = dict.Find(key);
++  return value ? WholeNumber(*value) : std::nullopt;
 +}
 +
 +base::ListValue StringsToList(const std::set<std::string>& strings) {
@@ -2863,7 +2946,18 @@ index 0000000000000..b73ef2ae37d7c
 +  if (recent.empty() && our_seq == 0 && found.seq == 0) {
 +    return OwnFileKind::kOurs;
 +  }
-+  return found.seq > our_seq ? OwnFileKind::kCopy : OwnFileKind::kEcho;
++  // A write this install never made, past its own number, or at it once
++  // this install's own write at that number is noted, is a copy of the
++  // profile writing too. Each write is noted before it is made
++  // (SidebarSyncService::WriteOwnFile); a ledger from before that may hold
++  // a number whose write was never noted, and a file at that number is then
++  // taken for an old echo. Only an older number is always an echo.
++  if (found.seq > our_seq) {
++    return OwnFileKind::kCopy;
++  }
++  const bool ours_noted = !recent.empty() && recent.back().seq == our_seq;
++  return found.seq == our_seq && ours_noted ? OwnFileKind::kCopy
++                                            : OwnFileKind::kEcho;
 +}
 +
 +PeerStat::PeerStat() = default;
@@ -3001,8 +3095,8 @@ index 0000000000000..b73ef2ae37d7c
 +  if (const base::DictValue* const received =
 +          local->FindDict("tombstone_received")) {
 +    for (const auto [id, when] : *received) {
-+      if (const std::optional<double> time = when.GetIfDouble()) {
-+        ledger.tombstone_received[id] = static_cast<int64_t>(*time);
++      if (const std::optional<int64_t> time = WholeNumber(when)) {
++        ledger.tombstone_received[id] = *time;
 +      }
 +    }
 +  }
@@ -5094,10 +5188,10 @@ index 0000000000000..82345e9088807
 +}  // namespace spaces
 diff --git a/chrome/browser/ui/spaces/sidebar_sync_service.h b/chrome/browser/ui/spaces/sidebar_sync_service.h
 new file mode 100644
-index 0000000000000..ffdb745c34364
+index 0000000000000..86f6843db7e34
 --- /dev/null
 +++ b/chrome/browser/ui/spaces/sidebar_sync_service.h
-@@ -0,0 +1,278 @@
+@@ -0,0 +1,305 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -5219,7 +5313,9 @@ index 0000000000000..ffdb745c34364
 +  void PreviewJoin(const base::FilePath& picked, PreviewCallback done);
 +  // Sf9, Sf10: the answer to the sheet. With `combine`, the pairs at
 +  // `accepted` (indices into the preview's) become one; Keep both pairs
-+  // nothing. A backup is taken first. False when no preview waits.
++  // nothing. A backup is taken first, and sync starts once it is written;
++  // when it cannot be, sync stays off and Settings says so. False when no
++  // preview waits.
 +  bool ConfirmJoin(bool combine,
 +                   const std::string& device_name,
 +                   const std::vector<size_t>& accepted);
@@ -5234,7 +5330,9 @@ index 0000000000000..ffdb745c34364
 +  void Stop(bool remove_own_file);
 +
 +  // Sf22-Sf25, Sf28, Sf20: answers a waiting row. `id` is the row's, as
-+  // GetStatus() gives it; `choice` one of the row's buttons.
++  // GetStatus() gives it; `choice` one of the row's buttons. A held batch's
++  // Apply waits for its backup to be written, and stays held when it cannot
++  // be.
 +  bool ResolveDecision(const std::string& id, const std::string& choice);
 +  // Sf35: restores what a batch from another computer changed, here and on
 +  // the other computers.
@@ -5274,6 +5372,7 @@ index 0000000000000..ffdb745c34364
 +  void StopObserving();
 +  void EnsureWatches();
 +  void MaybeBecomeReady();
++  void NoteViewBeforeReady();
 +  void OnSessionRestored(Profile* profile, int tabs);
 +  void OnLedgerLoaded(std::optional<sidebar_sync::Ledger> ledger);
 +  void BecomeReady();
@@ -5293,13 +5392,30 @@ index 0000000000000..ffdb745c34364
 +                 bool force);
 +  void Apply();
 +  void WriteOwnFile();
-+  void OnOwnFileWritten(sidebar_sync::WriteRecord write, bool ok);
-+  void SaveLedger();
++  void WriteOwnFileOnceNoted(base::FilePath dir,
++                             std::string name,
++                             std::string json);
++  void OnOwnFileWritten(bool ok);
++  // Writes the ledger, then runs `saved` here.
++  void SaveLedger(base::OnceClosure saved = base::OnceClosure());
 +  void RefreshBackups();
 +  void OnBackupsListed(std::vector<base::FilePath> backups);
 +  void TakeNewInstallId();
 +  void OnJoinScanned(PreviewCallback done, sidebar_sync::JoinScan scan);
-+  void TakeBackup();
++  void FinishJoin(std::unique_ptr<PendingJoin> join,
++                  bool combine,
++                  std::string device_name,
++                  std::vector<size_t> accepted,
++                  bool backed_up);
++  void ApplyHeldBatch(std::string install,
++                      std::unique_ptr<HeldBatch> held,
++                      bool backed_up);
++  // Sf9, Sf22: writes `state` as a backup, then runs `written` with whether
++  // it was written.
++  void TakeBackup(const sidebar_sync::State& state,
++                  base::OnceCallback<void(bool)> written);
++  void OnBackupWritten(base::OnceCallback<void(bool)> written,
++                       base::FilePath path);
 +  void NotifyObservers();
 +
 +  const raw_ptr<Profile> profile_;
@@ -5320,6 +5436,8 @@ index 0000000000000..ffdb745c34364
 +  bool closing_all_browsers_ = false;
 +
 +  std::optional<sidebar_sync::Ledger> ledger_;
++  // Sf12: what this install last saw in its windows, the `before` of the
++  // next commit. Before the ledger is read, what the windows showed then.
 +  std::optional<sidebar_sync::LocalView> last_view_;
 +  // Sf18: ids the user removed in a live window since the last commit.
 +  std::set<std::string> intents_;
@@ -5335,6 +5453,9 @@ index 0000000000000..ffdb745c34364
 +  bool unreachable_ = false;
 +  bool denied_ = false;
 +  bool write_failed_ = false;
++  // Sf9, Sf22: the last backup before a join or an Apply could not be
++  // written, so that join or Apply did not happen.
++  bool backup_failed_ = false;
 +  bool watch_failed_ = false;
 +  bool ledger_lost_ = false;
 +  std::map<std::string, std::string> newer_;
@@ -5482,10 +5603,10 @@ index 0000000000000..527f38626a0e5
 +#endif  // CHROME_BROWSER_UI_SPACES_SIDEBAR_SYNC_SERVICE_FACTORY_H_
 diff --git a/chrome/browser/ui/spaces/sidebar_sync_state.cc b/chrome/browser/ui/spaces/sidebar_sync_state.cc
 new file mode 100644
-index 0000000000000..0506a96e3e472
+index 0000000000000..e862da370bf36
 --- /dev/null
 +++ b/chrome/browser/ui/spaces/sidebar_sync_state.cc
-@@ -0,0 +1,941 @@
+@@ -0,0 +1,971 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -5596,11 +5717,13 @@ index 0000000000000..0506a96e3e472
 +  return Stamp{*t, (*list)[offset + 1].GetString()};
 +}
 +
-+// Sf10: a Space's name as pairing compares it.
++// Sf10: a Space's name as pairing compares it, case-folded the same way in
++// every language. Lowercasing follows the computer's language (Turkish
++// lowers "I" to a dotless "ı"), so two computers could pair differently.
 +std::string PairingName(std::string_view name) {
 +  std::u16string text = base::UTF8ToUTF16(name);
 +  base::TrimWhitespace(text, base::TRIM_ALL, &text);
-+  return base::UTF16ToUTF8(base::i18n::ToLower(text));
++  return base::UTF16ToUTF8(base::i18n::FoldCase(text));
 +}
 +
 +// The ids of `ids` whose key `key_of` gives occurs once.
@@ -5645,7 +5768,7 @@ index 0000000000000..0506a96e3e472
 +}
 +
 +int64_t NextTime(int64_t now_ms, int64_t max_seen) {
-+  return std::max(now_ms, max_seen + 1);
++  return std::min(std::max(now_ms, max_seen + 1), kMaxTime);
 +}
 +
 +std::string_view KindName(Kind kind) {
@@ -5991,7 +6114,9 @@ index 0000000000000..0506a96e3e472
 +}
 +
 +bool ClockFarAhead(int64_t written_ms, int64_t now_ms) {
-+  return written_ms - now_ms > kSkewLimitMs;
++  // Not `written_ms - now_ms`: State::MaxTime() of an empty state is the
++  // smallest int64_t, and the difference would overflow.
++  return written_ms > now_ms + kSkewLimitMs;
 +}
 +
 +std::map<std::string, std::string> ResolveAliases(
@@ -6089,6 +6214,32 @@ index 0000000000000..0506a96e3e472
 +      it->second = std::move(copy);
 +    } else {
 +      it->second.order = MergeOrder(it->second.order, copy.order);
++    }
++  }
++  return out;
++}
++
++LocalView CanonicalView(const LocalView& view,
++                        const std::map<std::string, std::string>& resolved) {
++  if (resolved.empty()) {
++    return view;
++  }
++  LocalView out;
++  for (const auto& [id, item] : view.items) {
++    LocalItem copy = item;
++    if (auto parent = copy.fields.find(kFieldParent);
++        parent != copy.fields.end()) {
++      parent->second = Canonical(resolved, parent->second);
++    }
++    out.items.try_emplace(Canonical(resolved, id), copy);
++  }
++  for (const auto& [container, order] : view.lists) {
++    std::vector<std::string>& list = out.lists[Canonical(resolved, container)];
++    for (const std::string& id : order) {
++      std::string key = Canonical(resolved, id);
++      if (std::ranges::find(list, key) == list.end()) {
++        list.push_back(std::move(key));
++      }
 +    }
 +  }
 +  return out;
@@ -6429,10 +6580,10 @@ index 0000000000000..0506a96e3e472
 +}  // namespace spaces::sidebar_sync
 diff --git a/chrome/browser/ui/spaces/sidebar_sync_state.h b/chrome/browser/ui/spaces/sidebar_sync_state.h
 new file mode 100644
-index 0000000000000..30961ab0f3280
+index 0000000000000..1835ad2d9230d
 --- /dev/null
 +++ b/chrome/browser/ui/spaces/sidebar_sync_state.h
-@@ -0,0 +1,278 @@
+@@ -0,0 +1,288 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -6485,6 +6636,10 @@ index 0000000000000..30961ab0f3280
 +// The essentials row holds this many; the rest become pins (Sf41).
 +inline constexpr size_t kEssentialsCap = 12;
 +
++// The largest time a file or the ledger holds: the largest whole number a
++// JSON number keeps exactly, 2^53 - 1 (Sf33).
++inline constexpr int64_t kMaxTime = 9007199254740991;
++
 +// A hybrid logical time: milliseconds, then the install id of the writer,
 +// which breaks a tie the same way on every install (Sf15).
 +struct Stamp {
@@ -6504,7 +6659,8 @@ index 0000000000000..30961ab0f3280
 +};
 +
 +// The next local time: never behind the wall clock, never behind anything
-+// seen (Sf15).
++// seen (Sf15), and never past kMaxTime, so what it stamps can still be
++// written and read back (Sf27).
 +int64_t NextTime(int64_t now_ms, int64_t max_seen);
 +
 +struct Field {
@@ -6656,7 +6812,8 @@ index 0000000000000..30961ab0f3280
 +// additions, or any Space deleted.
 +bool ShouldHold(const Batch& batch, const State& before);
 +
-+// Sf27: a computer whose clock runs more than 24 hours ahead.
++// Sf27: a time more than 24 hours past `now_ms`, which only a computer whose
++// clock runs that far ahead writes.
 +bool ClockFarAhead(int64_t written_ms, int64_t now_ms);
 +
 +// Sf10: every alias resolved to the smallest id it reaches, so two computers
@@ -6670,6 +6827,10 @@ index 0000000000000..30961ab0f3280
 +// records that become one are merged field by field.
 +State Canonicalize(const State& state,
 +                   const std::map<std::string, std::string>& resolved);
++// Sf12: `view` with every id, parent and list under its resolved alias: a
++// view read before the ledger's aliases were known, as one read after.
++LocalView CanonicalView(const LocalView& view,
++                        const std::map<std::string, std::string>& resolved);
 +
 +// Sf10: a pair offered at the first join.
 +struct Pair {
@@ -7787,7 +7948,7 @@ index fd17c03f244b7..2c9c30840277f 100644
        session_service && session_id_.is_valid()) {
      if (content::WebContents* const contents = tab->GetContents()) {
 diff --git a/chrome/browser/ui/spaces/space_model.h b/chrome/browser/ui/spaces/space_model.h
-index c5b58a8d9d8a3..94e1e811f9e47 100644
+index 62e71215984de..0718053831584 100644
 --- a/chrome/browser/ui/spaces/space_model.h
 +++ b/chrome/browser/ui/spaces/space_model.h
 @@ -120,6 +120,13 @@ class SpaceModel : public TabStripModelObserver,

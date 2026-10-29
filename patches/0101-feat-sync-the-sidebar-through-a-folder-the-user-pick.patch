@@ -51,7 +51,7 @@ Removable when: not removable; it is product behaviour.
  chrome/browser/ui/spaces/sidebar_sync_apply.h |   66 +
  chrome/browser/ui/spaces/sidebar_sync_file.cc |  447 ++++
  chrome/browser/ui/spaces/sidebar_sync_file.h  |  133 ++
- .../browser/ui/spaces/sidebar_sync_ledger.cc  |  395 ++++
+ .../browser/ui/spaces/sidebar_sync_ledger.cc  |  415 ++++
  .../browser/ui/spaces/sidebar_sync_ledger.h   |  156 ++
  .../browser/ui/spaces/sidebar_sync_service.cc | 1803 +++++++++++++++++
  .../browser/ui/spaces/sidebar_sync_service.h  |  305 +++
@@ -61,7 +61,7 @@ Removable when: not removable; it is product behaviour.
  chrome/browser/ui/spaces/sidebar_sync_state.h |  288 +++
  .../browser/ui/spaces/sidebar_sync_tracker.cc |  238 +++
  .../browser/ui/spaces/sidebar_sync_tracker.h  |   56 +
- .../ui/spaces/sidebar_sync_unittest.cc        |  729 +++++++
+ .../ui/spaces/sidebar_sync_unittest.cc        |  752 +++++++
  chrome/browser/ui/spaces/space_model.cc       |    9 +
  chrome/browser/ui/spaces/space_model.h        |   11 +
  chrome/browser/ui/spaces/space_registry.cc    |    5 +-
@@ -78,7 +78,7 @@ Removable when: not removable; it is product behaviour.
  chrome/test/stedding/BUILD.gn                 |    3 +
  .../test/stedding/sidebar_sync_browsertest.cc |  387 ++++
  .../tools/build/mac/infoplist_strings_util.cc |   16 +
- 45 files changed, 8385 insertions(+), 91 deletions(-)
+ 45 files changed, 8428 insertions(+), 91 deletions(-)
  create mode 100644 chrome/browser/resources/settings/stedding_page/stedding_sync_section.css
  create mode 100644 chrome/browser/resources/settings/stedding_page/stedding_sync_section.html.ts
  create mode 100644 chrome/browser/resources/settings/stedding_page/stedding_sync_section.ts
@@ -2830,10 +2830,10 @@ index 0000000000000..0a59368dbebf0
 +#endif  // CHROME_BROWSER_UI_SPACES_SIDEBAR_SYNC_FILE_H_
 diff --git a/chrome/browser/ui/spaces/sidebar_sync_ledger.cc b/chrome/browser/ui/spaces/sidebar_sync_ledger.cc
 new file mode 100644
-index 0000000000000..18e3237899013
+index 0000000000000..150f380cc3054
 --- /dev/null
 +++ b/chrome/browser/ui/spaces/sidebar_sync_ledger.cc
-@@ -0,0 +1,395 @@
+@@ -0,0 +1,415 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -2842,12 +2842,16 @@ index 0000000000000..18e3237899013
 +
 +#include <algorithm>
 +#include <cmath>
++#include <cstring>
++#include <string>
++#include <string_view>
 +#include <utility>
 +
 +#include "base/files/file_enumerator.h"
 +#include "base/files/file_util.h"
 +#include "base/files/important_file_writer.h"
 +#include "base/json/json_reader.h"
++#include "base/strings/string_number_conversions.h"
 +#include "base/strings/string_util.h"
 +#include "base/strings/stringprintf.h"
 +
@@ -3220,11 +3224,27 @@ index 0000000000000..18e3237899013
 +      backups.push_back(path);
 +    }
 +  }
-+  // The names sort by time: newest first.
-+  std::ranges::sort(backups,
-+                    [](const base::FilePath& a, const base::FilePath& b) {
-+                      return b < a;
-+                    });
++  // Newest first. The names sort by time, but a backup made in the same
++  // second as another is "<time> (N).json" (base::GetUniquePath), newer the
++  // larger N, and as text " (1)" sorts below ".json": that put the newer one
++  // after the older, and the rotation deleted it (BACKLOG S-353).
++  const auto made = [](const base::FilePath& path) {
++    std::string name = path.BaseName().AsUTF8Unsafe();
++    name = name.substr(strlen(kBackupPrefix),
++                       name.size() - strlen(kBackupPrefix) - strlen(".json"));
++    int copy = 0;
++    if (const size_t open = name.find(" (");
++        open != std::string::npos && name.back() == ')' &&
++        base::StringToInt(
++            std::string_view(name).substr(open + 2, name.size() - open - 3),
++            &copy)) {
++      name.resize(open);
++    } else {
++      copy = 0;
++    }
++    return std::make_pair(std::move(name), copy);
++  };
++  std::ranges::sort(backups, std::ranges::greater(), made);
 +  return backups;
 +}
 +
@@ -7194,10 +7214,10 @@ index 0000000000000..c127ba238434a
 +#endif  // CHROME_BROWSER_UI_SPACES_SIDEBAR_SYNC_TRACKER_H_
 diff --git a/chrome/browser/ui/spaces/sidebar_sync_unittest.cc b/chrome/browser/ui/spaces/sidebar_sync_unittest.cc
 new file mode 100644
-index 0000000000000..8e9b276a4c92f
+index 0000000000000..e92478de7f4ca
 --- /dev/null
 +++ b/chrome/browser/ui/spaces/sidebar_sync_unittest.cc
-@@ -0,0 +1,729 @@
+@@ -0,0 +1,752 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -7910,6 +7930,29 @@ index 0000000000000..8e9b276a4c92f
 +  const std::vector<base::FilePath> backups = ListBackups(profile.GetPath());
 +  ASSERT_EQ(kBackupsKept, backups.size());
 +  EXPECT_GT(backups[0].BaseName().value(), backups[1].BaseName().value());
++}
++
++// Sf35 (BACKLOG S-353): of two backups made in the same second, the second is
++// "<time> (1).json" and the newer. As text " (1)" sorts below ".json", so it
++// was listed as the older of the two and the rotation deleted it.
++TEST(SidebarSyncLedgerTest, TheRotationKeepsTheNewerOfTwoBackupsInOneSecond) {
++  base::ScopedTempDir profile;
++  ASSERT_TRUE(profile.CreateUniqueTempDir());
++  const base::Time when = base::Time::UnixEpoch() + base::Days(20000);
++  const base::FilePath older = WriteBackup(profile.GetPath(), "{}", when);
++  const base::FilePath newer = WriteBackup(profile.GetPath(), "{}", when);
++  ASSERT_FALSE(older.empty());
++  ASSERT_FALSE(newer.empty());
++  ASSERT_NE(older, newer);
++  for (int i = 1; i < static_cast<int>(kBackupsKept); ++i) {
++    ASSERT_FALSE(
++        WriteBackup(profile.GetPath(), "{}", when + base::Minutes(i)).empty());
++  }
++  const std::vector<base::FilePath> backups = ListBackups(profile.GetPath());
++  ASSERT_EQ(kBackupsKept, backups.size());
++  EXPECT_EQ(newer, backups.back()) << "the newer of the two is the oldest kept";
++  EXPECT_TRUE(base::PathExists(newer));
++  EXPECT_FALSE(base::PathExists(older));
 +}
 +
 +TEST(SidebarSyncLedgerTest, BackupNamesMatchNoSidebarPattern) {

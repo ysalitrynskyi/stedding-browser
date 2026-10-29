@@ -15,15 +15,70 @@ Why: the owner asked for it on 2026-10-28.
 Removable when: Chromium's folders grow their own rule for what a
 collapsed folder keeps listed.
 ---
- chrome/browser/ui/spaces/space_model.cc       | 184 +++++++++++++--
+ .../browser/ui/spaces/sidebar_sync_apply.cc   |  20 +-
+ chrome/browser/ui/spaces/space_model.cc       | 199 ++++++++++++++--
+ chrome/browser/ui/spaces/space_model.h        |   5 +
  .../ui/spaces/space_model_window_unittest.cc  | 216 ++++++++++++++++++
  chrome/browser/ui/tabs/tab_strip_model.cc     |  49 +++-
  chrome/browser/ui/tabs/tab_strip_model.h      |   6 +
  .../test/stedding/pinned_run_browsertest.cc   |   7 +
- 5 files changed, 440 insertions(+), 22 deletions(-)
+ 7 files changed, 477 insertions(+), 25 deletions(-)
 
+diff --git a/chrome/browser/ui/spaces/sidebar_sync_apply.cc b/chrome/browser/ui/spaces/sidebar_sync_apply.cc
+index f849a443fdc0e..79f3bab4af372 100644
+--- a/chrome/browser/ui/spaces/sidebar_sync_apply.cc
++++ b/chrome/browser/ui/spaces/sidebar_sync_apply.cc
+@@ -462,10 +462,14 @@ class Applier {
+     // filed in; a pin, or a Space's own essential, is in its Space's -- and
+     // the Space that shows the shared row has none of its own, so the shared
+     // row is the profile's session too.
++    // The shared row is the profile's session wherever its tabs are filed:
++    // with every Space on a session of its own, `filed` is the tab's own
++    // Space, whose session it leaves (BACKLOG S-353).
+     if (current && filed &&
+         (model->IsSharedEssential(tab) ? std::string()
+                                        : JarOf(*registry_, *current)) !=
+-            JarOf(*registry_, *filed) &&
++            (parent == kEssentialsList ? std::string()
++                                       : JarOf(*registry_, *filed)) &&
+         !tab->GetContents()->WasDiscarded() && !move_now_->contains(id)) {
+       out_->held_moves.push_back(id);
+       return false;
+@@ -475,7 +479,8 @@ class Applier {
+       // shared one is settled when it is pinned, by the Space it is filed in
+       // then. A pinned tab whose part changes is let go first and pinned
+       // again in its new Space; refiling it while pinned kept the old part.
+-      const bool own = filed && model->SpaceIsIsolated(*filed);
++      const bool own = parent != kEssentialsList && filed &&
++                       model->SpaceIsIsolated(*filed);
+       if (tab->IsPinned() && model->IsOwnEssential(tab) != own) {
+         strip->SetTabPinned(strip->GetIndexOfTab(tab), false);
+       }
+@@ -488,12 +493,21 @@ class Applier {
+       if (!tab->IsPinned()) {
+         strip->SetTabPinned(strip->GetIndexOfTab(tab), true);
+       }
++      // Pinned in a Space with a session of its own, it is that Space's own
++      // essential; with every Space so, the shared row's is made shared
++      // here (BACKLOG S-353).
++      if (!own) {
++        model->ShareEssential(tab);
++      }
+       return true;
+     }
+     if (tab->IsPinned()) {
+       strip->SetTabPinned(strip->GetIndexOfTab(tab), false);
+     }
+-    if (space && (!current || *space != *current)) {
++    // Unpinning a shared essential files it in the Space on screen, so the
++    // Space it is in is read again (BACKLOG S-353).
++    if (const std::optional<SpaceId> now = model->FindSpaceForTab(tab);
++        space && (!now || *space != *now)) {
+       model->SetSpaceForTab(tab, *space);
+     }
+     if (IsFolder(parent)) {
 diff --git a/chrome/browser/ui/spaces/space_model.cc b/chrome/browser/ui/spaces/space_model.cc
-index 98ff0493134e4..1a37596b7b932 100644
+index 98ff0493134e4..21fd9cb85bb36 100644
 --- a/chrome/browser/ui/spaces/space_model.cc
 +++ b/chrome/browser/ui/spaces/space_model.cc
 @@ -9,6 +9,7 @@
@@ -286,10 +341,25 @@ index 98ff0493134e4..1a37596b7b932 100644
    SaveTabToSession(tab, id);
    observers_.Notify(&Observer::OnTabSpaceChanged, tab);
    MaybeRebindTabJar(tab);
-@@ -2800,6 +2922,14 @@ bool SpaceModel::IsSharedEssential(const tabs::TabInterface* tab) const {
+@@ -2800,6 +2922,29 @@ bool SpaceModel::IsSharedEssential(const tabs::TabInterface* tab) const {
    return tab && tab->IsPinned() && !own_essentials_.contains(tab->GetHandle());
  }
  
++void SpaceModel::ShareEssential(tabs::TabInterface* tab) {
++  if (!IsOwnEssential(tab)) {
++    return;
++  }
++  own_essentials_.erase(tab->GetHandle());
++  // The session says it is shared, the Spaces show it as shared, and it
++  // takes the profile's jar.
++  if (const auto it = tab_spaces_.find(tab->GetHandle());
++      it != tab_spaces_.end()) {
++    SaveTabToSession(tab, it->second);
++  }
++  observers_.Notify(&Observer::OnTabSpaceChanged, tab);
++  MaybeRebindTabJar(tab);
++}
++
 +bool SpaceModel::KeepsJarItWasMadeIn(const tabs::TabInterface* tab) const {
 +  if (!tab || !jars_kept_until_loaded_.contains(tab->GetHandle())) {
 +    return false;
@@ -301,7 +371,7 @@ index 98ff0493134e4..1a37596b7b932 100644
  void SpaceModel::SettleOwnEssentials() {
    if (!tab_strip_model_) {
      return;
-@@ -3025,6 +3155,12 @@ void SpaceModel::OnTabChangedAt(tabs::TabInterface* tab,
+@@ -3025,6 +3170,12 @@ void SpaceModel::OnTabChangedAt(tabs::TabInterface* tab,
    if (!tab) {
      return;
    }
@@ -314,7 +384,7 @@ index 98ff0493134e4..1a37596b7b932 100644
    // pins H1 (the owner, 2026-10-22): a pin made on a page that is no home --
    // the new tab page, or a tab still loading from it -- takes the first web
    // page it shows as its home, once. It had none for good, so Cmd-W left it
-@@ -3084,6 +3220,12 @@ void SpaceModel::MaybeRebindTabJar(tabs::TabInterface* tab) {
+@@ -3084,6 +3235,12 @@ void SpaceModel::MaybeRebindTabJar(tabs::TabInterface* tab) {
                                         tab) == TabStripModel::kNoTab) {
                           return;
                         }
@@ -327,7 +397,7 @@ index 98ff0493134e4..1a37596b7b932 100644
                         content::WebContents* const contents =
                             tab->GetContents();
                         const SpaceId id = model->SpaceForTab(tab);
-@@ -3536,6 +3678,14 @@ std::string SpaceModel::Serialize() const {
+@@ -3536,6 +3693,14 @@ std::string SpaceModel::Serialize() const {
        entry.Set("dark_color", static_cast<int>(*space->dark_color()));
      }
      entry.Set("pins_collapsed", space->pins_collapsed());
@@ -342,7 +412,7 @@ index 98ff0493134e4..1a37596b7b932 100644
      list.Append(std::move(entry));
    }
    base::DictValue root;
-@@ -3573,8 +3723,10 @@ void SpaceModel::RestoreFrom(const std::string& data) {
+@@ -3573,8 +3738,10 @@ void SpaceModel::RestoreFrom(const std::string& data) {
    }
  
    spaces_ = std::move(restored);
@@ -354,7 +424,7 @@ index 98ff0493134e4..1a37596b7b932 100644
  
    // The active Space must be one that came back; a session naming a Space that
    // failed to parse would otherwise leave the window pointing at nothing.
-@@ -3653,8 +3805,10 @@ void SpaceModel::AddSpacesFromSession(
+@@ -3653,8 +3820,10 @@ void SpaceModel::AddSpacesFromSession(
    // A Space the registry already has stays as it is. One it lacks goes at
    // the end, and the registry's change makes it a Space of this window and
    // of every other window that follows the registry (OnRegistryChanged).
@@ -366,6 +436,22 @@ index 98ff0493134e4..1a37596b7b932 100644
    }
  }
  
+diff --git a/chrome/browser/ui/spaces/space_model.h b/chrome/browser/ui/spaces/space_model.h
+index ef24bf68af75b..99222d6b49ab5 100644
+--- a/chrome/browser/ui/spaces/space_model.h
++++ b/chrome/browser/ui/spaces/space_model.h
+@@ -493,6 +493,11 @@ class SpaceModel : public TabStripModelObserver,
+   // profile's shared jar. The Space is the tab's (FindSpaceForTab).
+   bool IsOwnEssential(const tabs::TabInterface* tab) const;
+   bool IsSharedEssential(const tabs::TabInterface* tab) const;
++  // sidebar-file Sf17 (BACKLOG S-353): makes a Space's own essential a shared
++  // one where it is, for a move to the shared row another computer made.
++  // Pinning decides the part by the Space the tab is filed in, so with every
++  // Space on a session of its own a pin is always that Space's own.
++  void ShareEssential(tabs::TabInterface* tab);
+   // sessions S11, S30 (BACKLOG S-338): `tab` was made in a jar other than its
+   // Space's for the page it opens first -- a page a shared essential opened,
+   // or a service worker's window (NewTabSpaceChoice::keeps_jar) -- and that
 diff --git a/chrome/browser/ui/spaces/space_model_window_unittest.cc b/chrome/browser/ui/spaces/space_model_window_unittest.cc
 index c6756adf89585..0a81e4dc14462 100644
 --- a/chrome/browser/ui/spaces/space_model_window_unittest.cc

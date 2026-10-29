@@ -22,7 +22,7 @@ The README's pictures and its animation, made on a Mac from a build, the same wa
 - A build in `out/release` (`tooling/dev build`), or an installed copy with `--app`. The capture params (`pin_tabs`, `folder_tabs`, `space_pin_tabs`, `drift_tabs`, `open_command_bar`) are compiled into that build. An official build leaves them out, and the pictures come out without the essentials, folders, pins or open command bar those params add.
 - A `python3` with PyObjC, as `tooling/drive` and `tooling/capture-state` need.
 - `ffmpeg` and `ffprobe` for the animation (`brew install ffmpeg`, or set `FFMPEG` and `FFPROBE`).
-- Your own Stedding quit. Every launching mode refuses to start beside another copy.
+- Your own Stedding quit, or a copy of the build with its own identity passed as `--app`. Every launching mode refuses to start beside another app with the same bundle id. To run beside the owner's Stedding, copy `out/release/Stedding.app` (`ditto`), give the copy's `Info.plist` its own `CFBundleIdentifier`, `CrProductDirName` and `SUDefaultsDomain`, point `SUFeedURL` at nothing, and sign it again ad hoc (`codesign --force --deep --sign -`).
 - Ports 5173 and 8797 free.
 
 ## Order of work
@@ -47,7 +47,9 @@ tooling/readme/promote-readme.py --write
 
 `--with-new` on the stills also takes `dark-pages`, `local-tabs`, `isolated-space` and `web-app`. On `slideshow` it adds `isolated-space`, `local-tabs` and `dark-pages` to the crossfade (not `web-app`).
 
-Each script writes only under the folder it is given, and refuses one inside the repository's `docs/` or `tooling/`. Pictures go into `docs/images/readme/` by hand, after a look. Running a step again replaces what it wrote.
+Each script writes only under the folder it is given, and refuses one inside the repository's `docs/` or `tooling/`. Pictures go into `docs/images/readme/` by hand, after a look ("Looking at a still" below). Running a step again replaces what it wrote. Do not edit these scripts, or `common.sh`, while a run is going: bash reads a running script from where it left off, and an edit shifts the text under it (a run ended in `-z: command not found`).
+
+The site keeps its own copies of most stills, the Windows picture and the press kit's files. Its repository's README ("Screenshots and their close-ups") says which file goes where, and its close-ups are cut again after a change.
 
 ## The stills
 
@@ -74,6 +76,23 @@ Each still is `<out>/<still>.png` at 1800 px wide, the size `docs/images/readme/
 
 `welcome-import` runs with a scratch home folder that holds the made-up Arc sidebar (`arc-demo-sidebar.py`: four Spaces, pinned tabs and folders, four essentials, on example sites). That home is handed to the browser alone through `STEDDING_LAUNCH_ENV` (`tooling/lib.sh`), so the step reads that sidebar and the dialog sits on GitHub's home page.
 
+### Looking at a still
+
+A capture can pass every check and still be wrong. Look at each one before it goes in:
+
+- **No hover.** No bar along the sidebar's edge and no row lit as if the pointer were on
+  it. Both come from a pointer resting over the window (trap 136).
+- **Every tab's icon.** A plain globe, or a globe with a spinner or a dot, is a page still
+  loading. It happens on a slow page and on a busy Mac (trap 137). Take that still again
+  with `--settle 60` once the machine is quiet.
+- **The corners** are transparent, not the desktop and not a solid colour.
+- **The page.** No advert, banner, pop-up, cookie notice, political headline or AI
+  product. Live pages change between runs: on 2026-10-28 Wikipedia showed a fundraising
+  banner, MDN an advert, GitHub's home page an AI coding advert around the import dialog,
+  example.com a dark theme, and Hacker News' front page politics. Hence the map, GitHub's
+  trending page, the Python tutorial and one day's Hacker News front page
+  (`URL_HN_DAY` in `common.sh`) in the stills.
+
 ## The Windows pictures
 
 `docs/images/win-wide.png` (the open sidebar) and `win-rail.png` (the rail) come from the
@@ -92,7 +111,7 @@ GitHub's trending page on screen, the sample app left out.
    rectangle, and Windows 11 rounds its corners on screen with an 8 px radius, so a capture
    kept as it is shows square corners the window never has. A capture of the screen instead
    shows the desktop in them.
-4. Look at each: the page on screen, no hover on a row, the corners.
+4. Look at each as "Looking at a still" says: no hover on a row, every icon, the corners.
 
 A Windows page shows its scrollbar while it can scroll, as Chrome does there; the
 sidebar's does not.

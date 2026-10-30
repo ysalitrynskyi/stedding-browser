@@ -987,7 +987,7 @@ The local n-1 check is `tooling\win\update-n1.ps1`. Build A at one `VERSION` and
 
 ## Release channel
 
-Releases are GitHub Releases. `tooling/publish-release` creates one as the repository's latest, so the repository page and `/releases/latest` show it. `--prerelease` marks a test release instead. The latest release is Stedding 0.4.0 beta 1 (`v0.4.0-beta.1`, 2026-10-28), for macOS and Windows, built on Chromium 157.0.8103.31; `tooling/dev status` counts the patches. `VERSION` names the latest release, so the next release starts by bumping that file. The tag is `v` plus `VERSION`. The shipped platforms are macOS and Windows. The Windows image is built on a Windows PC and the Mac image on a Mac.
+Releases are GitHub Releases. `tooling/publish-release` creates one as the repository's latest, so the repository page and `/releases/latest` show it. `--prerelease` marks a test release instead. The latest release is Stedding 0.4.0 beta 2 (`v0.4.0-beta.2`, 2026-10-29), for macOS and Windows, built on Chromium 157.0.8103.31; `tooling/dev status` counts the patches. `VERSION` names the latest release, so the next release starts by bumping that file. The tag is `v` plus `VERSION`. The shipped platforms are macOS and Windows. The Windows image is built on a Windows PC and the Mac image on a Mac.
 
 Installed copies update themselves from the feeds in `updates/`, served from GitHub: Sparkle on the Mac, Stedding's updater on Windows. The site is not on that path (ADR 0014).
 

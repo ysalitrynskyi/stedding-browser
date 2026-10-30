@@ -17,9 +17,9 @@ infrastructure, then features. A request in chat comes before this list. A spec 
 
 ### Next
 
-The latest release is 0.4.0 beta 1, on Chromium 157.0.8103.31 (`S-278`). The next, 0.4.0
-beta 2, is the fixes of the 2026-10-28 review below, S-338 to S-345 first. Google's schedule
-puts M157 on stable on 2026-11-03.
+The latest release is 0.4.0 beta 2, on Chromium 157.0.8103.31 (`S-278`). It carries the
+fixes of the 2026-10-28 review below. Each row closes once its fix is checked on a real build.
+Google's schedule puts M157 on stable on 2026-11-03.
 
 S-306, shorter test runs, is the unfinished item of the 2026-10-26 order. Its Mac half
 is in. The Windows times are not.
@@ -37,10 +37,10 @@ A read of the whole series before 0.4.0 beta 1 raised 126 possible faults. Readi
 again to refute each one confirmed 107, listed here by area with the file that holds each.
 All 107 were already in 0.3.0 beta 22; none came with 0.4.0 beta 1.
 
-The plan: fix in row order. S-338 to S-345 are 0.4.0 beta 2 (cookie jars, lost tabs, a
-wedged quit, a lost profile, sync, updates, captures); the rest follow by area. Each fault
-gets a test that fails first, and its fix goes into the patch that owns the code
-(`tooling/fold-fix`). Then use the build where a person would see it.
+Every row here is fixed in 0.4.0 beta 2: each fault has a test that failed first, and its fix
+is in the patch that owns the code. Both platforms' suites pass on it, with DCHECKs and the
+dangling-pointer detector, and on Windows under ASan. What each row still needs is the check
+on a real build, where a person would see it (`PLAN.md`, "When an item is done").
 
 | Id | Item | Feature / spec | Notes |
 |---|---|---|---|
@@ -58,7 +58,6 @@ gets a test that fails first, and its fix goes into the patch that owns the code
 | S-349 | Settings, shortcuts, menus and the browser's own pages | `docs/features/settings.md`; `docs/features/shortcuts.md`; `docs/features/menus.md`; `docs/features/sidebar-panels.md`; `docs/features/welcome.md` | A download whose deep scan failed can be opened from the downloads panel (`downloads_panel.ts`). Settings: `chrome://settings/` opens Autofill instead of the Stedding section (`route.ts`); removing two routes quickly deletes a different rule, a route that is not a site is cleared as if saved, and turning off an own session does not withdraw the question already asked (`stedding_page.ts`); a key the browser refuses leaves the recorder's prompt up and the recorder off (`stedding_shortcuts_editor.ts`). Shortcuts: saving a row drops chords another row borrows (`shortcut_editor.cc`); folded Mac menu rows stay hidden once their chords differ by more than Option or Shift, and a key with no Mac key code gets an uninitialized key equivalent (`shortcut_menu_mac.mm`). Pages: every archive update rebuilds the page and takes the focus (`stedding_archive/app.ts`); the same downloads search loads the next page; a new history search keeps the old scroll. The welcome page's search-engine message crashes the browser on an id the choice list lacks (`search_engine_choice_dialog_service.cc`); Finish and Skip do not close a welcome already marked seen. A hover delay of 0 is not the 0.35-second pause (`vertical_tab_strip_region_view.cc`). Move to Space and Always Open In stop at nine Spaces (`tab_context_menu_command.h`). |
 | S-350 | Tabs, the strip and drags | `docs/features/tabs.md`; `docs/features/folders.md`; `docs/features/switcher.md` | New folders and restored folder paths ignore the five-deep cap (`tab_strip_model.cc`). Dragging another row ends full screen and pointer lock on the page shown (`browser_view.cc`). The localhost address-row exception follows the dragged tab (`address_row.cc`). With ⌘ held, a tab dropped on the spacer or the + can land on the last chip (`space_switcher_view.cc`). A split between a parent and its child leaves the child nested (`space_tab_visibility_controller.cc`). The horizontal strip keeps a collapsed folder's tab after you leave it (`browser_tab_strip_controller.cc`), and keyboard selection there walks tabs another Space hides (`tab.cc`). The recent-tabs strip stays up after its run ends (`recent_tabs_switcher_view.cc`). One tab of a nested folder, dropped, lands short of the bar (`folder_view.cc`). Screen readers count filtered-out tabs in a tab's position (`tab_container_impl.cc`). |
 | S-351 | Page colour, site controls, the blocker and dialog text | `docs/features/dark-pages.md`; `docs/features/site-controls.md`; `docs/features/blocker.md`; `docs/features/web-apps.md` | Darkening one site deletes a broader exception (`dark_pages.cc`). A tab switch during a top-edge colour read drops the new tab's only sample, and a dark-pages change on a background tab drops the active page's read (`page_theme_color_controller.cc`). The page-info bubble's site controls act on the committed page while it names the pending address, and put a Space name from sync into the clear-data question unescaped (`stedding_site_controls_view.cc`); a site's app name goes unescaped into the cookie-deletion question (`space_dialogs.cc`), and a Space name with a bidi override reorders the app warnings (`app_jar.cc`). Cancelling the blocker's reload leaves the shield and the page disagreeing (`blocker_rules.cc`). The full-screen media dialog anchors to a toolbar that is not drawn (`address_row_controls.cc`). Replacing a tagged Space notification leaves the old banner up (`platform_notification_context_impl.cc`). A pin's first-commit home treats a leading `www.` as the same site (`pin_home.cc`). |
-| S-352 | An extension's keyword in the command bar is not handed to the extension | `docs/features/commandbar.md` K27 | An extension that registers an omnibox keyword (`omnibox` API) gets its query from Chromium's address field, which calls `ExtensionOmniboxEventRouter::OnInputEntered`. The command bar opened the keyword's internal address, a page that does not exist (review F090); since the S-347 fix it searches the whole text with the default engine instead. The command bar cannot reach the omnibox's code without a dependency cycle between the modules (`//chrome/browser/ui/views/commandbar` and `//chrome/browser/extensions`). Give the bar a way to hand the text to the extension, through an interface the browser sets, or to the window's own address field. Full extension support is a hard requirement. |
 | S-353 | Two sidebar sync faults found while fixing S-342 | `docs/features/sidebar-file.md` | `MoveHere` reads a shared essential's Space before unpinning it, and the unpin files it into the Space on screen, so a shared essential moved to the pinned run of the Space it was filed in ends up in the Space on screen (compare with `FindSpaceForTab` after the unpin). `ListBackups` sorts names as text, so of two backups in the same second, `…-HHMMSS (1).json` sorts after `…-HHMMSS.json` and the rotation can delete the newer one. Also left of S-342's F028: with every Space on its own session, an own essential moved to the shared row stays an own essential; making it shared needs a method on `SpaceModel`. |
 
 ### Defects

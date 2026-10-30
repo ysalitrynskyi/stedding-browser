@@ -16,25 +16,72 @@ button closes a tab, so the pin goes with it and Reopen Closed Tab can bring
 it back. Cmd-W, a middle click and the tab menu keep H3's rule, and with
 Cmd-W's setting off the button closes as before.
 
+GitHub issue 63 (tabs R64, menus M1; BACKLOG S-363): the short tab menu
+offers Chromium's Duplicate, above Copy Link. Its copy of an essential or
+a Space pin, from the menu or the command Duplicate Tab, is a plain tab
+added where a new tab opens, as Cmd-T adds one, and the essential or the
+pin stays the only one. Chromium put the copy beside the tab it copies,
+so an essential's copy was a second essential and a pin's copy landed
+beside the pin. A plain tab's copy still lands right after it.
+
 Why: the owner asked for it, with a confirmation so the user really
 confirms a removal, and then for the minus first on every pin that is
 awake, so a press only puts a pin to sleep and removing one takes a second
-press and a confirmation.
+press and a confirmation. The owner chose a plain tab for a pin's copy
+on 2026-10-30.
 Removable when: never as a feature; the tab_view.cc and tab_close_button
 hunks go if Chromium's vertical tab strip grows its own pinned-tab close
-rule.
+rule; the DuplicateTabAt hunk stays while essentials are Chromium's
+pinned tabs.
 ---
- chrome/browser/ui/stedding/pin_lifecycle.cc   |  53 ++++++
- chrome/browser/ui/stedding/pin_lifecycle.h    |  16 ++
- .../browser/ui/views/tabs/common/tab_view.cc  | 126 +++++++++++++-
+ chrome/browser/ui/browser_commands.cc         |  23 ++-
+ chrome/browser/ui/stedding/pin_lifecycle.cc   |  59 +++++++
+ chrome/browser/ui/stedding/pin_lifecycle.h    |  23 +++
+ chrome/browser/ui/tabs/tab_menu_model.cc      |   6 +-
+ .../browser/ui/views/tabs/common/tab_view.cc  | 126 ++++++++++++-
  .../browser/ui/views/tabs/common/tab_view.h   |  11 ++
  .../ui/views/tabs/tab/tab_close_button.cc     |  14 +-
  .../ui/views/tabs/tab/tab_close_button.h      |   8 +
- .../stedding/sidebar_click_browsertest.cc     | 161 +++++++++++++++++-
- 7 files changed, 372 insertions(+), 17 deletions(-)
+ .../test/stedding/pinned_run_browsertest.cc   |  91 ++++++++++
+ .../stedding/sidebar_click_browsertest.cc     | 165 +++++++++++++++++-
+ 10 files changed, 502 insertions(+), 24 deletions(-)
 
+diff --git a/chrome/browser/ui/browser_commands.cc b/chrome/browser/ui/browser_commands.cc
+index 7875d47b5d55a..21767fecfd324 100644
+--- a/chrome/browser/ui/browser_commands.cc
++++ b/chrome/browser/ui/browser_commands.cc
+@@ -402,11 +402,24 @@ content::WebContents* DuplicateTabAt(BrowserWindowInterface* browser,
+     // window next to the tab being duplicated.
+     TabStripModel* tab_strip_model = browser->GetTabStripModel();
+     pinned = tab_strip_model->IsTabPinned(index);
+-    int add_types = AddTabTypes::ADD_ACTIVE | AddTabTypes::ADD_INHERIT_OPENER |
+-                    (pinned ? AddTabTypes::ADD_PINNED : 0);
+-    const auto old_group = tab_strip_model->GetTabGroupForTab(index);
+-    tab_strip_model->InsertWebContentsAt(dst_index, std::move(contents_dupe),
+-                                         add_types, old_group);
++    if (stedding::DuplicatesAsPlainTab(browser,
++                                       tab_strip_model->GetTabAtIndex(index))) {
++      // Stedding (tabs R64, GitHub issue 63): the copy of an essential or a
++      // Space pin is a plain tab, added as Cmd-T adds one, where a new tab
++      // opens; the essential or the pin stays the only one. Beside it, the
++      // copy of an essential was a second essential.
++      pinned = false;
++      tab_strip_model->AddWebContents(std::move(contents_dupe), /*index=*/-1,
++                                      ui::PAGE_TRANSITION_TYPED,
++                                      AddTabTypes::ADD_ACTIVE);
++    } else {
++      int add_types = AddTabTypes::ADD_ACTIVE |
++                      AddTabTypes::ADD_INHERIT_OPENER |
++                      (pinned ? AddTabTypes::ADD_PINNED : 0);
++      const auto old_group = tab_strip_model->GetTabGroupForTab(index);
++      tab_strip_model->InsertWebContentsAt(dst_index, std::move(contents_dupe),
++                                           add_types, old_group);
++    }
+   } else {
+     CreateAndShowNewWindowWithContents(std::move(contents_dupe), browser);
+   }
 diff --git a/chrome/browser/ui/stedding/pin_lifecycle.cc b/chrome/browser/ui/stedding/pin_lifecycle.cc
-index c1847fbe98c4a..a6ee15a50d28d 100644
+index c1847fbe98c4a..1444e06724597 100644
 --- a/chrome/browser/ui/stedding/pin_lifecycle.cc
 +++ b/chrome/browser/ui/stedding/pin_lifecycle.cc
 @@ -5,6 +5,7 @@
@@ -104,8 +151,19 @@ index c1847fbe98c4a..a6ee15a50d28d 100644
  bool SleepInsteadOfClose(BrowserWindowInterface* browser) {
    TabStripModel* const tabs = browser ? browser->GetTabStripModel() : nullptr;
    return tabs && SleepOrLeaveToClose(browser, Selection(tabs));
+@@ -454,4 +507,10 @@ bool SetHomeAndGo(BrowserWindowInterface* browser,
+   return true;
+ }
+ 
++bool DuplicatesAsPlainTab(BrowserWindowInterface* browser,
++                          const tabs::TabInterface* tab) {
++  return browser && spaces::SpaceModel::From(browser) && tab &&
++         !tab->IsSplit() && IsPinnedAnywhere(browser, tab);
++}
++
+ }  // namespace stedding
 diff --git a/chrome/browser/ui/stedding/pin_lifecycle.h b/chrome/browser/ui/stedding/pin_lifecycle.h
-index 8a46207879611..4ac6898c8dc58 100644
+index 8a46207879611..d7298fb984e35 100644
 --- a/chrome/browser/ui/stedding/pin_lifecycle.h
 +++ b/chrome/browser/ui/stedding/pin_lifecycle.h
 @@ -65,6 +65,22 @@ bool SleepInsteadOfClose(BrowserWindowInterface* browser);
@@ -131,6 +189,44 @@ index 8a46207879611..4ac6898c8dc58 100644
  // The same for the tab menu's Close on `tabs`, the tabs it acts on (the row
  // the menu was opened on, or the selection that holds it): its row shows
  // Cmd-W's shortcut, and does what Cmd-W does (the owner, 2026-10-20). It
+@@ -89,6 +105,13 @@ bool SetHomeAndGo(BrowserWindowInterface* browser,
+                   tabs::TabInterface* tab,
+                   const GURL& home);
+ 
++// tabs R64 (GitHub issue 63): whether Duplicate makes `tab`'s copy a plain
++// tab, placed where a new tab opens, instead of one beside it of its kind:
++// `tab` is an essential or a Space pin in a window with Spaces. A split's
++// pane is copied with its split, as Chromium does.
++bool DuplicatesAsPlainTab(BrowserWindowInterface* browser,
++                          const tabs::TabInterface* tab);
++
+ }  // namespace stedding
+ 
+ #endif  // CHROME_BROWSER_UI_STEDDING_PIN_LIFECYCLE_H_
+diff --git a/chrome/browser/ui/tabs/tab_menu_model.cc b/chrome/browser/ui/tabs/tab_menu_model.cc
+index d8880ab331627..dff363c023698 100644
+--- a/chrome/browser/ui/tabs/tab_menu_model.cc
++++ b/chrome/browser/ui/tabs/tab_menu_model.cc
+@@ -199,7 +199,7 @@ void TabMenuModel::BuildStedding(int index) {
+   const int num_tabs = indices.size();
+ 
+   // Arc's order (docs/features/menus.md M1): the sidebar's verbs, then the
+-  // link, then closing. Every label takes the plural with a selection (R21);
++  // copy and the link, then closing. Every label takes the plural with a selection (R21);
+   // the collection controller enables each row for the row it was opened on.
+   const bool will_pin = tab_strip_->WillContextMenuPin(index);
+   AddItemWithStringId(TabStripModel::CommandTogglePinned,
+@@ -312,6 +312,10 @@ void TabMenuModel::BuildStedding(int index) {
+                       IDS_STEDDING_EDIT_HOME);
+ 
+   AddSeparator(ui::NORMAL_SEPARATOR);
++  // tabs R64 (GitHub issue 63): Chromium's Duplicate, whose copy of an
++  // essential or a Space pin is a plain tab.
++  AddItemWithStringId(TabStripModel::CommandDuplicate,
++                      IDS_TAB_CXMENU_DUPLICATE);
+   AddItem(TabStripModel::CommandCopyURL,
+           l10n_util::GetPluralStringFUTF16(IDS_STEDDING_TAB_CXMENU_COPY_LINK,
+                                            num_tabs));
 diff --git a/chrome/browser/ui/views/tabs/common/tab_view.cc b/chrome/browser/ui/views/tabs/common/tab_view.cc
 index d9d40dc9c5659..4fb3278960009 100644
 --- a/chrome/browser/ui/views/tabs/common/tab_view.cc
@@ -413,8 +509,108 @@ index 957cc621a610b..745b8da43d1cb 100644
  };
  
  #endif  // CHROME_BROWSER_UI_VIEWS_TABS_TAB_TAB_CLOSE_BUTTON_H_
+diff --git a/chrome/test/stedding/pinned_run_browsertest.cc b/chrome/test/stedding/pinned_run_browsertest.cc
+index e424a12d86589..8334051906ed0 100644
+--- a/chrome/test/stedding/pinned_run_browsertest.cc
++++ b/chrome/test/stedding/pinned_run_browsertest.cc
+@@ -2122,4 +2122,95 @@ IN_PROC_BROWSER_TEST_F(PinnedRunTest, NewTabsOpenAtTheTopWhenAsked) {
+   }
+ }
+ 
++// tabs R64, menus M1 (GitHub issue 63): Duplicate puts a plain tab's copy
++// right after it. The copy of an essential or a Space pin is a plain tab
++// where a new tab opens -- the end of the list, or its top with the setting
++// on (R62) -- and the essential or the pin stays the only one, from the tab
++// menu and from the command Duplicate Tab alike.
++IN_PROC_BROWSER_TEST_F(PinnedRunTest, ADuplicateOfAPinIsAPlainTab) {
++  PrefService* const prefs = browser()->GetProfile()->GetPrefs();
++  tabs::TabInterface* const essential = AddBlankTab();
++  tabs().SetTabPinned(Index(essential), true);
++  ASSERT_TRUE(essential->IsPinned());
++  tabs::TabInterface* const pin = AddBlankTab();
++  model().SetSpacePinned(pin, true);
++  ASSERT_TRUE(model().IsSpacePinned(pin));
++  tabs::TabInterface* const plain = AddBlankTab();
++  AddBlankTab();  // A row after `plain`, so that right after it is not the end.
++
++  const auto essentials = [&]() { return tabs().IndexOfFirstNonPinnedTab(); };
++  const auto pins = [&]() {
++    int count = 0;
++    for (int i = 0; i < tabs().count(); ++i) {
++      count += model().IsSpacePinned(tabs().GetTabAtIndex(i)) ? 1 : 0;
++    }
++    return count;
++  };
++  // The tab menu's Duplicate on `tab`'s row; the copy is the tab on screen.
++  const auto duplicate = [&](tabs::TabInterface* tab) -> tabs::TabInterface* {
++    const int before = tabs().count();
++    const int index = Index(tab);
++    EXPECT_TRUE(tabs().IsContextMenuCommandEnabled(
++        index, TabStripModel::CommandDuplicate));
++    tabs().ExecuteContextMenuCommand(index, TabStripModel::CommandDuplicate);
++    EXPECT_EQ(before + 1, tabs().count());
++    tabs::TabInterface* const copy = tabs().GetActiveTab();
++    EXPECT_NE(tab, copy) << "the copy is not on screen";
++    return copy;
++  };
++  // A plain tab of the active Space, neither an essential nor a pin.
++  const auto expect_plain = [&](tabs::TabInterface* copy) {
++    EXPECT_FALSE(copy->IsPinned()) << "the copy is an essential";
++    EXPECT_FALSE(model().IsSpacePinned(copy)) << "the copy is a Space pin";
++    EXPECT_TRUE(model().IsTabInActiveSpace(copy));
++  };
++
++  {
++    SCOPED_TRACE("a plain tab: right after it");
++    tabs::TabInterface* const copy = duplicate(plain);
++    EXPECT_EQ(Index(plain) + 1, Index(copy));
++    expect_plain(copy);
++  }
++  {
++    SCOPED_TRACE("an essential: a plain tab at the end");
++    const int had = essentials();
++    tabs::TabInterface* const copy = duplicate(essential);
++    expect_plain(copy);
++    EXPECT_EQ(had, essentials());
++    EXPECT_EQ(tabs().count() - 1, Index(copy));
++  }
++  {
++    SCOPED_TRACE("a Space pin: a plain tab at the end");
++    const int had = pins();
++    tabs::TabInterface* const copy = duplicate(pin);
++    expect_plain(copy);
++    EXPECT_EQ(had, pins());
++    EXPECT_EQ(tabs().count() - 1, Index(copy));
++  }
++  {
++    SCOPED_TRACE("Duplicate Tab on the essential on screen");
++    tabs().ActivateTabAt(Index(essential));
++    const int had = essentials();
++    const int before = tabs().count();
++    chrome::ExecuteCommand(browser(), IDC_DUPLICATE_TAB);
++    ASSERT_EQ(before + 1, tabs().count());
++    tabs::TabInterface* const copy = tabs().GetActiveTab();
++    ASSERT_NE(essential, copy);
++    expect_plain(copy);
++    EXPECT_EQ(had, essentials());
++  }
++  prefs->SetBoolean(stedding::prefs::kNewTabsAtTop, true);
++  {
++    SCOPED_TRACE("the setting on: a Space pin's copy at the top of the list");
++    tabs::TabInterface* const copy = duplicate(pin);
++    expect_plain(copy);
++    for (int i = 0; i < Index(copy); ++i) {
++      tabs::TabInterface* const above = tabs().GetTabAtIndex(i);
++      EXPECT_TRUE(above->IsPinned() || model().IsSpacePinned(above))
++          << "row " << i << " of the list is above the copy";
++    }
++  }
++  prefs->SetBoolean(stedding::prefs::kNewTabsAtTop, false);
++}
++
+ }  // namespace
 diff --git a/chrome/test/stedding/sidebar_click_browsertest.cc b/chrome/test/stedding/sidebar_click_browsertest.cc
-index dd5d51a48762d..afcc681cc49b5 100644
+index dd5d51a48762d..62839771acfba 100644
 --- a/chrome/test/stedding/sidebar_click_browsertest.cc
 +++ b/chrome/test/stedding/sidebar_click_browsertest.cc
 @@ -123,6 +123,8 @@
@@ -620,3 +816,35 @@ index dd5d51a48762d..afcc681cc49b5 100644
        EXPECT_EQ(count, tab_strip_model()->count());
        EXPECT_TRUE(model->IsSpacePinned(pin));
        EXPECT_TRUE(pin->GetContents()->WasDiscarded());
+@@ -2672,7 +2817,6 @@ IN_PROC_BROWSER_TEST_F(SidebarClickTest,
+       }
+       for (const TabStripModel::ContextMenuCommand gone :
+            {TabStripModel::CommandNewTabToRight, TabStripModel::CommandReload,
+-            TabStripModel::CommandDuplicate,
+             TabStripModel::CommandSendTabToSelf,
+             TabStripModel::CommandAddToReadLater,
+             TabStripModel::CommandAddToNewGroup,
+@@ -2757,6 +2901,7 @@ IN_PROC_BROWSER_TEST_F(SidebarClickTest,
+           u"Sleep Other Tabs in This Space",
+           mute,
+           u"—",
++          u"Duplicate",
+           u"Copy Link",
+           u"Copy Link as Markdown",
+           u"—",
+@@ -2785,6 +2930,7 @@ IN_PROC_BROWSER_TEST_F(SidebarClickTest,
+           u"Make This the Pinned Page",
+           u"Edit Pinned Address…",
+           u"—",
++          u"Duplicate",
+           u"Copy Link",
+           u"Copy Link as Markdown",
+           u"—",
+@@ -2808,6 +2954,7 @@ IN_PROC_BROWSER_TEST_F(SidebarClickTest,
+           u"Make This the Pinned Page",
+           u"Edit Pinned Address…",
+           u"—",
++          u"Duplicate",
+           u"Copy Link",
+           u"Copy Link as Markdown",
+           u"—",

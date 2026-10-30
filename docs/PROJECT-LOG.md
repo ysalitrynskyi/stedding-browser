@@ -2,6 +2,17 @@
 
 What was built, newest first. Nothing here is needed to do a task: `AGENTS.md` carries what is true now, `BACKLOG.md` the order of work, `PLAN.md` the owner's decisions. This file was the "State of the project" section of `AGENTS.md` until 2026-09-30. This log starts at 2026-10-15. Closed work from before that is the table in [docs/history/archive.md](history/archive.md).
 
+## 2026-10-30 -- After 0.4.0 beta 2: Duplicate, and a sleeping pin folds away
+
+Not released yet. The short tab menu offers Duplicate (GitHub issue 63, S-363), and the copy of
+an essential or a Space pin is a plain tab where a new tab opens, the owner's choice: Chromium's
+copy of an essential had been a second essential (tabs R64, patch 0110). A pin a collapsed folder
+keeps listed while it is awake folds away when it is put to sleep (GitHub issue 35, S-356, patch
+0112). Issue 14's buttons in a centred address field answer the window's hit test on both
+platforms; a real click on Windows is still owed (S-357). `tooling/move-series` moves a checkout
+onto a newer series by writing only the files that differ (trap 89). Every GitHub issue was read
+again and the open ones labelled.
+
 ## 2026-10-29 -- 0.4.0 beta 2: the fixes of the 2026-10-28 review
 
 Released as 0.4.0 beta 2, on Chromium 157.0.8103.31, for macOS and Windows: the faults of the

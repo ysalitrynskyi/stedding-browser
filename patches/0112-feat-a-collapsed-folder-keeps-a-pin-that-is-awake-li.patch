@@ -21,8 +21,11 @@ collapsed folder keeps listed.
  .../ui/spaces/space_model_window_unittest.cc  | 216 ++++++++++++++++++
  chrome/browser/ui/tabs/tab_strip_model.cc     |  49 +++-
  chrome/browser/ui/tabs/tab_strip_model.h      |   6 +
+ .../spaces/space_tab_visibility_controller.cc |  17 ++
+ .../spaces/space_tab_visibility_controller.h  |   5 +
+ .../test/stedding/folder_tabs_browsertest.cc  |  31 +++
  .../test/stedding/pinned_run_browsertest.cc   |   7 +
- 7 files changed, 477 insertions(+), 25 deletions(-)
+ 10 files changed, 530 insertions(+), 25 deletions(-)
 
 diff --git a/chrome/browser/ui/spaces/sidebar_sync_apply.cc b/chrome/browser/ui/spaces/sidebar_sync_apply.cc
 index f849a443fdc0e..79f3bab4af372 100644
@@ -848,6 +851,92 @@ index 92d97a40408a3..593abee7c0a33 100644
    // Set by the embedder; see SetBeforeCloseTabsCallback().
    BeforeCloseTabsCallback before_close_tabs_callback_;
    // Set by the embedder; see SetNewTabIndexCallback().
+diff --git a/chrome/browser/ui/views/spaces/space_tab_visibility_controller.cc b/chrome/browser/ui/views/spaces/space_tab_visibility_controller.cc
+index 924b63642b9af..f3c5594d4ea90 100644
+--- a/chrome/browser/ui/views/spaces/space_tab_visibility_controller.cc
++++ b/chrome/browser/ui/views/spaces/space_tab_visibility_controller.cc
+@@ -595,6 +595,23 @@ void SpaceTabVisibilityController::OnSpacePinsCollapsedChanged(
+   UpdateTabVisibility();
+ }
+ 
++void SpaceTabVisibilityController::OnTabChangedAt(tabs::TabInterface* tab,
++                                                  TabChangeType change_type) {
++  if (change_type != TabChangeType::kAll) {
++    return;
++  }
++  for (const tabs::TabCollection* collection =
++           tab ? tab->GetParentCollection() : nullptr;
++       collection; collection = collection->GetParentCollection()) {
++    if (collection->type() == tabs::TabCollection::Type::FOLDER &&
++        static_cast<const tabs::FolderTabCollection*>(collection)
++            ->collapsed()) {
++      PostUpdateTabVisibility();
++      return;
++    }
++  }
++}
++
+ void SpaceTabVisibilityController::OnTabStripModelChanged(
+     TabStripModel* tab_strip_model,
+     const TabStripModelChange& change,
+diff --git a/chrome/browser/ui/views/spaces/space_tab_visibility_controller.h b/chrome/browser/ui/views/spaces/space_tab_visibility_controller.h
+index 3c07459377a74..d58c6ffc44e21 100644
+--- a/chrome/browser/ui/views/spaces/space_tab_visibility_controller.h
++++ b/chrome/browser/ui/views/spaces/space_tab_visibility_controller.h
+@@ -111,6 +111,11 @@ class SpaceTabVisibilityController : public SpaceModel::Observer,
+       const TabStripModelChange& change,
+       const TabStripSelectionChange& selection) override;
+   void OnSplitTabChanged(const SplitTabChange& change) override;
++  // folders F3 (GitHub issue 35): a pin a collapsed folder keeps listed while
++  // it is awake folds away once it sleeps. Sleeping changes neither the active
++  // tab nor the tree; the strip reports it as a change of the whole tab.
++  void OnTabChangedAt(tabs::TabInterface* tab,
++                      TabChangeType change_type) override;
+ 
+   // tabs::TabCollectionObserver, on the strip's root: a folder collapsed from
+   // anywhere -- its header, the command bar's Collapse All Folders, a session
+diff --git a/chrome/test/stedding/folder_tabs_browsertest.cc b/chrome/test/stedding/folder_tabs_browsertest.cc
+index 724e654797761..63e9fc5591d8f 100644
+--- a/chrome/test/stedding/folder_tabs_browsertest.cc
++++ b/chrome/test/stedding/folder_tabs_browsertest.cc
+@@ -774,6 +774,37 @@ IN_PROC_BROWSER_TEST_F(FolderTabsTest, AWindowAFolderTabOpensHoldsItsPage) {
+   }
+ }
+ 
++// folders F3 (GitHub issue 35, a comment on 0.4.0 beta 1): a pin of the
++// Space that a collapsed folder keeps listed while it is awake folds away
++// once it goes to sleep, without opening and closing the folder. The rows
++// were drawn again only when the active tab or the tree changed, and putting
++// a pin to sleep changes neither.
++IN_PROC_BROWSER_TEST_F(FolderTabsTest, AnAwakePinFoldsAwayWhenItSleeps) {
++  CloseDownToOne();
++  spaces::SpaceModel* const model = spaces::SpaceModel::From(browser());
++  ASSERT_TRUE(model);
++  tabs::TabInterface* const pin = OpenLoaded("a.test");
++  model->SetSpacePinned(pin, true);
++  tabs::TabInterface* const other = OpenLoaded("b.test");
++  std::vector<int> indices = {IndexOf(pin), IndexOf(other)};
++  std::ranges::sort(indices);
++  tabs::FolderTabCollection* const folder =
++      tab_strip_model()->AddToNewFolder(indices);
++  ASSERT_TRUE(folder);
++  folder->SetCollapsed(true);
++  tabs::TabInterface* const elsewhere = OpenLoaded("c.test");
++  ASSERT_EQ(elsewhere, tab_strip_model()->GetActiveTab());
++  ASSERT_FALSE(pin->GetContents()->WasDiscarded());
++  ASSERT_TRUE(DrawnRow(pin)) << "the collapsed folder did not list the pin";
++  ASSERT_FALSE(DrawnRow(other));
++
++  stedding::SleepTabList({pin});
++  ASSERT_TRUE(base::test::RunUntil(
++      [&]() { return pin->GetContents()->WasDiscarded(); }));
++  EXPECT_FALSE(DrawnRow(pin)) << "the pin stayed listed asleep";
++  EXPECT_TRUE(folder->collapsed());
++}
++
+ // Decision 6 (PLAN.md TAB-11): collapsing the folder that holds the tab on
+ // screen keeps that tab's row; a collapsed folder stays collapsed (SPC-5);
+ // its header shows the count (folders F33); Ctrl+Shift+E collapses every
 diff --git a/chrome/test/stedding/pinned_run_browsertest.cc b/chrome/test/stedding/pinned_run_browsertest.cc
 index e424a12d86589..04c2e6262ce78 100644
 --- a/chrome/test/stedding/pinned_run_browsertest.cc

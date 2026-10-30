@@ -2,6 +2,25 @@
 
 What was built, newest first. Nothing here is needed to do a task: `AGENTS.md` carries what is true now, `BACKLOG.md` the order of work, `PLAN.md` the owner's decisions. This file was the "State of the project" section of `AGENTS.md` until 2026-09-30. This log starts at 2026-10-15. Closed work from before that is the table in [docs/history/archive.md](history/archive.md).
 
+## 2026-10-29 -- 0.4.0 beta 2: the fixes of the 2026-10-28 review
+
+Released as 0.4.0 beta 2, on Chromium 157.0.8103.31, for macOS and Windows: the faults of the
+2026-10-28 review (S-338 to S-351, and S-326's little window brought back by the session), and
+three more. An extension's omnibox keyword typed in the command bar reaches the extension
+(S-352, closed: a handler the omnibox API sets through a target with no dependencies). Sidebar
+sync's last faults (S-353): an own essential moved to the shared row is shared also where every
+Space has its own session, and waits for Move now when it is loaded; a shared essential moved to
+its own Space's pins stays in that Space; the newer of two backups made in the same second is the
+one kept. S-354 did not reproduce: a closed little window leaves nothing for ⇧⌘T at all, and
+whether it should is S-355, for the owner. GitHub issue 43 is answered by its reporter: it
+happens only with On startup set to the New Tab page or to pages (S-323).
+
+The Windows sweep, `tooling/dev test all`, had run no test since the Keychain's component tests
+joined it: their filter matched nothing on Windows and the lister stopped the run. They join on
+the Mac alone now. The 2026-10-29 ASan run on Windows ran out of commit charge with four tests at
+a time; two at a time it passed. The review's rows stay open until each fix is seen on a real
+build. How the release was checked is in its notes.
+
 ## 2026-10-28 -- 0.4.0 beta 1, and a crash in 0.3.0 beta 22
 
 The owner found that Remove, in the question a pinned tab's x asks, crashed 0.3.0 beta 22: the

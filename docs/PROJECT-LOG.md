@@ -2,6 +2,25 @@
 
 What was built, newest first. Nothing here is needed to do a task: `AGENTS.md` carries what is true now, `BACKLOG.md` the order of work, `PLAN.md` the owner's decisions. This file was the "State of the project" section of `AGENTS.md` until 2026-09-30. This log starts at 2026-10-15. Closed work from before that is the table in [docs/history/archive.md](history/archive.md).
 
+## 2026-10-31 -- 0.4.0 beta 3
+
+Released as 0.4.0 beta 3, on Chromium 157.0.8103.31, for both platforms: Duplicate in the short
+tab menu (issue 63), a split's address field over the active pane and the buttons at a centred
+field's end on Windows (issue 14), and a sleeping pin that folds back into its collapsed folder
+(issue 35). On the final build every suite passed on both platforms (the Mac 1348 unit and 681
+browser tests, Windows 1339 and 639). The acceptance scripts passed with the real pointer on the
+Mac's signed build, as a copy with its own identity beside the owner's running Stedding, and on
+Windows' installed copy, which an installed beta 2 had first updated to through a local feed. The
+installer repaired, uninstalled keeping the profile and installed again.
+
+The real-pointer checks closed S-357 (Copy Link and Install answer a click at Compact on both
+platforms) and S-364 (the field follows the active pane on the Mac, and on Windows from 1300
+pixels wide). They found S-370: in a Windows window about 1040 pixels wide the right pane's part
+of the row is mostly the caption buttons, and the field stays over the left pane when the right is
+active; the notes list it. S-327, the check mark, shows only on the Mac: on Windows it was up a
+second after the click. The Mac image was signed from a worktree of the repository, since the
+owner's running Stedding was the app in `dist/signed`, which `tooling/sign-release` empties.
+
 ## 2026-10-31 -- Windows on the beta 3 fixes, four tests that were wrong, the Windows leg two at a time
 
 Not released yet. The PC moved onto the series of 2026-10-30 with `tooling/move-series`, which

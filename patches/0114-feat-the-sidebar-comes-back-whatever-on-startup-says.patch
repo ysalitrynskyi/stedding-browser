@@ -23,16 +23,17 @@ Chromium restores pinned tabs with their place and folders on its own.
  chrome/browser/app_controller_mac.mm          |   8 +-
  chrome/browser/prefs/session_startup_pref.cc  |   4 +
  chrome/browser/prefs/session_startup_pref.h   |   6 +
- chrome/browser/sessions/session_restore.cc    |  67 +++++++++
+ chrome/browser/sessions/session_restore.cc    |  67 ++++++++
  chrome/browser/sessions/session_restore.h     |   6 +
  chrome/browser/sessions/session_service.cc    |  10 +-
  chrome/browser/ui/archive/archive_mark.h      |   6 +
- chrome/browser/ui/archive/archived_tabs.cc    |  71 ++++++++-
+ chrome/browser/ui/archive/archived_tabs.cc    |  71 +++++++-
+ .../ui/archive/archived_tabs_unittest.cc      |  17 +-
  .../startup/startup_browser_creator_impl.cc   |  14 +-
  .../ui/startup/startup_tab_provider.cc        |   6 +-
- .../test/stedding/dock_reopen_browsertest.mm  |  26 +++-
- chrome/test/stedding/restore_browsertest.cc   | 138 +++++++++++++++++-
- 12 files changed, 341 insertions(+), 21 deletions(-)
+ .../test/stedding/dock_reopen_browsertest.mm  |  26 ++-
+ chrome/test/stedding/restore_browsertest.cc   | 151 +++++++++++++++++-
+ 13 files changed, 362 insertions(+), 30 deletions(-)
 
 diff --git a/chrome/browser/app_controller_mac.mm b/chrome/browser/app_controller_mac.mm
 index 143e73543cfc7..d2cab18d9cab0 100644
@@ -369,6 +370,40 @@ index fd5a503eeb79f..a0e091642ed99 100644
        return;
      }
      if (!when.is_null() && now - when > keep) {
+diff --git a/chrome/browser/ui/archive/archived_tabs_unittest.cc b/chrome/browser/ui/archive/archived_tabs_unittest.cc
+index fe1f929927e67..452464cb82596 100644
+--- a/chrome/browser/ui/archive/archived_tabs_unittest.cc
++++ b/chrome/browser/ui/archive/archived_tabs_unittest.cc
+@@ -816,17 +816,24 @@ TEST_F(ArchivePageWindowTest,
+   }
+ }
+ 
+-// A13: the next launch opens a window again only when it continues where
+-// this run left off, or after a restart. The test profile has no session
+-// service, as a quit leaves it.
++// A13: the next launch opens a window again when it continues where this
++// run left off, after a restart, and with the New Tab page or specific pages,
++// which bring back its sidebar (windows G10, BACKLOG S-323). The test profile
++// has no session service, as a quit leaves it.
+ TEST_F(ArchivePageWindowTest, OnlyALaunchThatRestoresReopensAWindow) {
+   SessionStartupPref::SetStartupPref(
+       profile(), SessionStartupPref(SessionStartupPref::LAST));
+   EXPECT_EQ(NextLaunch::kReopensIt, NextLaunchReopens(browser()));
+   SessionStartupPref::SetStartupPref(
+       profile(), SessionStartupPref(SessionStartupPref::DEFAULT));
+-  EXPECT_EQ(NextLaunch::kLeavesItClosed, NextLaunchReopens(browser()))
+-      << "the New Tab page at startup: the window's tabs are closed";
++  EXPECT_EQ(NextLaunch::kReopensIt, NextLaunchReopens(browser()))
++      << "the New Tab page at startup: the window's sidebar comes back";
++  SessionStartupPref::SetStartupPref(
++      profile(), SessionStartupPref(SessionStartupPref::URLS));
++  EXPECT_EQ(NextLaunch::kReopensIt, NextLaunchReopens(browser()))
++      << "specific pages at startup: the window's sidebar comes back";
++  SessionStartupPref::SetStartupPref(
++      profile(), SessionStartupPref(SessionStartupPref::DEFAULT));
+   PrefService* const local_state = g_browser_process->local_state();
+   ASSERT_TRUE(local_state);
+   local_state->SetBoolean(::prefs::kRestartLastSessionOnShutdown, true);
 diff --git a/chrome/browser/ui/startup/startup_browser_creator_impl.cc b/chrome/browser/ui/startup/startup_browser_creator_impl.cc
 index 706b7e0d844bd..b7e038b72a7db 100644
 --- a/chrome/browser/ui/startup/startup_browser_creator_impl.cc
@@ -473,10 +508,47 @@ index e4ddf28bf8b87..d141050de3375 100644
  
  }  // namespace
 diff --git a/chrome/test/stedding/restore_browsertest.cc b/chrome/test/stedding/restore_browsertest.cc
-index 9f99d1cd07019..1e25e06d3640d 100644
+index 9f99d1cd07019..563892a112c49 100644
 --- a/chrome/test/stedding/restore_browsertest.cc
 +++ b/chrome/test/stedding/restore_browsertest.cc
-@@ -2671,10 +2671,13 @@ IN_PROC_BROWSER_TEST_F(ArchiveReopenTest,
+@@ -59,6 +59,7 @@
+ #include "chrome/browser/ui/archive/closed_folder.h"
+ #include "chrome/browser/ui/archive/tab_archiver.h"
+ #include "chrome/browser/ui/browser_commands.h"
++#include "chrome/browser/ui/browser_tabstrip.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+ #include "chrome/browser/ui/navigator/browser_navigator.h"
+@@ -1620,7 +1621,9 @@ IN_PROC_BROWSER_TEST_F(RestoreTest,
+ // session of its own -- come back in Three, in its jar, with the pin, the
+ // home, the name and the split. The run after a crash starts on a new tab
+ // page and restores nothing until the bubble's Restore. A test run ends with
+-// a quit, not a kill: the kill itself is the live check (BACKLOG S-147).
++// a quit, not a kill: the kill itself is the live check (BACKLOG S-147); the
++// run here starts with the New Tab page, which brings back the sidebar
++// (windows G10), and is left as a launch after a crash leaves its window.
+ IN_PROC_BROWSER_TEST_F(RestoreTest,
+                        PRE_ReplacedContentsComeBackFromACrashRestore) {
+   spaces::SpaceModel* const m = model();
+@@ -1669,12 +1672,14 @@ IN_PROC_BROWSER_TEST_F(RestoreTest,
+ 
+ IN_PROC_BROWSER_TEST_F(RestoreTest, ReplacedContentsComeBackFromACrashRestore) {
+   ASSERT_EQ(1u, GetAllBrowserWindowInterfaces().size());
+-  ASSERT_FALSE(Find("pinned.test")) << "the run restored before the bubble";
++  ASSERT_FALSE(Find("other.test")) << "a loose tab came back";
+   // The window a launch after a crash opens: one new tab page, which the
+-  // restore replaces.
++  // restore replaces. This launch brought back the pins (windows G10).
++  chrome::AddTabAt(browser(), GURL(chrome::kChromeUINewTabURL), -1, true);
+   while (tabs()->count() > 1) {
+-    tabs()->CloseWebContentsAt(tabs()->count() - 1, TabCloseTypes::CLOSE_NONE);
++    tabs()->CloseWebContentsAt(0, TabCloseTypes::CLOSE_NONE);
+   }
++  ASSERT_FALSE(Find("pinned.test"));
+   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(),
+                                            GURL(chrome::kChromeUINewTabURL)));
+   SessionRestore::RestoreSessionAfterCrash(browser());
+@@ -2671,10 +2676,13 @@ IN_PROC_BROWSER_TEST_F(ArchiveReopenTest,
      ASSERT_TRUE(SessionServiceFactory::GetForProfileIfExisting(profile))
          << "with no session service, every close reads as a quit's";
      EXPECT_EQ(kLast, stedding::NextLaunchReopens(browser()));
@@ -492,7 +564,7 @@ index 9f99d1cd07019..1e25e06d3640d 100644
      SessionStartupPref::SetStartupPref(
          profile, SessionStartupPref(SessionStartupPref::LAST));
  
-@@ -3676,5 +3679,136 @@ IN_PROC_BROWSER_TEST_F(RestoredVerbsTest, RestoredTabsKeepWhatTheVerbsDo) {
+@@ -3676,5 +3684,136 @@ IN_PROC_BROWSER_TEST_F(RestoredVerbsTest, RestoredTabsKeepWhatTheVerbsDo) {
    EXPECT_EQ(std::optional<bool>(false), AboveTheClearLine(loose));
  }
  

@@ -34,7 +34,7 @@ The traps follow. 28 is retired. Read the one for the topic in front of you, not
 | Building, disk, rebuild cost | 1, 16, 19, 23, 44, 45, 53, 54, 57, 70, 73, 74, 83, 89, 90, 100, 123 |
 | The working loop and the series | 5, 9, 13, 14, 17, 22, 50, 51, 89, 92, 139 |
 | Driving and capturing the window | 3, 7, 10, 11, 12, 15, 18, 24, 27, 29, 30, 36, 37, 52, 56, 59, 61, 63, 64, 65, 76, 82, 93, 94, 95, 96, 103, 105, 107, 116, 121, 130, 132, 133, 136, 137 |
-| What a test can and cannot prove | 2, 4, 31, 46, 48, 51, 52, 55, 56, 58, 59, 60, 66, 68, 69, 72, 75, 77, 78, 79, 80, 81, 84, 86, 87, 88, 91, 98, 99, 101, 102, 104, 106, 107, 110, 111, 112, 113, 114, 115, 119, 120, 126, 127, 138 |
+| What a test can and cannot prove | 2, 4, 31, 46, 48, 51, 52, 55, 56, 58, 59, 60, 66, 68, 69, 72, 75, 77, 78, 79, 80, 81, 84, 86, 87, 88, 91, 98, 99, 101, 102, 104, 106, 107, 110, 111, 112, 113, 114, 115, 119, 120, 126, 127, 138, 141 |
 | Windows | 32, 34, 36, 38, 40, 42, 53, 54, 55, 56, 57, 59, 62, 67, 68, 69, 70, 71, 74, 91, 93, 98, 99, 100, 101, 103, 106, 111, 113, 114, 115, 116, 118, 121, 122, 125, 128 |
 | Release and signing | 44, 47, 49, 62, 85, 117, 118, 124, 129, 131, 140 |
 | Chromium's and the platforms' own behaviour to know | 6, 8, 20, 21, 25, 26, 33, 35, 39, 41, 43, 60, 72, 73, 92, 95, 97, 98, 104, 105, 107, 108, 109, 110, 111, 113, 122, 135 |
@@ -942,6 +942,12 @@ Two switches do the same for windows. `--stedding-welcome[=<step>]` forces the w
     with `.stedding-local` copied in): its `dist/signed` is its own, and `tooling/package-dmg
     --app <worktree>/dist/signed/stable/Stedding.app` in the main checkout puts the image in
     the `dist/` that `tooling/publish-release` reads.
+141. **`tooling/dev test` with `STEDDING_TEST_OUT` built `out/release` and ran the other
+    directory's binaries.** On 2026-10-31 a `mac-checks` sweep after the S-323 patch built
+    the release tests and ran `mac-checks`' binaries from that morning: 681 browser tests,
+    where the release build listed 685, all passing on code without the patch. The build step
+    now builds the directory the sweep runs. Compare a sweep's count with the other
+    configuration's (trap 138).
 ## The Windows build
 
 Git for Windows runs the bash tooling. PowerShell runs the rest. The toolchain is the installed Visual Studio (`DEPOT_TOOLS_WIN_TOOLCHAIN=0`, set by the scripts). Three variables name the machine's paths, so none is in the repo: `STEDDING_CHROMIUM_SRC` (the checkout's `src`), `STEDDING_DEPOT_TOOLS` when depot_tools is not already on `PATH`, and `STEDDING_VPYTHON_ROOT`, a short directory for vpython's venv (trap 34). The bash tooling takes the checkout as `CHROMIUM_ROOT`, the folder that holds `src`, as a POSIX path.

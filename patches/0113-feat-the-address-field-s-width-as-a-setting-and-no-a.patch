@@ -10,32 +10,43 @@ state, the suggestions open under it at its width, and the empty row either
 side of it moves the window: the two spacers are views of their own class
 that the caption hit test passes through. The spacers now always exist and
 are shown with a centred width; a change applies at once. A positive
-`location_bar_width` still overrides the setting.
+`location_bar_width` still overrides the setting. Once the field is moved
+onto the page's middle the spacers are set to fill the row either side of
+it, so neither lies over the field's end.
+
+In a side-by-side split the field is the active pane's (toolbar T49, a
+comment on issue 14 after 0.4.0 beta 2): over that pane alone, full width
+taking its part of the row and a centred width centred on it, no wider. It
+had spanned both panes, the left pane's address drawn across the gap. The
+row lays out again when the panes move (the window background already
+watches them) and when the active tab changes.
 
 The focused field no longer offers "Ask Google about this page" with
 Google as the engine: Chromium's OmniboxContextualSearchOnFocusSuggestions
 is off, as the rest of that family already was.
 
-Why: the owner asked for both on 2026-10-28.
+Why: the owner asked for both on 2026-10-28, and for the split's field on
+2026-10-30.
 Removable when: never as a feature; the toolbar hunks go if Chromium's
 toolbar grows its own width setting.
 ---
  .../api/settings_private/prefs_util.cc        |   2 +
- .../stedding_page/stedding_page.html.ts       |  16 +++
- .../ui/stedding/address_row_unittest.cc       |  54 ++++++++
- .../ui/stedding/privacy_defaults_unittest.cc  |  11 ++
+ .../stedding_page/stedding_page.html.ts       |  16 ++
+ .../ui/stedding/address_row_unittest.cc       |  54 ++++
+ .../ui/stedding/privacy_defaults_unittest.cc  |  11 +
  chrome/browser/ui/stedding/stedding_prefs.cc  |   1 +
  chrome/browser/ui/stedding/stedding_prefs.h   |   4 +
- chrome/browser/ui/stedding_ui_metrics.cc      |  16 ++-
- chrome/browser/ui/stedding_ui_metrics.h       |  11 ++
- .../views/location_bar/location_bar_view.cc   |   8 ++
+ chrome/browser/ui/stedding_ui_metrics.cc      |  16 +-
+ chrome/browser/ui/stedding_ui_metrics.h       |  11 +
+ .../views/frame/stedding_window_background.cc |   5 +
+ .../views/location_bar/location_bar_view.cc   |   8 +
  .../ui/views/location_bar/location_bar_view.h |   3 +
- .../browser/ui/views/toolbar/toolbar_view.cc  | 121 ++++++++++++------
+ .../browser/ui/views/toolbar/toolbar_view.cc  | 236 ++++++++++++++----
  .../browser/ui/views/toolbar/toolbar_view.h   |   6 +
- .../browser/ui/webui/settings/settings_ui.cc  |  18 +++
- .../test/stedding/address_band_browsertest.cc |  68 ++++++++++
+ .../browser/ui/webui/settings/settings_ui.cc  |  18 ++
+ .../test/stedding/address_band_browsertest.cc | 132 ++++++++++
  .../omnibox/common/omnibox_feature_configs.cc |   6 +-
- 15 files changed, 306 insertions(+), 39 deletions(-)
+ 16 files changed, 479 insertions(+), 50 deletions(-)
 
 diff --git a/chrome/browser/extensions/api/settings_private/prefs_util.cc b/chrome/browser/extensions/api/settings_private/prefs_util.cc
 index 743958674f75c..700e2635439c4 100644
@@ -267,6 +278,22 @@ index 683b4f9fbf99d..5b02de2c7d2fc 100644
  
  // Open the command bar as soon as a window opens. Zero in normal use; this
  // exists so the overlay can be screenshotted, since it is otherwise only
+diff --git a/chrome/browser/ui/views/frame/stedding_window_background.cc b/chrome/browser/ui/views/frame/stedding_window_background.cc
+index ebee00423fae2..e610054ae7c4b 100644
+--- a/chrome/browser/ui/views/frame/stedding_window_background.cc
++++ b/chrome/browser/ui/views/frame/stedding_window_background.cc
+@@ -92,6 +92,11 @@ SteddingWindowBackground::~SteddingWindowBackground() = default;
+ 
+ void SteddingWindowBackground::OnViewBoundsChanged(
+     views::View* observed_view) {
++  // toolbar T49: side by side, the address field sits over the active pane,
++  // so the row lays out again when the panes move.
++  if (ToolbarView* const toolbar = browser_view_->toolbar()) {
++    toolbar->InvalidateLayout();
++  }
+   const gfx::RectF row = PageBarSurface(browser_view_);
+   if (!row.IsEmpty()) {
+     browser_view_->SchedulePaintInRect(gfx::ToEnclosingRect(row));
 diff --git a/chrome/browser/ui/views/location_bar/location_bar_view.cc b/chrome/browser/ui/views/location_bar/location_bar_view.cc
 index 2dd2aed380652..ebc2519826777 100644
 --- a/chrome/browser/ui/views/location_bar/location_bar_view.cc
@@ -301,10 +328,18 @@ index 5009de91ff646..ceec8b4aba4c4 100644
    // Returns the location bar border radius in DIPs.
    int GetBorderRadius() const;
 diff --git a/chrome/browser/ui/views/toolbar/toolbar_view.cc b/chrome/browser/ui/views/toolbar/toolbar_view.cc
-index 3b7b46fed2568..ddabef1373e83 100644
+index 3b7b46fed2568..4f43fa406984e 100644
 --- a/chrome/browser/ui/views/toolbar/toolbar_view.cc
 +++ b/chrome/browser/ui/views/toolbar/toolbar_view.cc
-@@ -62,6 +62,7 @@
+@@ -6,6 +6,7 @@
+ 
+ #include <algorithm>
+ #include <memory>
++#include <optional>
+ #include <utility>
+ 
+ #include "base/command_line.h"
+@@ -62,6 +63,7 @@
  #include "chrome/browser/ui/page_action/page_action_properties_provider.h"
  #include "chrome/browser/ui/side_panel/side_panel_entry_id.h"
  #include "chrome/browser/ui/stedding/little_window.h"
@@ -312,7 +347,25 @@ index 3b7b46fed2568..ddabef1373e83 100644
  #include "chrome/browser/ui/stedding_ui_metrics.h"
  #include "chrome/browser/ui/tabs/public/tab_features.h"
  #include "chrome/browser/ui/tabs/tab_strip_model.h"
-@@ -225,6 +226,16 @@ constexpr int kLargeSpaceBetweenButtons = 6;
+@@ -82,7 +84,9 @@
+ #include "chrome/browser/ui/views/extensions/extensions_toolbar_coordinator.h"
+ #include "chrome/browser/ui/views/extensions/extensions_toolbar_desktop.h"
+ #include "chrome/browser/ui/views/frame/browser_view.h"
++#include "chrome/browser/ui/views/frame/contents_container_view.h"
+ #include "chrome/browser/ui/views/frame/custom_corners_background.h"
++#include "chrome/browser/ui/views/frame/multi_contents_view.h"
+ #include "chrome/browser/ui/views/frame/top_container_view.h"
+ #include "chrome/browser/ui/views/glic/glic_button_interface.h"
+ #include "chrome/browser/ui/views/global_media_controls/media_toolbar_button.h"
+@@ -141,6 +145,7 @@
+ #include "components/safe_browsing/core/common/features.h"
+ #include "components/send_tab_to_self/features.h"
+ #include "components/signin/public/base/signin_buildflags.h"
++#include "components/split_tabs/split_tab_visual_data.h"
+ #include "components/strings/grit/components_strings.h"
+ #include "components/tabs/public/tab_interface.h"
+ #include "content/public/browser/render_view_host.h"
+@@ -225,6 +230,46 @@ constexpr int kLargeSpaceBetweenButtons = 6;
  constexpr int kInsideBorderAroundGlicButtons = 2;
  constexpr int kGlicButtonMargin = 5;
  
@@ -326,10 +379,40 @@ index 3b7b46fed2568..ddabef1373e83 100644
 +BEGIN_METADATA(SteddingRowSpacer)
 +END_METADATA
 +
++// Stedding (toolbar T49, GitHub issue 14): side by side, the active pane's
++// part of the row, its left edge and its right, in `toolbar`'s coordinates.
++// Nothing outside a split, or with the panes stacked, where the row is the
++// upper pane's alone and the page is the whole row.
++std::optional<std::pair<int, int>> SteddingActivePaneSpan(
++    BrowserView* browser_view,
++    const views::View* toolbar) {
++  MultiContentsView* const panes =
++      browser_view ? browser_view->multi_contents_view() : nullptr;
++  if (!panes || !panes->IsInSplitView() ||
++      panes->GetSplitLayout() != split_tabs::SplitTabLayout::kSideBySide ||
++      !toolbar->GetWidget()) {
++    return std::nullopt;
++  }
++  const ContentsContainerView* const pane =
++      panes->GetActiveContentsContainerView();
++  if (!pane || !pane->GetVisible() || !pane->GetWidget()) {
++    return std::nullopt;
++  }
++  // Through the screen: in full screen on the Mac the row is in an overlay
++  // widget of its own (toolbar T24).
++  gfx::Point left;
++  gfx::Point right(pane->width(), 0);
++  views::View::ConvertPointToScreen(pane, &left);
++  views::View::ConvertPointToScreen(pane, &right);
++  views::View::ConvertPointFromScreen(toolbar, &left);
++  views::View::ConvertPointFromScreen(toolbar, &right);
++  return std::make_pair(left.x(), right.x());
++}
++
  // Returns whether `point` should be treated as part of the caption area in
  // `view`. Recursively traverses into icon containers to correctly handle
  // padding between buttons.
-@@ -244,7 +255,8 @@ bool IsPositionInWindowCaptionForView(const views::View* view,
+@@ -244,7 +289,8 @@ bool IsPositionInWindowCaptionForView(const views::View* view,
      // Separators and dividers are non-interactive and should be treated
      // as caption area.
      if (views::IsViewClass<views::Separator>(child) ||
@@ -339,7 +422,35 @@ index 3b7b46fed2568..ddabef1373e83 100644
        return true;
      }
      // The point hit an interactive control (button, location bar, etc.).
-@@ -1636,7 +1648,7 @@ void ToolbarView::Layout(PassKey) {
+@@ -1329,6 +1375,14 @@ void ToolbarView::Update(WebContents* tab) {
+     reload_control->SetDevToolsStatus(
+         chrome::IsDebuggerAttachedToCurrentTab(browser_));
+   }
++
++  // Stedding (toolbar T49): side by side, the field is the active pane's, so
++  // it moves to the other pane with the focus.
++  if (display_mode_ == DisplayMode::kNormal &&
++      base::FeatureList::IsEnabled(stedding::kArcStyleWindow) &&
++      SteddingActivePaneSpan(browser_view_, this)) {
++    InvalidateLayout();
++  }
+ }
+ 
+ bool ToolbarView::UpdateSecurityState() {
+@@ -1629,6 +1683,12 @@ void ToolbarView::Layout(PassKey) {
+     }
+   }
+ 
++  // Stedding (toolbar T49): side by side, the page is the active pane.
++  const std::optional<std::pair<int, int>> stedding_pane =
++      display_mode_ == DisplayMode::kNormal &&
++              base::FeatureList::IsEnabled(stedding::kArcStyleWindow)
++          ? SteddingActivePaneSpan(browser_view_, this)
++          : std::nullopt;
+   // Stedding (toolbar T18, T29): the address inside the bar reads as centred
+   // on the page, which on Windows runs on under the caption buttons. The bar
+   // is the whole row between the clusters and its own middle is not the
+@@ -1636,10 +1696,11 @@ void ToolbarView::Layout(PassKey) {
    // coordinates, before it lays out. A capped bar is centred below instead,
    // after its layout, and gathers its contents on its own middle.
    if (display_mode_ == DisplayMode::kNormal && location_bar_view_ &&
@@ -347,19 +458,87 @@ index 3b7b46fed2568..ddabef1373e83 100644
 +      !stedding_field_centred_ &&
        base::FeatureList::IsEnabled(stedding::kArcStyleWindow)) {
      location_bar_view_->SetSteddingCentre(
-         (width() + stedding_trailing_reserve_) / 2);
-@@ -1666,8 +1678,8 @@ void ToolbarView::Layout(PassKey) {
+-        (width() + stedding_trailing_reserve_) / 2);
++        stedding_pane ? (stedding_pane->first + stedding_pane->second) / 2
++                      : (width() + stedding_trailing_reserve_) / 2);
+   }
+   // Stedding little E7, E8: a popup's address reads as centred on the
+   // window, whatever sits at the bar's ends: a little window's buttons, and
+@@ -1665,24 +1726,122 @@ void ToolbarView::Layout(PassKey) {
+   // layout's own position. Reading them anyway clamped the field to x 0,
    // over the back, forward and reload buttons, in a window under about
    // 1000 DIP with the sidebar open (2026-09-08).
++  // Side by side (toolbar T49, GitHub issue 14), the field is the active
++  // pane's at every width: over that pane, a card gutter short of its edge at
++  // the gap, full width taking that whole part of the row and a capped field
++  // centred on the pane, no wider than it. A pane narrower than the field's
++  // own minimum keeps the minimum, centred on the pane as the clusters allow.
++  // It spanned both panes, the address drawn across the gap.
++  const bool stedding_spacers =
++      stedding_field_centred_ && stedding_left_spacer_ &&
++      stedding_right_spacer_ && stedding_left_spacer_->GetVisible() &&
++      stedding_right_spacer_->GetVisible();
    if (display_mode_ == DisplayMode::kNormal && location_bar_view_ &&
 -      stedding_left_spacer_ && stedding_right_spacer_ &&
 -      stedding_left_spacer_->GetVisible() &&
-+      stedding_field_centred_ && stedding_left_spacer_ &&
-+      stedding_right_spacer_ && stedding_left_spacer_->GetVisible() &&
-       stedding_right_spacer_->GetVisible()) {
+-      stedding_right_spacer_->GetVisible()) {
++      (stedding_spacers || (stedding_pane && !stedding_field_centred_))) {
      const gfx::Rect bar = location_bar_view_->bounds();
-     const int left_limit = stedding_left_spacer_->x();
-@@ -1683,6 +1695,60 @@ void ToolbarView::Layout(PassKey) {
+-    const int left_limit = stedding_left_spacer_->x();
+-    const int right_limit = stedding_right_spacer_->bounds().right();
+-    // On the bar's centre, which on Windows runs on past this view under
+-    // the caption buttons (toolbar T19); the clusters still bound it.
+-    const int x = std::clamp(
+-        (width() + stedding_trailing_reserve_ - bar.width()) / 2, left_limit,
+-        std::max(left_limit, right_limit - bar.width()));
+-    if (x != bar.x()) {
+-      location_bar_view_->SetX(x);
++    // The clusters bound the field: the spacers' far ends, or at full width
++    // the bar's own ends, which the layout gave the whole row between them.
++    const int left_limit =
++        stedding_spacers ? stedding_left_spacer_->x() : bar.x();
++    const int right_limit =
++        stedding_spacers ? stedding_right_spacer_->bounds().right()
++                         : bar.right();
++    // On the page's centre, which on Windows runs on past this view under
++    // the caption buttons (toolbar T19).
++    int twice_centre = width() + stedding_trailing_reserve_;
++    int low = left_limit;
++    int high = right_limit;
++    int field_width = bar.width();
++    if (stedding_pane) {
++      const int gutter = stedding::kCardGutter.Get();
++      twice_centre = stedding_pane->first + stedding_pane->second;
++      low = std::max(low, stedding_pane->first + gutter);
++      high = std::min(high, stedding_pane->second - gutter);
++      const int room = std::max(
++          high - low, location_bar_view_->GetMinimumSize().width());
++      field_width = std::min(
++          stedding_field_centred_ ? std::min(field_width, room) : room,
++          right_limit - left_limit);
++      if (field_width > high - low) {
++        low = left_limit;
++        high = right_limit;
++      }
++    }
++    const int x = std::clamp((twice_centre - field_width) / 2, low,
++                             std::max(low, high - field_width));
++    const gfx::Rect field(x, bar.y(), field_width, bar.height());
++    if (field != bar) {
++      location_bar_view_->SetBoundsRect(field);
++    }
++    // The spacers fill the row either side of the field and no more: one
++    // still where the layout put it lay over the moved field's end, and a
++    // press there moved the window (toolbar T48).
++    if (stedding_spacers) {
++      stedding_left_spacer_->SetBounds(
++          left_limit, stedding_left_spacer_->y(), std::max(0, x - left_limit),
++          stedding_left_spacer_->height());
++      stedding_right_spacer_->SetBounds(
++          field.right(), stedding_right_spacer_->y(),
++          std::max(0, right_limit - field.right()),
++          stedding_right_spacer_->height());
+     }
    }
  }
  
@@ -420,7 +599,7 @@ index 3b7b46fed2568..ddabef1373e83 100644
  void ToolbarView::SetSteddingTrailingReserve(int reserve) {
    if (stedding_trailing_reserve_ == reserve) {
      return;
-@@ -1790,49 +1856,30 @@ void ToolbarView::InitLayout() {
+@@ -1790,49 +1949,30 @@ void ToolbarView::InitLayout() {
      // being pushed against the leading one. They flex at the same order as the
      // location bar, so all three grow together and the bar keeps a third of
      // whatever space is going rather than being pinned to its minimum.
@@ -545,7 +724,7 @@ index 7bbdd154fbc84..1dfa55e1b9fd3 100644
    html_source->AddString(
        "steddingArchiveKeepSubLabel",
 diff --git a/chrome/test/stedding/address_band_browsertest.cc b/chrome/test/stedding/address_band_browsertest.cc
-index 742acf6f818c3..7c4a9a36e41cc 100644
+index 742acf6f818c3..11fb880b163a0 100644
 --- a/chrome/test/stedding/address_band_browsertest.cc
 +++ b/chrome/test/stedding/address_band_browsertest.cc
 @@ -36,6 +36,7 @@
@@ -556,7 +735,7 @@ index 742acf6f818c3..7c4a9a36e41cc 100644
  #include "base/test/run_until.h"
  #include "base/time/time.h"
  #include "build/build_config.h"
-@@ -286,6 +287,73 @@ IN_PROC_BROWSER_TEST_F(AddressBandTest, TheFieldIsWholeInEveryState) {
+@@ -286,6 +287,137 @@ IN_PROC_BROWSER_TEST_F(AddressBandTest, TheFieldIsWholeInEveryState) {
        << "a click on the field's empty start did not focus the address";
  }
  
@@ -623,6 +802,70 @@ index 742acf6f818c3..7c4a9a36e41cc 100644
 +      EXPECT_EQ(HTCLIENT, frame->NonClientHitTest(centre))
 +          << button->GetClassName() << " at " << centre.ToString()
 +          << " is the window's to drag";
++    }
++  }
++}
++
++// toolbar T49 (GitHub issue 14, a comment on 0.4.0 beta 2): side by side, the
++// field is the active pane's at every width: over that pane alone, no wider
++// than the setting, with the row over the gap the window's to drag, and it
++// follows the focus to the other pane. It spanned both panes, the left
++// pane's address drawn across the gap.
++IN_PROC_BROWSER_TEST_F(AddressBandTest, ASplitsFieldSitsOverTheActivePane) {
++  TabStripModel* const tabs = browser()->GetTabStripModel();
++  ASSERT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
++      browser(), embedded_test_server()->GetURL("b.test", "/title1.html"),
++      WindowOpenDisposition::NEW_FOREGROUND_TAB,
++      ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
++  tabs->ActivateTabAt(0);
++  tabs->AddToNewSplit({1}, split_tabs::SplitTabVisualData(),
++                      split_tabs::SplitTabCreatedSource::kTabContextMenu);
++  ASSERT_TRUE(tabs->GetTabAtIndex(1)->IsSplit());
++  MultiContentsView* const panes = view()->multi_contents_view();
++  ASSERT_TRUE(base::test::RunUntil([&]() {
++    views::test::RunScheduledLayout(view());
++    return panes->IsInSplitView() &&
++           panes->GetSplitLayout() == split_tabs::SplitTabLayout::kSideBySide;
++  }));
++  ToolbarView* const row = view()->toolbar();
++  PrefService* const prefs = browser()->GetProfile()->GetPrefs();
++  for (const int width : {0, 800, 480}) {
++    prefs->SetInteger(stedding::prefs::kToolbarFieldWidth, width);
++    for (const int active : {0, 1}) {
++      SCOPED_TRACE(base::StringPrintf("width %d, pane %d", width, active));
++      tabs->ActivateTabAt(active);
++      const auto pane = [&]() {
++        return panes->GetActiveContentsContainerView()->GetBoundsInScreen();
++      };
++      const auto over_the_pane = [&]() {
++        views::test::RunScheduledLayout(view());
++        const gfx::Rect field = bar()->GetBoundsInScreen();
++        return field.x() >= pane().x() && field.right() <= pane().right();
++      };
++      EXPECT_TRUE(base::test::RunUntil(over_the_pane))
++          << "the field at " << bar()->GetBoundsInScreen().ToString()
++          << " is not over the active pane at " << pane().ToString();
++      if (width) {
++        EXPECT_LE(bar()->width(), width);
++      }
++      // The field's own ends are the field's; the row over the gap between
++      // the panes is the window's.
++      const int middle = bar()->y() + bar()->height() / 2;
++      EXPECT_FALSE(
++          row->IsPositionInWindowCaption(gfx::Point(bar()->x() + 4, middle)))
++          << "the field's start is the window's to drag";
++      EXPECT_FALSE(row->IsPositionInWindowCaption(
++          gfx::Point(bar()->bounds().right() - 4, middle)))
++          << "the field's end is the window's to drag";
++      const gfx::Rect left = panes->contents_container_views()[0]
++                                 ->GetBoundsInScreen();
++      const gfx::Rect right = panes->contents_container_views()[1]
++                                  ->GetBoundsInScreen();
++      gfx::Point gap((left.right() + right.x()) / 2, 0);
++      views::View::ConvertPointFromScreen(row, &gap);
++      gap.set_y(middle);
++      EXPECT_TRUE(row->IsPositionInWindowCaption(gap))
++          << "the row over the gap is not the window's to drag";
 +    }
 +  }
 +}

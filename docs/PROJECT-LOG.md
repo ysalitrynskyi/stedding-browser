@@ -13,6 +13,13 @@ platforms; a real click on Windows is still owed (S-357). `tooling/move-series` 
 onto a newer series by writing only the files that differ (trap 89). Every GitHub issue was read
 again and the open ones labelled.
 
+Issue 14's newest comment showed the address field of a side-by-side split drawn across both
+panes. The field is now the active pane's at every width (S-364, toolbar T49, patch 0113), and
+the spacers either side of a centred field no longer lie over its end. Copy Link's check mark
+(S-327) stayed its 1.5 seconds in both browser tests, timed now, so the short mark seen with
+the real pointer is not reproduced in a test yet. Four Windows browser tests that time out only
+four at a time run in the serial leg (S-334).
+
 ## 2026-10-29 -- 0.4.0 beta 2: the fixes of the 2026-10-28 review
 
 Released as 0.4.0 beta 2, on Chromium 157.0.8103.31, for macOS and Windows: the faults of the

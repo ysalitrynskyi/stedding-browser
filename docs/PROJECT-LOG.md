@@ -39,6 +39,10 @@ failed and passed alone, a different few each time (S-369). Six moved to the ser
 others took their place; two at a time, all three runs passed. `tooling/dev` runs the Windows
 leg two at a time now, about 70 seconds longer.
 
+After the push the PC moved onto it, rebuilt the browser tests and ran the browser leg on both
+builds: all 639 tests passed on `win-release` and on `win-checks`, the four fixed tests among
+them, with no DCHECK or dangling-pointer report. That closes S-367 and S-369.
+
 The Mac's release sweep on the fixed tests passed except one more silent timeout
 (`HorizontalStripTest.VerticalTabsComeOnAsADragEnds`, 8 of 8 after; S-368). Trap 139: `tooling/dev`
 edited while a sweep ran it would have run shifted lines when the sweep returned, so it was put

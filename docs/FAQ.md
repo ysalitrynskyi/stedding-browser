@@ -160,6 +160,14 @@ Tabs → **On startup, load** can also load the essentials, or the whole Space o
 screen. The choices are **The selected tab only**, **The selected tab and the
 essentials**, and **The whole active Space**.
 
+**Do my tabs come back if Stedding opens on the New Tab page?**
+Your sidebar does. Whatever Settings → **On startup** says, a launch brings back the
+essentials, each Space's pinned tabs, and your folders with their tabs. The choice
+decides the other tabs only: **Continue where you left off** brings them back too,
+**Open the New Tab page** leaves them closed and adds a New Tab page, and **Open a
+specific page or set of pages** opens those pages. The tabs left closed are under
+**Archived**.
+
 **Can tabs I am not using free their memory?**
 Yes. Settings → Stedding → Tabs → **Put tabs to sleep after** offers Never (the
 default), 5 minutes, 30 minutes or 4 hours. A tab you have not looked at for that

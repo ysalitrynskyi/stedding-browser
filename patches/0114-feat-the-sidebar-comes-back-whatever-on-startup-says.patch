@@ -1,0 +1,631 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Sat, 31 Oct 2026 15:11:59 -0400
+Subject: feat: the sidebar comes back whatever On startup says (S-323)
+
+GitHub issue 43, the owner's call of 2026-10-30: a launch brings back
+each normal window's essentials, Space pins and folders whatever On
+startup says, and the choice decides the loose tabs alone, as in Arc.
+With the New Tab page or specific pages the launch now restores the
+session with RESTORE_SIDEBAR_ONLY, which drops the loose tabs, popups
+and windows left empty before any browser is made, and adds the New
+Tab page or the pages. Chromium's own pinned-tab list is not opened as
+well, which would double the essentials. The Mac's Dock and the
+no-window restore follow the same rule. The archive marks only the
+tabs that come back; the loose ones carry a mark of their own and stay
+rows.
+
+Why: GitHub issue 43; the owner asked on 2026-10-30 for the sidebar to come
+back whatever On startup says.
+Removable when: never as a feature; the startup and restore hunks go if
+Chromium restores pinned tabs with their place and folders on its own.
+---
+ chrome/browser/app_controller_mac.mm          |   8 +-
+ chrome/browser/prefs/session_startup_pref.cc  |   4 +
+ chrome/browser/prefs/session_startup_pref.h   |   6 +
+ chrome/browser/sessions/session_restore.cc    |  67 +++++++++
+ chrome/browser/sessions/session_restore.h     |   6 +
+ chrome/browser/sessions/session_service.cc    |  10 +-
+ chrome/browser/ui/archive/archive_mark.h      |   6 +
+ chrome/browser/ui/archive/archived_tabs.cc    |  71 ++++++++-
+ .../startup/startup_browser_creator_impl.cc   |  14 +-
+ .../ui/startup/startup_tab_provider.cc        |   6 +-
+ .../test/stedding/dock_reopen_browsertest.mm  |  26 +++-
+ chrome/test/stedding/restore_browsertest.cc   | 138 +++++++++++++++++-
+ 12 files changed, 341 insertions(+), 21 deletions(-)
+
+diff --git a/chrome/browser/app_controller_mac.mm b/chrome/browser/app_controller_mac.mm
+index 143e73543cfc7..d2cab18d9cab0 100644
+--- a/chrome/browser/app_controller_mac.mm
++++ b/chrome/browser/app_controller_mac.mm
+@@ -2014,8 +2014,12 @@ class AppControllerProfileObserver : public ProfileAttributesStorage::Observer,
+           // last window held: the window its close button closed while the
+           // browser ran on. A window holds its Spaces' tabs and folders, and
+           // a new tab page in their place left them in Recently Closed alone.
+-          if (SessionStartupPref::GetStartupPref(profile->GetPrefs())
+-                  .ShouldRestoreLastSession() &&
++          // With the New Tab page or specific pages, its sidebar comes back
++          // alone (windows G10, BACKLOG S-323).
++          const SessionStartupPref startup =
++              SessionStartupPref::GetStartupPref(profile->GetPrefs());
++          if ((startup.ShouldRestoreLastSession() ||
++               startup.ShouldRestoreTheSidebarOnly()) &&
+               !ProfileBrowserCollection::GetForProfile(profile)
+                    ->FindTabbedBrowser()) {
+             AttemptSessionRestore(profile);
+diff --git a/chrome/browser/prefs/session_startup_pref.cc b/chrome/browser/prefs/session_startup_pref.cc
+index ab1b3400c8bac..7000a30b4720f 100644
+--- a/chrome/browser/prefs/session_startup_pref.cc
++++ b/chrome/browser/prefs/session_startup_pref.cc
+@@ -202,6 +202,10 @@ bool SessionStartupPref::ShouldRestoreLastSession() const {
+   return type == LAST || type == LAST_AND_URLS;
+ }
+ 
++bool SessionStartupPref::ShouldRestoreTheSidebarOnly() const {
++  return type == DEFAULT || type == URLS;
++}
++
+ bool SessionStartupPref::ShouldOpenUrls() const {
+   return type == URLS || type == LAST_AND_URLS;
+ }
+diff --git a/chrome/browser/prefs/session_startup_pref.h b/chrome/browser/prefs/session_startup_pref.h
+index 666bd803fa9e9..293626aa19993 100644
+--- a/chrome/browser/prefs/session_startup_pref.h
++++ b/chrome/browser/prefs/session_startup_pref.h
+@@ -91,6 +91,12 @@ struct SessionStartupPref {
+   // Returns true if |type| is indicating last session should be restored.
+   bool ShouldRestoreLastSession() const;
+ 
++  // Stedding (windows G10, BACKLOG S-323): whether a launch brings back the
++  // last session's sidebars alone -- the essentials, each Space's pins and
++  // its folders -- and leaves the loose tabs closed: the New Tab page and
++  // specific pages. As in Arc, the choice decides the loose tabs only.
++  bool ShouldRestoreTheSidebarOnly() const;
++
+   // Returns true if |type| is indicating a specific set of URLs should be
+   // opened.
+   bool ShouldOpenUrls() const;
+diff --git a/chrome/browser/sessions/session_restore.cc b/chrome/browser/sessions/session_restore.cc
+index 1a868f60e20cf..641877b8018d3 100644
+--- a/chrome/browser/sessions/session_restore.cc
++++ b/chrome/browser/sessions/session_restore.cc
+@@ -9,6 +9,7 @@
+ #include "chrome/browser/ui/spaces/space_storage_partition.h"
+ #include "chrome/browser/ui/stedding/little_mark.h"
+ #include "chrome/browser/ui/stedding/little_window.h"
++#include "chrome/browser/ui/tabs/stedding_folder_session.h"
+ 
+ #include <stddef.h>
+ 
+@@ -324,6 +325,63 @@ void ReportRestoredWindowCreated(aura::Window* window) {
+ }
+ #endif
+ 
++// Stedding (windows G10, BACKLOG S-323): whether `tab` is part of a sidebar:
++// an essential (Chromium's pinned tab), a Space's pin, or a tab in a folder.
++bool IsSidebarTab(const sessions::SessionTab& tab) {
++  if (tab.pinned) {
++    return true;
++  }
++  const auto pin = tab.extra_data.find(spaces::kSessionTabSpacePinKey);
++  if (pin != tab.extra_data.end() && pin->second == "1") {
++    return true;
++  }
++  const auto path = tab.extra_data.find(stedding::kSessionTabFolderPathKey);
++  return path != tab.extra_data.end() && !path->second.empty() &&
++         path->second != "[]";
++}
++
++// Stedding (windows G10, BACKLOG S-323): with On startup set to the New Tab
++// page or to specific pages, a launch brings back each normal window's
++// sidebar and leaves its loose tabs closed, as Arc does. A split comes back
++// whole when any of its tabs is kept. Popups and apps' windows stay closed,
++// as they did, and so does a window left with no tab.
++void KeepTheSidebarsOnly(
++    std::vector<std::unique_ptr<sessions::SessionWindow>>* windows) {
++  std::erase_if(*windows, [](const std::unique_ptr<sessions::SessionWindow>&
++                                 window) {
++    if (window->type != sessions::SessionWindow::TYPE_NORMAL) {
++      return true;
++    }
++    std::set<split_tabs::SplitTabId> kept_splits;
++    for (const std::unique_ptr<sessions::SessionTab>& tab : window->tabs) {
++      if (tab->split_id && IsSidebarTab(*tab)) {
++        kept_splits.insert(*tab->split_id);
++      }
++    }
++    const int selected = window->selected_tab_index;
++    int kept_before_selected = 0;
++    int index = 0;
++    std::erase_if(window->tabs,
++                  [&](const std::unique_ptr<sessions::SessionTab>& tab) {
++                    const bool kept =
++                        IsSidebarTab(*tab) ||
++                        (tab->split_id && kept_splits.contains(*tab->split_id));
++                    if (kept && index < selected) {
++                      ++kept_before_selected;
++                    }
++                    ++index;
++                    return !kept;
++                  });
++    if (window->tabs.empty()) {
++      return true;
++    }
++    window->selected_tab_index =
++        std::min(kept_before_selected,
++                 static_cast<int>(window->tabs.size()) - 1);
++    return false;
++  });
++}
++
+ }  // namespace
+ 
+ // SessionRestoreImpl ---------------------------------------------------------
+@@ -375,6 +433,8 @@ class SessionRestoreImpl : public BrowserCollectionObserver {
+ 
+   bool synchronous() const { return synchronous_; }
+ 
++  void set_sidebar_only(bool sidebar_only) { sidebar_only_ = sidebar_only; }
++
+   BrowserWindowInterface* Restore() {
+     DCHECK(!is_foreign_session_restore_);
+     if (restore_browser_) {
+@@ -811,6 +871,9 @@ class SessionRestoreImpl : public BrowserCollectionObserver {
+     DVLOG(1) << "ProcessSessionWindows " << windows->size();
+ 
+     PruneWindows(windows);
++    if (sidebar_only_) {
++      KeepTheSidebarsOnly(windows);
++    }
+ 
+     if (windows->empty()) {
+       // Restore was unsuccessful. The cookie/storage systems can also delete
+@@ -1638,6 +1701,9 @@ class SessionRestoreImpl : public BrowserCollectionObserver {
+   // If true, restores the normal browser.
+   bool restore_browser_ = true;
+ 
++  // Stedding (windows G10, BACKLOG S-323): see RESTORE_SIDEBAR_ONLY.
++  bool sidebar_only_ = false;
++
+   // True if this instance is restoring a session from another device, rather
+   // than this profile's own last session. Foreign restores are not reported to
+   // SessionRestoreObservers.
+@@ -1728,6 +1794,7 @@ BrowserWindowInterface* SessionRestore::RestoreSession(
+       (behavior & RESTORE_APPS) != 0, (behavior & RESTORE_BROWSER) != 0,
+       /* log_event */ true, /* is_foreign_session_restore */ false,
+       startup_tabs);
++  restorer->set_sidebar_only((behavior & RESTORE_SIDEBAR_ONLY) != 0);
+   return restorer->Restore();
+ }
+ 
+diff --git a/chrome/browser/sessions/session_restore.h b/chrome/browser/sessions/session_restore.h
+index 2968af2bc298d..0df34e0ee4df4 100644
+--- a/chrome/browser/sessions/session_restore.h
++++ b/chrome/browser/sessions/session_restore.h
+@@ -70,6 +70,12 @@ class SessionRestore {
+ 
+     // Restores normal browsers.
+     RESTORE_BROWSER = 1 << 4,
++
++    // Stedding (windows G10, BACKLOG S-323): restores each normal window's
++    // sidebar alone -- its essentials, each Space's pins and the tabs in its
++    // folders -- and leaves the loose tabs closed, as a launch does with On
++    // startup set to the New Tab page or to specific pages.
++    RESTORE_SIDEBAR_ONLY = 1 << 5,
+   };
+ 
+   // Notification callback list.
+diff --git a/chrome/browser/sessions/session_service.cc b/chrome/browser/sessions/session_service.cc
+index de4c894198836..e4cc775388392 100644
+--- a/chrome/browser/sessions/session_service.cc
++++ b/chrome/browser/sessions/session_service.cc
+@@ -607,14 +607,20 @@ bool SessionService::RestoreIfNecessary(const StartupTabs& startup_tabs,
+     sessions::TabRestoreService* tab_restore_service =
+         TabRestoreServiceFactory::GetForProfileIfExisting(profile());
+ 
++    // Stedding (windows G10, BACKLOG S-323): with the New Tab page or
++    // specific pages, the sidebars come back alone.
+     if (ShouldTriggerSessionRestoreForBrowser(browser) &&
+-        pref.ShouldRestoreLastSession() &&
++        (pref.ShouldRestoreLastSession() ||
++         pref.ShouldRestoreTheSidebarOnly()) &&
+         (!tab_restore_service || !tab_restore_service->IsRestoring())) {
+       SessionRestore::RestoreSession(
+           profile(), browser,
+           SessionRestore::RESTORE_BROWSER |
+               (browser ? 0 : SessionRestore::ALWAYS_CREATE_TABBED_BROWSER) |
+-              (restore_apps ? SessionRestore::RESTORE_APPS : 0),
++              (restore_apps ? SessionRestore::RESTORE_APPS : 0) |
++              (pref.ShouldRestoreLastSession()
++                   ? 0
++                   : SessionRestore::RESTORE_SIDEBAR_ONLY),
+           startup_tabs);
+       return true;
+     }
+diff --git a/chrome/browser/ui/archive/archive_mark.h b/chrome/browser/ui/archive/archive_mark.h
+index d8c445896eaf4..1bc186e0f3cec 100644
+--- a/chrome/browser/ui/archive/archive_mark.h
++++ b/chrome/browser/ui/archive/archive_mark.h
+@@ -85,6 +85,12 @@ inline constexpr char kArchiveReopensAtNextLaunch[] = "next";
+ // the value above is.
+ inline constexpr char kArchiveReopensUnlessAWindowOpens[] = "last";
+ 
++// windows G10 (BACKLOG S-323): a loose tab of a window whose sidebar alone the
++// next launch opens again, On startup being the New Tab page or specific
++// pages. It stays closed, and a row of the archive, whatever the window's mark
++// above says once the launch has settled it.
++inline constexpr char kArchiveLeftClosedKey[] = "stedding.archive.left_closed";
++
+ struct ClosedFolderMark {
+   std::string batch;
+   std::string name;
+diff --git a/chrome/browser/ui/archive/archived_tabs.cc b/chrome/browser/ui/archive/archived_tabs.cc
+index fd5a503eeb79f..a0e091642ed99 100644
+--- a/chrome/browser/ui/archive/archived_tabs.cc
++++ b/chrome/browser/ui/archive/archived_tabs.cc
+@@ -48,6 +48,7 @@
+ #include "components/sessions/core/tab_restore_service_observer.h"
+ #include "components/sessions/core/tab_restore_types.h"
+ #include "components/tabs/public/folder_tab_collection.h"
++#include "components/tabs/public/split_tab_data.h"
+ #include "components/tabs/public/tab_collection.h"
+ #include "components/tabs/public/tab_collection_types.h"
+ #include "components/tabs/public/tab_interface.h"
+@@ -401,6 +402,57 @@ tabs::TabInterface* FindRestoredTab(
+   return nullptr;
+ }
+ 
++namespace {
++
++// windows G10 (BACKLOG S-323): with the New Tab page or specific pages, the
++// next launch brings back a window's sidebar alone, unless a restart is
++// pending, which restores the whole session whatever the setting.
++bool NextLaunchKeepsTheSidebarOnly(Profile* profile) {
++  if (!profile ||
++      !SessionStartupPref::GetStartupPref(profile).ShouldRestoreTheSidebarOnly()) {
++    return false;
++  }
++  const PrefService* const local_state =
++      g_browser_process ? g_browser_process->local_state() : nullptr;
++  return !(local_state &&
++           local_state->GetBoolean(::prefs::kRestartLastSessionOnShutdown));
++}
++
++// What such a launch keeps: an essential, a Space's pin, a tab in a folder,
++// and a split any of whose tabs is one of them (session_restore.cc,
++// KeepTheSidebarsOnly).
++bool IsSidebarTab(tabs::TabInterface* tab) {
++  if (tab->IsPinned() || !FolderPathForTab(tab).empty()) {
++    return true;
++  }
++  const spaces::SpaceModel* const model =
++      spaces::SpaceModel::From(tab->GetBrowserWindowInterface());
++  return model && model->IsSpacePinned(tab);
++}
++
++bool NextLaunchKeeps(tabs::TabInterface* tab) {
++  BrowserWindowInterface* const window = tab->GetBrowserWindowInterface();
++  if (!window || !NextLaunchKeepsTheSidebarOnly(window->GetProfile())) {
++    return true;
++  }
++  if (IsSidebarTab(tab)) {
++    return true;
++  }
++  if (const std::optional<split_tabs::SplitTabId> split = tab->GetSplit()) {
++    if (const split_tabs::SplitTabData* const data =
++            window->GetTabStripModel()->GetSplitData(*split)) {
++      for (tabs::TabInterface* const other : data->ListTabs()) {
++        if (IsSidebarTab(other)) {
++          return true;
++        }
++      }
++    }
++  }
++  return false;
++}
++
++}  // namespace
++
+ void PopulateArchiveExtraData(tabs::TabInterface* tab,
+                               std::map<std::string, std::string>* extra_data) {
+   if (!tab || !extra_data) {
+@@ -408,8 +460,13 @@ void PopulateArchiveExtraData(tabs::TabInterface* tab,
+   }
+   content::WebContents* const contents = tab->GetContents();
+   // A13: a tab of a window the next launch opens again, whatever Space or
+-  // pin it has.
+-  switch (g_recording_next_launch) {
++  // pin it has; with the New Tab page or specific pages, a tab of its
++  // sidebar alone (windows G10), and its loose tabs stay rows.
++  const bool kept = NextLaunchKeeps(tab);
++  if (!kept && g_recording_next_launch != NextLaunch::kLeavesItClosed) {
++    (*extra_data)[kArchiveLeftClosedKey] = "1";
++  }
++  switch (kept ? g_recording_next_launch : NextLaunch::kLeavesItClosed) {
+     case NextLaunch::kLeavesItClosed:
+       break;
+     case NextLaunch::kReopensIt:
+@@ -480,7 +537,12 @@ NextLaunch NextLaunchReopens(BrowserWindowInterface* closing) {
+   // are closed, and the archive lists them.
+   const PrefService* const local_state =
+       g_browser_process ? g_browser_process->local_state() : nullptr;
+-  if (!SessionStartupPref::GetStartupPref(profile).ShouldRestoreLastSession() &&
++  // With the New Tab page or specific pages the next launch reopens the
++  // window's sidebar (windows G10), and PopulateArchiveExtraData marks those
++  // tabs alone.
++  const SessionStartupPref startup = SessionStartupPref::GetStartupPref(profile);
++  if (!startup.ShouldRestoreLastSession() &&
++      !startup.ShouldRestoreTheSidebarOnly() &&
+       !(local_state &&
+         local_state->GetBoolean(::prefs::kRestartLastSessionOnShutdown))) {
+     return NextLaunch::kLeavesItClosed;
+@@ -646,7 +708,8 @@ std::vector<ArchivedTab> ListArchivedTabs(
+     // listed beside itself, the command bar's "Archived" row for a tab on
+     // screen. A last window still waiting has no window of its profile to
+     // be listed in, and the next one to open settles it first.
+-    if (tab.extra_data.contains(kArchiveReopensKey)) {
++    if (tab.extra_data.contains(kArchiveReopensKey) &&
++        !tab.extra_data.contains(kArchiveLeftClosedKey)) {
+       return;
+     }
+     if (!when.is_null() && now - when > keep) {
+diff --git a/chrome/browser/ui/startup/startup_browser_creator_impl.cc b/chrome/browser/ui/startup/startup_browser_creator_impl.cc
+index 706b7e0d844bd..b7e038b72a7db 100644
+--- a/chrome/browser/ui/startup/startup_browser_creator_impl.cc
++++ b/chrome/browser/ui/startup/startup_browser_creator_impl.cc
+@@ -627,9 +627,10 @@ void StartupBrowserCreatorImpl::DetermineURLsAndLaunch(
+     behavior_options |= HAS_CMD_LINE_TABS;
+   }
+ 
+-  BrowserOpenBehavior behavior = DetermineBrowserOpenBehavior(
+-      StartupBrowserCreator::GetSessionStartupPref(*command_line_, profile_),
+-      behavior_options);
++  const SessionStartupPref startup_pref =
++      StartupBrowserCreator::GetSessionStartupPref(*command_line_, profile_);
++  BrowserOpenBehavior behavior =
++      DetermineBrowserOpenBehavior(startup_pref, behavior_options);
+ 
+   SessionRestore::BehaviorBitmask restore_options =
+       restore_tabbed_browser ? SessionRestore::RESTORE_BROWSER : 0;
+@@ -650,6 +651,9 @@ void StartupBrowserCreatorImpl::DetermineURLsAndLaunch(
+         browser_defaults::kAlwaysCreateTabbedBrowserOnSessionRestore,
+         has_create_browser_switch, was_mac_login_or_resume,
+         restore_tabbed_browser);
++    if (!startup_pref.ShouldRestoreLastSession()) {
++      restore_options |= SessionRestore::RESTORE_SIDEBAR_ONLY;
++    }
+   }
+ 
+   BrowserWindowInterface* browser = RestoreOrCreateBrowser(
+@@ -891,7 +895,9 @@ StartupBrowserCreatorImpl::DetermineBrowserOpenBehavior(
+     return BrowserOpenBehavior::NEW;
+   }
+ 
+-  if (pref.ShouldRestoreLastSession()) {
++  // Stedding (windows G10, BACKLOG S-323): with the New Tab page or specific
++  // pages the launch restores too, the sidebars alone (RESTORE_SIDEBAR_ONLY).
++  if (pref.ShouldRestoreLastSession() || pref.ShouldRestoreTheSidebarOnly()) {
+     // Don't perform a session restore on a post-crash launch, as this could
+     // cause a crash loop.
+     if (!(options & IS_POST_CRASH_LAUNCH)) {
+diff --git a/chrome/browser/ui/startup/startup_tab_provider.cc b/chrome/browser/ui/startup/startup_tab_provider.cc
+index 0ce9c1210619b..490cc7bacda5c 100644
+--- a/chrome/browser/ui/startup/startup_tab_provider.cc
++++ b/chrome/browser/ui/startup/startup_tab_provider.cc
+@@ -242,7 +242,11 @@ StartupTabs StartupTabProviderImpl::GetPinnedTabsForState(
+     const SessionStartupPref& pref,
+     const StartupTabs& pinned_tabs,
+     bool profile_has_other_tabbed_browser) {
+-  if (pref.ShouldRestoreLastSession() || profile_has_other_tabbed_browser) {
++  // Stedding (windows G10, BACKLOG S-323): the essentials come back with the
++  // sidebar from the session for the New Tab page and specific pages too, so
++  // Chromium's own list of pinned tabs would open them a second time.
++  if (pref.ShouldRestoreLastSession() || pref.ShouldRestoreTheSidebarOnly() ||
++      profile_has_other_tabbed_browser) {
+     return StartupTabs();
+   }
+   return pinned_tabs;
+diff --git a/chrome/test/stedding/dock_reopen_browsertest.mm b/chrome/test/stedding/dock_reopen_browsertest.mm
+index e4ddf28bf8b87..d141050de3375 100644
+--- a/chrome/test/stedding/dock_reopen_browsertest.mm
++++ b/chrome/test/stedding/dock_reopen_browsertest.mm
+@@ -20,6 +20,7 @@
+ #include "chrome/browser/profiles/keep_alive/scoped_profile_keep_alive.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/sessions/session_restore.h"
++#include "chrome/browser/ui/browser_tabstrip.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "chrome/test/base/in_process_browser_test.h"
+@@ -112,15 +113,28 @@ IN_PROC_BROWSER_TEST_F(DockReopenTest, TheDockBringsTheLastWindowBack) {
+       << "the folder did not come back";
+   EXPECT_EQ(parent, b->GetParentCollection());
+ 
+-  // With the New Tab page at startup, the Dock opens a new window.
++  // With the New Tab page at startup, the Dock brings back the window's
++  // sidebar, its folder's tabs, and not its loose tab (windows G10, BACKLOG
++  // S-323).
++  // Added, not opened from a folder's tab, which would file it there.
++  chrome::AddTabAt(back,
++                   embedded_test_server()->GetURL("loose.test", "/title1.html"),
++                   -1, true);
++  tabs::TabInterface* const loose = Find(back, "loose.test");
++  ASSERT_TRUE(loose);
++  ASSERT_NE(tabs::TabCollection::Type::FOLDER,
++            loose->GetParentCollection()->type())
++      << "the loose tab joined the folder";
+   SessionStartupPref::SetStartupPref(
+       profile->GetPrefs(), SessionStartupPref(SessionStartupPref::DEFAULT));
+   CloseBrowserSynchronously(back);
+-  BrowserWindowInterface* const fresh = ReopenFromTheDock(profile);
+-  ASSERT_TRUE(fresh);
+-  SetBrowser(fresh);
+-  EXPECT_FALSE(Find(fresh, "kept-a.test"))
+-      << "the Dock restored though the profile starts on the New Tab page";
++  BrowserWindowInterface* const again = ReopenFromTheDock(profile);
++  ASSERT_TRUE(again);
++  SetBrowser(again);
++  EXPECT_TRUE(Find(again, "kept-a.test"))
++      << "the folder stayed behind with the New Tab page at startup";
++  EXPECT_TRUE(Find(again, "kept-b.test"));
++  EXPECT_FALSE(Find(again, "loose.test")) << "a loose tab came back";
+ }
+ 
+ }  // namespace
+diff --git a/chrome/test/stedding/restore_browsertest.cc b/chrome/test/stedding/restore_browsertest.cc
+index 9f99d1cd07019..1e25e06d3640d 100644
+--- a/chrome/test/stedding/restore_browsertest.cc
++++ b/chrome/test/stedding/restore_browsertest.cc
+@@ -2671,10 +2671,13 @@ IN_PROC_BROWSER_TEST_F(ArchiveReopenTest,
+     ASSERT_TRUE(SessionServiceFactory::GetForProfileIfExisting(profile))
+         << "with no session service, every close reads as a quit's";
+     EXPECT_EQ(kLast, stedding::NextLaunchReopens(browser()));
++    // With the New Tab page at startup the next launch reopens the window's
++    // sidebar, and only its tabs carry the mark (windows G10, BACKLOG
++    // S-323).
+     SessionStartupPref::SetStartupPref(
+         profile, SessionStartupPref(SessionStartupPref::DEFAULT));
+-    EXPECT_EQ(kClosed, stedding::NextLaunchReopens(browser()))
+-        << "the New Tab page at startup: the window's tabs are closed";
++    EXPECT_EQ(kLast, stedding::NextLaunchReopens(browser()))
++        << "the New Tab page at startup: the window's sidebar comes back";
+     SessionStartupPref::SetStartupPref(
+         profile, SessionStartupPref(SessionStartupPref::LAST));
+ 
+@@ -3676,5 +3679,136 @@ IN_PROC_BROWSER_TEST_F(RestoredVerbsTest, RestoredTabsKeepWhatTheVerbsDo) {
+   EXPECT_EQ(std::optional<bool>(false), AboveTheClearLine(loose));
+ }
+ 
++// windows G10 (BACKLOG S-323, GitHub issue 43): whatever On startup says, a
++// launch brings the sidebar back -- the essentials, each Space's pins, and
++// its folders with their tabs -- and the choice decides the loose tabs alone,
++// as in Arc. With the New Tab page the loose tabs stay closed and a New Tab
++// page is the tab on screen; with specific pages those pages open instead.
++// The essentials come back once: Chromium reopens its own list of pinned
++// tabs for these two choices, which would have doubled them.
++class StartupKeepsTheSidebarTest : public RestoreTest {
++ public:
++  // A launch with no address of its own, as a person's is: the fixture's
++  // about:blank would take the place of the New Tab page or the pages.
++  StartupKeepsTheSidebarTest() { set_open_about_blank_on_browser_launch(false); }
++
++ protected:
++  void SetUpOnMainThread() override {
++    RestoreTest::SetUpOnMainThread();
++    if (browser()) {
++      SessionStartupPref::SetStartupPref(browser()->GetProfile(), Choice());
++    }
++  }
++
++  virtual SessionStartupPref Choice() {
++    return SessionStartupPref(SessionStartupPref::DEFAULT);
++  }
++
++  // How many tabs of the window show `host`.
++  int Count(const std::string& host) {
++    int count = 0;
++    for (int i = 0; i < tabs()->count(); ++i) {
++      content::WebContents* const contents = tabs()->GetWebContentsAt(i);
++      const content::NavigationEntry* const entry =
++          contents->GetController().GetLastCommittedEntry();
++      const GURL url = entry ? entry->GetURL() : contents->GetVisibleURL();
++      count += url.host() == host;
++    }
++    return count;
++  }
++
++  // The run before the launch: an essential; in Home a loose tab and a folder
++  // holding one; in Work a Space pin and a loose tab, Work on screen.
++  void BuildTheSidebar() {
++    spaces::SpaceModel* const m = model();
++    ASSERT_TRUE(m);
++    m->SetSpaceName(m->active_id(), "Home");
++    const SpaceId work = m->AddSpace("Work", SK_ColorBLUE)->id();
++    ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), Url("essential.test")));
++    tabs()->SetTabPinned(0, true);
++    Open("loose.test");
++    tabs::TabInterface* const filed = Open("filed.test");
++    tabs::FolderTabCollection* const folder =
++        tabs()->AddToNewFolder({Index(filed)});
++    ASSERT_TRUE(folder);
++    folder->SetTitle("Kept");
++    ASSERT_TRUE(m->SetActiveSpace(work));
++    tabs::TabInterface* const pin = Open("pin.test");
++    m->SetSpacePinned(pin, true);
++    Open("loose-work.test");
++  }
++
++  void ExpectTheSidebarWithoutTheLooseTabs() {
++    ASSERT_EQ(1u, GetAllBrowserWindowInterfaces().size());
++    spaces::SpaceModel* const m = model();
++    ASSERT_TRUE(m);
++    ASSERT_EQ(2u, m->size());
++    const SpaceId home = m->spaces()[0]->id();
++    const SpaceId work = m->spaces()[1]->id();
++    EXPECT_EQ("Home", m->spaces()[0]->name());
++
++    EXPECT_EQ(1, Count("essential.test")) << "the essential came back twice";
++    tabs::TabInterface* const essential = Find("essential.test");
++    ASSERT_TRUE(essential);
++    EXPECT_TRUE(essential->IsPinned());
++
++    tabs::TabInterface* const filed = Find("filed.test");
++    ASSERT_TRUE(filed) << "a folder's tab stayed behind";
++    const tabs::FolderTabCollection* const folder = FolderOf(filed);
++    ASSERT_TRUE(folder);
++    EXPECT_EQ("Kept", folder->title());
++    EXPECT_EQ(home, m->SpaceForTab(filed));
++
++    tabs::TabInterface* const pin = Find("pin.test");
++    ASSERT_TRUE(pin) << "a Space's pin stayed behind";
++    EXPECT_TRUE(m->IsSpacePinned(pin));
++    EXPECT_EQ(work, m->SpaceForTab(pin));
++
++    EXPECT_EQ(0, Count("loose.test")) << "a loose tab came back";
++    EXPECT_EQ(0, Count("loose-work.test")) << "a loose tab came back";
++  }
++};
++
++IN_PROC_BROWSER_TEST_F(StartupKeepsTheSidebarTest,
++                       PRE_TheNewTabPageKeepsTheSidebar) {
++  BuildTheSidebar();
++}
++
++IN_PROC_BROWSER_TEST_F(StartupKeepsTheSidebarTest,
++                       TheNewTabPageKeepsTheSidebar) {
++  ExpectTheSidebarWithoutTheLooseTabs();
++  const GURL shown = tabs()->GetActiveWebContents()->GetVisibleURL();
++  EXPECT_TRUE(shown == GURL(chrome::kChromeUINewTabURL) ||
++              shown.host() == chrome::kChromeUINewTabHost ||
++              shown.host() == chrome::kChromeUINewTabPageThirdPartyHost)
++      << "the tab on screen is " << shown;
++  EXPECT_EQ(model()->spaces()[1]->id(), model()->active_id())
++      << "the Space on screen at the quit is on screen again";
++  EXPECT_EQ(model()->active_id(),
++            model()->SpaceForTab(tabs()->GetActiveTab()));
++}
++
++class StartupPagesKeepTheSidebarTest : public StartupKeepsTheSidebarTest {
++ protected:
++  SessionStartupPref Choice() override {
++    SessionStartupPref pages(SessionStartupPref::URLS);
++    pages.urls = {GURL(chrome::kChromeUIVersionURL)};
++    return pages;
++  }
++};
++
++IN_PROC_BROWSER_TEST_F(StartupPagesKeepTheSidebarTest,
++                       PRE_SpecificPagesKeepTheSidebar) {
++  BuildTheSidebar();
++}
++
++IN_PROC_BROWSER_TEST_F(StartupPagesKeepTheSidebarTest,
++                       SpecificPagesKeepTheSidebar) {
++  ExpectTheSidebarWithoutTheLooseTabs();
++  EXPECT_EQ(GURL(chrome::kChromeUIVersionURL),
++            tabs()->GetActiveWebContents()->GetVisibleURL());
++  EXPECT_EQ(1, Count(chrome::kChromeUIVersionHost));
++}
++
+ }  // namespace
+ 

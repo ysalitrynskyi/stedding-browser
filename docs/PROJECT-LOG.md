@@ -2,6 +2,24 @@
 
 What was built, newest first. Nothing here is needed to do a task: `AGENTS.md` carries what is true now, `BACKLOG.md` the order of work, `PLAN.md` the owner's decisions. This file was the "State of the project" section of `AGENTS.md` until 2026-09-30. This log starts at 2026-10-15. Closed work from before that is the table in [docs/history/archive.md](history/archive.md).
 
+## 2026-10-31 -- 0.4.0 beta 4: the sidebar comes back whatever On startup says
+
+Released as 0.4.0 beta 4, on Chromium 157.0.8103.31, for both platforms. S-323 (issue 43, the
+owner's call of 2026-10-30) is patch 0114: with On startup set to the New Tab page or to specific
+pages a launch restores the session with `RESTORE_SIDEBAR_ONLY`, which keeps each normal window's
+essentials, Space pins, folder tabs and the splits holding one, and then adds the New Tab page or
+the pages; the Dock and the no-window restore follow it, and the archive marks only the tabs that
+come back, so the loose ones stay rows. Its tests failed first. The sweeps found two tests that
+held the old rule (the archive's unit test, and a crash-restore test that used the New Tab page to
+stand in for a launch after a crash), and that every launch's New Tab page and every quit's ended
+up in the archive: archive A16 keeps them out. A `mac-checks` sweep had run that directory's
+binaries from the morning, because `tooling/dev test` built `out/release` whatever
+`STEDDING_TEST_OUT` named; it builds the directory it runs now (trap 141). On the Mac's build with
+the real pointer, On startup chosen in Settings, a quit and a launch brought back the pin and the
+folder and left the rest under Archived. Both platforms' final sweeps, installers, a beta 3 to
+beta 4 update on Windows and both acceptance runs passed. S-371 (a compositor DCHECK) and S-372 (a
+frame stall) each happened once and not again.
+
 ## 2026-10-31 -- 0.4.0 beta 3
 
 Released as 0.4.0 beta 3, on Chromium 157.0.8103.31, for both platforms: Duplicate in the short

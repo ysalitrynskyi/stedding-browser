@@ -10,7 +10,7 @@ Everything under `docs/`, grouped by who it is for.
 | [SHORTCUTS.md](SHORTCUTS.md) | Every shortcut Stedding adds or changes, on macOS and Windows, and where it differs from Chromium |
 | [FAQ.md](FAQ.md) | Questions and answers: the project, installing and updating, using it (including what Stedding has that Arc did not, and the reverse), privacy, and contributing |
 | [PRIVACY.md](PRIVACY.md) | The privacy principles, and every network connection the browser makes |
-| [release-notes/v0.4.0-beta.3.md](release-notes/v0.4.0-beta.3.md) | What the current release changed, with checksums. Earlier releases are on the [Releases page](https://github.com/ysalitrynskyi/stedding-browser/releases) |
+| [release-notes/v0.4.0-beta.4.md](release-notes/v0.4.0-beta.4.md) | What the current release changed, with checksums. Earlier releases are on the [Releases page](https://github.com/ysalitrynskyi/stedding-browser/releases) |
 | [../LICENSE](../LICENSE) | The BSD-3-Clause licence |
 
 ## About the project

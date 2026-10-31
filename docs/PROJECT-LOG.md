@@ -2,6 +2,48 @@
 
 What was built, newest first. Nothing here is needed to do a task: `AGENTS.md` carries what is true now, `BACKLOG.md` the order of work, `PLAN.md` the owner's decisions. This file was the "State of the project" section of `AGENTS.md` until 2026-09-30. This log starts at 2026-10-15. Closed work from before that is the table in [docs/history/archive.md](history/archive.md).
 
+## 2026-10-31 -- Windows on the beta 3 fixes, four tests that were wrong, the Windows leg two at a time
+
+Not released yet. The PC moved onto the series of 2026-10-30 with `tooling/move-series`, which
+wrote ten files, and built `win-release` in 2 minutes and `win-checks` in 6. Every unit test
+passed on both. The browser tests of Duplicate (S-363), the split's address field (S-364) and
+the presses at a centred field's end (S-357) pass on both, the last with the real caption
+buttons' reserve; S-357 still owes a real click. S-334's four tests ran clean in the Windows
+serial leg in every run, which closes it.
+
+Four tests failed for reasons of their own. Each was logged until the cause showed, fixed in the
+test, and seen failing first:
+
+- `CertificateReportsTest.NoCertificateIsReported` (S-365, patch 0074): the first page's
+  favicon is fetched after the page has loaded, over a connection of its own, and when that
+  came after reporting was switched on, its report took the next site's place, since the cache
+  keys a report on its SCTs alone. The test waits for that request now. 5 of 24 runs failed
+  four at a time before, 0 of 40 after. No report went out before the switch in any run.
+- `MotionFramesTest.HiddenOmniboxPopupsFollowTheSidebarOnceAMotion` (S-366, patch 0077): the
+  extra move was the hidden popup's height alone, the page's late answer to the test's own
+  show and hide, landing 1 ms into the collapse. The counter counts a window's place, its
+  origin and width: 12 of 12 passed, and with the popup's hold taken out it still fails (19
+  and 22 moves), so it still catches what motion O8 fixed.
+- `FolderTabsTest.AnAwakePinFoldsAwayWhenItSleeps` (patch 0112) crashed on `win-checks`: it
+  never started its test server, which a build with DCHECKs refuses and a release build lets
+  pass. The `mac-checks` sweep of 2026-10-30 had missed it because its binary was built before
+  the round's last four tests (trap 138); `tooling/dev test --no-build` now names a binary
+  older than the series. On a current `mac-checks` build the whole sweep passed, with one
+  timeout that printed nothing and did not come back in 30 runs (S-368).
+- `WelcomeFirstRunTest.TheFlowOpensOnceAndNotAfterFinish` (S-367, patch 0104) failed once on
+  Windows: after the restart the fixture's `browser()` is the window last active, which can be
+  the popup the step before opened. It reads the first tabbed window now.
+
+On Windows, four at a time, every one of seven runs had a few drags, bubbles or keys that
+failed and passed alone, a different few each time (S-369). Six moved to the serial leg, and
+others took their place; two at a time, all three runs passed. `tooling/dev` runs the Windows
+leg two at a time now, about 70 seconds longer.
+
+The Mac's release sweep on the fixed tests passed except one more silent timeout
+(`HorizontalStripTest.VerticalTabsComeOnAsADragEnds`, 8 of 8 after; S-368). Trap 139: `tooling/dev`
+edited while a sweep ran it would have run shifted lines when the sweep returned, so it was put
+back until the sweep ended.
+
 ## 2026-10-30 -- After 0.4.0 beta 2: Duplicate, and a sleeping pin folds away
 
 Not released yet. The short tab menu offers Duplicate (GitHub issue 63, S-363), and the copy of

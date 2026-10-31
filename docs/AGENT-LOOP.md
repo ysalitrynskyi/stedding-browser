@@ -198,7 +198,7 @@ The suites were cut by merging and deleting what repeated itself. Keep them that
   scenario, or a new row in an existing table, is the default. A new test needs a
   setup no other test has.
 - **Which leg runs it.** `tooling/dev` runs the browser suite four at a time on
-  Windows and on the Mac (`STEDDING_BROWSER_JOBS`, default 4; trap 88), then the
+  the Mac and two at a time on Windows (`STEDDING_BROWSER_JOBS`; trap 88), then the
   fixtures in `SERIAL_BROWSER_TESTS` one at a time: the real pointer, the active
   window, the clipboard, picture-in-picture, a page that must paint, a command bar
   held open, frames counted on a window that is on screen, and full screen. A new

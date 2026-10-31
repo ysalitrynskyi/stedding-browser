@@ -17,8 +17,9 @@ infrastructure, then features. A request in chat comes before this list. A spec 
 
 ### Next
 
-The latest release is 0.4.0 beta 2, on Chromium 157.0.8103.31 (`S-278`). It carries the
-fixes of the 2026-10-28 review below. Each row closes once its fix is checked on a real build.
+The latest release is 0.4.0 beta 3, on Chromium 157.0.8103.31 (`S-278`). It carries the
+fixes of the 2026-10-28 review below, from beta 2, and the fixes for GitHub issues 14, 35 and
+63. Each row closes once its fix is checked on a real build.
 Google's schedule puts M157 on stable on 2026-11-03.
 
 S-306, shorter test runs, is the unfinished item of the 2026-10-26 order. Its Mac half

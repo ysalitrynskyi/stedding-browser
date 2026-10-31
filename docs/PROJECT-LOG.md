@@ -15,7 +15,10 @@ again and the open ones labelled.
 
 Issue 14's newest comment showed the address field of a side-by-side split drawn across both
 panes. The field is now the active pane's at every width (S-364, toolbar T49, patch 0113), and
-the spacers either side of a centred field no longer lie over its end. Copy Link's check mark
+the spacers either side of a centred field no longer lie over its end. That was S-357: on Windows
+the field moves toward the caption buttons, and the right spacer, still where the layout put it,
+took the presses of the buttons at the field's end; the test now lends the Mac's row Windows'
+reserve and failed first. Copy Link's check mark
 (S-327) stayed its 1.5 seconds in both browser tests, timed now, so the short mark seen with
 the real pointer is not reproduced in a test yet. Four Windows browser tests that time out only
 four at a time run in the serial leg (S-334).

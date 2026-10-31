@@ -23,6 +23,12 @@ reserve and failed first. Copy Link's check mark
 the real pointer is not reproduced in a test yet. Four Windows browser tests that time out only
 four at a time run in the serial leg (S-334).
 
+The owner's calls on the open issues: Manifest V2 stays off, and the FAQ says why (S-362,
+closed); a closed little window stays closed (S-355, closed); command-bar favicons are a yes
+for after the core-loop gate (S-361); peek attached to its tab is for later (S-360); the
+sidebar comes back whatever On startup says, in a later beta (S-323); Sparkle 2.10.1 ships
+with the next pin move (S-358).
+
 ## 2026-10-29 -- 0.4.0 beta 2: the fixes of the 2026-10-28 review
 
 Released as 0.4.0 beta 2, on Chromium 157.0.8103.31, for macOS and Windows: the faults of the

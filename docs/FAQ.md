@@ -220,6 +220,14 @@ on Windows) runs one from the keyboard: hold the keys and press E again to choos
 then let go to run it. The command bar’s actions mode lists them too, including when
 the address row is hidden.
 
+**Does uBlock Origin work?**
+uBlock Origin Lite does; it installs from the Chrome Web Store. The full uBlock
+Origin is a Manifest V2 extension, and Chromium turns those off. Stedding leaves
+that as Chromium has it: turning them back on would be one more patch that any
+Chromium update could break. Stedding also has a blocker of its own, off until you
+turn it on in Settings › Stedding › Privacy. It blocks the requests EasyList and
+EasyPrivacy name.
+
 **Does Netflix play?**
 Not yet. Netflix, Disney+, Prime Video and Spotify’s web player need Widevine.
 Stedding does not have that licence yet (`S-270` in [BACKLOG.md](../BACKLOG.md)).

@@ -49,12 +49,21 @@ a `+` (`features/sidebar.md` Y44). The Library is not this foot (§9).
   Chromium's own vertical tabs (ADR 0010). `⌘S` closes and opens it. Closed, it shrinks
   to a rail of icons or, as a setting, hides completely: the page goes edge to edge and
   the pointer at the window's leading edge slides the sidebar back over it
-  (`features/sidebar.md` Y19). State persists. Chromium's switch to horizontal tabs
+  (`features/sidebar.md` Y19), after a rest the user sets, and at the speed the user
+  sets (`features/settings.md` T37, T38; GitHub issue 45). State persists. Chromium's switch to horizontal tabs
   stays, and Spaces, pins and folders work there too (`PLAN.md` decision 1;
   `features/menus.md` M8, M9; `features/spaces.md` B34).
 - **Row height and text size** **[1.0]**, Stedding's own — three tab row heights and a
   sidebar text size (`features/sidebar.md` Y1, Y2). The rail follows the row height
   (Y8, Y12).
+- **The address in the sidebar** **[1.0]**, as a setting — Back, Forward and Reload at the
+  sidebar's top and the page's site in a field under them, as Arc has them; the address
+  row hides while the sidebar is open (`features/sidebar.md` Y46, `features/toolbar.md`
+  T50; GitHub issue 45). Off by default.
+- **Appearance** **[1.0]**, Stedding's own — the window's colour (Stedding's, a neutral
+  grey, or the user's for each look), how much a Space's colour tints it, and how strongly
+  the active tab stands out, browser-wide (`features/settings.md` T41–T43; GitHub issue
+  45).
 - **Pinned Tabs** **[1.0]** — saved per Space, above the Clear line, never auto-archived.
   `⌘D` pins. Arc describes them as between an app and a bookmark: navigating *within*
   the site stays in the tab; **a link that would leave the site opens Peek (§5) instead
@@ -78,6 +87,8 @@ a `+` (`features/sidebar.md` Y44). The Library is not this foot (§9).
   GitHub issue 8, ADR 0028). Arc's importer takes the first twelve (import I11), and
   Import sidebar… stops at twelve the same way. Sync turns any past the twelfth into
   pins of the first Space (sidebar-file Sf41). The sidebar itself does not cap the row.
+  How many share a row of the grid is automatic, or up to 3 or 4 as a setting (sidebar
+  Y33; GitHub issue 45).
 - **Unpinned Tabs** **[1.0]** — below the Clear line, auto-archived when idle once the
   user picks a time (§11). `⇧⌘K` clears them as a set (`features/spaces.md` B20). The
   Clear line is there even when nothing is pinned (B17).
@@ -221,8 +232,9 @@ a `+` (`features/sidebar.md` Y44). The Library is not this foot (§9).
 ## 3. Command bar
 
 - **Command bar** **[1.0]** — Arc's combined new tab, URL entry, search, tab switcher
-  and action palette. `⌘T` opens it and lists open tabs from every Space first; `⌘L`
-  opens it with the page's address in it (`features/commandbar.md`). Stedding keeps an
+  and action palette. `⌘T` opens it and lists open tabs from every Space first, each row
+  with its site's icon (K38; GitHub issue 58); `⌘L` opens it with the page's address in
+  it (`features/commandbar.md`). Stedding keeps an
   address row on top of the page that shows the whole address (`ROADMAP.md` M4;
   `features/toolbar.md` T28–T30).
 - **Actions mode** **[1.0]** — `⇥` in an empty bar, a leading `>`, or `⇧⌘P`. It lists

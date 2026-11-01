@@ -17,10 +17,12 @@ infrastructure, then features. A request in chat comes before this list. A spec 
 
 ### Next
 
-The latest release is 0.4.0 beta 5, on Chromium 157.0.8103.31 (`S-278`). It carries the
+The latest release is 0.4.0 beta 4, on Chromium 157.0.8103.31 (`S-278`). It carries the
 fixes of the 2026-10-28 review below, from beta 2, the fixes for GitHub issues 14, 35 and 63
-from beta 3, S-323 (issue 43) from beta 4, and the command bar's site icons (issue 58). Each
-row closes once its fix is checked on a real build.
+from beta 3, and S-323 (issue 43). Each row closes once its fix is checked on a real build.
+The next, 0.4.0 beta 5, carries the command bar's site icons (S-361, issue 58), and is cut
+once issue 45's three sidebar ideas (S-359) are in as well: the owner, 2026-11-01, asked for
+them to be built here, as settings, since no pull requests came.
 Google's schedule puts M157 on stable on 2026-11-03.
 
 S-306, shorter test runs, is the unfinished item of the 2026-10-26 order. Its Mac half
@@ -149,7 +151,7 @@ Rows the specs still leave open. M10 is in ROADMAP's order (ADR 0021).
 
 | Id | Item | Feature / spec | Notes |
 |---|---|---|---|
-| S-359 | Three sidebar ideas from GitHub issue 45 | `docs/features/sidebar.md`; `docs/features/settings.md` | Waits for MathHue's pull requests: the owner said yes to all three on 2026-10-27. A faster reveal of a hidden sidebar and its animation speed; the address, Back, Forward and Reload at the top of the sidebar, with essentials per row; an Appearance section (window colour, Space colour strength, tab highlight). Their patches were numbered 0109 to 0111, which the series now uses: they are renumbered when they come. |
+| S-359 | Three sidebar ideas from GitHub issue 45 | `docs/features/sidebar.md`; `docs/features/settings.md` | Being built here: the owner said yes to all three on 2026-10-27, and on 2026-11-01, with no pull request come, asked for them as settings, in full, before 0.4.0 beta 5. A faster reveal of a hidden sidebar and its animation speed; the address, Back, Forward and Reload at the top of the sidebar, with essentials per row; an Appearance section (window colour, Space colour strength, tab highlight). |
 | S-360 | Peek attached to its tab, as Arc's (GitHub issue 62) | `docs/features/peek.md` | Later, the owner (2026-10-30): it redesigns peek. Today a peek is a little window (peek P6), as the spec says; the reporter, on 0.4.0 beta 1 on the Mac, asks for Arc's peek, which sits over its tab and holds it until closed. |
 | S-320 | Bookmarks pinned in the sidebar (GitHub issue 40) | `docs/features/pins.md`; `docs/features/sidebar.md` | Waits for the owner. Space pins and essentials already keep a page and cost nothing while asleep (H3). Answer that pins serve this and ask what is missing, or plan a bookmarks block. |
 | S-235 | Apps made from pages, the rest | `docs/features/web-apps.md`; ADR 0025 | Built in patch 0072. The Windows install was seen on beta 20; Add to Dock from the command bar was seen on the Mac. Enter in the dialog is `MakeAppTest.EnterInTheDialogAddsTheApp`. Left, planned in the spec: Wa8 (the Windows browser test of the Start menu entry), Wa16 and Wa17 (updates and uninstall with an app installed), Wa19 (a missing Mac launcher), Wa22 (launching an app with Stedding quit). |

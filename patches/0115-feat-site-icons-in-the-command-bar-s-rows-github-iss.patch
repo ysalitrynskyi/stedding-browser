@@ -1,0 +1,913 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Sun, 1 Nov 2026 00:13:41 -0400
+Subject: feat: site icons in the command bar's rows (GitHub issue 58)
+
+Each row in tabs mode starts with an icon: an open tab's own, the
+page's icon from the profile's favicons for a closed tab, a History or
+Bookmark suggestion, a typed site and a blank document, the magnifier
+for a search and the information glyph for site information. A lookup
+is made once per page per bar and its answer replaces the default page
+icon in place, without rebuilding the list. A browser page's glyph is
+drawn in the bar's secondary text colour. Actions mode draws no icons.
+What a row says besides its title -- "Switch to Tab", the Space, the
+kind of suggestion, a chord -- is now its own smaller label at the
+row's right end, and the Independent-session mark follows the Space's
+name there.
+
+Why: GitHub issue 58; the owner said yes on 2026-10-30 (BACKLOG S-361):
+the rows could only be told apart by reading them.
+Removable when: never as a feature; the rows are Stedding's own views.
+---
+ chrome/browser/ui/views/commandbar/BUILD.gn   |   9 +
+ .../ui/views/commandbar/command_bar_view.cc   | 260 ++++++++++++++++--
+ .../ui/views/commandbar/command_bar_view.h    |  27 +-
+ .../commandbar/command_bar_view_unittest.cc   | 122 ++++++++
+ chrome/test/stedding/BUILD.gn                 |   3 +
+ .../test/stedding/command_bar_browsertest.cc  | 151 ++++++++++
+ 6 files changed, 543 insertions(+), 29 deletions(-)
+
+diff --git a/chrome/browser/ui/views/commandbar/BUILD.gn b/chrome/browser/ui/views/commandbar/BUILD.gn
+index 02ab76dfcf0fe..6bf98b5bd92d6 100644
+--- a/chrome/browser/ui/views/commandbar/BUILD.gn
++++ b/chrome/browser/ui/views/commandbar/BUILD.gn
+@@ -61,6 +61,13 @@ source_set("commandbar") {
+     "//third_party/metrics_proto",
+     "//components/tabs:public",
+     "//ui/views/controls/webview",
++    # commandbar K38 (GitHub issue 58): the rows' site icons.
++    "//chrome/browser/favicon",
++    "//chrome/browser/ui:tab_ui_helper",
++    "//components/favicon/core",
++    "//components/favicon_base",
++    "//components/keyed_service/core",
++    "//components/vector_icons",
+   ]
+ }
+ 
+@@ -84,6 +91,8 @@ source_set("unit_tests") {
+     "//components/prefs",
+     "//components/search_engines",
+     "//components/tabs:public",
++    # commandbar K38: the glyphs the rows draw.
++    "//components/vector_icons",
+     "//content/public/browser",
+     "//ui/base",
+     "//ui/events",
+diff --git a/chrome/browser/ui/views/commandbar/command_bar_view.cc b/chrome/browser/ui/views/commandbar/command_bar_view.cc
+index a0dae2989eeba..eb7ae530d4125 100644
+--- a/chrome/browser/ui/views/commandbar/command_bar_view.cc
++++ b/chrome/browser/ui/views/commandbar/command_bar_view.cc
+@@ -16,6 +16,7 @@
+ #include "base/functional/callback.h"
+ #include "base/functional/callback_helpers.h"
+ #include "base/memory/ptr_util.h"
++#include "base/notreached.h"
+ #include "base/strings/string_split.h"
+ #include "base/strings/string_util.h"
+ #include "base/strings/strcat.h"
+@@ -28,6 +29,8 @@
+ #include "chrome/browser/autocomplete/chrome_autocomplete_provider_client.h"
+ #include "chrome/browser/autocomplete/chrome_autocomplete_scheme_classifier.h"
+ #include "chrome/browser/browser_process.h"
++#include "chrome/browser/favicon/favicon_service_factory.h"
++#include "chrome/browser/favicon/favicon_utils.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/search_engines/template_url_service_factory.h"
+ #include "chrome/browser/sessions/tab_restore_service_factory.h"
+@@ -64,12 +67,15 @@
+ #include "chrome/browser/ui/stedding/stedding_command_ids.h"
+ #include "chrome/browser/ui/stedding/stedding_prefs.h"
+ #include "chrome/browser/ui/stedding/tab_names.h"
++#include "chrome/browser/ui/tab_ui_helper.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "chrome/browser/ui/views/commandbar/address_row_controls.h"
+ #include "chrome/browser/ui/views/frame/browser_view.h"
+ #include "chrome/browser/ui/views/stedding/isolation_mark_view.h"
+ #include "chrome/browser/ui/webui/stedding_archive/stedding_archive_ui.h"
+ #include "chrome/common/webui_url_constants.h"
++#include "components/favicon/core/favicon_service.h"
++#include "components/keyed_service/core/service_access_type.h"
+ #include "components/omnibox/browser/autocomplete_classifier.h"
+ #include "components/omnibox/browser/autocomplete_controller.h"
+ #include "components/omnibox/browser/autocomplete_controller_config.h"
+@@ -85,6 +91,7 @@
+ #include "components/search_engines/template_url_starter_pack_data.h"
+ #include "components/sessions/core/tab_restore_service.h"
+ #include "components/url_formatter/url_formatter.h"
++#include "components/vector_icons/vector_icons.h"
+ #include "content/public/browser/navigation_controller.h"
+ #include "content/public/browser/web_contents.h"
+ #include "third_party/metrics_proto/omnibox_event.pb.h"
+@@ -97,6 +104,8 @@
+ #include "ui/events/event.h"
+ #include "ui/events/event_observer.h"
+ #include "ui/events/keycodes/keyboard_codes.h"
++#include "ui/gfx/favicon_size.h"
++#include "ui/gfx/image/image_skia_operations.h"
+ #include "ui/gfx/geometry/rect_conversions.h"
+ #include "ui/gfx/geometry/rect_f.h"
+ #include "ui/gfx/range/range.h"
+@@ -158,6 +167,8 @@ constexpr int kPanelInset = 12;
+ constexpr int kPanelElevation = 16;
+ constexpr int kPanelEdge = 1;
+ constexpr int kFontSizeDelta = 3;
++// commandbar K38: between a row's icon and its title.
++constexpr int kRowIconSpacing = 12;
+ constexpr size_t kMaxTabResults = 4;
+ constexpr size_t kMaxSuggestions = 6;
+ // archive A10: archived rows, after the open tabs.
+@@ -520,7 +531,8 @@ class CommandBarView::ResultRow : public views::LabelButton {
+   // an Independent session, in the secondary label colour, quieter than the
+   // row's text; `mark` says it, as the row's tooltip and, after its text,
+   // its accessible description.
+-  void SetIsolationMark(const std::u16string& mark) {
++  void SetIsolationMark(const std::u16string& mark, bool after_detail) {
++    mark_after_detail_ = after_detail;
+     if (!mark_) {
+       mark_ = AddChildView(std::make_unique<stedding::IsolationMarkView>(
+           stedding::IsolationMarkView::Form::kGlyph,
+@@ -530,13 +542,42 @@ class CommandBarView::ResultRow : public views::LabelButton {
+     GetViewAccessibility().SetDescription(mark);
+   }
+ 
+-  // views::LayoutDelegate: the row's own layout, and the mark right after
+-  // its text, which gives up its end when the row is too short for both.
++  // K38 (GitHub issue 58): the row's title, and what it says at its right
++  // end -- "Switch to Tab", the Space, the kind of suggestion, a chord --
++  // quieter than the title, so the titles line up and read first. `name`
++  // is what the row says to assistive technology.
++  void SetTexts(const std::u16string& title,
++                const std::u16string& detail,
++                const std::u16string& name) {
++    SetText(title);
++    if (!detail_ && !detail.empty()) {
++      detail_ = AddChildView(std::make_unique<views::Label>());
++      detail_->SetFontList(
++          label()->font_list().DeriveWithSizeDelta(kDetailFontSizeDelta));
++      detail_->SetEnabledColor(ui::kColorLabelForegroundSecondary);
++      detail_->SetAutoColorReadabilityEnabled(false);
++      detail_->SetElideBehavior(gfx::ELIDE_TAIL);
++      // A press on the words is a press on the row.
++      detail_->SetCanProcessEventsWithinSubtree(false);
++    }
++    if (detail_) {
++      detail_->SetText(detail);
++      detail_->SetVisible(!detail.empty());
++    }
++    // After SetText, which names the row by its title alone.
++    GetViewAccessibility().SetName(name);
++  }
++
++  // views::LayoutDelegate: the row's own layout, with the detail at the
++  // row's end and the mark right after the text that names the Space. The
++  // title gives up its end first; the detail never takes more than
++  // kDetailShare of what the title would have.
+   views::ProposedLayout CalculateProposedLayout(
+       const views::SizeBounds& size_bounds) const override {
+     views::ProposedLayout layout =
+         views::LabelButton::CalculateProposedLayout(size_bounds);
+-    if (!mark_ || !size_bounds.is_fully_bounded()) {
++    const bool has_detail = detail_ && detail_->GetVisible();
++    if ((!mark_ && !has_detail) || !size_bounds.is_fully_bounded()) {
+       return layout;
+     }
+     const auto text = std::ranges::find_if(
+@@ -546,18 +587,54 @@ class CommandBarView::ResultRow : public views::LabelButton {
+     if (text == layout.child_layouts.end()) {
+       return layout;
+     }
+-    const stedding::MarkAfterText placed = stedding::PlaceMarkAfterText(
+-        text->bounds, size_bounds.width().value() - GetInsets().right());
+-    text->bounds = placed.label;
+     const auto* const manager =
+         static_cast<const views::LayoutManagerBase*>(GetLayoutManager());
+-    layout.child_layouts.emplace_back(
+-        mark_.get(), manager && manager->CanBeVisible(mark_), placed.mark,
+-        views::SizeBounds());
++    const int height = size_bounds.height().value();
++    int end = size_bounds.width().value() - GetInsets().right();
++    std::optional<gfx::Rect> mark;
++    if (mark_ && has_detail && mark_after_detail_) {
++      constexpr int kSize = stedding::IsolationMarkView::kGlyphSize;
++      mark = gfx::Rect(end - kSize, (height - kSize) / 2, kSize, kSize);
++      end -= kSize + stedding::IsolationMarkView::kGapAfterText;
++    }
++    if (has_detail) {
++      const gfx::Size wanted = detail_->GetPreferredSize({});
++      const int room = std::max(0, end - text->bounds.x());
++      const int width =
++          std::min(wanted.width(), static_cast<int>(room * kDetailShare));
++      const gfx::Rect detail(end - width, (height - wanted.height()) / 2,
++                             width, wanted.height());
++      layout.child_layouts.emplace_back(
++          detail_.get(), manager && manager->CanBeVisible(detail_), detail,
++          views::SizeBounds());
++      end = detail.x() - kDetailGap;
++      if (text->bounds.right() > end) {
++        text->bounds.set_width(std::max(0, end - text->bounds.x()));
++      }
++    }
++    if (mark_ && !mark) {
++      const stedding::MarkAfterText placed =
++          stedding::PlaceMarkAfterText(text->bounds, end);
++      text->bounds = placed.label;
++      mark = placed.mark;
++    }
++    if (mark_) {
++      layout.child_layouts.emplace_back(
++          mark_.get(), manager && manager->CanBeVisible(mark_), *mark,
++          views::SizeBounds());
++    }
+     return layout;
+   }
+ 
+  private:
++  // K38: the detail's type against the title's, the room between them, and
++  // the most of the title's room the detail takes.
++  static constexpr int kDetailFontSizeDelta = -2;
++  static constexpr int kDetailGap = 16;
++  static constexpr float kDetailShare = 0.4f;
++
++  raw_ptr<views::Label> detail_ = nullptr;
++  bool mark_after_detail_ = false;
+   raw_ptr<stedding::IsolationMarkView> mark_ = nullptr;
+   bool chosen_ = false;
+   base::RepeatingCallback<void(views::View*)> ground_;
+@@ -1734,10 +1811,12 @@ void CommandBarView::UpdateResults(const std::u16string& query,
+     if (replace_current_tab_) {
+       verb = u"Go";
+     }
+-    rows_.push_back({.kind = RowKind::kTyped,
+-                     .title = query_,
+-                     .detail = std::move(verb),
+-                     .url = typed.destination});
++    rows_.push_back(
++        {.kind = RowKind::kTyped,
++         .title = query_,
++         .detail = std::move(verb),
++         .url = typed.destination,
++         .icon_page = typed.is_search ? GURL() : typed.destination});
+     // K18 (BACKLOG S-352): an extension's keyword hands the query to the
+     // extension, which the row names. Should it not take it after all, Enter
+     // searches the whole text, as `url` says.
+@@ -1746,6 +1825,7 @@ void CommandBarView::UpdateResults(const std::u16string& query,
+             &rows_.back().extension_input)) {
+       rows_.back().extension_id = extension->GetExtensionId();
+       rows_.back().detail = extension->short_name();
++      rows_.back().icon_page = GURL();
+     }
+     // Before the omnibox starts: its first answer can arrive inside Start()
+     // and complete this row (K23).
+@@ -1861,7 +1941,8 @@ void CommandBarView::UpdateResults(const std::u16string& query,
+                          ? u"Archived"
+                          : u"Archived · " + base::UTF8ToUTF16(tab.space_name),
+            .archived_id = tab.id,
+-           .mark = std::move(mark)});
++           .mark = std::move(mark),
++           .icon_page = tab.url});
+       ++archived_rows;
+     }
+   }
+@@ -1887,7 +1968,8 @@ void CommandBarView::UpdateResults(const std::u16string& query,
+       rows_.push_back({.kind = RowKind::kNewDocument,
+                        .title = title,
+                        .detail = base::UTF8ToUTF16(url.host()),
+-                       .url = url});
++                       .url = url,
++                       .icon_page = url});
+       ++document_rows;
+     }
+   }
+@@ -1975,10 +2057,14 @@ void CommandBarView::ShowSuggestions(const AutocompleteResult& result) {
+       // direction mark, hid that address, or reordered it.
+       title = IsolatedTitle(match.description) + u"  ·  " + match.contents;
+     }
+-    rows_.push_back({.kind = RowKind::kSuggestion,
+-                     .title = std::move(title),
+-                     .detail = std::move(kind),
+-                     .url = match.destination_url});
++    rows_.push_back(
++        {.kind = RowKind::kSuggestion,
++         .title = std::move(title),
++         .detail = std::move(kind),
++         .url = match.destination_url,
++         .icon_page = AutocompleteMatch::IsSearchType(match.type)
++                          ? GURL()
++                          : match.destination_url});
+     ++suggestion_rows;
+   }
+   // Where the chosen page is now, or the typed row when it is gone: never
+@@ -2028,6 +2114,7 @@ void CommandBarView::ShowInlineCompletion(const std::u16string& rest,
+   typed.title = query_ + rest;
+   typed.detail = replace_current_tab_ ? u"Go" : u"Open";
+   typed.url = url;
++  typed.icon_page = url;
+   field_->SetText(typed.title);
+   // Reversed, as the address bar selects it: the caret stays after what was
+   // typed and the rest is selected.
+@@ -2217,13 +2304,17 @@ void CommandBarView::RebuildRows() {
+   }
+   for (size_t i = 0; i < rows_.size(); ++i) {
+     const Row& row = rows_[i];
+-    auto view = std::make_unique<ResultRow>(
+-        base::BindRepeating(&CommandBarView::RunRow, base::Unretained(this),
+-                            i),
+-        RowText(row));
++    auto view = std::make_unique<ResultRow>(base::BindRepeating(
++        &CommandBarView::RunRow, base::Unretained(this), i));
+     StyleRow(view.get());
++    view->SetTexts(row.title, row.detail, RowText(row));
++    view->SetImageModel(views::Button::STATE_NORMAL, RowIcon(row));
+     if (!row.mark.empty()) {
+-      view->SetIsolationMark(row.mark);
++      // The mark goes after the words that name its Space: the detail of a
++      // tab or a closed tab, the title of a Move Tab row.
++      view->SetIsolationMark(row.mark,
++                             /*after_detail=*/row.kind == RowKind::kTab ||
++                                 row.kind == RowKind::kArchived);
+     }
+     view->SetGroundCallback(base::BindRepeating(
+         &CommandBarView::PaintRowGround, base::Unretained(this)));
+@@ -2237,10 +2328,12 @@ void CommandBarView::RebuildRows() {
+ }
+ 
+ void CommandBarView::RedrawRow(size_t index) {
+-  // One label changes; the list is not rebuilt, so the chosen row and a
+-  // click in progress stay where they are (K5).
++  // One row's words and icon change; the list is not rebuilt, so the chosen
++  // row and a click in progress stay where they are (K5).
+   if (auto* const view = views::AsViewClass<ResultRow>(RowView(index))) {
+-    view->SetText(RowText(rows_[index]));
++    const Row& row = rows_[index];
++    view->SetTexts(row.title, row.detail, RowText(row));
++    view->SetImageModel(views::Button::STATE_NORMAL, RowIcon(row));
+   }
+ }
+ 
+@@ -2250,6 +2343,115 @@ std::u16string CommandBarView::RowText(const Row& row) {
+                             : row.title + kRowSeparator + row.detail;
+ }
+ 
++ui::ImageModel CommandBarView::RowIcon(const Row& row) {
++  // K38 (GitHub issue 58): actions mode lists commands, read by their
++  // names, so its rows draw no icon and none of them is indented.
++  if (mode_ != Mode::kTabs) {
++    return ui::ImageModel();
++  }
++  const auto glyph = [](const gfx::VectorIcon& icon) {
++    return ui::ImageModel::FromVectorIcon(
++        icon, ui::kColorLabelForegroundSecondary, gfx::kFaviconSize);
++  };
++  switch (row.kind) {
++    case RowKind::kTab: {
++      // The icon the sidebar draws for the tab, a sleeping one's included.
++      tabs::TabInterface* const tab = row.tab.Get();
++      TabUIHelper* const helper = tab ? TabUIHelper::From(tab) : nullptr;
++      const ui::ImageModel favicon =
++          helper ? helper->GetFavicon() : ui::ImageModel();
++      if (favicon.IsEmpty()) {
++        return favicon::GetDefaultFaviconModel(ui::kColorDialogBackground);
++      }
++      // A browser page's icon is a glyph drawn for the tab strip's colours.
++      // The bar draws it in its own, as the split's mini toolbar does, or a
++      // dark glyph vanishes against a dark bar.
++      if (helper->ShouldThemifyFavicon()) {
++        return ui::ImageModel::FromImageGenerator(
++            base::BindRepeating(
++                [](const ui::ImageModel& source,
++                   const ui::ColorProvider* provider) {
++                  return gfx::ImageSkiaOperations::CreateColorMask(
++                      source.Rasterize(provider),
++                      provider->GetColor(ui::kColorLabelForegroundSecondary));
++                },
++                favicon),
++            gfx::Size(gfx::kFaviconSize, gfx::kFaviconSize));
++      }
++      return favicon;
++    }
++    case RowKind::kSiteSearch:
++      return glyph(vector_icons::kSearchIcon);
++    case RowKind::kSiteInformation:
++      return glyph(vector_icons::kInfoIcon);
++    case RowKind::kTyped:
++    case RowKind::kSuggestion:
++      if (!row.icon_page.is_valid()) {
++        return glyph(vector_icons::kSearchIcon);
++      }
++      return SiteIcon(row.icon_page);
++    case RowKind::kArchived:
++    case RowKind::kNewDocument:
++      return SiteIcon(row.icon_page);
++    case RowKind::kAction:
++      return ui::ImageModel();
++  }
++  NOTREACHED();
++}
++
++ui::ImageModel CommandBarView::SiteIcon(const GURL& page) {
++  const auto known = site_icons_.find(page);
++  if (known == site_icons_.end()) {
++    // Asked once: an empty entry stands for the lookup until it answers,
++    // and for a page the profile has no icon for after.
++    site_icons_[page];
++    // A private window reads the profile's icons, as its address field does,
++    // and writes none.
++    favicon::FaviconService* const service =
++        page.is_valid() ? FaviconServiceFactory::GetForProfile(
++                              browser_->GetProfile(),
++                              ServiceAccessType::EXPLICIT_ACCESS)
++                        : nullptr;
++    if (service) {
++      service->GetFaviconImageForPageURL(
++          page,
++          base::BindOnce(&CommandBarView::OnSiteIcon,
++                         weak_factory_.GetWeakPtr(), page),
++          &site_icon_tracker_);
++    }
++  } else if (!known->second.IsEmpty()) {
++    return ui::ImageModel::FromImage(known->second);
++  }
++  return favicon::GetDefaultFaviconModel(ui::kColorDialogBackground);
++}
++
++void CommandBarView::OnSiteIcon(
++    const GURL& page,
++    const favicon_base::FaviconImageResult& result) {
++  if (result.image.IsEmpty()) {
++    return;
++  }
++  site_icons_[page] = result.image;
++  // The rows that wait for it take it in place: the list is not rebuilt, so
++  // the chosen row and a click in progress stay where they are (K5).
++  for (size_t i = 0; i < rows_.size(); ++i) {
++    if (rows_[i].icon_page != page) {
++      continue;
++    }
++    if (auto* const view = views::AsViewClass<ResultRow>(RowView(i))) {
++      view->SetImageModel(views::Button::STATE_NORMAL, RowIcon(rows_[i]));
++    }
++  }
++}
++
++ui::ImageModel CommandBarView::row_icon_for_testing(size_t index) {
++  auto* const view = views::AsViewClass<ResultRow>(RowView(index));
++  if (!view || !view->GetImageModel(views::Button::STATE_NORMAL)) {
++    return ui::ImageModel();
++  }
++  return *view->GetImageModel(views::Button::STATE_NORMAL);
++}
++
+ WindowOpenDisposition CommandBarView::TypedDisposition() const {
+   return replace_current_tab_ || ActiveTabIsUntouchedNewTab()
+              ? WindowOpenDisposition::CURRENT_TAB
+@@ -2321,6 +2523,8 @@ views::View* CommandBarView::RowView(size_t index) {
+ 
+ void CommandBarView::StyleRow(ResultRow* row) {
+   row->SetHorizontalAlignment(gfx::ALIGN_LEFT);
++  // K38: the room between a row's icon and its title.
++  row->SetImageLabelSpacing(kRowIconSpacing);
+   row->SetPreferredSize(gfx::Size(kBarWidth, kRowHeight));
+   row->SetBorder(views::CreateEmptyBorder(gfx::Insets::VH(0, 14)));
+   row->row_label()->SetFontList(
+diff --git a/chrome/browser/ui/views/commandbar/command_bar_view.h b/chrome/browser/ui/views/commandbar/command_bar_view.h
+index 3c8e039d772d1..e21204acee738 100644
+--- a/chrome/browser/ui/views/commandbar/command_bar_view.h
++++ b/chrome/browser/ui/views/commandbar/command_bar_view.h
+@@ -5,6 +5,7 @@
+ #ifndef CHROME_BROWSER_UI_VIEWS_COMMANDBAR_COMMAND_BAR_VIEW_H_
+ #define CHROME_BROWSER_UI_VIEWS_COMMANDBAR_COMMAND_BAR_VIEW_H_
+ 
++#include <map>
+ #include <memory>
+ #include <optional>
+ #include <string>
+@@ -15,8 +16,10 @@
+ #include "base/memory/raw_ptr.h"
+ #include "base/memory/weak_ptr.h"
+ #include "base/scoped_observation.h"
++#include "base/task/cancelable_task_tracker.h"
+ #include "build/build_config.h"
+ #include "chrome/browser/ui/archive/archived_tabs.h"
++#include "components/favicon_base/favicon_types.h"
+ #include "components/omnibox/browser/autocomplete_controller.h"
+ #include "components/omnibox/browser/autocomplete_result.h"
+ #include "components/sessions/core/session_id.h"
+@@ -24,6 +27,8 @@
+ #include "ui/base/accelerators/accelerator.h"
+ #include "ui/base/window_open_disposition.h"
+ #include "ui/base/metadata/metadata_header_macros.h"
++#include "ui/base/models/image_model.h"
++#include "ui/gfx/image/image.h"
+ #include "ui/gfx/range/range.h"
+ #include "ui/views/controls/textfield/textfield_controller.h"
+ #include "ui/views/focus/focus_manager.h"
+@@ -122,6 +127,9 @@ class CommandBarView : public views::View,
+   std::u16string row_mark_for_testing(size_t index) const {
+     return rows_.at(index).mark;
+   }
++  // K38: the icon drawn at row `index`'s start; empty for a row that draws
++  // none.
++  ui::ImageModel row_icon_for_testing(size_t index);
+   size_t selected_row_for_testing() const { return selected_; }
+   // Shows `result` as the omnibox's providers' answer for the text in the
+   // field, the way OnResultChanged does (K4, K23). A unit test has no
+@@ -268,6 +276,11 @@ class CommandBarView : public views::View,
+     // BACKLOG S-352): the extension, and the query handed to it.
+     std::string extension_id;
+     std::u16string extension_input;
++    // K38 (GitHub issue 58): the page whose site icon the row draws at its
++    // start -- a closed tab's, a suggestion's, the typed address's, a blank
++    // document's. Empty for a search, which draws the magnifier, and for a
++    // row that draws its tab's own icon, another glyph or none.
++    GURL icon_page;
+   };
+ 
+   // K27: the site search a chip names. The keyword is the key: the engine
+@@ -358,8 +371,16 @@ class CommandBarView : public views::View,
+   void RebuildRows();
+   // Redraws the text of row `index` without rebuilding the list.
+   void RedrawRow(size_t index);
+-  // What row `row` draws: its title, and its detail at the right.
++  // What row `row` says to assistive technology: its title, then its detail.
+   static std::u16string RowText(const Row& row);
++  // K38: the icon row `row` draws at its start; empty in actions mode.
++  ui::ImageModel RowIcon(const Row& row);
++  // K38: `page`'s site icon from the profile's favicons, or the default
++  // page icon until the lookup answers or when it finds none. Each page is
++  // looked up once per bar.
++  ui::ImageModel SiteIcon(const GURL& page);
++  void OnSiteIcon(const GURL& page,
++                  const favicon_base::FaviconImageResult& result);
+ 
+   // Moves the chosen row by `delta` (arrow keys), past either end to the
+   // other when `wrap` (the held chord, T39).
+@@ -423,6 +444,10 @@ class CommandBarView : public views::View,
+   std::optional<SiteChip> chip_;
+   raw_ptr<views::ScrollView> list_ = nullptr;
+   std::vector<Row> rows_;
++  // K38: the site icons looked up for rows, by page; an empty image while
++  // the lookup is out or when it found none.
++  std::map<GURL, gfx::Image> site_icons_;
++  base::CancelableTaskTracker site_icon_tracker_;
+   std::vector<stedding::ArchivedTab> ArchivedTabs() const;
+   base::RepeatingCallback<std::vector<stedding::ArchivedTab>()>
+       archived_source_for_testing_;
+diff --git a/chrome/browser/ui/views/commandbar/command_bar_view_unittest.cc b/chrome/browser/ui/views/commandbar/command_bar_view_unittest.cc
+index 7e8047885951c..8834399bf39d2 100644
+--- a/chrome/browser/ui/views/commandbar/command_bar_view_unittest.cc
++++ b/chrome/browser/ui/views/commandbar/command_bar_view_unittest.cc
+@@ -57,10 +57,12 @@
+ #include "components/sessions/core/session_id.h"
+ #include "components/tabs/public/folder_tab_collection.h"
+ #include "components/tabs/public/tab_interface.h"
++#include "components/vector_icons/vector_icons.h"
+ #include "content/public/browser/web_contents.h"
+ #include "testing/gtest/include/gtest/gtest.h"
+ #include "ui/base/accelerators/accelerator.h"
+ #include "ui/base/l10n/l10n_util.h"
++#include "ui/base/models/image_model.h"
+ #include "ui/base/window_open_disposition.h"
+ #include "ui/compositor/layer.h"
+ #include "ui/decoration/shadow.h"
+@@ -3012,4 +3014,124 @@ TEST_F(CommandBarViewTest, TheSiteInformationRowFollowsTheAddress) {
+   base::RunLoop().RunUntilIdle();
+ }
+ 
++// commandbar K38 (GitHub issue 58): a tab's row draws the tab's own icon at
++// its start, and what it says at its right -- "Switch to Tab", or the Space
++// -- apart at the row's end, smaller than the title, which gives up its end
++// first. Assistive technology still hears the title, then the detail.
++TEST_F(CommandBarViewTest, ATabRowDrawsItsIconAndWhereItGoesAtItsEnd) {
++  AddTab(browser(), GURL("https://example.com/"));
++  SetTabName(browser(), tabs().GetActiveTab(),
++             u"A tab with a name long enough to run the whole width of a row "
++             u"and on, past where the row says where it goes");
++  auto bar = std::make_unique<CommandBarView>(browser());
++  ASSERT_LE(1u, bar->row_count_for_testing());
++  ASSERT_EQ(u"Switch to Tab", bar->row_detail_for_testing(0));
++  const ui::ImageModel icon = bar->row_icon_for_testing(0);
++  EXPECT_FALSE(icon.IsEmpty()) << "the tab's row draws no icon";
++  EXPECT_FALSE(icon.IsVectorIcon()) << "a glyph, not the tab's icon";
++
++  views::View* const row = bar->row_view_for_testing(0);
++  ASSERT_TRUE(row);
++  row->SetSize(gfx::Size(600, 44));
++  views::test::RunScheduledLayout(row);
++  std::vector<const views::Label*> labels;
++  for (const views::View* child : row->children()) {
++    const auto* const label = views::AsViewClass<views::Label>(child);
++    if (label && label->GetVisible()) {
++      labels.push_back(label);
++    }
++  }
++  ASSERT_EQ(2u, labels.size()) << "the title and the detail";
++  const views::Label* const title = labels[0];
++  const views::Label* const detail = labels[1];
++  EXPECT_EQ(u"Switch to Tab", detail->GetText());
++  EXPECT_EQ(row->width() - row->GetInsets().right(), detail->bounds().right())
++      << "the detail is not at the row's end";
++  EXPECT_EQ(detail->GetPreferredSize({}).width(), detail->width())
++      << "the detail gave up its words to the title";
++  EXPECT_LT(title->bounds().right(), detail->x()) << "the title runs into it";
++  EXPECT_LT(detail->font_list().GetFontSize(),
++            title->font_list().GetFontSize());
++  const std::u16string name(row->GetViewAccessibility().GetCachedName());
++  EXPECT_TRUE(name.starts_with(bar->row_title_for_testing(0)) &&
++              name.ends_with(u"Switch to Tab"))
++      << base::UTF16ToUTF8(name);
++}
++
++// commandbar K38, sessions S32: a tab of another Space says the Space at the
++// row's end, and the mark of its Independent session follows the Space's
++// name there, inside the row.
++TEST_F(CommandBarViewTest, TheMarkFollowsTheSpaceAtTheRowsEnd) {
++  const spaces::SpaceId home = model().active_id();
++  spaces::Space* const work = model().AddSpace("Work", SK_ColorBLUE);
++  model().SetSpaceIsolated(work->id(), true);
++  model().SetActiveSpace(work->id());
++  AddTab(browser(), GURL("https://work.example/"));
++  model().SetActiveSpace(home);
++
++  auto bar = std::make_unique<CommandBarView>(browser());
++  size_t in_work = bar->row_count_for_testing();
++  for (size_t i = 0; i < bar->row_count_for_testing(); ++i) {
++    if (bar->row_detail_for_testing(i) == u"Work") {
++      in_work = i;
++    }
++  }
++  ASSERT_LT(in_work, bar->row_count_for_testing());
++  ASSERT_FALSE(bar->row_mark_for_testing(in_work).empty());
++  views::View* const row = bar->row_view_for_testing(in_work);
++  ASSERT_TRUE(row);
++  row->SetSize(gfx::Size(600, 44));
++  views::test::RunScheduledLayout(row);
++  const views::View* const mark = FindShownIsolationMark(row);
++  ASSERT_TRUE(mark) << "the row draws no mark";
++  const views::Label* detail = nullptr;
++  for (const views::View* child : row->children()) {
++    const auto* const label = views::AsViewClass<views::Label>(child);
++    if (label && label->GetVisible() && label->GetText() == u"Work") {
++      detail = label;
++    }
++  }
++  ASSERT_TRUE(detail) << "the Space is not drawn apart";
++  EXPECT_GE(mark->x(), detail->bounds().right()) << "after the Space";
++  EXPECT_EQ(row->width() - row->GetInsets().right(), mark->bounds().right())
++      << "the mark is not at the row's end";
++}
++
++// commandbar K38: a search draws the magnifier, a closed tab its page's icon
++// (the default page icon here: a unit test's profile has no favicons), and
++// actions mode, which lists commands, draws none.
++TEST_F(CommandBarViewTest, EachRowDrawsWhatItOpens) {
++  AddTab(browser(), GURL("https://example.com/"));
++  auto bar = std::make_unique<CommandBarView>(browser());
++  bar->SetArchivedSourceForTesting(base::BindLambdaForTesting([] {
++                                     ArchivedTab closed;
++                                     closed.id =
++                                         SessionID::FromSerializedValue(77);
++                                     closed.title = u"Old page";
++                                     closed.url = GURL("https://old.example/");
++                                     return std::vector<ArchivedTab>{closed};
++                                   }),
++                                   base::BindRepeating([](SessionID) {}));
++  bar->PrefillForTesting(u"old page");
++  ASSERT_LE(2u, bar->row_count_for_testing());
++  const ui::ImageModel typed = bar->row_icon_for_testing(0);
++  ASSERT_TRUE(typed.IsVectorIcon()) << "the typed search draws no glyph";
++  EXPECT_EQ(&vector_icons::kSearchIcon, typed.GetVectorIcon().vector_icon());
++  const size_t closed = RowIndex(*bar, u"Old page");
++  ASSERT_LT(closed, bar->row_count_for_testing());
++  const ui::ImageModel page = bar->row_icon_for_testing(closed);
++  EXPECT_FALSE(page.IsEmpty()) << "the closed tab's row draws no icon";
++  EXPECT_FALSE(page.IsVectorIcon() &&
++               page.GetVectorIcon().vector_icon() == &vector_icons::kSearchIcon)
++      << "a page drawn as a search";
++
++  auto actions = std::make_unique<CommandBarView>(browser());
++  actions->SetModeForTesting(CommandBarView::Mode::kActions);
++  ASSERT_LE(1u, actions->row_count_for_testing());
++  for (size_t i = 0; i < actions->row_count_for_testing(); ++i) {
++    EXPECT_TRUE(actions->row_icon_for_testing(i).IsEmpty())
++        << base::UTF16ToUTF8(actions->row_title_for_testing(i));
++  }
++}
++
+ }  // namespace stedding
+diff --git a/chrome/test/stedding/BUILD.gn b/chrome/test/stedding/BUILD.gn
+index b08cfe2010e69..b4d3283317069 100644
+--- a/chrome/test/stedding/BUILD.gn
++++ b/chrome/test/stedding/BUILD.gn
+@@ -128,6 +128,9 @@ test("stedding_browser_tests") {
+     "//chrome/browser/favicon",
+     "//components/favicon/content",
+     "//components/favicon/core",
++    # commandbar K38: the icons the bar's rows draw.
++    "//chrome/browser/ui:tab_ui_helper",
++    "//components/favicon_base",
+     "//chrome/browser/content_settings:content_settings_factory",
+     "//chrome/browser/devtools",
+     "//chrome/browser/devtools:test_support",
+diff --git a/chrome/test/stedding/command_bar_browsertest.cc b/chrome/test/stedding/command_bar_browsertest.cc
+index 856d86317cb9f..2734aab61c8b7 100644
+--- a/chrome/test/stedding/command_bar_browsertest.cc
++++ b/chrome/test/stedding/command_bar_browsertest.cc
+@@ -25,6 +25,7 @@
+ #include "chrome/app/chrome_command_ids.h"
+ #include "chrome/browser/bookmarks/bookmark_model_factory.h"
+ #include "chrome/browser/extensions/chrome_test_extension_loader.h"
++#include "chrome/browser/favicon/favicon_service_factory.h"
+ #include "chrome/browser/history/history_service_factory.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/search_engines/template_url_service_factory.h"
+@@ -42,6 +43,7 @@
+ #include "chrome/browser/ui/stedding/dark_pages.h"
+ #include "chrome/browser/ui/stedding/screenshot/screenshot_capture.h"
+ #include "chrome/browser/ui/stedding/stedding_prefs.h"
++#include "chrome/browser/ui/tab_ui_helper.h"
+ #include "chrome/browser/ui/tabs/tab_enums.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "chrome/browser/ui/tabs/vertical_tab_strip_state_controller.h"
+@@ -58,6 +60,9 @@
+ #include "chrome/test/base/ui_test_utils.h"
+ #include "components/bookmarks/browser/bookmark_model.h"
+ #include "components/bookmarks/test/bookmark_test_helpers.h"
++#include "components/favicon/content/content_favicon_driver.h"
++#include "components/favicon/core/favicon_service.h"
++#include "components/favicon_base/favicon_types.h"
+ #include "components/history/core/browser/history_service.h"
+ #include "components/history/core/browser/history_types.h"
+ #include "components/history/core/test/history_service_test_util.h"
+@@ -81,10 +86,12 @@
+ #include "extensions/test/test_extension_dir.h"
+ #include "net/dns/mock_host_resolver.h"
+ #include "net/test/embedded_test_server/embedded_test_server.h"
++#include "third_party/skia/include/core/SkBitmap.h"
+ #include "third_party/skia/include/core/SkColor.h"
+ #include "ui/base/accelerators/accelerator.h"
+ #include "ui/base/clipboard/clipboard.h"
+ #include "ui/base/clipboard/test/test_clipboard.h"
++#include "ui/base/models/image_model.h"
+ #include "ui/base/window_open_disposition.h"
+ #include "ui/events/event.h"
+ #include "ui/events/event_constants.h"
+@@ -92,7 +99,10 @@
+ #include "ui/gfx/geometry/rect.h"
+ #include "ui/gfx/geometry/rect_conversions.h"
+ #include "ui/gfx/geometry/rect_f.h"
++#include "ui/gfx/image/image.h"
+ #include "ui/views/controls/button/label_button.h"
++#include "ui/views/controls/image_view.h"
++#include "ui/views/controls/label.h"
+ #include "ui/views/controls/scroll_view.h"
+ #include "ui/views/controls/textfield/textfield.h"
+ #include "ui/views/test/views_test_utils.h"
+@@ -1631,6 +1641,147 @@ IN_PROC_BROWSER_TEST_F(CommandBarKeysTest, EveryRowItDrawsIsTheRowEnterRuns) {
+ // the active Space's two, then the first two of the other Space. The first
+ // four matches of the strip were listed: the other Space's four, and none
+ // of the Space on screen.
++// commandbar K38 (GitHub issue 58): the rows draw their sites' icons. A page
++// from history and a closed tab of it take the icon the profile keeps for that
++// page once the lookup answers, in place, and so does the typed row once it
++// completes to the site; an open tab's row draws the icon its tab shows.
++IN_PROC_BROWSER_TEST_F(CommandBarKeysTest, TheRowsDrawTheirSitesIcons) {
++  history::HistoryService* const history =
++      HistoryServiceFactory::GetForProfile(browser()->GetProfile(),
++                                           ServiceAccessType::EXPLICIT_ACCESS);
++  ASSERT_TRUE(history);
++  ui_test_utils::WaitForHistoryToLoad(history);
++  const GURL page("https://iconsite.test/");
++  history->AddPageWithDetails(page, u"Iconsite home", /*visit_count=*/3,
++                              /*typed_count=*/2,
++                              base::Time::Now() - base::Hours(1),
++                              /*hidden=*/false, history::SOURCE_BROWSED);
++  favicon::FaviconService* const favicons =
++      FaviconServiceFactory::GetForProfile(browser()->GetProfile(),
++                                           ServiceAccessType::EXPLICIT_ACCESS);
++  ASSERT_TRUE(favicons);
++  SkBitmap red;
++  red.allocN32Pixels(16, 16);
++  red.eraseColor(SK_ColorRED);
++  favicons->SetFavicons({page}, GURL("https://iconsite.test/favicon.ico"),
++                        favicon_base::IconType::kFavicon,
++                        gfx::Image::CreateFrom1xBitmap(red));
++  history::BlockUntilHistoryProcessesPendingRequests(history);
++
++  // Whether `icon` is the red one stored for the page.
++  const auto is_red = [](const ui::ImageModel& icon) {
++    if (!icon.IsImage()) {
++      return false;
++    }
++    const SkBitmap bitmap = icon.GetImage().AsBitmap();
++    return !bitmap.isNull() && bitmap.getColor(bitmap.width() / 2,
++                                               bitmap.height() / 2) ==
++                                   SK_ColorRED;
++  };
++
++  {
++    SCOPED_TRACE("HistoryAClosedTabAndTheTypedSite");
++    stedding::CommandBarView* const bar = OpenBar();
++    ASSERT_TRUE(bar);
++    bar->SetArchivedSourceForTesting(
++        base::BindRepeating(
++            [](const GURL& url) {
++              std::vector<stedding::ArchivedTab> archived(1);
++              archived[0].id = SessionID::FromSerializedValue(911);
++              archived[0].title = u"Iconsite closed";
++              archived[0].url = url;
++              return archived;
++            },
++            page),
++        base::BindRepeating([](SessionID) {}));
++    Type(bar, u"iconsite");
++    // The first row whose title holds `title` (a suggestion's is set apart
++    // in isolates, K4); the count when none.
++    const auto row = [&](std::u16string_view title) {
++      for (size_t i = 0; i < bar->row_count_for_testing(); ++i) {
++        if (bar->row_title_for_testing(i).find(title) !=
++            std::u16string::npos) {
++          return i;
++        }
++      }
++      return bar->row_count_for_testing();
++    };
++    EXPECT_TRUE(base::test::RunUntil([&]() {
++      const size_t closed = row(u"Iconsite closed");
++      return closed < bar->row_count_for_testing() &&
++             is_red(bar->row_icon_for_testing(closed));
++    })) << "the closed tab's row never drew the page's icon";
++    EXPECT_TRUE(base::test::RunUntil([&]() {
++      const size_t from_history = row(u"Iconsite home");
++      return from_history < bar->row_count_for_testing() &&
++             bar->row_detail_for_testing(from_history) == u"History" &&
++             is_red(bar->row_icon_for_testing(from_history));
++    })) << "the History row never drew the page's icon";
++    EXPECT_TRUE(base::test::RunUntil([&]() {
++      return bar->row_detail_for_testing(0) == u"Open" &&
++             is_red(bar->row_icon_for_testing(0));
++    })) << "the typed row, completed to the site, never drew its icon";
++    bar->Close();
++    base::RunLoop().RunUntilIdle();
++  }
++
++  {
++    SCOPED_TRACE("AnOpenTab");
++    ASSERT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
++        browser(),
++        embedded_test_server()->GetURL("a.test",
++                                       "/favicon/page_with_favicon.html"),
++        WindowOpenDisposition::NEW_FOREGROUND_TAB,
++        ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
++    tabs::TabInterface* const tab =
++        browser()->GetTabStripModel()->GetActiveTab();
++    favicon::ContentFaviconDriver* const driver =
++        favicon::ContentFaviconDriver::FromWebContents(tab->GetContents());
++    ASSERT_TRUE(driver);
++    ASSERT_TRUE(base::test::RunUntil([&]() { return driver->FaviconIsValid(); }))
++        << "the page's icon never loaded";
++    stedding::CommandBarView* const bar = OpenBar();
++    ASSERT_TRUE(bar);
++    const std::u16string title = tab->GetTitle();
++    size_t found = bar->row_count_for_testing();
++    for (size_t i = 0; i < bar->row_count_for_testing(); ++i) {
++      if (bar->row_title_for_testing(i) == title &&
++          bar->row_detail_for_testing(i) == u"Switch to Tab") {
++        found = i;
++      }
++    }
++    ASSERT_LT(found, bar->row_count_for_testing()) << "no row for the tab";
++    EXPECT_EQ(TabUIHelper::From(tab)->GetFavicon(),
++              bar->row_icon_for_testing(found));
++    // Drawn: the icon at the row's start, then the title, then "Switch to
++    // Tab" at the row's end.
++    auto* const drawn =
++        views::AsViewClass<views::LabelButton>(bar->row_view_for_testing(found));
++    ASSERT_TRUE(drawn);
++    views::test::RunScheduledLayout(drawn);
++    const auto image = std::ranges::find_if(
++        drawn->children(), [](const views::View* child) {
++          return views::IsViewClass<views::ImageView>(child);
++        });
++    ASSERT_NE(image, drawn->children().end()) << "the row draws no icon";
++    const gfx::Rect icon = (*image)->bounds();
++    EXPECT_EQ(gfx::Size(16, 16), icon.size());
++    std::vector<const views::Label*> words;
++    for (const views::View* child : drawn->children()) {
++      const auto* const label = views::AsViewClass<views::Label>(child);
++      if (label && label->GetVisible()) {
++        words.push_back(label);
++      }
++    }
++    ASSERT_EQ(2u, words.size());
++    EXPECT_GT(words[0]->x(), icon.right()) << "the title is not after the icon";
++    EXPECT_EQ(u"Switch to Tab", words[1]->GetText());
++    EXPECT_GT(words[1]->x(), words[0]->bounds().right());
++    bar->Close();
++    base::RunLoop().RunUntilIdle();
++  }
++}
++
+ IN_PROC_BROWSER_TEST_F(CommandBarKeysTest, TheActiveSpacesTabsAreListedFirst) {
+   spaces::SpaceModel* const model = spaces::SpaceModel::From(browser());
+   ASSERT_TRUE(model);

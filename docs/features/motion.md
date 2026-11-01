@@ -1,6 +1,6 @@
 # Feature: Motion
 
-Status: **O1–O8 built.** `MotionFramesTest` is a browser test. A Windows run of it is not recorded.
+Status: **O1–O9 built.** `MotionFramesTest` is a browser test. A Windows run of it is not recorded.
 Owner: `docs/ROADMAP.md` ("The quality bar"). The gate is `stedding::ShouldAnimate` (patch 0017).
 
 `stedding::ShouldAnimate()` is false when the system asks for reduced motion, when `stedding.ui.animate` is off, or when a capture sets `reduce_motion`. Every Stedding animation asks it.
@@ -17,6 +17,7 @@ Owner: `docs/ROADMAP.md` ("The quality bar"). The gate is `stedding::ShouldAnima
 | O6 | In the Stedding window the sidebar's collapse and expand, and the rail's hover overlay, ease out (`gfx::Tween::EASE_OUT`) over Chromium's times: 350 ms to collapse and 400 ms to expand on the Mac, 250 ms to open the hover overlay and 200 ms to close it. Nothing moves when `ShouldAnimate()` is false (O2). | browser: `MotionFramesTest.SidebarMotionsEaseOut` | built |
 | O7 | A Space switch keeps the Space being left (spaces B32) as a recording of what its rows painted. The compositor rasters that recording with its other layers. The switch does not draw a bitmap of the list on the UI thread. | browser: `MotionFramesTest.TheSpaceLeftIsARecordingOfItsRows`, `MotionFramesTest.SpaceSlide` | built |
 | O8 | The omnibox's hidden popups (the results dropdown and the AI mode popup) follow a moving location bar once its bounds have stayed put for 200 ms, not at every frame. A sidebar collapse, a window resize or a full-screen change no longer moves those hidden windows and lays out their hidden pages on every frame. A popup opened before that update is placed and sized from the location bar as it is then, so it opens at the field. Each hidden popup takes a new place, its origin and its width, at most once per collapse or expand; its height follows its page's answer to a layout, which can land at any time (S-366). | browser: `MotionFramesTest.HiddenOmniboxPopupsFollowTheSidebarOnceAMotion`, `MotionFramesTest.TheOmniboxDropdownOpensAtTheFieldAfterTheWindowChanges` | built |
+| O9 | The sidebar's speed is the user's (settings T38, `stedding.sidebar.animation_speed`; GitHub issue 45): Normal runs the sidebar's motions over O6's times, Fast over half of them, Instant not at all. It reaches the sidebar's collapse and expand, its hover overlay and a hidden sidebar's slide (sidebar Y19), which `BrowserAnimationController` runs over the motion's time scaled on the clock, every keyframe in its place, and the Space slide, its swipe's settle and the swipe's following of the fingers (spaces B32, B35). At Instant a swipe switches when the fingers lift, as with no motion. `stedding::ShouldAnimate()` false stills the sidebar at every speed; Instant leaves the overlays' motion alone. | unit: `MotionTest.TheSidebarsSpeedScalesItsMotions`; browser: `MotionFramesTest.TheSidebarsSpeedSetsItsMotions` | built |
 
 ## Running the tests
 

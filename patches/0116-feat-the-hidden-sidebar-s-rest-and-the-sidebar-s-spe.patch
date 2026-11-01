@@ -1,0 +1,848 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Sun, 1 Nov 2026 01:09:16 -0400
+Subject: feat: the hidden sidebar's rest and the sidebar's speed as settings
+
+GitHub issue 45, its first idea. "Show a hidden sidebar" sets the rest at
+the window's edge before a hidden sidebar slides in: at once, 0.05, 0.1
+(the default), 0.25 or 0.5 seconds, and 0.2 seconds more at the right
+edge, where the page's scroll bar is; both of the reveal's timers read it.
+"Sidebar animation" runs the sidebar's collapse, expand, hover overlay,
+hidden slide and Space slide at Normal, Fast (half the time) or Instant:
+the animation controller scales the clock's run of a motion, so every
+keyframe keeps its place. "Hover delay" gains 0.25 and 0.5 seconds. Each
+has a Settings row and a cycling command bar row.
+
+Why: GitHub issue 45; the owner said yes on 2026-10-27 and asked on
+2026-11-01 for it to be built here.
+Removable when: never as a feature; the controller hunk goes if Chromium
+gives its browser animations a speed of its own.
+---
+ .../api/settings_private/prefs_util.cc        |  5 ++
+ .../stedding_page/stedding_page.html.ts       | 32 +++++++++
+ .../settings/stedding_page/stedding_page.ts   |  2 +
+ .../animation/browser_animation_controller.cc | 22 +++++-
+ .../animation/browser_animation_controller.h  |  5 ++
+ chrome/browser/ui/stedding/motion.cc          | 18 +++++
+ chrome/browser/ui/stedding/motion.h           | 11 +++
+ chrome/browser/ui/stedding/motion_unittest.cc | 25 +++++++
+ chrome/browser/ui/stedding/stedding_prefs.cc  |  5 ++
+ chrome/browser/ui/stedding/stedding_prefs.h   | 20 ++++++
+ .../ui/stedding/stedding_prefs_unittest.cc    |  9 +++
+ .../ui/views/commandbar/command_bar_view.cc   | 22 ++++++
+ .../commandbar/command_bar_view_unittest.cc   | 15 ++++
+ .../frame/vertical_tab_strip_region_view.cc   | 57 +++++++++++----
+ .../frame/vertical_tab_strip_region_view.h    |  2 +
+ .../browser/ui/webui/settings/settings_ui.cc  | 22 ++++++
+ .../stedding/motion_frames_browsertest.cc     | 57 +++++++++++++++
+ .../stedding/settings_spaces_browsertest.cc   | 72 +++++++++++++++----
+ .../stedding/sidebar_forms_browsertest.cc     | 46 ++++++++++++
+ 19 files changed, 417 insertions(+), 30 deletions(-)
+
+diff --git a/chrome/browser/extensions/api/settings_private/prefs_util.cc b/chrome/browser/extensions/api/settings_private/prefs_util.cc
+index 700e2635439c4..944a36cdca951 100644
+--- a/chrome/browser/extensions/api/settings_private/prefs_util.cc
++++ b/chrome/browser/extensions/api/settings_private/prefs_util.cc
+@@ -337,6 +337,11 @@ const PrefsUtil::TypedPrefMap& PrefsUtil::GetAllowlistedKeys() {
+       settings_api::PrefType::kBoolean;
+   (*s_allowlist)[stedding::prefs::kSidebarHoverDelayMs] =
+       settings_api::PrefType::kNumber;
++  // sidebar Y19, motion O9 (GitHub issue 45).
++  (*s_allowlist)[stedding::prefs::kSidebarRevealDelayMs] =
++      settings_api::PrefType::kNumber;
++  (*s_allowlist)[stedding::prefs::kSidebarAnimationSpeed] =
++      settings_api::PrefType::kNumber;
+   (*s_allowlist)[stedding::prefs::kSidebarClosedForm] =
+       settings_api::PrefType::kNumber;
+   (*s_allowlist)[stedding::prefs::kSidebarPageFlush] =
+diff --git a/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts b/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
+index 25a7229611a73..f5a7715d79b94 100644
+--- a/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
++++ b/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
+@@ -39,6 +39,23 @@ export function getHtml(this: SettingsSteddingPageElement) {
+         ]}">
+     </settings-dropdown-menu>
+   </div>
++  <div class="hr settings-box">
++    <div class="start" id="revealDelayLabel">
++      <div class="label">$i18n{steddingRevealDelayLabel}</div>
++      <div class="secondary">$i18n{steddingRevealDelaySubLabel}</div>
++    </div>
++    <settings-dropdown-menu id="revealDelayMs"
++        pref-key="stedding.sidebar.reveal_delay_ms"
++        label="$i18n{steddingRevealDelayLabel}"
++        .menuOptions="${[
++          {value: 0, name: '$i18n{steddingRevealDelay0}'},
++          {value: 50, name: '$i18n{steddingRevealDelay50}'},
++          {value: 100, name: '$i18n{steddingRevealDelay100}'},
++          {value: 250, name: '$i18n{steddingRevealDelay250}'},
++          {value: 500, name: '$i18n{steddingRevealDelay500}'},
++        ]}">
++    </settings-dropdown-menu>
++  </div>
+   <settings-toggle-button
+       id="pageFlush"
+       class="hr"
+@@ -123,6 +140,21 @@ export function getHtml(this: SettingsSteddingPageElement) {
+         .menuOptions="${this.hoverDelayOptions_}">
+     </settings-dropdown-menu>
+   </div>
++  <div class="hr settings-box">
++    <div class="start" id="animationSpeedLabel">
++      <div class="label">$i18n{steddingAnimationSpeedLabel}</div>
++      <div class="secondary">$i18n{steddingAnimationSpeedSubLabel}</div>
++    </div>
++    <settings-dropdown-menu id="animationSpeed"
++        pref-key="stedding.sidebar.animation_speed"
++        label="$i18n{steddingAnimationSpeedLabel}"
++        .menuOptions="${[
++          {value: 0, name: '$i18n{steddingAnimationSpeedNormal}'},
++          {value: 1, name: '$i18n{steddingAnimationSpeedFast}'},
++          {value: 2, name: '$i18n{steddingAnimationSpeedInstant}'},
++        ]}">
++    </settings-dropdown-menu>
++  </div>
+   <settings-toggle-button
+       id="hideAddressRow"
+       class="hr"
+diff --git a/chrome/browser/resources/settings/stedding_page/stedding_page.ts b/chrome/browser/resources/settings/stedding_page/stedding_page.ts
+index d9a930e615d34..9c6e850b123fa 100644
+--- a/chrome/browser/resources/settings/stedding_page/stedding_page.ts
++++ b/chrome/browser/resources/settings/stedding_page/stedding_page.ts
+@@ -198,7 +198,9 @@ export class SettingsSteddingPageElement extends
+   // names as plain text, so "Chromium's" read "Chromium&#39;s"; the names
+   // come from loadTimeData, as externalOptions_() takes its first.
+   protected accessor hoverDelayOptions_: DropdownMenuOptionList = [
++    {value: 250, name: loadTimeData.getString('steddingHoverDelay025s')},
+     {value: 0, name: loadTimeData.getString('steddingHoverDelayChromium')},
++    {value: 500, name: loadTimeData.getString('steddingHoverDelay05s')},
+     {value: 1000, name: loadTimeData.getString('steddingHoverDelay1s')},
+     {value: 2000, name: loadTimeData.getString('steddingHoverDelay2s')},
+     {value: 5000, name: loadTimeData.getString('steddingHoverDelay5s')},
+diff --git a/chrome/browser/ui/animation/browser_animation_controller.cc b/chrome/browser/ui/animation/browser_animation_controller.cc
+index 161552153a307..1ca529454d526 100644
+--- a/chrome/browser/ui/animation/browser_animation_controller.cc
++++ b/chrome/browser/ui/animation/browser_animation_controller.cc
+@@ -495,12 +495,19 @@ class BrowserAnimationController::GroupData : public gfx::AnimationDelegate {
+     current_motion_info_ = std::move(motion_info);
+     UpdateCurrentValues(base::Milliseconds(0), 0.0, params);
+     // Stedding: the sidebar's expand, collapse and expand-on-hover motions
+-    // follow the system and the preference (docs/features/motion.md O2).
++    // follow the system and the preference (docs/features/motion.md O2), and
++    // the sidebar's speed (O9; the vertical strip is the one group this
++    // controller runs): Fast runs the motion in half the time and Instant
++    // ends it at once. The values follow the clock's share of the run, so
++    // every keyframe keeps its place in the motion.
++    last_run_duration_ = base::TimeDelta();
+     if (gfx::Animation::ShouldRenderRichAnimation() &&
+-        stedding::ShouldAnimate(controller_->prefs())) {
++        stedding::ShouldAnimateSidebar(controller_->prefs())) {
+       MaybeCreateAnimator();
+       MaybeStartLogger();
+-      animator_->Start(current_motion_info_.duration);
++      last_run_duration_ = current_motion_info_.duration *
++                           stedding::SidebarMotionScale(controller_->prefs());
++      animator_->Start(last_run_duration_);
+       Notify(BrowserAnimationUpdate::kStarted);
+     } else {
+       Notify(BrowserAnimationUpdate::kStarted);
+@@ -541,6 +548,8 @@ class BrowserAnimationController::GroupData : public gfx::AnimationDelegate {
+     return std::nullopt;
+   }
+ 
++  base::TimeDelta last_run_duration() const { return last_run_duration_; }
++
+   // Returns the current motion duration.
+   base::TimeDelta GetMotionDuration() const {
+     if (!current_motion_) {
+@@ -718,6 +727,8 @@ class BrowserAnimationController::GroupData : public gfx::AnimationDelegate {
+   ValueLookup current_values_;
+   BrowserAnimationMotion current_motion_;
+   MotionInfo current_motion_info_;
++  // Stedding (motion O9): the clock time the last Start() ran its motion over.
++  base::TimeDelta last_run_duration_;
+   std::optional<Animator> animator_;
+   std::optional<Logger> logger_;
+ 
+@@ -766,6 +777,11 @@ base::TimeDelta BrowserAnimationController::GetMotionDuration(
+   return GetGroupData(group).GetMotionDuration();
+ }
+ 
++base::TimeDelta BrowserAnimationController::GetLastRunDurationForTesting(
++    BrowserAnimationGroup group) const {
++  return GetGroupData(group).last_run_duration();
++}
++
+ void BrowserAnimationController::Start(
+     BrowserAnimationGroup group,
+     BrowserAnimationMotion motion,
+diff --git a/chrome/browser/ui/animation/browser_animation_controller.h b/chrome/browser/ui/animation/browser_animation_controller.h
+index 46450f865b5cf..1e50927e5a135 100644
+--- a/chrome/browser/ui/animation/browser_animation_controller.h
++++ b/chrome/browser/ui/animation/browser_animation_controller.h
+@@ -180,6 +180,11 @@ class BrowserAnimationController {
+   void SetAnimationContainerForTesting(BrowserAnimationGroup group,
+                                        gfx::AnimationContainer* container);
+ 
++  // Stedding (motion O9): how long the last motion of `group` ran on the
++  // clock, at the sidebar's speed; zero when it ended at once.
++  base::TimeDelta GetLastRunDurationForTesting(
++      BrowserAnimationGroup group) const;
++
+  private:
+   // Holds data about a currently running motion.
+   class GroupData;
+diff --git a/chrome/browser/ui/stedding/motion.cc b/chrome/browser/ui/stedding/motion.cc
+index 92b8bb0c314a7..13565d5398187 100644
+--- a/chrome/browser/ui/stedding/motion.cc
++++ b/chrome/browser/ui/stedding/motion.cc
+@@ -24,6 +24,24 @@ bool ShouldAnimate(const PrefService* prefs) {
+   return !prefs || prefs->GetBoolean(prefs::kUiAnimate);
+ }
+ 
++double SidebarMotionScale(const PrefService* prefs) {
++  if (!prefs) {
++    return 1.0;
++  }
++  switch (prefs->GetInteger(prefs::kSidebarAnimationSpeed)) {
++    case prefs::kSidebarAnimationFast:
++      return 0.5;
++    case prefs::kSidebarAnimationInstant:
++      return 0.0;
++    default:
++      return 1.0;
++  }
++}
++
++bool ShouldAnimateSidebar(const PrefService* prefs) {
++  return ShouldAnimate(prefs) && SidebarMotionScale(prefs) > 0.0;
++}
++
+ float SpaceSwipeShift(float offset, float width, bool has_neighbour) {
+   if (has_neighbour) {
+     return std::clamp(offset, -std::max(width, 0.0f), std::max(width, 0.0f));
+diff --git a/chrome/browser/ui/stedding/motion.h b/chrome/browser/ui/stedding/motion.h
+index 781be668c8259..f296378871201 100644
+--- a/chrome/browser/ui/stedding/motion.h
++++ b/chrome/browser/ui/stedding/motion.h
+@@ -18,6 +18,17 @@ namespace stedding {
+ // profile's; null means no profile is at hand and only the system decides.
+ bool ShouldAnimate(const PrefService* prefs);
+ 
++// motion O9 (GitHub issue 45): how the sidebar's own motions -- its collapse
++// and expand, the hover overlay, a hidden sidebar's slide and the Space slide
++// -- scale their times, from `stedding.sidebar.animation_speed`: 1 at Normal,
++// 0.5 at Fast, 0 at Instant. A null prefs pointer, or a value Settings does
++// not offer, is Normal.
++double SidebarMotionScale(const PrefService* prefs);
++
++// Whether the sidebar's own motions run: ShouldAnimate(), and a speed other
++// than Instant.
++bool ShouldAnimateSidebar(const PrefService* prefs);
++
+ // docs/features/spaces.md B32: when the active Space changes, the sidebar's
+ // list slides in from the side of the Space being entered. +1 means from the
+ // right (a Space later in the switcher), -1 from the left, 0 no slide (the
+diff --git a/chrome/browser/ui/stedding/motion_unittest.cc b/chrome/browser/ui/stedding/motion_unittest.cc
+index 15021ae9f968c..7460e432745ae 100644
+--- a/chrome/browser/ui/stedding/motion_unittest.cc
++++ b/chrome/browser/ui/stedding/motion_unittest.cc
+@@ -50,6 +50,31 @@ TEST_F(MotionTest, CaptureParameterStillsIt) {
+   EXPECT_FALSE(ShouldAnimate(&prefs_));
+ }
+ 
++// motion O9 (GitHub issue 45): Normal keeps the sidebar's times, Fast halves
++// them, Instant stills the sidebar alone, and "Animate the sidebar and
++// overlays" off stills it whatever the speed.
++TEST_F(MotionTest, TheSidebarsSpeedScalesItsMotions) {
++  gfx::Animation::SetPrefersReducedMotionForTesting(false);
++  EXPECT_EQ(1.0, SidebarMotionScale(&prefs_));
++  EXPECT_EQ(1.0, SidebarMotionScale(nullptr));
++  EXPECT_TRUE(ShouldAnimateSidebar(&prefs_));
++  prefs_.SetInteger(prefs::kSidebarAnimationSpeed,
++                    prefs::kSidebarAnimationFast);
++  EXPECT_EQ(0.5, SidebarMotionScale(&prefs_));
++  EXPECT_TRUE(ShouldAnimateSidebar(&prefs_));
++  prefs_.SetInteger(prefs::kSidebarAnimationSpeed,
++                    prefs::kSidebarAnimationInstant);
++  EXPECT_EQ(0.0, SidebarMotionScale(&prefs_));
++  EXPECT_FALSE(ShouldAnimateSidebar(&prefs_));
++  EXPECT_TRUE(ShouldAnimate(&prefs_)) << "the overlays still move";
++  prefs_.SetInteger(prefs::kSidebarAnimationSpeed, 7);
++  EXPECT_EQ(1.0, SidebarMotionScale(&prefs_)) << "an unknown value is Normal";
++  prefs_.SetInteger(prefs::kSidebarAnimationSpeed,
++                    prefs::kSidebarAnimationFast);
++  prefs_.SetBoolean(prefs::kUiAnimate, false);
++  EXPECT_FALSE(ShouldAnimateSidebar(&prefs_));
++}
++
+ }  // namespace
+ // Spaces B32: the next Space comes in from the right, the previous one from
+ // the left, mirrored in a right-to-left UI; nothing slides for the same Space.
+diff --git a/chrome/browser/ui/stedding/stedding_prefs.cc b/chrome/browser/ui/stedding/stedding_prefs.cc
+index 97b9138f56977..5b49b7c7d7fa7 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs.cc
++++ b/chrome/browser/ui/stedding/stedding_prefs.cc
+@@ -65,6 +65,11 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
+   // for more (the owner, 2026-10-20).
+   registry->RegisterIntegerPref(kStartupLoad, 0);
+   registry->RegisterIntegerPref(kSidebarHoverDelayMs, 2000);
++  // sidebar Y19, motion O9 (GitHub issue 45): the edge's rest and the
++  // sidebar's motion as they were before either was a setting.
++  registry->RegisterIntegerPref(kSidebarRevealDelayMs, 100);
++  registry->RegisterIntegerPref(kSidebarAnimationSpeed,
++                                kSidebarAnimationNormal);
+   registry->RegisterIntegerPref(kSidebarClosedForm, kSidebarClosedToIcons);
+   // sidebar Y23: the page keeps its card beside the sidebar until the user
+   // chooses it flush against the window.
+diff --git a/chrome/browser/ui/stedding/stedding_prefs.h b/chrome/browser/ui/stedding/stedding_prefs.h
+index 593817b398ac9..c754d327ea0ef 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs.h
++++ b/chrome/browser/ui/stedding/stedding_prefs.h
+@@ -162,6 +162,26 @@ inline constexpr char kMarkLocalTabs[] = "stedding.sidebar.mark_local_tabs";
+ // expands; a click in the rail starts the wait again. Zero keeps Chromium's
+ // own timing (350 ms, sooner with its velocity heuristic).
+ inline constexpr char kSidebarHoverDelayMs[] = "stedding.sidebar.hover_delay_ms";
++// settings T11 (GitHub issue 45): the pauses Settings offers for it, 0 being
++// Chromium's 0.35 seconds.
++inline constexpr int kSidebarHoverDelayChoices[] = {250, 0, 500, 1000, 2000,
++                                                    5000};
++// sidebar Y19, Y39 (GitHub issue 45): milliseconds the pointer rests at the
++// window's edge before a hidden sidebar slides in. The values Settings and the
++// command bar offer: at once, 0.05, 0.1 (the default), 0.25 and 0.5 seconds.
++// The right edge waits kSidebarRightEdgeExtraMs longer, for the page's scroll
++// bar there.
++inline constexpr char kSidebarRevealDelayMs[] =
++    "stedding.sidebar.reveal_delay_ms";
++inline constexpr int kSidebarRevealDelayChoices[] = {0, 50, 100, 250, 500};
++inline constexpr int kSidebarRightEdgeExtraMs = 200;
++// motion O9 (GitHub issue 45): how fast the sidebar moves -- Normal, at the
++// times motion O6 gives; Fast, in half of them; Instant, not at all.
++inline constexpr char kSidebarAnimationSpeed[] =
++    "stedding.sidebar.animation_speed";
++inline constexpr int kSidebarAnimationNormal = 0;
++inline constexpr int kSidebarAnimationFast = 1;
++inline constexpr int kSidebarAnimationInstant = 2;
+ // sidebar Y19: what a closed sidebar leaves -- 0, the rail of icons
+ // (Chromium's collapsed strip); 1, nothing: the page takes the window edge to
+ // edge, and the pointer at the window's leading edge slides the sidebar in
+diff --git a/chrome/browser/ui/stedding/stedding_prefs_unittest.cc b/chrome/browser/ui/stedding/stedding_prefs_unittest.cc
+index b51a5c12c09a7..a56632a9efaa7 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs_unittest.cc
++++ b/chrome/browser/ui/stedding/stedding_prefs_unittest.cc
+@@ -65,6 +65,15 @@ TEST(SteddingPrefsTest, EveryPreferenceRegistersWithItsDefault) {
+   // tabs R39: no tab sleeps on a timer until the user chooses a time.
+   ASSERT_TRUE(service.FindPreference(kTabsIdleSleepMinutes));
+   EXPECT_EQ(0, service.GetInteger(kTabsIdleSleepMinutes));
++  // sidebar Y11, Y19, motion O9 (GitHub issue 45): the rail's 2 second pause,
++  // the edge's 0.1 second rest and the sidebar's motion at Chromium's times.
++  ASSERT_TRUE(service.FindPreference(kSidebarHoverDelayMs));
++  EXPECT_EQ(2000, service.GetInteger(kSidebarHoverDelayMs));
++  ASSERT_TRUE(service.FindPreference(kSidebarRevealDelayMs));
++  EXPECT_EQ(100, service.GetInteger(kSidebarRevealDelayMs));
++  ASSERT_TRUE(service.FindPreference(kSidebarAnimationSpeed));
++  EXPECT_EQ(kSidebarAnimationNormal,
++            service.GetInteger(kSidebarAnimationSpeed));
+   // tabs R45: a launch loads each window's selected tab only.
+   ASSERT_TRUE(service.FindPreference(kStartupLoad));
+   EXPECT_EQ(0, service.GetInteger(kStartupLoad));
+diff --git a/chrome/browser/ui/views/commandbar/command_bar_view.cc b/chrome/browser/ui/views/commandbar/command_bar_view.cc
+index eb7ae530d4125..03bcdeb51073c 100644
+--- a/chrome/browser/ui/views/commandbar/command_bar_view.cc
++++ b/chrome/browser/ui/views/commandbar/command_bar_view.cc
+@@ -1417,6 +1417,28 @@ void CommandBarView::BuildActions() {
+            {{0, u"The selected tab only"},
+             {1, u"The selected tab and the essentials"},
+             {2, u"The whole active Space"}}},
++          // sidebar Y11, Y19, motion O9 (GitHub issue 45): read at the next
++          // pause, rest or motion.
++          {stedding::prefs::kSidebarHoverDelayMs,
++           u"Hover delay",
++           {{250, u"0.25 seconds"},
++            {0, u"0.35 seconds"},
++            {500, u"0.5 seconds"},
++            {1000, u"1 second"},
++            {2000, u"2 seconds"},
++            {5000, u"5 seconds"}}},
++          {stedding::prefs::kSidebarRevealDelayMs,
++           u"Show a hidden sidebar",
++           {{0, u"At once"},
++            {50, u"After 0.05 seconds"},
++            {100, u"After 0.1 seconds"},
++            {250, u"After 0.25 seconds"},
++            {500, u"After 0.5 seconds"}}},
++          {stedding::prefs::kSidebarAnimationSpeed,
++           u"Sidebar animation",
++           {{stedding::prefs::kSidebarAnimationNormal, u"Normal"},
++            {stedding::prefs::kSidebarAnimationFast, u"Fast"},
++            {stedding::prefs::kSidebarAnimationInstant, u"Instant"}}},
+       };
+       for (const IntPref& pref : kInts) {
+         const int value = prefs->GetInteger(pref.key);
+diff --git a/chrome/browser/ui/views/commandbar/command_bar_view_unittest.cc b/chrome/browser/ui/views/commandbar/command_bar_view_unittest.cc
+index 8834399bf39d2..c3a81f8bf8450 100644
+--- a/chrome/browser/ui/views/commandbar/command_bar_view_unittest.cc
++++ b/chrome/browser/ui/views/commandbar/command_bar_view_unittest.cc
+@@ -1462,6 +1462,21 @@ TEST_F(CommandBarViewTest, APreferenceRowCyclesItsValue) {
+        {u"On startup, load: The selected tab and the essentials ▸",
+         u"On startup, load: The whole active Space ▸",
+         u"On startup, load: The selected tab only ▸"}},
++      // sidebar Y11, Y19, motion O9 (GitHub issue 45): the choices Settings
++      // offers, in its order, wrapping at the end.
++      {"0.35 seconds, then 0.5, then 1", u"hover delay",
++       stedding::prefs::kSidebarHoverDelayMs, nullptr, 3, {0, 500, 1000},
++       {u"Hover delay: 0.35 seconds \u25B8", u"Hover delay: 0.5 seconds \u25B8",
++        u"Hover delay: 1 second \u25B8"}},
++      {"0.25 seconds, then 0.5, then at once", u"show a hidden",
++       stedding::prefs::kSidebarRevealDelayMs, nullptr, 3, {250, 500, 0},
++       {u"Show a hidden sidebar: After 0.25 seconds \u25B8",
++        u"Show a hidden sidebar: After 0.5 seconds \u25B8",
++        u"Show a hidden sidebar: At once \u25B8"}},
++      {"Fast, then Instant, then Normal", u"sidebar animation",
++       stedding::prefs::kSidebarAnimationSpeed, nullptr, 3, {1, 2, 0},
++       {u"Sidebar animation: Fast \u25B8", u"Sidebar animation: Instant \u25B8",
++        u"Sidebar animation: Normal \u25B8"}},
+   };
+ 
+   for (const Row& row : rows) {
+diff --git a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+index 4ba46918af839..cf19a371e55f1 100644
+--- a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
++++ b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+@@ -257,7 +257,6 @@ constexpr int kLeadingEdgeWidth = 6;
+ // padding). The Archived row and the downloads button stand on that column.
+ constexpr int kRowFaviconInset = 8;
+ constexpr int kRowFaviconTitleGap = 8;
+-constexpr base::TimeDelta kLeadingEdgeRevealDelay = base::Milliseconds(100);
+ // settings T11: the pause the hover delay's "Chromium's timing" stands for,
+ // stored as 0.
+ constexpr int kChromiumHoverDelayMs = 350;
+@@ -266,9 +265,10 @@ constexpr int kChromiumHoverDelayMs = 350;
+ // reveal takes only the last 2 DIP there, the screen's edge in a maximized
+ // window, and a longer rest, and a press anywhere drops a pending one; most
+ // of a 15 DIP scrollbar stays the page's, and a pointer thrown at the edge
+-// and pressed at once grabs the scrollbar, not the sidebar.
++// and pressed at once grabs the scrollbar, not the sidebar. The rest there is
++// the user's (stedding.sidebar.reveal_delay_ms) and
++// stedding::prefs::kSidebarRightEdgeExtraMs more.
+ constexpr int kRightEdgeWidth = 2;
+-constexpr base::TimeDelta kRightEdgeRevealDelay = base::Milliseconds(300);
+ constexpr int kSnapDistance = 15;
+ 
+ // sidebar Y8: how far past the rail's own width the strip still wears the
+@@ -2415,8 +2415,10 @@ void VerticalTabStripRegionView::SlideInSpaceList(const spaces::SpaceId& from,
+       tab_strip_view() ? tab_strip_view()->unpinned_tabs_scroll_view() : nullptr;
+   spaces::SpaceModel* const model =
+       spaces::SpaceModel::From(browser_view()->browser());
++  // motion O9: Instant shows the new Space at once, as no motion does.
+   if (!list || !model ||
+-      !stedding::ShouldAnimate(browser_view()->GetProfile()->GetPrefs())) {
++      !stedding::ShouldAnimateSidebar(
++          browser_view()->GetProfile()->GetPrefs())) {
+     DropOutgoingSpace();
+     return;
+   }
+@@ -2460,8 +2462,8 @@ void VerticalTabStripRegionView::SlideInSpaceList(const spaces::SpaceId& from,
+     layer->SetOpacity(swiped ? stedding::kSpaceSwipeEntryOpacity : 0.0f);
+     ui::ScopedLayerAnimationSettings settings(layer->GetAnimator());
+     settings.SetTransitionDuration(
+-        base::Milliseconds(swiped ? stedding::kSpaceSwipeEntryMs
+-                                  : stedding::kSpaceSlideDurationMs));
++        SidebarMotionTime(swiped ? stedding::kSpaceSwipeEntryMs
++                                 : stedding::kSpaceSlideDurationMs));
+     settings.SetTweenType(gfx::Tween::EASE_OUT);
+     layer->SetTransform(gfx::Transform());
+     layer->SetOpacity(1.0f);
+@@ -2483,8 +2485,8 @@ void VerticalTabStripRegionView::SlideInSpaceList(const spaces::SpaceId& from,
+     out.Translate(-direction * distance, 0);
+     snapshot->SlideOut(
+         out,
+-        base::Milliseconds(swiped ? stedding::kSpaceSwipeEntryMs
+-                                  : stedding::kSpaceSlideDurationMs),
++        SidebarMotionTime(swiped ? stedding::kSpaceSwipeEntryMs
++                                 : stedding::kSpaceSlideDurationMs),
+         base::BindOnce(&VerticalTabStripRegionView::DropOutgoingSpaceAfterSlide,
+                        weak_factory_.GetWeakPtr(),
+                        outgoing_space_generation_));
+@@ -2502,7 +2504,8 @@ void VerticalTabStripRegionView::SnapshotOutgoingSpace(
+       tab_strip_view() ? tab_strip_view()->unpinned_tabs_scroll_view()
+                        : nullptr;
+   if (!list || !list->IsDrawn() || list->bounds().IsEmpty() ||
+-      !stedding::ShouldAnimate(browser_view()->GetProfile()->GetPrefs())) {
++      !stedding::ShouldAnimateSidebar(
++          browser_view()->GetProfile()->GetPrefs())) {
+     return;
+   }
+   // A swipe takes the Space's title out with its list (B35); every other
+@@ -2573,7 +2576,10 @@ std::vector<views::View*> VerticalTabStripRegionView::SpaceSwipeViews() {
+ 
+ void VerticalTabStripRegionView::OnSpaceSwipeProgress(float offset) {
+   space_swipe_switching_ = false;
+-  if (!stedding::ShouldAnimate(browser_view()->GetProfile()->GetPrefs())) {
++  // motion O9: at Instant the list does not follow the fingers either; the
++  // swipe switches when they lift, as with no motion (spaces B35).
++  if (!stedding::ShouldAnimateSidebar(
++          browser_view()->GetProfile()->GetPrefs())) {
+     return;
+   }
+   const std::vector<views::View*> moving = SpaceSwipeViews();
+@@ -2607,8 +2613,8 @@ void VerticalTabStripRegionView::OnSpaceSwipeEnd(float offset, bool flick) {
+       stedding::SpaceSwipeCommits(offset, width, flick)) {
+     // SlideInSpaceList runs inside the switch and brings the new Space in
+     // from the side the fingers left.
+-    space_swipe_switching_ =
+-        stedding::ShouldAnimate(browser_view()->GetProfile()->GetPrefs());
++    space_swipe_switching_ = stedding::ShouldAnimateSidebar(
++        browser_view()->GetProfile()->GetPrefs());
+     const spaces::SpaceId before = model->active_id();
+     model->SwitchToNeighbour(forward);
+     const bool slid = !space_swipe_switching_;
+@@ -2628,7 +2634,7 @@ void VerticalTabStripRegionView::OnSpaceSwipeEnd(float offset, bool flick) {
+     settings.SetPreemptionStrategy(
+         ui::LayerAnimator::IMMEDIATELY_ANIMATE_TO_NEW_TARGET);
+     settings.SetTransitionDuration(
+-        base::Milliseconds(stedding::kSpaceSwipeSettleMs));
++        SidebarMotionTime(stedding::kSpaceSwipeSettleMs));
+     settings.SetTweenType(gfx::Tween::EASE_OUT);
+     layer->SetTransform(gfx::Transform());
+     layer->SetOpacity(1.0f);
+@@ -2893,7 +2899,7 @@ void VerticalTabStripRegionView::UpdateExpandOnHoverState(
+   if (hidden) {
+     if (!expand_on_hover_timer_.IsRunning()) {
+       expand_on_hover_timer_.Start(
+-          FROM_HERE, kLeadingEdgeRevealDelay,
++          FROM_HERE, LeadingEdgeRevealDelay(),
+           base::BindOnce(&VerticalTabStripRegionView::AnimateExpandOnHover,
+                          base::Unretained(this),
+                          /*expand=*/true));
+@@ -3074,6 +3080,14 @@ void VerticalTabStripRegionView::RemoveClickHandler() {
+   click_handler_installed_ = false;
+ }
+ 
++base::TimeDelta VerticalTabStripRegionView::SidebarMotionTime(int ms) const {
++  return base::Milliseconds(ms) *
++         stedding::SidebarMotionScale(
++             browser_view() && browser_view()->GetProfile()
++                 ? browser_view()->GetProfile()->GetPrefs()
++                 : nullptr);
++}
++
+ base::TimeDelta VerticalTabStripRegionView::SteddingHoverDelay() const {
+   if (!base::FeatureList::IsEnabled(stedding::kArcStyleWindow) ||
+       !browser_view() || !browser_view()->browser()) {
+@@ -3442,7 +3456,20 @@ void VerticalTabStripRegionView::OnWindowPointerPressed() {
+ }
+ 
+ base::TimeDelta VerticalTabStripRegionView::LeadingEdgeRevealDelay() const {
+-  return IsOnRight() ? kRightEdgeRevealDelay : kLeadingEdgeRevealDelay;
++  // sidebar Y19, Y39 (GitHub issue 45): the rest the user chose, 0.1 seconds
++  // unless they chose another, and longer at the right edge, which the
++  // page's scroll bar shares. A value Settings does not offer is clamped
++  // into the range it does.
++  int delay_ms = 100;
++  if (browser_view() && browser_view()->GetProfile()) {
++    delay_ms = std::clamp(browser_view()->GetProfile()->GetPrefs()->GetInteger(
++                              stedding::prefs::kSidebarRevealDelayMs),
++                          0, 500);
++  }
++  if (IsOnRight()) {
++    delay_ms += stedding::prefs::kSidebarRightEdgeExtraMs;
++  }
++  return base::Milliseconds(delay_ms);
+ }
+ 
+ void VerticalTabStripRegionView::RevealFromLeadingEdge() {
+diff --git a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
+index 53707d31a1f8b..48398140f64de 100644
+--- a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
++++ b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
+@@ -524,6 +524,8 @@ class VerticalTabStripRegionView final
+   // How long the pointer rests at the reveal edge first: longer on the
+   // right, where the edge is also the page's scrollbar (sidebar Y39).
+   base::TimeDelta LeadingEdgeRevealDelay() const;
++  // motion O9: `ms` of a Space's slide or settle at the sidebar's speed.
++  base::TimeDelta SidebarMotionTime(int ms) const;
+   void RevealFromLeadingEdge();
+   bool CanRevealFromLeadingEdge() const;
+   bool IsAtLeadingEdge(gfx::Point point) const;
+diff --git a/chrome/browser/ui/webui/settings/settings_ui.cc b/chrome/browser/ui/webui/settings/settings_ui.cc
+index 1dfa55e1b9fd3..d40940b6f6bf3 100644
+--- a/chrome/browser/ui/webui/settings/settings_ui.cc
++++ b/chrome/browser/ui/webui/settings/settings_ui.cc
+@@ -1132,7 +1132,29 @@ SettingsUI::SettingsUI(content::WebUI* web_ui)
+   html_source->AddString(
+       "steddingHoverDelayChromium",
+       "After 0.35 seconds (Chromium\u2019s timing)");
++  html_source->AddString("steddingHoverDelay025s", "After 0.25 seconds");
++  html_source->AddString("steddingHoverDelay05s", "After 0.5 seconds");
+   html_source->AddString("steddingHoverDelay1s", "After 1 second");
++  // sidebar Y19, Y39, settings T37 (GitHub issue 45).
++  html_source->AddString("steddingRevealDelayLabel", "Show a hidden sidebar");
++  html_source->AddString(
++      "steddingRevealDelaySubLabel",
++      "How long the pointer rests at the window\u2019s edge before the "
++      "sidebar slides in. The right edge waits 0.2 seconds more, for the "
++      "page\u2019s scroll bar.");
++  html_source->AddString("steddingRevealDelay0", "At once");
++  html_source->AddString("steddingRevealDelay50", "After 0.05 seconds");
++  html_source->AddString("steddingRevealDelay100", "After 0.1 seconds");
++  html_source->AddString("steddingRevealDelay250", "After 0.25 seconds");
++  html_source->AddString("steddingRevealDelay500", "After 0.5 seconds");
++  // motion O9, settings T38 (GitHub issue 45).
++  html_source->AddString("steddingAnimationSpeedLabel", "Sidebar animation");
++  html_source->AddString(
++      "steddingAnimationSpeedSubLabel",
++      "How fast the sidebar opens, closes, slides in and changes Space.");
++  html_source->AddString("steddingAnimationSpeedNormal", "Normal");
++  html_source->AddString("steddingAnimationSpeedFast", "Fast");
++  html_source->AddString("steddingAnimationSpeedInstant", "Instant");
+   html_source->AddString("steddingHoverDelay2s", "After 2 seconds");
+   html_source->AddString("steddingHoverDelay5s", "After 5 seconds");
+   html_source->AddString("steddingArchiveKeep30d", "30 days");
+diff --git a/chrome/test/stedding/motion_frames_browsertest.cc b/chrome/test/stedding/motion_frames_browsertest.cc
+index ebcda5e48daf2..c4a3f16407ee9 100644
+--- a/chrome/test/stedding/motion_frames_browsertest.cc
++++ b/chrome/test/stedding/motion_frames_browsertest.cc
+@@ -952,6 +952,63 @@ IN_PROC_BROWSER_TEST_F(MotionFramesTest, SidebarMotionsEaseOut) {
+ #endif
+ }
+ 
++// motion O9 (GitHub issue 45): the sidebar's speed. Normal runs the collapse
++// and the expand over their times, Fast over half of them, and Instant ends
++// each at once with the strip at its end width. The motions' own times, which
++// place their keyframes, are the same at every speed.
++IN_PROC_BROWSER_TEST_F(MotionFramesTest, TheSidebarsSpeedSetsItsMotions) {
++  if (!Animates()) {
++    GTEST_SKIP() << "the machine asks for reduced motion";
++  }
++  const BrowserAnimationController* const controller =
++      BrowserAnimationController::From(browser());
++  const auto time_of = [&](BrowserAnimationMotion motion) {
++    return controller
++        ->GetMotionSpecificationForTesting(
++            TabStripAnimations::kVerticalTabStrip, motion)
++        ->GetDuration();
++  };
++  const base::TimeDelta collapse = time_of(TabStripAnimations::kCollapse);
++  const base::TimeDelta expand = time_of(TabStripAnimations::kExpand);
++  ASSERT_TRUE(collapse.is_positive());
++  PrefService* const prefs = browser()->GetProfile()->GetPrefs();
++  const struct {
++    int speed;
++    double scale;
++    const char* trace;
++  } kSpeeds[] = {
++      {stedding::prefs::kSidebarAnimationNormal, 1.0, "Normal"},
++      {stedding::prefs::kSidebarAnimationFast, 0.5, "Fast"},
++      {stedding::prefs::kSidebarAnimationInstant, 0.0, "Instant"},
++  };
++  for (const auto& each : kSpeeds) {
++    SCOPED_TRACE(each.trace);
++    prefs->SetInteger(stedding::prefs::kSidebarAnimationSpeed, each.speed);
++    for (const bool to_rail : {true, false}) {
++      SCOPED_TRACE(to_rail ? "collapse" : "expand");
++      vertical_tab_strip_state_controller()->RequestCollapse(to_rail);
++      EXPECT_EQ((to_rail ? collapse : expand) * each.scale,
++                controller->GetLastRunDurationForTesting(
++                    TabStripAnimations::kVerticalTabStrip));
++      if (each.scale == 0.0) {
++        EXPECT_FALSE(StripAnimating()) << "Instant still moved";
++      }
++      ASSERT_TRUE(base::test::RunUntil([&]() { return !StripAnimating(); }));
++      EXPECT_EQ(to_rail, vertical_tab_strip_state_controller()->IsCollapsed());
++      views::test::RunScheduledLayout(widget());
++      if (to_rail) {
++        EXPECT_LT(region()->width(), 100) << "not the rail";
++      } else {
++        EXPECT_GT(region()->width(), 150) << "not open";
++      }
++      EXPECT_EQ((to_rail ? collapse : expand),
++                time_of(to_rail ? TabStripAnimations::kCollapse
++                                : TabStripAnimations::kExpand))
++          << "the motion's own time changed";
++    }
++  }
++}
++
+ // The rail's expand-on-hover overlay, opening and closing (sidebar Y10, Y11).
+ IN_PROC_BROWSER_TEST_F(MotionFramesTest, RailHoverOverlay) {
+   if (!Animates()) {
+diff --git a/chrome/test/stedding/settings_spaces_browsertest.cc b/chrome/test/stedding/settings_spaces_browsertest.cc
+index 87e0bbc9d6c9b..63a1a9a4e68a3 100644
+--- a/chrome/test/stedding/settings_spaces_browsertest.cc
++++ b/chrome/test/stedding/settings_spaces_browsertest.cc
+@@ -201,19 +201,20 @@ std::u16string TextUnder(views::View* view) {
+   return text;
+ }
+ 
+-// The hover pause menu (settings T11) as the page draws it, through every
+-// shadow root. With $1 a value of zero or more, the menu first takes it the
++// A Sidebar card's menu -- the hover pause (settings T11), the edge's rest
++// (T37), the sidebar's speed (T38) -- as the page draws it, through every
++// shadow root, found by its preference, $2. With $1 a value of zero or more, the menu first takes it the
+ // way a choice in its open list lands -- the select takes the value and tells
+ // its listeners -- and answers "picked <value>". Otherwise it answers
+ // "<selected value>|<value>=<name>;..." for the choices it offers, or "" until
+ // its preference has arrived and the selection follows it.
++constexpr char kHoverDelayKey[] = "stedding.sidebar.hover_delay_ms";
+ constexpr char kHoverPauseMenu[] = R"(
+   (() => {
+     const find = root => {
+       for (const element of root.querySelectorAll('*')) {
+         if (element.localName === 'settings-dropdown-menu' &&
+-            element.getAttribute('pref-key') ===
+-                'stedding.sidebar.hover_delay_ms') {
++            element.getAttribute('pref-key') === $2) {
+           return element;
+         }
+         if (element.shadowRoot) {
+@@ -751,8 +752,8 @@ IN_PROC_BROWSER_TEST_F(SettingsSpacesTest, TheListRenamesIsolatesAndDeletes) {
+   }
+ }
+ 
+-// settings T11 (BACKLOG S-129): "Open the icons on hover" offers four
+-// pauses, each drawn by its name, and each one picked in the page's own menu
++// settings T11 (BACKLOG S-129, GitHub issue 45): "Open the icons on hover"
++// offers six pauses, each drawn by its name, and each one picked in the page's own menu
+ // is written to the preference the rail reads (sidebar Y11). Chromium's own
+ // timing is written as 0, which the rail reads as Chromium's 0.35 seconds.
+ IN_PROC_BROWSER_TEST_F(SettingsSpacesTest, EachHoverPauseIsWrittenAsPicked) {
+@@ -767,21 +768,23 @@ IN_PROC_BROWSER_TEST_F(SettingsSpacesTest, EachHoverPauseIsWrittenAsPicked) {
+     SCOPED_TRACE("four choices, each by its name");
+     std::string menu;
+     ASSERT_TRUE(base::test::RunUntil([&]() {
+-      menu = content::EvalJs(page, content::JsReplace(kHoverPauseMenu, -1))
++      menu = content::EvalJs(page, content::JsReplace(kHoverPauseMenu, -1,
++                                                      kHoverDelayKey))
+                  .ExtractString();
+       return !menu.empty();
+     }));
+     EXPECT_EQ(
+-        "2000|0=After 0.35 seconds (Chromium\u2019s timing);1000=After 1 second;"
++        "2000|250=After 0.25 seconds;0=After 0.35 seconds (Chromium\u2019s "
++        "timing);500=After 0.5 seconds;1000=After 1 second;"
+         "2000=After 2 seconds;5000=After 5 seconds",
+         menu);
+   }
+   // Each pick differs from the one before it, starting from the default.
+-  for (const int pause : {0, 1000, 5000, 2000}) {
++  for (const int pause : {0, 250, 500, 1000, 5000, 2000}) {
+     SCOPED_TRACE(testing::Message() << "pick " << pause);
+-    EXPECT_EQ(
+-        "picked " + base::NumberToString(pause),
+-        content::EvalJs(page, content::JsReplace(kHoverPauseMenu, pause)));
++    EXPECT_EQ("picked " + base::NumberToString(pause),
++              content::EvalJs(page, content::JsReplace(kHoverPauseMenu, pause,
++                                                       kHoverDelayKey)));
+     EXPECT_TRUE(base::test::RunUntil([&]() {
+       return prefs->GetInteger(stedding::prefs::kSidebarHoverDelayMs) == pause;
+     })) << "the preference holds "
+@@ -789,6 +792,51 @@ IN_PROC_BROWSER_TEST_F(SettingsSpacesTest, EachHoverPauseIsWrittenAsPicked) {
+   }
+ }
+ 
++// settings T37, T38 (GitHub issue 45): "Show a hidden sidebar" offers the
++// edge's five rests and "Sidebar animation" the three speeds, each by its
++// name, and each pick is written to the preference the sidebar reads
++// (sidebar Y19, motion O9).
++IN_PROC_BROWSER_TEST_F(SettingsSpacesTest, TheSidebarsRestAndSpeedAreWritten) {
++  PrefService* const prefs = browser()->GetProfile()->GetPrefs();
++  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(),
++                                           GURL("chrome://settings/stedding")));
++  content::WebContents* const page =
++      browser()->GetTabStripModel()->GetActiveWebContents();
++  const struct {
++    const char* key;
++    const char* offered;
++    std::vector<int> picks;
++  } kMenus[] = {
++      {stedding::prefs::kSidebarRevealDelayMs,
++       "100|0=At once;50=After 0.05 seconds;100=After 0.1 seconds;"
++       "250=After 0.25 seconds;500=After 0.5 seconds",
++       {0, 50, 250, 500, 100}},
++      {stedding::prefs::kSidebarAnimationSpeed,
++       "0|0=Normal;1=Fast;2=Instant",
++       {1, 2, 0}},
++  };
++  for (const auto& each : kMenus) {
++    SCOPED_TRACE(each.key);
++    std::string menu;
++    ASSERT_TRUE(base::test::RunUntil([&]() {
++      menu = content::EvalJs(page,
++                             content::JsReplace(kHoverPauseMenu, -1, each.key))
++                 .ExtractString();
++      return !menu.empty();
++    }));
++    EXPECT_EQ(each.offered, menu);
++    for (const int pick : each.picks) {
++      SCOPED_TRACE(testing::Message() << "pick " << pick);
++      EXPECT_EQ("picked " + base::NumberToString(pick),
++                content::EvalJs(page, content::JsReplace(kHoverPauseMenu, pick,
++                                                         each.key)));
++      EXPECT_TRUE(base::test::RunUntil(
++          [&]() { return prefs->GetInteger(each.key) == pick; }))
++          << "the preference holds " << prefs->GetInteger(each.key);
++    }
++  }
++}
++
+ // spaces B5, settings T9 (BACKLOG S-148; the owner's decision of 2026-10-18;
+ // docs/history/plan-2026-09-26.md WEB-20): Settings' bin, clicked on the
+ // rendered page, asks the question every deletion of a Space asks, over the
+diff --git a/chrome/test/stedding/sidebar_forms_browsertest.cc b/chrome/test/stedding/sidebar_forms_browsertest.cc
+index 72209daedf357..974512337dbd1 100644
+--- a/chrome/test/stedding/sidebar_forms_browsertest.cc
++++ b/chrome/test/stedding/sidebar_forms_browsertest.cc
+@@ -1481,6 +1481,52 @@ IN_PROC_BROWSER_TEST_F(SidebarFormsTest, TheSlidOutSidebarsEssentialsTakeTheirPr
+ // choice of side; everything about the sidebar's edge mirrors -- the card's
+ // gutter, the handle and its reach, the rail's centre, the reveal edge, the
+ // drop arrow -- and the rows keep their reading direction.
++// sidebar Y19, Y39, settings T37 (GitHub issue 45): the rest at the edge
++// before a hidden sidebar slides in is the user's: at once, 0.05, 0.1 (the
++// default), 0.25 or 0.5 seconds at the left edge, and 0.2 seconds more at
++// the right, where the page's scroll bar is.
++IN_PROC_BROWSER_TEST_F(SidebarFormsTest, TheEdgesRestIsTheUsers) {
++  CloseTo(stedding::prefs::kSidebarClosedHidden);
++  views::test::RunScheduledLayout(browser_view()->GetWidget());
++  const base::OneShotTimer& reveal = region()->leading_edge_timer_for_testing();
++  // The rest a pointer at the sidebar's edge starts, or a failure.
++  const auto rest_at_the_edge = [&]() -> std::optional<base::TimeDelta> {
++    views::test::RunScheduledLayout(browser_view()->GetWidget());
++    const gfx::Rect window = browser_view()->GetBoundsInScreen();
++    const gfx::Point edge(
++        prefs()->GetBoolean(stedding::prefs::kSidebarOnRight)
++            ? window.right() - 1
++            : window.x() + 1,
++        window.CenterPoint().y());
++    region()->PlayWindowPointerForTesting(edge, /*pressed=*/false);
++    std::optional<base::TimeDelta> delay;
++    if (reveal.IsRunning()) {
++      delay = reveal.GetCurrentDelay();
++    }
++    // A press drops it, so the next value starts its own rest.
++    region()->PlayWindowPointerForTesting(edge, /*pressed=*/true);
++    region()->SetPointerForTesting(std::nullopt);
++    return delay;
++  };
++  EXPECT_EQ(100, prefs()->GetInteger(stedding::prefs::kSidebarRevealDelayMs));
++  for (const bool on_right : {false, true}) {
++    SCOPED_TRACE(on_right ? "the right edge" : "the left edge");
++    prefs()->SetBoolean(stedding::prefs::kSidebarOnRight, on_right);
++    for (const int ms : stedding::prefs::kSidebarRevealDelayChoices) {
++      SCOPED_TRACE(ms);
++      prefs()->SetInteger(stedding::prefs::kSidebarRevealDelayMs, ms);
++      const std::optional<base::TimeDelta> rest = rest_at_the_edge();
++      ASSERT_TRUE(rest) << "the edge started no reveal";
++      EXPECT_EQ(base::Milliseconds(
++                    ms + (on_right ? stedding::prefs::kSidebarRightEdgeExtraMs
++                                   : 0)),
++                *rest);
++    }
++  }
++  prefs()->SetBoolean(stedding::prefs::kSidebarOnRight, false);
++  prefs()->ClearPref(stedding::prefs::kSidebarRevealDelayMs);
++}
++
+ class SidebarRightTest : public SidebarFormsTest {
+  protected:
+   void SetUpOnMainThread() override {

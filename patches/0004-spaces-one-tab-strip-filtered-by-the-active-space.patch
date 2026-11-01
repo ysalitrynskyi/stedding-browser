@@ -56,6 +56,13 @@ kept as the flexible spacer that holds the Space switcher at the bottom.
 The Space context menu names each icon (Home, Work, ...) and shows a
 swatch beside each colour.
 
+The rebuild also writes the window's vertical tab strip state, its width
+and whether it is collapsed, which Chromium's own rebuild drops: the
+restore after a rebuilt log opened the sidebar at the default width and
+wrote that back (GitHub issue 65, sidebar Y47). A restored window whose
+log has no width it can read takes the width last set, from the profile's
+preference, instead of the default.
+
 Why: Spaces are the feature people stay in Arc for, and the workflow layer
 the sidebar exists to serve; a switcher that changes an id without moving
 the active tab is a picture of a feature.
@@ -67,7 +74,7 @@ session service can express tab sets itself. Never short of that.
  chrome/browser/prefs/session_startup_pref.cc  |  13 +-
  chrome/browser/sessions/BUILD.gn              |   2 +
  chrome/browser/sessions/session_restore.cc    |   6 +
- .../browser/sessions/session_service_base.cc  |   7 +
+ .../browser/sessions/session_service_base.cc  |  27 +
  .../sessions/stedding_session_rebuild.cc      |  48 ++
  .../sessions/stedding_session_rebuild.h       |  49 ++
  chrome/browser/ui/BUILD.gn                    |   1 +
@@ -75,7 +82,7 @@ session service can express tab sets itself. Never short of that.
  chrome/browser/ui/browser_init_state.h        |   5 +
  chrome/browser/ui/browser_tabrestore.cc       |   2 +
  .../ui/browser_window/internal/BUILD.gn       |   1 +
- .../internal/browser_window_features.cc       |   7 +
+ .../internal/browser_window_features.cc       |  14 +
  .../embedder_browser_window_features.cc       |  11 +-
  .../public/browser_window_features.h          |   5 +
  .../public/create_browser_window.h            |   4 +
@@ -116,7 +123,7 @@ session service can express tab sets itself. Never short of that.
  .../tabs/common/tab_strip_view_layout.cc      |  26 +-
  chrome/test/BUILD.gn                          |   2 +
  .../tabs/public/tab_context_menu_command.h    |   5 +
- 53 files changed, 3443 insertions(+), 26 deletions(-)
+ 53 files changed, 3470 insertions(+), 26 deletions(-)
  create mode 100644 chrome/browser/sessions/stedding_session_rebuild.cc
  create mode 100644 chrome/browser/sessions/stedding_session_rebuild.h
  create mode 100644 chrome/browser/ui/spaces/BUILD.gn
@@ -217,7 +224,7 @@ index 816c2a017bd41..60137ffee0fe0 100644
        auto it = extra_data.find(
            tabs::TabStripModelSelectionState::kFocusedTabGroupIdKey);
 diff --git a/chrome/browser/sessions/session_service_base.cc b/chrome/browser/sessions/session_service_base.cc
-index 75f43fb8ec025..7a1807ca0bcfc 100644
+index 75f43fb8ec025..aac55f7825fa7 100644
 --- a/chrome/browser/sessions/session_service_base.cc
 +++ b/chrome/browser/sessions/session_service_base.cc
 @@ -4,6 +4,8 @@
@@ -229,10 +236,37 @@ index 75f43fb8ec025..7a1807ca0bcfc 100644
  #include <stddef.h>
  
  #include <memory>
-@@ -790,6 +792,11 @@ void SessionServiceBase::BuildCommandsForBrowser(
+@@ -37,6 +39,7 @@
+ #include "chrome/browser/ui/tabs/tab_group_model.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model_selection_state.h"
++#include "chrome/browser/ui/tabs/vertical_tab_strip_state_controller.h"
+ #include "chrome/browser/ui/ui_features.h"
+ #include "chrome/browser/ui/window_feature_controller/window_feature_controller.h"
+ #include "chrome/browser/ui/window_metadata/window_metadata_controller.h"
+@@ -790,6 +793,30 @@ void SessionServiceBase::BuildCommandsForBrowser(
      index++;
    }
  
++  // Stedding (sidebar Y47, GitHub issue 65): the sidebar's width and whether
++  // it is collapsed are window extra data that the controller writes only
++  // when they change. Chromium's rebuild does not re-emit them, so a log
++  // rebuilt at startup restored the next launch -- an update's restart --
++  // with the sidebar at its default width.
++  if (const tabs::VerticalTabStripStateController* const vertical_tabs =
++          tabs::VerticalTabStripStateController::From(browser)) {
++    command_storage_manager()->AppendRebuildCommand(
++        sessions::CreateAddWindowExtraDataCommand(
++            browser->GetSessionID(),
++            tabs::VerticalTabStripStateController::kCollapsedKey,
++            base::ToString(vertical_tabs->IsCollapsed())));
++    command_storage_manager()->AppendRebuildCommand(
++        sessions::CreateAddWindowExtraDataCommand(
++            browser->GetSessionID(),
++            tabs::VerticalTabStripStateController::kUncollapsedWidthKey,
++            base::NumberToString(vertical_tabs->GetUncollapsedWidth())));
++  }
++
 +  // Stedding: extra data that features wrote into the log (Spaces, folders)
 +  // is not in the tab strip and would otherwise be dropped by this rebuild.
 +  command_storage_manager()->AppendRebuildCommands(
@@ -430,7 +464,7 @@ index bbf731f6eda43..7571644e038d1 100644
      "//components/tabs:public",
      "//ui/base",
 diff --git a/chrome/browser/ui/browser_window/internal/browser_window_features.cc b/chrome/browser/ui/browser_window/internal/browser_window_features.cc
-index 6c1c78d4341e7..f3f6e5e04b662 100644
+index 6c1c78d4341e7..93550b570e24c 100644
 --- a/chrome/browser/ui/browser_window/internal/browser_window_features.cc
 +++ b/chrome/browser/ui/browser_window/internal/browser_window_features.cc
 @@ -3,6 +3,7 @@
@@ -454,6 +488,20 @@ index 6c1c78d4341e7..f3f6e5e04b662 100644
    if (base::FeatureList::IsEnabled(features::kGlicActorUi) &&
        features::kGlicActorUiBorderGlow.Get()) {
      actor_border_view_controller_ =
+@@ -639,6 +646,13 @@ void BrowserWindowFeatures::Init(BrowserWindowInterface* browser) {
+       restored_state_uncollapsed_width =
+           profile->GetPrefs()->GetInteger(prefs::kVerticalTabsUncollapsedWidth);
+     }
++    // Stedding (sidebar Y47, GitHub issue 65): a restored window whose log
++    // lost its width -- any log written before the rebuild re-emitted it --
++    // takes the width the user last set, not the default.
++    if (!restored_state_uncollapsed_width.has_value()) {
++      restored_state_uncollapsed_width =
++          profile->GetPrefs()->GetInteger(prefs::kVerticalTabsUncollapsedWidth);
++    }
+ 
+     vertical_tab_strip_state_controller_ =
+         GetUserDataFactory()
 diff --git a/chrome/browser/ui/browser_window/internal/embedder_browser_window_features.cc b/chrome/browser/ui/browser_window/internal/embedder_browser_window_features.cc
 index a2c0889f7003c..ec65e696eaaba 100644
 --- a/chrome/browser/ui/browser_window/internal/embedder_browser_window_features.cc

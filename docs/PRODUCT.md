@@ -279,11 +279,13 @@ a `+` (`features/sidebar.md` Y44). The Library is not this foot (§9).
 ## 5. Transient windows
 
 - **Peek** **[1.0]** — a link from a pinned tab or an essential that leaves its site
-  opens in a peek: a little window over that window, its page a whole tab in the pin's
-  jar, instead of navigating the pinned tab away. "Open as Tab" (`⌘O`) and "Open in
+  opens in a peek, instead of navigating the pinned tab away: by default a card over
+  that tab's page inside the window, the page waiting under it and the peek going and
+  coming with its tab (`features/peek.md` P20); or, as "Show a peek" allows, a little
+  window over that window. Its page is in the pin's jar. "Open as Tab" (`⌘O`) and "Open in
   Split View" (`⇧⌘O`, beside the pinned tab) move the page into the window without a
   reload. An essential's peek, and a peek of a tab already in a split, offer Open as
-  Tab alone (`features/peek.md` P9). Escape or a click on the window closes it. On by
+  Tab alone (`features/peek.md` P9). Escape or a click beside it closes it. On by
   default (`PLAN.md` decision 2), with its switch in Settings › Stedding and on the
   welcome flow. "Open a peek with" can ask for a press held 0.3 s or 0.5 s instead of
   a click, so a plain click follows the link in the pinned tab (P18).

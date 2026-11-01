@@ -87,8 +87,9 @@ Each release's notes are on the
 - **⌘T (Ctrl+T)**: a URL, a search, or an open or archived tab in any Space. ⇧⌘P
   (Ctrl+Shift+P) lists the commands, each with its key.
 - **Split view**: drag a tab onto the page, and it opens beside it.
-- **Peek**: a link from a pinned tab that leaves its site opens over the window; keep it as a
-  tab or beside the pin. On a click, or only on a held press, as you choose.
+- **Peek**: a link from a pinned tab that leaves its site opens on a card over the page, or in
+  a small window if you prefer; keep it as a tab or beside the pin. On a click, or only on a
+  held press, as you choose.
 - **History and Downloads in the sidebar**, the sidebar on the left or the right, and
   **shortcuts you can change**.
 - **Little windows** for links from other apps, with **Open in Stedding** to keep the page as
@@ -171,8 +172,11 @@ colours and icons, essentials, pinned tabs, nested folders, open tabs, history a
 It reads Arc's files on your disk and sends nothing anywhere. On a Mac the passwords need one
 keychain prompt; on Windows none. Running it again does not duplicate anything.
 
-The same welcome step brings bookmarks, history and passwords from Dia (on a Mac, Dia's
-passwords need one keychain prompt), and from the file Safari exports. Passwords in that file
+The same welcome step brings bookmarks, history and passwords from Chrome, Edge, Brave,
+Vivaldi and Dia (on a Mac, each browser's passwords need one keychain prompt; on Windows,
+passwords that Chrome seals with its own key cannot be read and are counted), and from the
+file Safari exports. Settings → Stedding → Sync and import → **Import from another browser**
+opens that step again any time. Passwords in that file
 are plain text, so they stay unticked until you ask for them. Chromium's own importer also
 lists the browsers it finds, including Firefox, and on the Mac Safari's bookmarks.
 
@@ -204,7 +208,7 @@ behave as they do in Chrome.
 | Google services | No sign-in, sync, telemetry or experiments. Chromium's component updates and network time stay ([PRIVACY.md](docs/PRIVACY.md)) | ✓ |
 | Ad and tracker blocking | Built in, from EasyList and EasyPrivacy; off until you turn it on | ✓ |
 | Sync | Your sidebar, through a folder your own sync app keeps; no account | Your folder |
-| Import | Arc (Mac and Windows), Dia, Safari's export file, Firefox. Chrome, Brave, the new Edge, Vivaldi and Chromium are not offered | Most |
+| Import | Arc (Mac and Windows), Chrome, Edge, Brave, Vivaldi, Dia, Safari's export file, Firefox. Opera is not offered | Most |
 | Updates | Checked against a signature, in the background, with a switch to turn them off | ✓ |
 | Safe Browsing | Waits on a Google API key (`S-75`) | Not yet |
 | Netflix, Disney+, Prime Video, Spotify | Need Widevine, which needs a licence from Google first (`S-270`) | Not yet |

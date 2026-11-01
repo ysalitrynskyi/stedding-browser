@@ -133,13 +133,15 @@ pins and folders, then hides the bar and the star, because the sidebar holds the
 Above 50 bookmarks it asks first. Settings → Stedding → Tabs → **Show the bookmark
 bar and the star** brings both back.
 
-**A link opened in a little window over the page. What is that?**
-A peek. A link from a pinned tab or an essential to another site opens over the
-window, so the pinned tab stays where it was. Escape, ⌘W, or a click on the window
-behind it closes the peek. **Open as Tab** (⌘O) keeps the page as a tab. Settings →
-Stedding → Peek and little windows → **Open a peek with** can require a press held
-for 0.3 or 0.5 seconds, so a plain click follows the link in the tab. **Open links
-from pinned tabs in a peek**, the switch above that, turns Peek off.
+**A link opened on a card over the page. What is that?**
+A peek. A link from a pinned tab or an essential to another site opens on a card over
+that tab's page, inside the window, so the pinned tab stays where it was; it waits,
+dimmed, until the peek closes, and the peek goes and comes back with its tab. Escape,
+⌘W, or a click beside the card closes the peek. **Open as Tab** (⌘O) keeps the page as
+a tab. Settings → Stedding → Peek and little windows → **Show a peek** → In a small
+window opens peeks in a little window of their own instead. **Open a peek with** can
+require a press held for 0.3 or 0.5 seconds, so a plain click follows the link in the
+tab. **Open links from pinned tabs in a peek**, the switch above that, turns Peek off.
 
 **Can I divide the sidebar with lines?**
 Yes. Right-click a tab or a pinned tab in a Space’s list and choose **Add Separator

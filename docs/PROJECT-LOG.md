@@ -2,6 +2,39 @@
 
 What was built, newest first. Nothing here is needed to do a task: `AGENTS.md` carries what is true now, `BACKLOG.md` the order of work, `PLAN.md` the owner's decisions. This file was the "State of the project" section of `AGENTS.md` until 2026-09-30. This log starts at 2026-10-15. Closed work from before that is the table in [docs/history/archive.md](history/archive.md).
 
+## 2026-11-01, later -- issues 62, 65 and 66, issue 45's second round, and the import step
+
+The owner asked for GitHub issue 66 (Spaces that loop), a fix for issue 65 (the sidebar's width
+after an update), the comment on issue 45 (a wider reveal edge, two essentials per row, the whole
+address row in the sidebar with Windows' buttons on hover), issue 62 (Peek inside the window, the
+small window kept as a setting) and a review of the welcome flow's import step.
+
+- **Issue 65** (sidebar Y47): the session log is rebuilt from the live windows at every startup,
+  and the rebuild dropped the sidebar's width and collapsed state, which the controller writes
+  only when they change. The restore after the next restart -- an update's -- opened the sidebar
+  at Chromium's 352 DIP. The rebuild now writes them, and a restored window with no width in its
+  log takes the one last set. `RestoreTest.TheSidebarsWidthComesBack`, four launches, forces a
+  rebuild and then a log with no width; without the fix both launches after them opened at 352.
+- **Issue 66** (spaces B45, settings T44): "Loop around Spaces", on by default, for the keys, the
+  swipe, the wheel and moving a tab; a switch round the end slides as the step goes.
+- **Issue 45, the comment** (sidebar Y19, Y33, Y48, Y49; toolbar T50, T51; settings T45):
+  "Edge that shows a hidden sidebar" (6, 12 or 24 DIP, 12 by default where it was 6); "Up to 2"
+  essentials per row; with the address in the sidebar the address row lends its buttons -- the
+  extensions, the pinned actions, the menu -- to a row under the sidebar's address, the same
+  views, so their popups anchor there; on Windows the caption buttons move to the sidebar's top
+  row and show on hover, so the address row goes there too.
+- **Issue 62** (peek P20, settings T46): "Show a peek: Over the page", the default, shows the peek
+  as a tab-scoped child widget over the pinned tab's page (`tabs::TabDialogManager`), the page
+  made as a tab's (tab helpers), with its own dialogs over the card; Open as Tab moves the same
+  page in. "In a small window" keeps the little window.
+- **The import step** (import I43-I45, welcome W3): Chrome, Edge, Brave and Vivaldi join Dia in
+  the Chromium family's table, each with its own block; a running browser is told by its profile
+  lock, since Stedding on Windows is `chrome.exe`; Chromium's own importer rows offer only what
+  their source can bring, with search engines and autofill where it can; Settings and the command
+  bar open the step.
+- Found on the way: the hidden sidebar's clip, refreshed only by a layout, could stay on after the
+  slide's end under load and hide the edge's shadow (sidebar Y19).
+
 ## 2026-11-01 -- 0.4.0 beta 5: the command bar's icons, and issue 45's settings
 
 Released as 0.4.0 beta 5, on Chromium 157.0.8103.31, for both platforms. The owner asked for GitHub

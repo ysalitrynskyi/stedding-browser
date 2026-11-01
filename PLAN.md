@@ -28,7 +28,8 @@ still open is a BACKLOG row that names its id.
    last Space cannot be deleted (`docs/features/spaces.md` B5).
 8. Do not document an import from Chrome, Brave or Edge until that importer exists. The
    history file's WEB-15 records that it was dropped. Patch 0057 removed the reader patch
-   0055 had added.
+   0055 had added. Since 2026-11-01 it exists: Chrome, Edge, Brave and Vivaldi come in as
+   Dia does (`docs/features/import.md` I43), and the docs may say so.
 9. Little windows get no Space commands. "Open in Stedding" is the way into the main window
    (`docs/features/little.md` E2, E7).
 10. Tests that pin a bug are decided from the spec row and Arc's behaviour. Ask the owner only
@@ -67,6 +68,10 @@ still open is a BACKLOG row that names its id.
 18. Sync has no account and no Stedding server. It goes through a folder the user picks,
     and it is off by default (2026-10-23, GitHub issue 20; `S-282`; ADR 0029;
     `docs/features/sidebar-file.md` Sf7–Sf41).
+19. A peek shows over the page, inside the pinned tab's window, as Arc's does (the owner,
+    2026-11-01, GitHub issue 62: "current behaviour must be possible to set up in settings
+    too"). "Show a peek: In a small window" keeps the little window; over the page is the
+    default (`stedding.peek.style`, `docs/features/peek.md` P20).
 
 The operator's own request in chat comes before any of this and before BACKLOG's order.
 

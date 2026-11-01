@@ -145,13 +145,17 @@ Search, Import, Appearance, Behaviour, Default browser and Keys.
    one, a fresh profile keeps DuckDuckGo and records it as the choice.
 2. Import. From Arc, on the Mac or on Windows: its sidebar, history and
    passwords. On the Mac, macOS asks once whether Stedding may read Arc's
-   keychain item. From Dia, when it is installed: bookmarks, history and
-   passwords. From a file Safari exported, on either platform: bookmarks and
+   keychain item. From Chrome, Edge, Brave, Vivaldi and Dia, each when it is
+   installed: bookmarks, history and passwords, with the profile to take them
+   from (on Windows, passwords Chrome seals with its own key are counted and
+   left out). From a file Safari exported, on either platform: bookmarks and
    history, and passwords only if you tick them, because the file holds them as
    plain text. Through Chromium's importer: Safari's bookmarks, or Firefox's
    bookmarks and history, on the Mac; Firefox, with passwords, Internet
-   Explorer or the old Edge, on Windows; and a bookmarks HTML file on either platform.
-   Chrome, Brave, the new Edge, Vivaldi and Chromium are not offered.
+   Explorer or the old Edge, on Windows, each with only what it can bring; and a
+   bookmarks HTML file on either platform. Opera is not offered. Settings →
+   Stedding → Sync and import → **Import from another browser** opens this step
+   again.
 3. The colour scheme (system, light or dark), a Space colour, and the sidebar
    text size. A fresh profile uses 14 until you pick another.
 4. How Stedding behaves. Idle tabs stay until you choose a time to archive

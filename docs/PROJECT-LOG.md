@@ -2,6 +2,27 @@
 
 What was built, newest first. Nothing here is needed to do a task: `AGENTS.md` carries what is true now, `BACKLOG.md` the order of work, `PLAN.md` the owner's decisions. This file was the "State of the project" section of `AGENTS.md` until 2026-09-30. This log starts at 2026-10-15. Closed work from before that is the table in [docs/history/archive.md](history/archive.md).
 
+## 2026-11-01 -- 0.4.0 beta 5: the command bar's icons, and issue 45's settings
+
+Released as 0.4.0 beta 5, on Chromium 157.0.8103.31, for both platforms. The owner asked for GitHub
+issue 58 and, with no pull request come, for issue 45's three sidebar ideas to be built here, and
+for one release once both were in. Patch 0115 gives the command bar's rows their sites' icons and
+moves what a row says besides its title to its right end (commandbar K38). Patch 0116 makes the
+hidden sidebar's rest at the edge and the sidebar's speed settings: the animation controller runs
+a motion over its time scaled on the clock, so every keyframe keeps its place (motion O9). Patch
+0117 puts Back, Forward, Reload and the page's site at the top of the sidebar, where the window
+feeds them what it feeds the address row, and hides that row while the sidebar is open under its
+exceptions; and fixes how many essentials a row holds (sidebar Y33, Y46; toolbar T50). Patch 0118
+is an Appearance card, browser-wide: the window's colour, the Space's tint and the rows'
+highlight, read by the colour mixer from process-wide values, every window re-themed on a change
+(settings T41 to T43). S-370 was kept as it is on the owner's word, the better look; S-327 closed
+once a recording showed the check mark for its 1.5 seconds, the stills having been taken late
+(trap 142). The first final run found a crash in a test of the sidebar's top, a test window with
+no commands, fixed in 0117 before the builds that shipped. The Mac's DCHECK sweep had a
+frame-timing check wait 183 ms once (S-372): that build is about twice as slow as the release
+build, and its bound is now twice the release's. Both platforms' final sweeps, the Windows DCHECK
+sweep, the installers, a beta 4 to beta 5 update on Windows and both acceptance runs passed.
+
 ## 2026-10-31 -- 0.4.0 beta 4: the sidebar comes back whatever On startup says
 
 Released as 0.4.0 beta 4, on Chromium 157.0.8103.31, for both platforms. S-323 (issue 43, the

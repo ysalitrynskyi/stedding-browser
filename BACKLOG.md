@@ -17,9 +17,10 @@ infrastructure, then features. A request in chat comes before this list. A spec 
 
 ### Next
 
-The latest release is 0.4.0 beta 4, on Chromium 157.0.8103.31 (`S-278`). It carries the
+The latest release is 0.4.0 beta 5, on Chromium 157.0.8103.31 (`S-278`). It carries the
 fixes of the 2026-10-28 review below, from beta 2, the fixes for GitHub issues 14, 35 and 63
-from beta 3, and S-323 (issue 43). Each row closes once its fix is checked on a real build.
+from beta 3, S-323 (issue 43) from beta 4, and the command bar's site icons (issue 58). Each
+row closes once its fix is checked on a real build.
 Google's schedule puts M157 on stable on 2026-11-03.
 
 S-306, shorter test runs, is the unfinished item of the 2026-10-26 order. Its Mac half
@@ -150,7 +151,6 @@ Rows the specs still leave open. M10 is in ROADMAP's order (ADR 0021).
 |---|---|---|---|
 | S-359 | Three sidebar ideas from GitHub issue 45 | `docs/features/sidebar.md`; `docs/features/settings.md` | Waits for MathHue's pull requests: the owner said yes to all three on 2026-10-27. A faster reveal of a hidden sidebar and its animation speed; the address, Back, Forward and Reload at the top of the sidebar, with essentials per row; an Appearance section (window colour, Space colour strength, tab highlight). Their patches were numbered 0109 to 0111, which the series now uses: they are renumbered when they come. |
 | S-360 | Peek attached to its tab, as Arc's (GitHub issue 62) | `docs/features/peek.md` | Later, the owner (2026-10-30): it redesigns peek. Today a peek is a little window (peek P6), as the spec says; the reporter, on 0.4.0 beta 1 on the Mac, asks for Arc's peek, which sits over its tab and holds it until closed. |
-| S-361 | Favicons in the command bar's rows (GitHub issue 58) | `docs/features/commandbar.md` | The owner said yes on 2026-10-30. A feature, so it waits for the core-loop gate (S-173). Each row's site icon, and "Switch to tab" at the row's right end, as Zen draws them. |
 | S-320 | Bookmarks pinned in the sidebar (GitHub issue 40) | `docs/features/pins.md`; `docs/features/sidebar.md` | Waits for the owner. Space pins and essentials already keep a page and cost nothing while asleep (H3). Answer that pins serve this and ask what is missing, or plan a bookmarks block. |
 | S-235 | Apps made from pages, the rest | `docs/features/web-apps.md`; ADR 0025 | Built in patch 0072. The Windows install was seen on beta 20; Add to Dock from the command bar was seen on the Mac. Enter in the dialog is `MakeAppTest.EnterInTheDialogAddsTheApp`. Left, planned in the spec: Wa8 (the Windows browser test of the Start menu entry), Wa16 and Wa17 (updates and uninstall with an app installed), Wa19 (a missing Mac launcher), Wa22 (launching an app with Stedding quit). |
 | S-102 | Split view's open rows | `docs/features/splits.md` J2, J3, J5 | J3 and J5 are planned: what ⌘W does to the other pane, and whether a Space pin that joins a split leaves the pinned run. J2 is partial: ⌘1–9 and the badges counting a split once. Then resize, swap and dismiss by mouse and keyboard, and DevTools, find-in-page and full-screen video in a split. |

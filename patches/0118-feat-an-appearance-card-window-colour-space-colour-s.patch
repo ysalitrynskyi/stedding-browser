@@ -1,0 +1,1115 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Sun, 1 Nov 2026 01:52:20 -0400
+Subject: feat: an Appearance card -- window colour, Space colour strength, tab
+ highlight
+
+GitHub issue 45, its third idea. Settings gains an Appearance card after
+Sidebar, browser-wide as density is. "Window colour" is Stedding's own,
+a neutral grey, or the user's, with a colour well for each look, kept
+light enough for dark text in the light look and dark enough for light
+text in the dark. "Space colour strength" scales the active Space's tint
+of the ground, from none to strong. "Tab highlight" scales the rows'
+tints, translucent at Subtle in the light look and ringed with a hairline
+at Strong. The look lives in process-wide values the colour mixer reads;
+a change drops the cached colour providers and re-themes every window.
+The command bar has a cycling row for each.
+
+Why: GitHub issue 45; the owner said yes on 2026-10-27 and asked on
+2026-11-01 for it to be built here.
+Removable when: never as a feature; the row painter's hunk goes if
+Chromium's vertical rows gain an outline of their own.
+---
+ .../api/settings_private/prefs_util.cc        |  11 ++
+ .../settings/stedding_page/stedding_page.css  |  10 ++
+ .../stedding_page/stedding_page.html.ts       |  72 ++++++++++++
+ .../settings/stedding_page/stedding_page.ts   |  47 +++++++-
+ .../browser/ui/color/stedding_color_mixer.cc  | 105 ++++++++++++++----
+ .../ui/color/stedding_color_mixer_unittest.cc | 100 +++++++++++++++++
+ chrome/browser/ui/spaces/space_model.cc       |   2 +
+ chrome/browser/ui/stedding/BUILD.gn           |   3 +
+ chrome/browser/ui/stedding/sidebar_density.cc |  59 ++++++++++
+ chrome/browser/ui/stedding/sidebar_density.h  |   5 +
+ chrome/browser/ui/stedding/stedding_prefs.cc  |   7 ++
+ chrome/browser/ui/stedding/stedding_prefs.h   |  11 ++
+ .../ui/stedding/stedding_prefs_unittest.cc    |   7 ++
+ chrome/browser/ui/stedding_ui_metrics.cc      |  29 +++++
+ chrome/browser/ui/stedding_ui_metrics.h       |  22 ++++
+ .../ui/views/commandbar/command_bar_view.cc   |  46 ++++++++
+ .../commandbar/command_bar_view_unittest.cc   |  43 +++++++
+ .../views/frame/stedding_window_background.cc |   6 +-
+ .../tabs/common/vertical_tab_style_views.cc   |  26 ++++-
+ .../browser/ui/webui/settings/settings_ui.cc  |  29 +++++
+ .../stedding/settings_spaces_browsertest.cc   |  78 ++++++++++++-
+ 21 files changed, 693 insertions(+), 25 deletions(-)
+
+diff --git a/chrome/browser/extensions/api/settings_private/prefs_util.cc b/chrome/browser/extensions/api/settings_private/prefs_util.cc
+index 469a9cc7ba5c7..bc698d72d89ef 100644
+--- a/chrome/browser/extensions/api/settings_private/prefs_util.cc
++++ b/chrome/browser/extensions/api/settings_private/prefs_util.cc
+@@ -326,6 +326,17 @@ const PrefsUtil::TypedPrefMap& PrefsUtil::GetAllowlistedKeys() {
+   // privacy Q4, Q5: the rows Chromium's own pages do not carry.
+   (*s_allowlist)[stedding::prefs::kGlobalPrivacyControl] =
+       settings_api::PrefType::kBoolean;
++  // settings T41-T43 (GitHub issue 45): the window's look, browser-wide.
++  (*s_allowlist)[stedding::prefs::kWindowColour] =
++      settings_api::PrefType::kNumber;
++  (*s_allowlist)[stedding::prefs::kWindowColourLight] =
++      settings_api::PrefType::kNumber;
++  (*s_allowlist)[stedding::prefs::kWindowColourDark] =
++      settings_api::PrefType::kNumber;
++  (*s_allowlist)[stedding::prefs::kSpaceTintStrength] =
++      settings_api::PrefType::kNumber;
++  (*s_allowlist)[stedding::prefs::kTabHighlight] =
++      settings_api::PrefType::kNumber;
+   (*s_allowlist)[stedding::prefs::kSidebarDensity] =
+       settings_api::PrefType::kNumber;
+   (*s_allowlist)[stedding::prefs::kSidebarTextSize] =
+diff --git a/chrome/browser/resources/settings/stedding_page/stedding_page.css b/chrome/browser/resources/settings/stedding_page/stedding_page.css
+index 58536dccd8fb0..58ebff8d41191 100644
+--- a/chrome/browser/resources/settings/stedding_page/stedding_page.css
++++ b/chrome/browser/resources/settings/stedding_page/stedding_page.css
+@@ -194,3 +194,13 @@ settings-section > .hr:first-child,
+   color: var(--cr-secondary-text-color);
+   font-size: 12px;
+ }
++
++/* settings T41 (GitHub issue 45): a custom colour's well. */
++.colour-well {
++  block-size: 28px;
++  border: 1px solid var(--cr-separator-color);
++  border-radius: 6px;
++  cursor: pointer;
++  inline-size: 48px;
++  padding: 2px;
++}
+diff --git a/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts b/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
+index 00f34b890f86c..49a16ea931763 100644
+--- a/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
++++ b/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
+@@ -215,6 +215,78 @@ export function getHtml(this: SettingsSteddingPageElement) {
+       sub-label="$i18n{steddingMarkLocalTabsSubLabel}">
+   </settings-toggle-button>
+ </settings-section>
++<settings-section id="appearanceSection" class="cr-centered-card-container"
++    page-title="$i18n{steddingAppearanceTitle}">
++  <div class="hr settings-box">
++    <div class="start" id="windowColourLabel">
++      <div class="label">$i18n{steddingWindowColourLabel}</div>
++      <div class="secondary">$i18n{steddingWindowColourSubLabel}</div>
++    </div>
++    <settings-dropdown-menu id="windowColour"
++        pref-key="stedding.appearance.window_colour"
++        label="$i18n{steddingWindowColourLabel}"
++        .menuOptions="${[
++          {value: 0, name: '$i18n{steddingWindowColourStedding}'},
++          {value: 1, name: '$i18n{steddingWindowColourNeutral}'},
++          {value: 2, name: '$i18n{steddingWindowColourCustom}'},
++        ]}">
++    </settings-dropdown-menu>
++  </div>
++  ${this.isCustomColour_() ? html`
++  <div class="hr settings-box">
++    <div class="start">
++      <div class="label">$i18n{steddingCustomLightLabel}</div>
++      <div class="secondary">$i18n{steddingCustomLightSubLabel}</div>
++    </div>
++    <input type="color" id="customLight" class="colour-well"
++        data-pref="stedding.appearance.custom_light"
++        aria-label="$i18n{steddingCustomLightLabel}"
++        .value="${this.colourOf_(this.customLightPref_)}"
++        @change="${this.onCustomColourChange_}">
++  </div>
++  <div class="hr settings-box">
++    <div class="start">
++      <div class="label">$i18n{steddingCustomDarkLabel}</div>
++      <div class="secondary">$i18n{steddingCustomDarkSubLabel}</div>
++    </div>
++    <input type="color" id="customDark" class="colour-well"
++        data-pref="stedding.appearance.custom_dark"
++        aria-label="$i18n{steddingCustomDarkLabel}"
++        .value="${this.colourOf_(this.customDarkPref_)}"
++        @change="${this.onCustomColourChange_}">
++  </div>` : ''}
++  <div class="hr settings-box">
++    <div class="start" id="spaceTintLabel">
++      <div class="label">$i18n{steddingSpaceTintLabel}</div>
++      <div class="secondary">$i18n{steddingSpaceTintSubLabel}</div>
++    </div>
++    <settings-dropdown-menu id="spaceTint"
++        pref-key="stedding.appearance.space_tint"
++        label="$i18n{steddingSpaceTintLabel}"
++        .menuOptions="${[
++          {value: 0, name: '$i18n{steddingStrengthNone}'},
++          {value: 1, name: '$i18n{steddingStrengthSubtle}'},
++          {value: 2, name: '$i18n{steddingStrengthNormal}'},
++          {value: 3, name: '$i18n{steddingStrengthStrong}'},
++        ]}">
++    </settings-dropdown-menu>
++  </div>
++  <div class="hr settings-box">
++    <div class="start" id="tabHighlightLabel">
++      <div class="label">$i18n{steddingTabHighlightLabel}</div>
++      <div class="secondary">$i18n{steddingTabHighlightSubLabel}</div>
++    </div>
++    <settings-dropdown-menu id="tabHighlight"
++        pref-key="stedding.appearance.tab_highlight"
++        label="$i18n{steddingTabHighlightLabel}"
++        .menuOptions="${[
++          {value: 1, name: '$i18n{steddingStrengthSubtle}'},
++          {value: 2, name: '$i18n{steddingStrengthNormal}'},
++          {value: 3, name: '$i18n{steddingStrengthStrong}'},
++        ]}">
++    </settings-dropdown-menu>
++  </div>
++</settings-section>
+ <settings-section id="tabsSection" class="cr-centered-card-container"
+     page-title="$i18n{steddingTabsTitle}">
+   <settings-toggle-button
+diff --git a/chrome/browser/resources/settings/stedding_page/stedding_page.ts b/chrome/browser/resources/settings/stedding_page/stedding_page.ts
+index 9c6e850b123fa..317ff307132ed 100644
+--- a/chrome/browser/resources/settings/stedding_page/stedding_page.ts
++++ b/chrome/browser/resources/settings/stedding_page/stedding_page.ts
+@@ -30,6 +30,8 @@ import {WebUiListenerMixinLit} from 'chrome://resources/cr_elements/web_ui_liste
+ import {sendWithPromise} from 'chrome://resources/js/cr.js';
+ import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
+ import {CrLitElement} from 'chrome://resources/lit/v3_0/lit.rollup.js';
++import {PrefService} from '/shared/settings/prefs2/pref_service.js';
++import {PrefServiceObserverMixinLit} from '/shared/settings/prefs2/pref_service_observer_mixin_lit.js';
+ 
+ import type {DropdownMenuOptionList} from '../controls/settings_dropdown_menu.js';
+ import type {SettingsToggleButtonElement} from '../controls/settings_toggle_button.js';
+@@ -115,7 +117,10 @@ export interface SteddingShortcutGroup {
+   rows: SteddingShortcutRow[];
+ }
+ 
+-const SettingsSteddingPageElementBase = WebUiListenerMixinLit(CrLitElement);
++// settings T41 (GitHub issue 45): the page reads and writes the window's
++// custom colours itself, for its colour wells.
++const SettingsSteddingPageElementBase =
++    PrefServiceObserverMixinLit(WebUiListenerMixinLit(CrLitElement));
+ 
+ export class SettingsSteddingPageElement extends
+     SettingsSteddingPageElementBase implements SettingsPlugin {
+@@ -148,9 +153,43 @@ export class SettingsSteddingPageElement extends
+       blocker_: {type: Object},
+       blockerError_: {type: String},
+       routeErrorFor_: {type: String},
++      windowColourPref_: {type: Object},
++      customLightPref_: {type: Object},
++      customDarkPref_: {type: Object},
+     };
+   }
+ 
++  // settings T41 (GitHub issue 45): the window colour, and the custom colour
++  // for each look, as 0xRRGGBB, mirrored from the browser's prefs.
++  protected accessor windowColourPref_:
++      chrome.settingsPrivate.PrefObject<number>|undefined;
++  protected accessor customLightPref_:
++      chrome.settingsPrivate.PrefObject<number>|undefined;
++  protected accessor customDarkPref_:
++      chrome.settingsPrivate.PrefObject<number>|undefined;
++
++  // settings T41: whether the colour wells show.
++  protected isCustomColour_(): boolean {
++    return this.windowColourPref_?.value === 2;
++  }
++
++  // settings T41: a colour pref as an <input type="color"> takes it.
++  protected colourOf_(pref: chrome.settingsPrivate.PrefObject<number>|
++                      undefined): string {
++    const rgb = (pref?.value ?? 0) & 0xFFFFFF;
++    return '#' + rgb.toString(16).padStart(6, '0');
++  }
++
++  // settings T41: the colour a well was given, written to its pref.
++  protected onCustomColourChange_(e: Event) {
++    const input = e.target as HTMLInputElement;
++    const key = input.dataset['pref'];
++    const rgb = parseInt(input.value.slice(1), 16);
++    if (key && !Number.isNaN(rgb)) {
++      PrefService.getInstance().setPrefValue(key, rgb);
++    }
++  }
++
+   protected accessor spaces_: SteddingSpace[] = [];
+   protected accessor shortcuts_: SteddingShortcutGroup[] = [];
+   // import I4: Arc's sidebar summary, or '' when this Mac has none.
+@@ -208,6 +247,11 @@ export class SettingsSteddingPageElement extends
+ 
+   override connectedCallback() {
+     super.connectedCallback();
++    this.mirrorPrefs({
++      'stedding.appearance.window_colour': 'windowColourPref_',
++      'stedding.appearance.custom_light': 'customLightPref_',
++      'stedding.appearance.custom_dark': 'customDarkPref_',
++    });
+     this.addWebUiListener(
+         'stedding-spaces-changed',
+         (spaces: SteddingSpace[]) => this.spaces_ = spaces);
+@@ -414,6 +458,7 @@ export class SettingsSteddingPageElement extends
+   protected sectionJumps_(): Array<{target: string, title: string}> {
+     const jumps: Array<[string, string]> = [
+       ['sidebarSection', 'steddingSidebarTitle'],
++      ['appearanceSection', 'steddingAppearanceTitle'],
+       ['tabsSection', 'steddingTabsTitle'],
+       ['peekSection', 'steddingPeekTitle'],
+       ['spacesSection', 'steddingSpacesTitle'],
+diff --git a/chrome/browser/ui/color/stedding_color_mixer.cc b/chrome/browser/ui/color/stedding_color_mixer.cc
+index 41ee0e89c3d3b..f35ffd1d78b59 100644
+--- a/chrome/browser/ui/color/stedding_color_mixer.cc
++++ b/chrome/browser/ui/color/stedding_color_mixer.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "chrome/browser/ui/color/stedding_color_mixer.h"
+ 
++#include <algorithm>
++#include <cmath>
+ #include <utility>
+ 
+ #include "base/feature_list.h"
+@@ -29,9 +31,58 @@ namespace {
+ constexpr SkColor kSteddingLightWindow = SkColorSetRGB(0xCB, 0xD5, 0xE1);
+ constexpr SkColor kSteddingDarkWindow = SkColorSetRGB(0x21, 0x26, 0x3A);
+ 
+-// How much of the active Space's colour the window ground takes.
++// How much of the active Space's colour the window ground takes at Normal
++// (settings T42 scales it).
+ constexpr float kSpaceTintDark = 0.30f;
+ constexpr float kSpaceTintLight = 0.22f;
++// settings T41 (GitHub issue 45): Neutral grey, Tailwind's neutral-300 and
++// neutral-800 (MIT), with no hue at all.
++constexpr SkColor kNeutralLightWindow = SkColorSetRGB(0xD4, 0xD4, 0xD4);
++constexpr SkColor kNeutralDarkWindow = SkColorSetRGB(0x26, 0x26, 0x26);
++// A custom colour is kept light enough for the light look's dark text and
++// dark enough for the dark look's light text: its lightness at least this in
++// light, at most that in dark.
++constexpr double kCustomLightMinLightness = 0.70;
++constexpr double kCustomDarkMaxLightness = 0.28;
++
++// The active row's tint in dark, and the rows' hover and selection tints, at
++// Normal; settings T43 scales them.
++constexpr int kActiveRowAlpha = 0x24;
++constexpr int kHoverRowAlpha = 0x10;
++constexpr int kSelectedRowAlpha = 0x18;
++constexpr int kSelectedHoverRowAlpha = 0x20;
++// settings T43: Subtle in the light look makes the active row's white card
++// translucent, so the ground shows through it.
++constexpr SkAlpha kSubtleLightCardAlpha = 0xA6;
++
++SkAlpha Scaled(int alpha, float scale) {
++  return static_cast<SkAlpha>(std::clamp(
++      static_cast<int>(std::lround(alpha * scale)), 0, int{SK_AlphaOPAQUE}));
++}
++
++// settings T41: the ground the user chose, for the look.
++SkColor ChosenWindow(const stedding::WindowLook& look, bool dark) {
++  switch (look.colour) {
++    case stedding::WindowColour::kNeutral:
++      return dark ? kNeutralDarkWindow : kNeutralLightWindow;
++    case stedding::WindowColour::kCustom: {
++      const uint32_t rgb = dark ? look.custom_dark : look.custom_light;
++      const SkColor picked =
++          SkColorSetRGB((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF);
++      color_utils::HSL hsl;
++      color_utils::SkColorToHSL(picked, &hsl);
++      if (dark ? hsl.l <= kCustomDarkMaxLightness
++               : hsl.l >= kCustomLightMinLightness) {
++        return picked;
++      }
++      hsl.l = dark ? kCustomDarkMaxLightness : kCustomLightMinLightness;
++      return color_utils::HSLToSkColor(hsl, SK_AlphaOPAQUE);
++    }
++    case stedding::WindowColour::kStedding:
++      break;
++  }
++  return dark ? kSteddingDarkWindow : kSteddingLightWindow;
++}
+ 
+ // The new tab page keeps a neutral ground whatever the Space: the tint is
+ // the sidebar's, and a plum page under a plum sidebar read as one big stain.
+@@ -77,17 +128,22 @@ void AddSteddingColorMixer(ui::ColorProvider* provider,
+   // the window's own mark says so: a dark, grayscale key is also a normal
+   // window with Chrome's Grey colour.
+   const bool is_private = IsPrivateColorKey(key);
+-  SkColor window = is_private ? kSteddingPrivateWindow
+-                   : dark     ? kSteddingDarkWindow
+-                              : kSteddingLightWindow;
++  const stedding::WindowLook& look = stedding::GetWindowLook();
++  SkColor window =
++      is_private ? kSteddingPrivateWindow : ChosenWindow(look, dark);
+   // The active Space's colour (the widget's user colour override, set by the
+   // sidebar region's Space tint) tints the ground the sidebar sits on, as
+   // Arc does, not the pages. It is Chromium's user colour slot, so it also
+   // stands in for a colour chosen in Customize Chrome while it is set.
+-  if (key.user_color && !is_private) {
+-    window = color_utils::AlphaBlend(*key.user_color, window,
+-                                     dark ? kSpaceTintDark : kSpaceTintLight);
++  // settings T42: as strongly as the user chose, or not at all.
++  const float tint = (dark ? kSpaceTintDark : kSpaceTintLight) *
++                     stedding::LookStrengthScale(look.space_tint);
++  if (key.user_color && !is_private && tint > 0.0f) {
++    window = color_utils::AlphaBlend(*key.user_color, window, tint);
+   }
++  // settings T43: how strongly the active row, and a hovered or selected
++  // one, stands out.
++  const float highlight = stedding::LookStrengthScale(look.tab_highlight);
+ 
+   ui::ColorMixer& mixer = provider->AddMixer();
+   // The chrome around the page is one colour, as the reference has it: frame,
+@@ -139,10 +195,17 @@ void AddSteddingColorMixer(ui::ColorProvider* provider,
+   // a translucent light pill (a solid grey card read as a foreign object on
+   // the gradient); in light it stays the white card the reference has.
+   if (dark) {
+-    mixer[kColorTabBackgroundActiveFrameActive] =
+-        ui::SetAlpha(kColorTabForegroundActiveFrameActive, 0x24);
+-    mixer[kColorTabBackgroundActiveFrameInactive] =
+-        ui::SetAlpha(kColorTabForegroundActiveFrameActive, 0x24);
++    mixer[kColorTabBackgroundActiveFrameActive] = ui::SetAlpha(
++        kColorTabForegroundActiveFrameActive,
++        Scaled(kActiveRowAlpha, highlight));
++    mixer[kColorTabBackgroundActiveFrameInactive] = ui::SetAlpha(
++        kColorTabForegroundActiveFrameActive,
++        Scaled(kActiveRowAlpha, highlight));
++  } else if (look.tab_highlight == stedding::LookStrength::kSubtle) {
++    mixer[kColorTabBackgroundActiveFrameActive] = {
++        SkColorSetA(SK_ColorWHITE, kSubtleLightCardAlpha)};
++    mixer[kColorTabBackgroundActiveFrameInactive] = {
++        SkColorSetA(SK_ColorWHITE, kSubtleLightCardAlpha)};
+   }
+   // An inactive row has no fill of its own: the ground shows through, the
+   // essentials card included. Chromium's Material mixer gives inactive rows
+@@ -196,20 +259,24 @@ void AddSteddingColorMixer(ui::ColorProvider* provider,
+                        5.0f));
+     }
+   }
+-  mixer[kColorTabBackgroundInactiveHoverFrameActive] =
+-      ui::SetAlpha(kColorTabForegroundActiveFrameActive, 0x10);
+-  mixer[kColorTabBackgroundInactiveHoverFrameInactive] =
+-      ui::SetAlpha(kColorTabForegroundActiveFrameActive, 0x10);
++  mixer[kColorTabBackgroundInactiveHoverFrameActive] = ui::SetAlpha(
++      kColorTabForegroundActiveFrameActive, Scaled(kHoverRowAlpha, highlight));
++  mixer[kColorTabBackgroundInactiveHoverFrameInactive] = ui::SetAlpha(
++      kColorTabForegroundActiveFrameActive, Scaled(kHoverRowAlpha, highlight));
+   mixer[kColorTabBackgroundSelectedFrameActive] =
+-      ui::SetAlpha(kColorTabForegroundActiveFrameActive, 0x18);
++      ui::SetAlpha(kColorTabForegroundActiveFrameActive,
++                   Scaled(kSelectedRowAlpha, highlight));
+   mixer[kColorTabBackgroundSelectedFrameInactive] =
+-      ui::SetAlpha(kColorTabForegroundActiveFrameActive, 0x18);
++      ui::SetAlpha(kColorTabForegroundActiveFrameActive,
++                   Scaled(kSelectedRowAlpha, highlight));
+   // The pointer is still on the row after the right-click that selected it,
+   // so the hovered variants are what actually shows.
+   mixer[kColorTabBackgroundSelectedHoverFrameActive] =
+-      ui::SetAlpha(kColorTabForegroundActiveFrameActive, 0x20);
++      ui::SetAlpha(kColorTabForegroundActiveFrameActive,
++                   Scaled(kSelectedHoverRowAlpha, highlight));
+   mixer[kColorTabBackgroundSelectedHoverFrameInactive] =
+-      ui::SetAlpha(kColorTabForegroundActiveFrameActive, 0x20);
++      ui::SetAlpha(kColorTabForegroundActiveFrameActive,
++                   Scaled(kSelectedHoverRowAlpha, highlight));
+ 
+   // No ring around split panes (page U6): Arc draws none, and the
+   // page-coloured bar says which pane is active. The row-text tint at the
+diff --git a/chrome/browser/ui/color/stedding_color_mixer_unittest.cc b/chrome/browser/ui/color/stedding_color_mixer_unittest.cc
+index 5485370dfe70d..58fe891f84d75 100644
+--- a/chrome/browser/ui/color/stedding_color_mixer_unittest.cc
++++ b/chrome/browser/ui/color/stedding_color_mixer_unittest.cc
+@@ -5,6 +5,7 @@
+ #include "chrome/browser/ui/color/stedding_color_mixer.h"
+ 
+ #include <optional>
++#include <utility>
+ 
+ #include "base/test/scoped_feature_list.h"
+ #include "chrome/browser/ui/color/chrome_color_id.h"
+@@ -171,4 +172,103 @@ TEST(SteddingColorMixerTest, RowTextIsReadableOnTheGround) {
+   }
+ }
+ 
++// settings T41-T43 (GitHub issue 45): the window's look. Neutral grey has no
++// hue; a custom colour is used, kept light enough in the light look and dark
++// enough in the dark one; the Space's tint follows its strength, None
++// leaving the ground untinted; and the rows' tints follow the highlight.
++TEST(SteddingColorMixerTest, TheWindowsLookIsTheUsers) {
++  base::test::ScopedFeatureList features(stedding::kArcStyleWindow);
++  const stedding::WindowLook saved = stedding::GetWindowLook();
++  // The ground and the active row's fill for `look`, in a look, with a
++  // Space's colour when `tinted`.
++  const auto paint = [](const stedding::WindowLook& look, bool dark,
++                        bool tinted) {
++    stedding::SetWindowLook(look);
++    ui::ColorProviderKey key;
++    key.color_mode = dark ? ui::ColorProviderKey::ColorMode::kDark
++                          : ui::ColorProviderKey::ColorMode::kLight;
++    if (tinted) {
++      key.user_color = SkColorSetRGB(0xE5, 0x48, 0x4D);
++    }
++    ui::ColorProvider provider;
++    AddSteddingColorMixer(&provider, key);
++    provider.GenerateColorMapForTesting();
++    return std::pair(provider.GetColor(ui::kColorFrameActive),
++                     provider.GetColor(kColorTabBackgroundActiveFrameActive));
++  };
++  stedding::WindowLook look;
++  {
++    SCOPED_TRACE("Stedding's own");
++    EXPECT_EQ(SkColorSetRGB(0x21, 0x26, 0x3A), paint(look, true, false).first);
++    EXPECT_EQ(SkColorSetRGB(0xCB, 0xD5, 0xE1), paint(look, false, false).first);
++  }
++  {
++    SCOPED_TRACE("Neutral grey");
++    look.colour = stedding::WindowColour::kNeutral;
++    for (const bool dark : {true, false}) {
++      const SkColor ground = paint(look, dark, false).first;
++      EXPECT_EQ(SkColorGetR(ground), SkColorGetG(ground));
++      EXPECT_EQ(SkColorGetG(ground), SkColorGetB(ground)) << "a hue";
++      EXPECT_EQ(dark, color_utils::IsDark(ground));
++    }
++  }
++  {
++    SCOPED_TRACE("Custom, and kept readable");
++    look.colour = stedding::WindowColour::kCustom;
++    look.custom_dark = 0x1E3A5F;
++    look.custom_light = 0xDDEEFF;
++    EXPECT_EQ(SkColorSetRGB(0x1E, 0x3A, 0x5F), paint(look, true, false).first);
++    EXPECT_EQ(SkColorSetRGB(0xDD, 0xEE, 0xFF), paint(look, false, false).first);
++    // White picked for the dark look, black for the light one.
++    look.custom_dark = 0xFFFFFF;
++    look.custom_light = 0x000000;
++    color_utils::HSL hsl;
++    color_utils::SkColorToHSL(paint(look, true, false).first, &hsl);
++    EXPECT_LE(hsl.l, 0.29) << "too light for the dark look";
++    color_utils::SkColorToHSL(paint(look, false, false).first, &hsl);
++    EXPECT_GE(hsl.l, 0.69) << "too dark for the light look";
++  }
++  {
++    SCOPED_TRACE("the Space's tint by its strength");
++    look = stedding::WindowLook();
++    const SkColor plain = paint(look, true, false).first;
++    look.space_tint = stedding::LookStrength::kNone;
++    EXPECT_EQ(plain, paint(look, true, true).first) << "None tints nothing";
++    // Each step takes the ground further toward the Space's red.
++    int last_red = static_cast<int>(SkColorGetR(plain));
++    for (const stedding::LookStrength strength :
++         {stedding::LookStrength::kSubtle, stedding::LookStrength::kNormal,
++          stedding::LookStrength::kStrong}) {
++      look.space_tint = strength;
++      const int red =
++          static_cast<int>(SkColorGetR(paint(look, true, true).first));
++      EXPECT_GT(red, last_red) << static_cast<int>(strength);
++      last_red = red;
++    }
++  }
++  {
++    SCOPED_TRACE("the highlight by its strength");
++    look = stedding::WindowLook();
++    int last_alpha = 0;
++    for (const stedding::LookStrength strength :
++         {stedding::LookStrength::kSubtle, stedding::LookStrength::kNormal,
++          stedding::LookStrength::kStrong}) {
++      look.tab_highlight = strength;
++      const int alpha =
++          static_cast<int>(SkColorGetA(paint(look, true, false).second));
++      EXPECT_GT(alpha, last_alpha) << static_cast<int>(strength);
++      last_alpha = alpha;
++    }
++    EXPECT_EQ(0x24u, SkColorGetA([&] {
++                look.tab_highlight = stedding::LookStrength::kNormal;
++                return paint(look, true, false).second;
++              }()))
++        << "Normal is the row as it was";
++    look.tab_highlight = stedding::LookStrength::kSubtle;
++    EXPECT_LT(SkColorGetA(paint(look, false, false).second), 0xFFu)
++        << "Subtle lets the light ground through the white card";
++  }
++  stedding::SetWindowLook(saved);
++}
++
+ }  // namespace
+diff --git a/chrome/browser/ui/spaces/space_model.cc b/chrome/browser/ui/spaces/space_model.cc
+index 21fd9cb85bb36..60a9377074d92 100644
+--- a/chrome/browser/ui/spaces/space_model.cc
++++ b/chrome/browser/ui/spaces/space_model.cc
+@@ -305,6 +305,8 @@ SpaceModel::SpaceModel(BrowserWindowInterface& browser) : SpaceModel() {
+   // layout.
+   if (g_browser_process) {
+     stedding::EnsureSidebarDensityInstalled(g_browser_process->local_state());
++    // settings T41-T43: the window's look, before its first colours.
++    stedding::EnsureWindowLookInstalled(g_browser_process->local_state());
+   }
+   // import I4: the bar's "Import from Arc" row needs to know by the first
+   // opening whether the file exists.
+diff --git a/chrome/browser/ui/stedding/BUILD.gn b/chrome/browser/ui/stedding/BUILD.gn
+index fc37767bc5de6..987a9f997c9ff 100644
+--- a/chrome/browser/ui/stedding/BUILD.gn
++++ b/chrome/browser/ui/stedding/BUILD.gn
+@@ -454,6 +454,9 @@ source_set("sidebar_density") {
+     "//chrome/browser/ui:stedding_ui_metrics",
+     "//chrome/browser/ui/browser_window",
+     "//components/prefs",
++    # settings T41-T43: the window's look re-themes every widget.
++    "//ui/color",
++    "//ui/native_theme",
+     "//ui/views",
+   ]
+ }
+diff --git a/chrome/browser/ui/stedding/sidebar_density.cc b/chrome/browser/ui/stedding/sidebar_density.cc
+index e0b022b3a3fdc..f33bc071e2f1e 100644
+--- a/chrome/browser/ui/stedding/sidebar_density.cc
++++ b/chrome/browser/ui/stedding/sidebar_density.cc
+@@ -17,6 +17,8 @@
+ #include "chrome/browser/ui/stedding_ui_metrics.h"
+ #include "components/prefs/pref_change_registrar.h"
+ #include "components/prefs/pref_service.h"
++#include "ui/color/color_provider_manager.h"
++#include "ui/native_theme/native_theme.h"
+ #include "ui/views/view.h"
+ #include "ui/views/widget/widget.h"
+ 
+@@ -90,6 +92,63 @@ void EnsureSidebarDensityInstalled(PrefService* local_state) {
+   ApplyFromLocalState(local_state);
+ }
+ 
++namespace {
++
++LookStrength StrengthFrom(int value, LookStrength fallback) {
++  return value >= 0 && value <= 3 ? static_cast<LookStrength>(value)
++                                  : fallback;
++}
++
++void ApplyWindowLook(PrefService* local_state) {
++  WindowLook look;
++  const int colour = local_state->GetInteger(prefs::kWindowColour);
++  look.colour = colour >= 0 && colour <= 2 ? static_cast<WindowColour>(colour)
++                                           : WindowColour::kStedding;
++  look.custom_light = static_cast<uint32_t>(
++      local_state->GetInteger(prefs::kWindowColourLight) & 0xFFFFFF);
++  look.custom_dark = static_cast<uint32_t>(
++      local_state->GetInteger(prefs::kWindowColourDark) & 0xFFFFFF);
++  look.space_tint =
++      StrengthFrom(local_state->GetInteger(prefs::kSpaceTintStrength),
++                   LookStrength::kNormal);
++  look.tab_highlight =
++      StrengthFrom(local_state->GetInteger(prefs::kTabHighlight),
++                   LookStrength::kNormal);
++  // The highlight has no None: an active row that looks like the others.
++  if (look.tab_highlight == LookStrength::kNone) {
++    look.tab_highlight = LookStrength::kSubtle;
++  }
++  SetWindowLook(look);
++}
++
++void OnWindowLookChanged(PrefService* local_state) {
++  ApplyWindowLook(local_state);
++  // Colour providers are cached by their key, which a look does not change:
++  // drop them, and every widget builds its colours again through the mixers.
++  ui::ColorProviderManager::Get().ResetColorProviderCache();
++  ui::NativeTheme::GetInstanceForNativeUi()->NotifyOnNativeThemeUpdated();
++  RelayoutEveryWindow();
++}
++
++}  // namespace
++
++void EnsureWindowLookInstalled(PrefService* local_state) {
++  static base::NoDestructor<std::unique_ptr<PrefChangeRegistrar>> registrar;
++  if (!local_state || *registrar) {
++    return;
++  }
++  *registrar = std::make_unique<PrefChangeRegistrar>();
++  (*registrar)->Init(local_state);
++  for (const char* key :
++       {prefs::kWindowColour, prefs::kWindowColourLight,
++        prefs::kWindowColourDark, prefs::kSpaceTintStrength,
++        prefs::kTabHighlight}) {
++    (*registrar)->Add(key,
++                      base::BindRepeating(&OnWindowLookChanged, local_state));
++  }
++  ApplyWindowLook(local_state);
++}
++
+ void SetSidebarDensityPref(PrefService* local_state, int density) {
+   if (local_state) {
+     local_state->SetInteger(prefs::kSidebarDensity, std::clamp(density, 0, 2));
+diff --git a/chrome/browser/ui/stedding/sidebar_density.h b/chrome/browser/ui/stedding/sidebar_density.h
+index 82fc33ddcdf23..113d9b27032e6 100644
+--- a/chrome/browser/ui/stedding/sidebar_density.h
++++ b/chrome/browser/ui/stedding/sidebar_density.h
+@@ -17,6 +17,11 @@ void EnsureSidebarDensityInstalled(PrefService* local_state);
+ // The same, for a change made now (the bar's actions, Y4).
+ void SetSidebarDensityPref(PrefService* local_state, int density);
+ 
++// settings T41-T43 (GitHub issue 45): local state's window look to the
++// process-wide one (stedding::GetWindowLook), and every window re-themed when
++// it changes. Installed with the density, once.
++void EnsureWindowLookInstalled(PrefService* local_state);
++
+ }  // namespace stedding
+ 
+ #endif  // CHROME_BROWSER_UI_STEDDING_SIDEBAR_DENSITY_H_
+diff --git a/chrome/browser/ui/stedding/stedding_prefs.cc b/chrome/browser/ui/stedding/stedding_prefs.cc
+index cf27b38740628..98d75b4da1a3f 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs.cc
++++ b/chrome/browser/ui/stedding/stedding_prefs.cc
+@@ -130,6 +130,13 @@ void RegisterLocalStatePrefs(PrefRegistrySimple* registry) {
+   registry->RegisterDictionaryPref(kBlockerLists);
+   registry->RegisterIntegerPref(kSidebarDensity, 0);
+   registry->RegisterIntegerPref(kSidebarTextSize, 0);
++  // settings T41-T43: Stedding's own look until the user changes it; the
++  // custom colours start as Stedding's own, slate-300 and deep blue.
++  registry->RegisterIntegerPref(kWindowColour, 0);
++  registry->RegisterIntegerPref(kWindowColourLight, 0xCBD5E1);
++  registry->RegisterIntegerPref(kWindowColourDark, 0x21263A);
++  registry->RegisterIntegerPref(kSpaceTintStrength, 2);
++  registry->RegisterIntegerPref(kTabHighlight, 2);
+   registry->RegisterBooleanPref(kUpdatesAutomatic, true);
+   registry->RegisterTimePref(kUpdatesLastCheck, base::Time());
+   registry->RegisterStringPref(kUpdatesNewestListed, std::string());
+diff --git a/chrome/browser/ui/stedding/stedding_prefs.h b/chrome/browser/ui/stedding/stedding_prefs.h
+index b60876600818a..81727d0458c2e 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs.h
++++ b/chrome/browser/ui/stedding/stedding_prefs.h
+@@ -73,6 +73,17 @@ inline constexpr char kSidebarTextSize[] = "stedding.sidebar.text_size";
+ // unset (0); Settings and the welcome flow offer 12 to 15.
+ inline constexpr int kSidebarTextSizeDefault = 14;
+ inline constexpr int kSidebarTextSizeChoices[] = {0, 12, 13, 15};
++// settings T41-T43 (GitHub issue 45): the window's look, browser-wide, as
++// density is. The window colour: 0 Stedding's, 1 a neutral grey, 2 the
++// user's, with a colour for each look as 0xRRGGBB; how strongly the active
++// Space's colour tints the ground (0 none, 1 subtle, 2 normal, 3 strong);
++// and how strongly the active row stands out (1 subtle, 2 normal, 3 strong).
++inline constexpr char kWindowColour[] = "stedding.appearance.window_colour";
++inline constexpr char kWindowColourLight[] =
++    "stedding.appearance.custom_light";
++inline constexpr char kWindowColourDark[] = "stedding.appearance.custom_dark";
++inline constexpr char kSpaceTintStrength[] = "stedding.appearance.space_tint";
++inline constexpr char kTabHighlight[] = "stedding.appearance.tab_highlight";
+ 
+ // True once the first-run welcome flow was finished or skipped
+ // (docs/features/welcome.md).
+diff --git a/chrome/browser/ui/stedding/stedding_prefs_unittest.cc b/chrome/browser/ui/stedding/stedding_prefs_unittest.cc
+index 4e13136d44f91..213f30c8a198e 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs_unittest.cc
++++ b/chrome/browser/ui/stedding/stedding_prefs_unittest.cc
+@@ -129,6 +129,13 @@ TEST(SteddingPrefsTest, TheBrowserWidePreferencesRegisterWithTheirDefaults) {
+   EXPECT_EQ("", local_state.GetString(kUpdatesNewestListed));
+   EXPECT_TRUE(local_state.GetDict(kShortcutsUser).empty())
+       << "shortcuts Z10: no chord of the user's yet";
++  // settings T41-T43 (GitHub issue 45): Stedding's own look, its custom
++  // colours Stedding's own two until the user picks.
++  EXPECT_EQ(0, local_state.GetInteger(kWindowColour));
++  EXPECT_EQ(0xCBD5E1, local_state.GetInteger(kWindowColourLight));
++  EXPECT_EQ(0x21263A, local_state.GetInteger(kWindowColourDark));
++  EXPECT_EQ(2, local_state.GetInteger(kSpaceTintStrength));
++  EXPECT_EQ(2, local_state.GetInteger(kTabHighlight));
+ }
+ 
+ }  // namespace
+diff --git a/chrome/browser/ui/stedding_ui_metrics.cc b/chrome/browser/ui/stedding_ui_metrics.cc
+index 8efee8d373119..d1bdcdb9f425d 100644
+--- a/chrome/browser/ui/stedding_ui_metrics.cc
++++ b/chrome/browser/ui/stedding_ui_metrics.cc
+@@ -177,6 +177,35 @@ int GetSidebarTextSize() {
+   return TextSizeInForce();
+ }
+ 
++namespace {
++WindowLook& WindowLookInForce() {
++  static WindowLook look;
++  return look;
++}
++}  // namespace
++
++void SetWindowLook(const WindowLook& look) {
++  WindowLookInForce() = look;
++}
++
++const WindowLook& GetWindowLook() {
++  return WindowLookInForce();
++}
++
++float LookStrengthScale(LookStrength strength) {
++  switch (strength) {
++    case LookStrength::kNone:
++      return 0.0f;
++    case LookStrength::kSubtle:
++      return 0.5f;
++    case LookStrength::kNormal:
++      return 1.0f;
++    case LookStrength::kStrong:
++      return 1.5f;
++  }
++  return 1.0f;
++}
++
+ int SidebarRowHeight() {
+   const int preset = MetricsForDensity(DensityInForce()).row_height;
+   const int text = TextSizeInForce();
+diff --git a/chrome/browser/ui/stedding_ui_metrics.h b/chrome/browser/ui/stedding_ui_metrics.h
+index 5b02de2c7d2fc..8c464c655c8ed 100644
+--- a/chrome/browser/ui/stedding_ui_metrics.h
++++ b/chrome/browser/ui/stedding_ui_metrics.h
+@@ -5,6 +5,7 @@
+ #ifndef CHROME_BROWSER_UI_STEDDING_UI_METRICS_H_
+ #define CHROME_BROWSER_UI_STEDDING_UI_METRICS_H_
+ 
++#include <cstdint>
+ #include <optional>
+ 
+ #include "base/feature_list.h"
+@@ -56,6 +57,27 @@ SidebarDensity GetSidebarDensity();
+ void SetSidebarTextSize(int size);
+ int GetSidebarTextSize();
+ 
++// settings T41-T43 (GitHub issue 45): the window's look, browser-wide, set
++// from local state (WindowLook in chrome/browser/ui/stedding) and read by the
++// colour mixer, the window's ground and the sidebar's rows.
++enum class WindowColour { kStedding = 0, kNeutral = 1, kCustom = 2 };
++// How strongly a colour shows: the Space's tint of the ground, or the active
++// row's highlight, which offers no kNone.
++enum class LookStrength { kNone = 0, kSubtle = 1, kNormal = 2, kStrong = 3 };
++struct WindowLook {
++  WindowColour colour = WindowColour::kStedding;
++  // The custom colour for each look, as 0xRRGGBB. Stedding's own until the
++  // user picks.
++  uint32_t custom_light = 0xCBD5E1;
++  uint32_t custom_dark = 0x21263A;
++  LookStrength space_tint = LookStrength::kNormal;
++  LookStrength tab_highlight = LookStrength::kNormal;
++};
++void SetWindowLook(const WindowLook& look);
++const WindowLook& GetWindowLook();
++// A strength's share of the Normal amount: 0, 0.5, 1 and 1.5.
++float LookStrengthScale(LookStrength strength);
++
+ // The metrics in force: the preset, and a row never shorter than its text
+ // with the row's insets (Y2).
+ int SidebarRowHeight();
+diff --git a/chrome/browser/ui/views/commandbar/command_bar_view.cc b/chrome/browser/ui/views/commandbar/command_bar_view.cc
+index 9494e8d601d2d..ca9829b74cdfe 100644
+--- a/chrome/browser/ui/views/commandbar/command_bar_view.cc
++++ b/chrome/browser/ui/views/commandbar/command_bar_view.cc
+@@ -994,6 +994,52 @@ void CommandBarView::BuildActions() {
+                               },
+                               value)});
+     }
++    // settings T41-T43 (GitHub issue 45): the window's look, browser-wide,
++    // each a cycling row (K17) on local state, as Settings offers it.
++    if (PrefService* const local =
++            g_browser_process ? g_browser_process->local_state() : nullptr) {
++      struct LookPref {
++        const char* key;
++        const char16_t* label;
++        std::vector<PrefChoice> choices;
++      };
++      const LookPref kLooks[] = {
++          {stedding::prefs::kWindowColour,
++           u"Window colour",
++           {{0, u"Stedding"}, {1, u"Neutral grey"}, {2, u"Custom"}}},
++          {stedding::prefs::kSpaceTintStrength,
++           u"Space colour strength",
++           {{0, u"None"}, {1, u"Subtle"}, {2, u"Normal"}, {3, u"Strong"}}},
++          {stedding::prefs::kTabHighlight,
++           u"Tab highlight",
++           {{1, u"Subtle"}, {2, u"Normal"}, {3, u"Strong"}}},
++      };
++      for (const LookPref& pref : kLooks) {
++        if (!local->FindPreference(pref.key)) {
++          continue;
++        }
++        const int value = local->GetInteger(pref.key);
++        std::u16string name = u"?";
++        size_t at = 0;
++        for (size_t i = 0; i < pref.choices.size(); ++i) {
++          if (pref.choices[i].value == value) {
++            name = pref.choices[i].name;
++            at = i;
++          }
++        }
++        const int next = pref.choices[(at + 1) % pref.choices.size()].value;
++        Action action;
++        action.title = std::u16string(pref.label) + u": " + name + u" \u25B8";
++        action.keeps_bar_open = true;
++        action.key = std::u16string(pref.label);
++        action.run = base::BindRepeating(
++            [](PrefService* prefs, const char* key, int next) {
++              prefs->SetInteger(key, next);
++            },
++            base::Unretained(local), pref.key, next);
++        actions_.push_back(std::move(action));
++      }
++    }
+     // sidebar Y19: the sidebar's three forms -- open, a rail of icons,
+     // hidden -- each a row; Cmd-S and the sidebar's toggle close it to the
+     // form last chosen.
+diff --git a/chrome/browser/ui/views/commandbar/command_bar_view_unittest.cc b/chrome/browser/ui/views/commandbar/command_bar_view_unittest.cc
+index db251755d0bb4..1d56611f36ba9 100644
+--- a/chrome/browser/ui/views/commandbar/command_bar_view_unittest.cc
++++ b/chrome/browser/ui/views/commandbar/command_bar_view_unittest.cc
+@@ -1517,6 +1517,49 @@ TEST_F(CommandBarViewTest, APreferenceRowCyclesItsValue) {
+   }
+ }
+ 
++// settings T41-T43 (GitHub issue 45): the window's look is browser-wide, and
++// its rows cycle local state's values in the order Settings offers them.
++TEST_F(CommandBarViewTest, TheLookRowsCycleLocalState) {
++  AddTab(browser(), GURL("https://example.com/"));
++  PrefService* const local = g_browser_process->local_state();
++  ASSERT_TRUE(local);
++  ASSERT_TRUE(local->FindPreference(stedding::prefs::kWindowColour));
++  const struct {
++    const char16_t* query;
++    const char* key;
++    std::array<int, 3> values;
++    std::array<const char16_t*, 3> titles;
++  } kRows[] = {
++      {u"window colour", stedding::prefs::kWindowColour, {0, 1, 2},
++       {u"Window colour: Stedding \u25B8", u"Window colour: Neutral grey \u25B8",
++        u"Window colour: Custom \u25B8"}},
++      {u"space colour", stedding::prefs::kSpaceTintStrength, {2, 3, 0},
++       {u"Space colour strength: Normal \u25B8",
++        u"Space colour strength: Strong \u25B8",
++        u"Space colour strength: None \u25B8"}},
++      {u"tab highlight", stedding::prefs::kTabHighlight, {2, 3, 1},
++       {u"Tab highlight: Normal \u25B8", u"Tab highlight: Strong \u25B8",
++        u"Tab highlight: Subtle \u25B8"}},
++  };
++  for (const auto& row : kRows) {
++    SCOPED_TRACE(base::UTF16ToUTF8(row.query));
++    local->SetInteger(row.key, row.values[0]);
++    auto bar = std::make_unique<CommandBarView>(browser());
++    bar->SetModeForTesting(CommandBarView::Mode::kActions);
++    bar->ContentsChanged(bar->field_for_testing(), row.query);
++    ASSERT_EQ(1u, bar->row_count_for_testing());
++    for (size_t i = 0; i < 3; ++i) {
++      EXPECT_EQ(std::u16string(row.titles[i]), bar->row_title_for_testing(0));
++      if (i == 2) {
++        break;
++      }
++      EXPECT_TRUE(Enter(*bar));
++      EXPECT_EQ(row.values[i + 1], local->GetInteger(row.key));
++    }
++    local->ClearPref(row.key);
++  }
++}
++
+ // tabs R15: the bar matches the name the user gave a tab.
+ TEST_F(CommandBarViewTest, MatchesCustomTitle) {
+   AddTab(browser(), GURL("https://example.com/"));
+diff --git a/chrome/browser/ui/views/frame/stedding_window_background.cc b/chrome/browser/ui/views/frame/stedding_window_background.cc
+index e610054ae7c4b..110131fcbe41c 100644
+--- a/chrome/browser/ui/views/frame/stedding_window_background.cc
++++ b/chrome/browser/ui/views/frame/stedding_window_background.cc
+@@ -144,7 +144,11 @@ void SteddingWindowBackground::Paint(gfx::Canvas* canvas,
+   const bool is_private =
+       private_check && private_check->browser() &&
+       IsPrivateWindow(private_check->browser()->GetProfile());
+-  if (!dark || is_private) {
++  // settings T41 (GitHub issue 45): the gradient is Stedding's own ground;
++  // Neutral grey and a custom colour are flat.
++  const bool gradient =
++      GetWindowLook().colour == WindowColour::kStedding;
++  if (!dark || is_private || !gradient) {
+     canvas->DrawColor(frame);
+   } else {
+     // The gradient's far stop keeps its distance from the near stop whatever
+diff --git a/chrome/browser/ui/views/tabs/common/vertical_tab_style_views.cc b/chrome/browser/ui/views/tabs/common/vertical_tab_style_views.cc
+index 876ec1e7f37e3..f0246bd75f516 100644
+--- a/chrome/browser/ui/views/tabs/common/vertical_tab_style_views.cc
++++ b/chrome/browser/ui/views/tabs/common/vertical_tab_style_views.cc
+@@ -8,7 +8,9 @@
+ #include <string>
+ 
+ #include "chrome/browser/themes/theme_properties.h"
++#include "chrome/browser/ui/color/chrome_color_id.h"
+ #include "chrome/browser/ui/layout_constants.h"
++#include "chrome/browser/ui/stedding_ui_metrics.h"
+ #include "chrome/browser/ui/views/frame/browser_frame_view.h"
+ #include "chrome/browser/ui/views/tabs/common/tab_collection_node.h"
+ #include "chrome/browser/ui/views/tabs/common/tab_strip_collection_controller.h"
+@@ -19,7 +21,9 @@
+ #include "third_party/skia/include/core/SkPath.h"
+ #include "third_party/skia/include/core/SkRRect.h"
+ #include "ui/base/theme_provider.h"
++#include "ui/color/color_provider.h"
+ #include "ui/gfx/canvas.h"
++#include "ui/gfx/color_utils.h"
+ #include "ui/gfx/geometry/skia_conversions.h"
+ #include "ui/gfx/scoped_canvas.h"
+ #include "ui/views/view_utils.h"
+@@ -159,10 +163,30 @@ void VerticalTabStyleViews::PaintTabBackgroundFill(
+                                     hovered)) {
+     cc::PaintFlags flags;
+     flags.setAntiAlias(true);
+-    flags.setColor(GetCurrentTabBackgroundColor(selection_state));
++    const SkColor fill = GetCurrentTabBackgroundColor(selection_state);
++    flags.setColor(fill);
+     canvas->DrawRect(gfx::ScaleToEnclosingRect(
+                          delegate_->GetView()->GetLocalBounds(), scale),
+                      flags);
++    // Stedding (settings T43, GitHub issue 45): a Strong highlight rings the
++    // active row's opaque light card with a hairline of the row's text, as
++    // the dark look's stronger tint already stands out. Inside the clip, so
++    // the line's inner half shows: 1 DIP.
++    const ui::ColorProvider* const colors =
++        delegate_->GetView()->GetColorProvider();
++    if (base::FeatureList::IsEnabled(stedding::kArcStyleWindow) && colors &&
++        selection_state == TabStyle::TabSelectionState::kActive &&
++        stedding::GetWindowLook().tab_highlight ==
++            stedding::LookStrength::kStrong &&
++        SkColorGetA(fill) == SK_AlphaOPAQUE && !color_utils::IsDark(fill)) {
++      cc::PaintFlags ring;
++      ring.setAntiAlias(true);
++      ring.setStyle(cc::PaintFlags::kStroke_Style);
++      ring.setStrokeWidth(2 * scale);
++      ring.setColor(SkColorSetA(
++          colors->GetColor(kColorTabForegroundActiveFrameActive), 0x38));
++      canvas->DrawPath(fill_path, ring);
++    }
+   }
+ 
+   if (fill_id.has_value()) {
+diff --git a/chrome/browser/ui/webui/settings/settings_ui.cc b/chrome/browser/ui/webui/settings/settings_ui.cc
+index 40367acc49e56..4da55e6ca3695 100644
+--- a/chrome/browser/ui/webui/settings/settings_ui.cc
++++ b/chrome/browser/ui/webui/settings/settings_ui.cc
+@@ -722,6 +722,35 @@ SettingsUI::SettingsUI(content::WebUI* web_ui)
+   };
+   // The page's sections (settings T13).
+   html_source->AddString("steddingSidebarTitle", "Sidebar");
++  // settings T41-T43 (GitHub issue 45).
++  html_source->AddString("steddingAppearanceTitle", "Appearance");
++  html_source->AddString("steddingWindowColourLabel", "Window colour");
++  html_source->AddString(
++      "steddingWindowColourSubLabel",
++      "The colour around the page, under the sidebar, in every window.");
++  html_source->AddString("steddingWindowColourStedding", "Stedding");
++  html_source->AddString("steddingWindowColourNeutral", "Neutral grey");
++  html_source->AddString("steddingWindowColourCustom", "Custom");
++  html_source->AddString("steddingCustomLightLabel", "Colour, light look");
++  html_source->AddString(
++      "steddingCustomLightSubLabel",
++      "Kept light enough for dark text.");
++  html_source->AddString("steddingCustomDarkLabel", "Colour, dark look");
++  html_source->AddString(
++      "steddingCustomDarkSubLabel",
++      "Kept dark enough for light text.");
++  html_source->AddString("steddingSpaceTintLabel", "Space colour strength");
++  html_source->AddString(
++      "steddingSpaceTintSubLabel",
++      "How much of the Space\u2019s colour the window takes.");
++  html_source->AddString("steddingTabHighlightLabel", "Tab highlight");
++  html_source->AddString(
++      "steddingTabHighlightSubLabel",
++      "How strongly the tab you are on stands out in the sidebar.");
++  html_source->AddString("steddingStrengthNone", "None");
++  html_source->AddString("steddingStrengthSubtle", "Subtle");
++  html_source->AddString("steddingStrengthNormal", "Normal");
++  html_source->AddString("steddingStrengthStrong", "Strong");
+   html_source->AddString("steddingTabsTitle", "Tabs");
+   html_source->AddString("steddingPagesTitle", "Pages and menus");
+   // settings T13 (BACKLOG S-313): a card of its own for Peek and the little
+diff --git a/chrome/test/stedding/settings_spaces_browsertest.cc b/chrome/test/stedding/settings_spaces_browsertest.cc
+index 63a1a9a4e68a3..840c52140c6d9 100644
+--- a/chrome/test/stedding/settings_spaces_browsertest.cc
++++ b/chrome/test/stedding/settings_spaces_browsertest.cc
+@@ -50,6 +50,9 @@
+ #include "net/dns/mock_host_resolver.h"
+ #include "net/test/embedded_test_server/embedded_test_server.h"
+ #include "third_party/blink/public/common/input/web_mouse_event.h"
++#include "chrome/browser/browser_process.h"
++#include "chrome/browser/ui/views/frame/browser_view.h"
++#include "ui/color/color_provider.h"
+ #include "third_party/skia/include/core/SkColor.h"
+ #include "ui/base/accelerators/accelerator.h"
+ #include "ui/base/window_open_disposition.h"
+@@ -460,9 +463,10 @@ IN_PROC_BROWSER_TEST_F(SettingsSpacesTest, ThePageBindsEveryControl) {
+     // named at the top of the page, where its name jumps to it.
+     SCOPED_TRACE("the groups are cards, named at the top");
+     EXPECT_EQ(
+-        "sidebarSection,tabsSection,peekSection,spacesSection,syncSection,"
+-        "pagesSection,privacySection,updatesSection,shortcutsSection|Sidebar,"
+-        "Tabs,Peek and little windows,Spaces,Sync and import,Pages and menus,"
++        "sidebarSection,appearanceSection,tabsSection,peekSection,"
++        "spacesSection,syncSection,pagesSection,privacySection,"
++        "updatesSection,shortcutsSection|Sidebar,Appearance,Tabs,"
++        "Peek and little windows,Spaces,Sync and import,Pages and menus,"
+         "Privacy,Updates,Shortcuts",
+         content::EvalJs(page, OnThePage(R"(
+           const page = pick('settings-stedding-page');
+@@ -792,6 +796,74 @@ IN_PROC_BROWSER_TEST_F(SettingsSpacesTest, EachHoverPauseIsWrittenAsPicked) {
+   }
+ }
+ 
++// settings T41 (GitHub issue 45): the Appearance card. Window colour shows
++// its two colour wells at Custom alone; a colour picked in a well is written
++// to its preference; and an open window takes each new ground at once,
++// Neutral grey's with no hue, a custom one as picked.
++IN_PROC_BROWSER_TEST_F(SettingsSpacesTest, TheAppearanceCardRethemesTheWindow) {
++  PrefService* const local = g_browser_process->local_state();
++  BrowserView* const view = BrowserView::GetBrowserViewForBrowser(browser());
++  const auto ground = [&]() {
++    return view->GetColorProvider()->GetColor(ui::kColorFrameActive);
++  };
++  const SkColor before = ground();
++  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(),
++                                           GURL("chrome://settings/stedding")));
++  content::WebContents* const page =
++      browser()->GetTabStripModel()->GetActiveWebContents();
++  // How many colour wells the Appearance card shows; -1 before it is drawn.
++  const auto wells = [&]() {
++    return content::EvalJs(page, OnThePage(R"(
++      const card = pick('#appearanceSection');
++      if (!card || !pick('#windowColour')) {
++        return -1;
++      }
++      const page = pick('settings-stedding-page');
++      return page.shadowRoot.querySelectorAll(
++          '#appearanceSection input[type=color]').length;
++    )")).ExtractInt();
++  };
++  ASSERT_TRUE(base::test::RunUntil([&]() { return wells() >= 0; }));
++  EXPECT_EQ(0, wells()) << "wells before Custom";
++
++  local->SetInteger(stedding::prefs::kWindowColour, 1);
++  ASSERT_TRUE(base::test::RunUntil([&]() { return ground() != before; }))
++      << "the window kept its ground";
++  EXPECT_EQ(SkColorGetR(ground()), SkColorGetG(ground()));
++  EXPECT_EQ(SkColorGetG(ground()), SkColorGetB(ground())) << "a hue in grey";
++
++  local->SetInteger(stedding::prefs::kWindowColour, 2);
++  ASSERT_TRUE(base::test::RunUntil([&]() { return wells() == 2; }))
++      << "no wells at Custom";
++  // A pick in each well, as the colour panel's choice lands: the input takes
++  // the value and tells its listeners.
++  EXPECT_EQ(true, content::EvalJs(page, OnThePage(R"(
++    const page = pick('settings-stedding-page');
++    const set = (id, value) => {
++      const well = page.shadowRoot.querySelector(id);
++      well.value = value;
++      well.dispatchEvent(new Event('change'));
++    };
++    set('#customLight', '#e8f0e0');
++    set('#customDark', '#203020');
++    return true;
++  )")));
++  ASSERT_TRUE(base::test::RunUntil([&]() {
++    return local->GetInteger(stedding::prefs::kWindowColourLight) ==
++               0xE8F0E0 &&
++           local->GetInteger(stedding::prefs::kWindowColourDark) == 0x203020;
++  })) << "the picks were not written";
++  EXPECT_TRUE(base::test::RunUntil([&]() {
++    return ground() == SkColorSetRGB(0xE8, 0xF0, 0xE0) ||
++           ground() == SkColorSetRGB(0x20, 0x30, 0x20);
++  })) << "the window did not take the custom colour";
++
++  local->ClearPref(stedding::prefs::kWindowColour);
++  local->ClearPref(stedding::prefs::kWindowColourLight);
++  local->ClearPref(stedding::prefs::kWindowColourDark);
++  EXPECT_TRUE(base::test::RunUntil([&]() { return ground() == before; }));
++}
++
+ // settings T37, T38 (GitHub issue 45): "Show a hidden sidebar" offers the
+ // edge's five rests and "Sidebar animation" the three speeds, each by its
+ // name, and each pick is written to the preference the sidebar reads

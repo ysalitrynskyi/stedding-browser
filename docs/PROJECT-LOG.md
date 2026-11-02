@@ -34,8 +34,9 @@ times alone after the fix below (`SidebarFormsTest.TheSlidOutSidebarsEssentialsT
 needed a new way to lower the title band once bars left the top; `SpaceJarTest` timed out once).
 On the Mac, the changed suites on the release build (address row, sidebar address, sidebar forms,
 window buttons, rail); one menu test failed under load and passes alone. Every state was captured
-on both platforms, dark and light, for the owner's review; nothing is released. Owed before a
-release: the Mac's full sweep.
+on both platforms, dark and light, for the owner's review; nothing is released. Then the Mac's
+full sweep on the release build passed: unit_tests 1360, components_unittests 56,
+content_unittests 1, stedding_browser_tests 716 and 168 serial.
 
 ## 2026-11-02, later -- the owner's list after beta 6: a peek's edge, the welcome flow's privacy step, issue 45's version B
 

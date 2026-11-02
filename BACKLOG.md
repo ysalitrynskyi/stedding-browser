@@ -23,23 +23,10 @@ build.
 
 | Id | Item | Feature / spec | Notes |
 |---|---|---|---|
-| S-377 | An edge round the peek over the page | `docs/features/peek.md` P20; `docs/features/settings.md` | Dark on dark, the card's edge disappears. The owner chose a frosted rim from four rendered styles, with a setting for a soft glow or none. |
-| S-378 | The address in the sidebar in macOS full screen | `docs/features/toolbar.md`; `docs/features/sidebar.md` Y49 | In full screen, "Show the address in the sidebar" changes nothing, and ⌘S and ⇧⌘D no longer hide the address row. Needs the Mac. |
-| S-379 | "Address field" defaults to wide and centred | `docs/features/settings.md`; `docs/features/toolbar.md` | The owner's choice. |
-| S-380 | Chips in the address row sit off centre | `docs/features/toolbar.md` | The Stedding icon in the chip of a `chrome://` page is not centred vertically. Check every chip and page action. |
-| S-381 | Pinned tabs whose title starts with "/" | `docs/features/pins.md` | Many pinned rows read "/ ZeroWork" for no reason the owner can see. |
-| S-382 | "Mark pinned tabs that left their page" | `docs/features/pins.md`; `docs/features/settings.md` | The owner sees it do nothing, and its words do not say what it does. |
-| S-383 | The Undo after closing tabs | `docs/features/tabs.md` | It looks rough and sits off centre under the address row. |
-| S-384 | Spaces in settings | `docs/features/settings.md` | The rows are cramped and waste the width. |
-| S-385 | A full collapse slides the sidebar out | `docs/features/sidebar.md`; `docs/features/motion.md` | Collapsing completely squeezes the rows as the width shrinks. They should leave as they are. The step to the narrow rail still reflows, smoothly. |
-| S-386 | The wheel in a sidebar shown at the edge | `docs/features/sidebar.md` | With the sidebar hidden and shown by the pointer at the edge, the list does not scroll. |
-| S-387 | Privacy choices in the welcome flow | `docs/features/welcome.md`; `docs/PRIVACY.md` | Global Privacy Control, ad and tracker blocking (how it works, and that an extension can block more, without running Stedding down) and link cleaning, each chosen at setup. Link cleaning off by default (the owner: it can break referrals). |
-| S-388 | "Ad topics, site-suggested ads and ad measurement" | `docs/features/settings.md` | The row's words do not say what it is. |
-| S-389 | Folder icons and even gaps (GitHub issue 68) | `docs/features/folders.md`; `docs/features/sidebar.md` | A folder can take an icon. The gap from icon to name is the same for tabs, folders and Spaces, and a folder's name sits centred. |
 | S-390 | The sidebar's width across a real update (GitHub issue 65) | `docs/features/sidebar.md` Y47 | Beta 6's fix is tested on restarts. Try it the way the reporter sees it: install a release, set a width, update to the next from a local feed, and read the width. |
-| S-391 | The address in the sidebar, version B (GitHub issue 45) | `docs/features/sidebar.md` Y49; `docs/features/toolbar.md` | From the reporter's design: page controls and the menu at the right of the top row; window controls shown on hover; the field with a site-settings button, Install app, Copy Link and pinned extensions; a site panel with quick actions, the site's extensions, the Space's session, Clear site data, dark pages and ad blocking. |
 | S-393 | A folder's icon in the sidebar file and sync | `docs/features/folders.md` F42; `docs/features/sidebar-file.md` | A folder's icon comes back after a restart. The export, the import and sidebar sync do not carry it yet. |
-| S-392 | The top row beside the camera housing | `docs/features/toolbar.md` | On a Mac with a notch, explore using the menu bar's row for the window in full screen. Last. |
+| S-394 | macOS: "Stedding tried to access your data from other apps and was blocked" | `docs/PRIVACY.md` | Seen 2026-11-02 as a system notification while the round's test copy (its own bundle id, signed ad hoc) started fresh profiles. Find what reads another app's data at startup -- an import scan of other browsers is the likely one -- and whether a signed build does it; nothing should touch another app's data before the user asks for an import. |
+| S-392 | The top row beside the camera housing | `docs/features/toolbar.md` | On a Mac with a notch, explore using the menu bar's row for the window in full screen. Explored 2026-11-02: macOS's own full screen keeps that row for the menu bar, and no public switch gives it to the window, so the page starts under a black band. The row is the window's only in a full screen of Stedding's own -- a borderless window over the whole screen with the menu bar and Dock set to hide -- which gives up the full screen's own Space, Mission Control's place for it and its tiling, and has the menu bar slide over the row when the pointer reaches the top. The two halves beside the camera (`NSScreen` `auxiliaryTopLeftArea` and `auxiliaryTopRightArea`; on the 14-inch screen 771.5 by 32 points each, the housing 185 points between) could hold the sidebar's top line on the left and the window's menu on the right. Waits on the owner's choice. |
 
 ### Next
 

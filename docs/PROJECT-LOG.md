@@ -2,6 +2,41 @@
 
 What was built, newest first. Nothing here is needed to do a task: `AGENTS.md` carries what is true now, `BACKLOG.md` the order of work, `PLAN.md` the owner's decisions. This file was the "State of the project" section of `AGENTS.md` until 2026-09-30. This log starts at 2026-10-15. Closed work from before that is the table in [docs/history/archive.md](history/archive.md).
 
+## 2026-11-02, evening -- the Mac's half of the owner's list, and page bars under the page
+
+With the Mac free, its items of the owner's list, and what the owner saw on it:
+
+- **Full screen follows the address row's rules** (toolbar T8, T10; S-378): hidden with the
+  sidebar, the row no longer slides in with the pointer, the top keeps no empty band, and ⇧⌘D
+  works there. The strip over the row is the window's colour, not Chromium's grey (T32).
+- **The wheel in a sidebar shown at the edge** (S-386): it scrolls on the Mac too, with a wheel
+  and with a trackpad's phased scroll (`tooling/drive`'s new `scroll` step). On the way: a
+  layout after the slide, a scroll's among them, put the toggle of a sidebar expanded on hover
+  back on the traffic lights' row (sidebar Y52).
+- **Version B's last part** (sidebar Y53; S-391): with the address in the open sidebar, the
+  traffic lights show only while the pointer is over the sidebar's top.
+- **The owner's look at it**: the address row's buttons lent to the sidebar, the window's menu
+  among them, in the sidebar's colours, not the row's dark ones (Y51); Back, Forward and Reload a
+  size under the toggle, whose ink they now match (Y46).
+- **Page bars under the page** (toolbar T54): "Restore pages?", Translate and the like were
+  Chromium's grey band over the page. The owner chose from rendered designs a pill in the
+  window's colour under the page, rising over its bottom edge with a shadow so it is seen. A
+  toast no longer steps under the bars (T38), and the page no longer moves down a point when
+  one comes (T36).
+
+Also: a Chromium browser test of the tab strip API did not handle the folder case and stopped
+the Mac's `browser_tests` build; the notch row was explored and waits on the owner (S-392);
+macOS showed a "tried to access your data from other apps" notice for the test copy (S-394).
+
+Checked: on Windows, the full sweep on win-release (unit_tests 1351, components_unittests 45,
+content_unittests 1, stedding_browser_tests 673 and 183 serial): two failures, each passing three
+times alone after the fix below (`SidebarFormsTest.TheSlidOutSidebarsEssentialsTakeTheirPress`
+needed a new way to lower the title band once bars left the top; `SpaceJarTest` timed out once).
+On the Mac, the changed suites on the release build (address row, sidebar address, sidebar forms,
+window buttons, rail); one menu test failed under load and passes alone. Every state was captured
+on both platforms, dark and light, for the owner's review; nothing is released. Owed before a
+release: the Mac's full sweep.
+
 ## 2026-11-02, later -- the owner's list after beta 6: a peek's edge, the welcome flow's privacy step, issue 45's version B
 
 The owner chose the peek's edge from four styles rendered by a real build, then sent sixteen

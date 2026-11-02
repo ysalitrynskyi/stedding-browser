@@ -18,6 +18,9 @@ See tooling/drive for the step grammar.
 #   click X Y [mods] | rclick X Y [mods] | dblclick X Y [mods] | hover X Y | drag X1 Y1 X2 Y2
 #   move X1 Y1 X2 Y2 SECONDS                   the pointer along an eased path, no button
 #   wheel X Y RIGHT DOWN [shift]               a mouse wheel's notches at X Y, no phase
+#   scroll X Y DOWN                            a trackpad's two-finger scroll at X Y: DOWN
+#                                              points in pixel steps with began, changed and
+#                                              ended phases (negative: up)
 #   dragstart X Y | dragmove X Y | dragend      a drag in steps, so a shot can land mid-drag
 #   key <name>[+cmd][+shift][+ctrl][+alt]      (names: KEYS below)
 #   keydown <name> | keyup <name>              a modifier (or key) held across steps
@@ -40,7 +43,9 @@ KEYS = {'a': 0, 's': 1, 'd': 2, 'f': 3, 'h': 4, 'g': 5, 'z': 6, 'x': 7, 'c': 8, 
         'esc': 53, 'left': 123, 'right': 124, 'down': 125, 'up': 126, 'backspace': 51,
         'delete': 117, 'home': 115, 'end': 119, 'pageup': 116, 'pagedown': 121,
         # Shift-Cmd-[ and ] go to the previous and next tab (docs/SHORTCUTS.md).
-        '[': 33, ']': 30}
+        '[': 33, ']': 30,
+        # Cmd-, opens Settings.
+        ',': 43}
 MOD_KEYS = {'cmd': 55, 'shift': 56, 'alt': 58, 'ctrl': 59}
 PUNCT = {'.': 47, '/': 44, '-': 27, ' ': 49}
 KEY_MODS = ('cmd', 'shift', 'ctrl', 'alt')
@@ -131,6 +136,12 @@ def parse_steps(path):
                         int(_number(words[3])), len(words) == 5)
                 if not (args[2] or args[3]) or abs(args[2]) > 10 or abs(args[3]) > 10:
                     raise ValueError("wheel turns 1 to 10 notches")
+            elif op == 'scroll':
+                if len(words) != 3:
+                    raise ValueError("scroll takes X Y DOWN")
+                args = (_number(words[0]), _number(words[1]), int(_number(words[2])))
+                if not args[2] or abs(args[2]) > 2000:
+                    raise ValueError("scroll moves 1 to 2000 points")
             elif op == 'dragend':
                 if words:
                     raise ValueError("dragend takes nothing")
@@ -475,6 +486,29 @@ class Driver:
         q.CGEventSetFlags(event, q.kCGEventFlagMaskShift if shift else 0)
         q.CGEventPost(q.kCGHIDEventTap, event)
 
+    def scroll(self, x, y, down):
+        # A trackpad's two-finger scroll: continuous pixel deltas in phases, a
+        # began, changes and an ended, as a person's fingers send, and not a
+        # wheel's notches (wheel above). Some views take one and not the other
+        # (BACKLOG S-386).
+        q = self.q
+        sx, sy = self.to_screen(x, y)
+        self.require_mouse_at(sx, sy)
+        self.post_mouse(q.kCGEventMouseMoved, sx, sy, q.kCGMouseButtonLeft)
+        time.sleep(0.05)
+        steps = 12
+        per = -down / steps
+        phases = [1] + [2] * steps + [4]  # began, changed..., ended
+        for phase in phases:
+            delta = 0 if phase != 2 else int(round(per))
+            event = q.CGEventCreateScrollWheelEvent(None, q.kCGScrollEventUnitPixel,
+                                                    1, delta)
+            q.CGEventSetLocation(event, (sx, sy))
+            q.CGEventSetIntegerValueField(event, q.kCGScrollWheelEventIsContinuous, 1)
+            q.CGEventSetIntegerValueField(event, q.kCGScrollWheelEventScrollPhase, phase)
+            q.CGEventPost(q.kCGHIDEventTap, event)
+            time.sleep(0.016)
+
     def drag(self, x1, y1, x2, y2):
         q = self.q
         left = q.kCGMouseButtonLeft
@@ -641,6 +675,8 @@ class Driver:
             self.move(*args)
         elif op == 'wheel':
             self.wheel(*args)
+        elif op == 'scroll':
+            self.scroll(*args)
         elif op == 'dragstart':
             self.drag_start(*args)
         elif op == 'dragmove':

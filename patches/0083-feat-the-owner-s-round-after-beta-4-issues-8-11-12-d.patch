@@ -129,9 +129,9 @@ the hover card).
  .../spaces/space_tab_visibility_controller.h  |   7 +
  .../views/tabs/common/folder_drag_target.cc   | 112 ++-
  .../ui/views/tabs/common/folder_drag_target.h |  19 +-
- .../ui/views/tabs/common/folder_view.cc       | 528 +++++++++--
- .../ui/views/tabs/common/folder_view.h        |  98 +-
- .../views/tabs/common/folder_view_unittest.cc |  48 +-
+ .../ui/views/tabs/common/folder_view.cc       | 591 ++++++++++--
+ .../ui/views/tabs/common/folder_view.h        | 113 ++-
+ .../views/tabs/common/folder_view_unittest.cc |  73 +-
  .../tabs/common/pinned_tab_container_view.cc  |  24 +-
  .../tabs/common/stedding_tab_row_rules.cc     |   4 +
  .../tabs/common/stedding_tab_row_rules.h      |   7 +
@@ -172,7 +172,7 @@ the hover card).
  components/tabs/impl/tab_strip_collection.cc  |  98 ++
  .../tab_collection_observer_unittest.cc       | 161 ++++
  components/tabs/public/tab_strip_collection.h |  22 +
- 92 files changed, 7052 insertions(+), 777 deletions(-)
+ 92 files changed, 7142 insertions(+), 790 deletions(-)
  create mode 100644 chrome/browser/ui/views/page_action/stedding_copy_link_page_action_controller.cc
  create mode 100644 chrome/browser/ui/views/page_action/stedding_copy_link_page_action_controller.h
  create mode 100644 chrome/browser/ui/views/tabs/hovercard/tab_resource_line.cc
@@ -4476,19 +4476,21 @@ index 876c447fb7da5..f08a3c2abd7d1 100644
  };
  
 diff --git a/chrome/browser/ui/views/tabs/common/folder_view.cc b/chrome/browser/ui/views/tabs/common/folder_view.cc
-index bf1aea04f9940..5fa9a1d942e79 100644
+index bf1aea04f9940..dbdbd7f3c802f 100644
 --- a/chrome/browser/ui/views/tabs/common/folder_view.cc
 +++ b/chrome/browser/ui/views/tabs/common/folder_view.cc
-@@ -20,14 +20,17 @@
+@@ -20,14 +20,19 @@
  #include "base/strings/utf_string_conversions.h"
  #include "base/task/sequenced_task_runner.h"
  #include "base/time/time.h"
 +#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
  #include "chrome/browser/ui/color/chrome_color_id.h"
  #include "chrome/browser/ui/layout_constants.h"
++#include "chrome/browser/ui/spaces/space_icon.h"
 +#include "chrome/browser/ui/spaces/space_model.h"
  #include "chrome/browser/ui/stedding_ui_metrics.h"
 +#include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "chrome/browser/ui/views/stedding/glyph_ink.h"
  #include "chrome/browser/ui/views/stedding/rename_field_watcher.h"
  #include "chrome/browser/ui/views/tabs/common/clear_tabs_separator.h"
 +#include "chrome/browser/ui/views/tabs/common/folder_drag_target.h"
@@ -4498,15 +4500,18 @@ index bf1aea04f9940..5fa9a1d942e79 100644
  #include "chrome/browser/ui/views/tabs/common/tab_collection_node.h"
  #include "chrome/browser/ui/views/tabs/common/tab_strip_collection_controller.h"
  #include "chrome/browser/ui/views/tabs/common/tab_strip_view.h"
-@@ -38,7 +41,6 @@
+@@ -38,9 +43,9 @@
  #include "components/tabs/public/tab_collection.h"
  #include "components/tabs/public/tab_collection_types.h"
  #include "components/tabs/public/tab_interface.h"
 -#include "content/public/browser/web_contents.h"
  #include "ui/accessibility/ax_action_data.h"
  #include "ui/accessibility/ax_enums.mojom.h"
++#include "ui/base/emoji/emoji_panel_helper.h"
  #include "ui/base/metadata/metadata_impl_macros.h"
-@@ -69,7 +71,7 @@ namespace {
+ #include "ui/base/models/image_model.h"
+ #include "ui/color/color_provider.h"
+@@ -69,7 +74,7 @@ namespace {
  constexpr int kIndent = 14;
  constexpr int kHeaderInset = 8;
  // Until the header is in a window, whose colours it then takes
@@ -4515,7 +4520,19 @@ index bf1aea04f9940..5fa9a1d942e79 100644
  constexpr SkColor kHeaderText = SkColorSetA(SK_ColorWHITE, 0xD8);
  // The drop highlight: the rows' text colour at this alpha, over the ground,
  // as the rows' hover (0x10) and selection (0x18) tints are, and stronger
-@@ -98,6 +100,120 @@ tabs::FolderTabCollection* FolderFromNode(TabCollectionNode* node) {
+@@ -78,6 +83,11 @@ constexpr SkAlpha kDropHighlightAlpha = 0x2E;
+ // Arc's folder glyph, macOS's "folder" symbol at 15 points, centred in the
+ // favicon column's 18 DIP (sidebar_symbols.h).
+ constexpr int kGlyphSize = 15;
++// folders F41 (GitHub issue 68): from the glyph's column to the name, as from
++// a row's favicon to its title and a Space's glyph to its name, so the three
++// names start on one line. It was 4, and a folder's name sat closer to its
++// glyph than any title.
++constexpr int kGlyphTitleGap = 8;
+ 
+ tabs::FolderTabCollection* FolderFromNode(TabCollectionNode* node) {
+   if (!node) {
+@@ -98,6 +108,120 @@ tabs::FolderTabCollection* FolderFromNode(TabCollectionNode* node) {
        static_cast<const tabs::FolderTabCollection*>(held->get()));
  }
  
@@ -4636,7 +4653,16 @@ index bf1aea04f9940..5fa9a1d942e79 100644
  }  // namespace
  
  // The header row: the folder glyph and the name. A left click collapses or
-@@ -162,15 +278,16 @@ class FolderView::HeaderView : public views::View {
+@@ -112,7 +236,7 @@ class FolderView::HeaderView : public views::View {
+   explicit HeaderView(FolderView* owner) : owner_(owner) {
+     auto* const layout = SetLayoutManager(std::make_unique<views::BoxLayout>(
+         views::BoxLayout::Orientation::kHorizontal,
+-        gfx::Insets::VH(0, kHeaderInset), 4));
++        gfx::Insets::VH(0, kHeaderInset), kGlyphTitleGap));
+     layout->set_cross_axis_alignment(
+         views::BoxLayout::CrossAxisAlignment::kCenter);
+     SetPreferredSize(
+@@ -162,15 +286,16 @@ class FolderView::HeaderView : public views::View {
    void OnMouseExited(const ui::MouseEvent& event) override {
      owner_->SetHeaderHovered(false);
    }
@@ -4656,7 +4682,7 @@ index bf1aea04f9940..5fa9a1d942e79 100644
          return true;
        }
        dragging_ = true;
-@@ -336,7 +453,12 @@ FolderView::FolderView(TabCollectionNode* collection_node)
+@@ -336,7 +461,12 @@ FolderView::FolderView(TabCollectionNode* collection_node)
    UpdateHeader();
  }
  
@@ -4670,7 +4696,7 @@ index bf1aea04f9940..5fa9a1d942e79 100644
  
  tabs::FolderTabCollection* FolderView::folder() const {
    // Through the handle, never the node's pointer: the strip frees a folder's
-@@ -392,12 +514,31 @@ void FolderView::SetDropHighlight(bool highlighted) {
+@@ -392,12 +522,31 @@ void FolderView::SetDropHighlight(bool highlighted) {
    UpdateHeaderBackground();
  }
  
@@ -4702,7 +4728,7 @@ index bf1aea04f9940..5fa9a1d942e79 100644
  std::optional<bool> FolderView::IsAboveClearLine(
      const gfx::Point& screen_point) const {
    // The Space's line, drawn in the strip this header is in.
-@@ -422,7 +563,7 @@ std::optional<bool> FolderView::IsAboveClearLine(
+@@ -422,7 +571,7 @@ std::optional<bool> FolderView::IsAboveClearLine(
    // No line is drawn under a run with no rows after it; the "+ New Tab" row
    // still ends the run there.
    if (const auto* const container =
@@ -4711,7 +4737,7 @@ index bf1aea04f9940..5fa9a1d942e79 100644
      const views::View* const new_tab_row =
          container->space_boundary_new_tab_row();
      if (new_tab_row && new_tab_row->IsDrawn()) {
-@@ -433,60 +574,219 @@ std::optional<bool> FolderView::IsAboveClearLine(
+@@ -433,60 +582,219 @@ std::optional<bool> FolderView::IsAboveClearLine(
  }
  
  std::optional<FolderView::DropPlace> FolderView::DropPlaceAt(
@@ -4969,7 +4995,7 @@ index bf1aea04f9940..5fa9a1d942e79 100644
    if (!top) {
      return std::nullopt;
    }
-@@ -498,13 +798,12 @@ std::optional<FolderView::DropPlace> FolderView::DropPlaceAt(
+@@ -498,13 +806,12 @@ std::optional<FolderView::DropPlace> FolderView::DropPlaceAt(
    std::optional<size_t> slot;
    std::optional<size_t> from;
    for (const tabs::Child& child : top->GetChildren()) {
@@ -4986,7 +5012,7 @@ index bf1aea04f9940..5fa9a1d942e79 100644
        if (screen_point.y() < row->GetBoundsInScreen().CenterPoint().y()) {
          slot = index;
          next = row;
-@@ -543,13 +842,23 @@ std::optional<FolderView::DropPlace> FolderView::DropPlaceAt(
+@@ -543,13 +850,23 @@ std::optional<FolderView::DropPlace> FolderView::DropPlaceAt(
  
  void FolderView::ShowDropIndicator(const std::optional<DropPlace>& place) {
    // Lit while a release would move the folder, as a header is lit while a
@@ -5016,7 +5042,7 @@ index bf1aea04f9940..5fa9a1d942e79 100644
    }
  }
  
-@@ -565,9 +874,17 @@ void FolderView::OnHeaderDragEnded(const gfx::Point& screen_point,
+@@ -565,9 +882,17 @@ void FolderView::OnHeaderDragEnded(const gfx::Point& screen_point,
    if (!drop) {
      return;
    }
@@ -5036,7 +5062,7 @@ index bf1aea04f9940..5fa9a1d942e79 100644
      base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
          FROM_HERE,
          base::BindOnce(&FolderView::PlaceAt, weak_factory_.GetWeakPtr(),
-@@ -578,8 +895,61 @@ void FolderView::OnHeaderDragEnded(const gfx::Point& screen_point,
+@@ -578,8 +903,61 @@ void FolderView::OnHeaderDragEnded(const gfx::Point& screen_point,
  void FolderView::PlaceAt(bool pinned, size_t slot) {
    TabStripCollectionController* const controller =
        collection_node_ ? collection_node_->GetController() : nullptr;
@@ -5100,7 +5126,7 @@ index bf1aea04f9940..5fa9a1d942e79 100644
    }
  }
  
-@@ -629,14 +999,6 @@ void FolderView::OnThemeChanged() {
+@@ -629,14 +1007,6 @@ void FolderView::OnThemeChanged() {
  void FolderView::ViewHierarchyChanged(
      const views::ViewHierarchyChangedDetails& details) {
    views::View::ViewHierarchyChanged(details);
@@ -5115,7 +5141,7 @@ index bf1aea04f9940..5fa9a1d942e79 100644
    if (!details.is_add || details.parent != this ||
        views::IsViewClass<HeaderView>(details.child)) {
      return;
-@@ -777,42 +1139,30 @@ void FolderView::UpdateHeader() {
+@@ -777,42 +1147,39 @@ void FolderView::UpdateHeader() {
    } else {
      accessibility.SetIsExpanded();
    }
@@ -5150,25 +5176,109 @@ index bf1aea04f9940..5fa9a1d942e79 100644
    // at each hover, and the glyph was set again each time (PLAN.md TAB-40,
    // BACKLOG S-143).
 -  if (look_text_ == text && look_asleep_ == all_asleep) {
-+  if (look_text_ == text) {
++  const tabs::FolderTabCollection* const f = folder();
++  const std::string icon = f ? f->icon() : std::string();
++  if (look_text_ == text && look_icon_ == icon) {
      return;
    }
    look_text_ = text;
 -  look_asleep_ = all_asleep;
++  look_icon_ = icon;
    ++look_draws_;
 -  // The glyph dims with its tabs (R7); it is the same folder open or closed,
 -  // as Arc draws it (F12).
 -  const SkColor color = all_asleep ? stedding::SleptTitleColor(text) : text;
 -  glyph_->SetImage(stedding::FolderGlyph(color, kGlyphSize));
 -  name_->SetEnabledColor(color);
-+  // The same glyph open or closed, as Arc draws it (F12).
-+  glyph_->SetImage(stedding::FolderGlyph(text, kGlyphSize));
++  // The same glyph open or closed, as Arc draws it (F12); the folder's own
++  // icon in its place, on the favicons' column, when it has one (F42).
++  glyph_->SetImage(
++      icon.empty()
++          ? stedding::FolderGlyph(text, kGlyphSize)
++          : stedding::CentredGlyphImage(base::UTF8ToUTF16(icon),
++                                        stedding::SidebarFont(), text,
++                                        stedding::SidebarFaviconSize()));
 +  name_->SetEnabledColor(text);
  }
  
  bool FolderView::IsOnName(const gfx::Point& point_in_header) const {
+@@ -844,17 +1211,47 @@ void FolderView::BeginRename() {
+   rename_field_->SelectAll(false);
+ }
+ 
++namespace {
++bool g_opens_emoji_panel = true;
++}  // namespace
++
++// static
++void FolderView::SetOpensEmojiPanelForTesting(bool opens) {
++  g_opens_emoji_panel = opens;
++}
++
++void FolderView::BeginIconEdit() {
++  tabs::FolderTabCollection* const f = folder();
++  if (!f || rail_ || rename_field_->GetVisible()) {
++    return;
++  }
++  editing_icon_ = true;
++  rename_field_->SetText(base::UTF8ToUTF16(f->icon()));
++  rename_field_->SetPlaceholderText(u"Type or paste an emoji");
++  name_->SetVisible(false);
++  rename_field_->SetVisible(true);
++  rename_field_->RequestFocus();
++  rename_field_->SelectAll(false);
++  if (g_opens_emoji_panel && ui::IsEmojiPanelSupported()) {
++    ui::ShowEmojiPanel();
++  }
++}
++
+ void FolderView::EndRename(bool commit) {
+   if (!rename_field_->GetVisible()) {
+     return;
+   }
+   tabs::FolderTabCollection* const f = folder();
+-  if (commit && f) {
++  if (commit && f && editing_icon_) {
++    // folders F42: the first character, kept whole, as a Space's icon.
++    f->SetIcon(spaces::SpaceIconFromText(rename_field_->GetText()));
++  } else if (commit && f) {
+     std::u16string title;
+     base::TrimWhitespace(std::u16string(rename_field_->GetText()),
+                          base::TRIM_ALL, &title);
+     f->SetTitle(base::UTF16ToUTF8(title));
+   }
++  editing_icon_ = false;
+   rename_field_->SetVisible(false);
+   name_->SetVisible(!rail_);
+   UpdateHeader();
+@@ -878,6 +1275,10 @@ void FolderView::BuildMenuModel() {
+   const tabs::FolderTabCollection* const f = folder();
+   menu_model_ = std::make_unique<ui::SimpleMenuModel>(this);
+   menu_model_->AddItem(kRenameCommand, u"Rename Folder\u2026");
++  menu_model_->AddItem(kIconCommand, u"Change Icon\u2026");
++  if (f && !f->icon().empty()) {
++    menu_model_->AddItem(kRemoveIconCommand, u"Remove Icon");
++  }
+   const bool collapsed = f && f->collapsed();
+   menu_model_->AddItem(kToggleCommand,
+                        collapsed ? u"Expand Folder" : u"Collapse Folder");
+@@ -918,6 +1319,14 @@ void FolderView::ExecuteCommand(int command_id, int event_flags) {
+     case kRenameCommand:
+       BeginRename();
+       break;
++    case kIconCommand:
++      BeginIconEdit();
++      break;
++    case kRemoveIconCommand:
++      if (folder()) {
++        folder()->SetIcon(std::string());
++      }
++      break;
+     case kToggleCommand:
+       ToggleCollapsed();
+       break;
 diff --git a/chrome/browser/ui/views/tabs/common/folder_view.h b/chrome/browser/ui/views/tabs/common/folder_view.h
-index 3ecfbe265ae1b..cb9c0ec132ae5 100644
+index 3ecfbe265ae1b..bcb70427c82a8 100644
 --- a/chrome/browser/ui/views/tabs/common/folder_view.h
 +++ b/chrome/browser/ui/views/tabs/common/folder_view.h
 @@ -8,6 +8,7 @@
@@ -5194,7 +5304,25 @@ index 3ecfbe265ae1b..cb9c0ec132ae5 100644
  }  // namespace tabs
  
  namespace views {
-@@ -85,9 +89,11 @@ class FolderView : public views::View,
+@@ -65,6 +69,17 @@ class FolderView : public views::View,
+   static constexpr int kAlphabetizeCommand = 6;
+   // folders F38: Pin Folder, or Unpin Folder in the pinned run.
+   static constexpr int kPinCommand = 7;
++  // folders F42 (GitHub issue 68): Change Icon, and Remove Icon once there
++  // is one.
++  static constexpr int kIconCommand = 8;
++  static constexpr int kRemoveIconCommand = 9;
++
++  // folders F42: the name's field, empty, takes one character for the
++  // folder's icon -- typed, pasted or from the system's emoji picker, which
++  // opens with it where there is one. Enter keeps it; empty draws the glyph.
++  void BeginIconEdit();
++  // Tests keep the system's emoji picker shut: it is a window of its own.
++  static void SetOpensEmojiPanelForTesting(bool opens);
+ 
+   explicit FolderView(TabCollectionNode* collection_node);
+   FolderView(const FolderView&) = delete;
+@@ -85,9 +100,11 @@ class FolderView : public views::View,
    void UpdateHeaderForTesting() { UpdateHeader(); }
    // The field an open rename types into, or null.
    views::Textfield* rename_field_for_testing() { return rename_field_; }
@@ -5208,7 +5336,7 @@ index 3ecfbe265ae1b..cb9c0ec132ae5 100644
    // The header menu as it would open now (M7).
    ui::SimpleMenuModel* menu_model_for_testing() {
      BuildMenuModel();
-@@ -105,18 +111,16 @@ class FolderView : public views::View,
+@@ -105,18 +122,16 @@ class FolderView : public views::View,
    // pointer shows among the rows of its strip, as a pin or a tab row moves:
    // between two pins or before the first, over the Clear line, takes it into
    // the Space's pinned run there, and among the rows under the line takes it
@@ -5233,7 +5361,7 @@ index 3ecfbe265ae1b..cb9c0ec132ae5 100644
    // views::View:
    void ViewHierarchyChanged(
        const views::ViewHierarchyChangedDetails& details) override;
-@@ -140,6 +144,25 @@ class FolderView : public views::View,
+@@ -140,6 +155,25 @@ class FolderView : public views::View,
    bool IsCommandIdEnabled(int command_id) const override;
    void ExecuteCommand(int command_id, int event_flags) override;
  
@@ -5259,7 +5387,7 @@ index 3ecfbe265ae1b..cb9c0ec132ae5 100644
   private:
    class HeaderView;
  
-@@ -156,32 +179,65 @@ class FolderView : public views::View,
+@@ -156,32 +190,65 @@ class FolderView : public views::View,
    void BeginRename();
    void EndRename(bool commit);
    void UpdateHeader();
@@ -5332,7 +5460,7 @@ index 3ecfbe265ae1b..cb9c0ec132ae5 100644
  
    // Null once the node is destroyed: a removed folder's view outlives its
    // node while it animates out.
-@@ -201,10 +257,12 @@ class FolderView : public views::View,
+@@ -201,10 +268,16 @@ class FolderView : public views::View,
    bool drop_highlighted_ = false;
    // folders F38: a drag of the header is under way.
    bool header_dragging_ = false;
@@ -5345,11 +5473,15 @@ index 3ecfbe265ae1b..cb9c0ec132ae5 100644
 +  // The look last drawn (UpdateLook): the rows' text colour.
    std::optional<SkColor> look_text_;
 -  bool look_asleep_ = false;
++  // folders F42: the icon the glyph was last drawn with, and whether the
++  // name's field is taking an icon rather than a name.
++  std::string look_icon_;
++  bool editing_icon_ = false;
    size_t look_draws_ = 0;
    // folders F13: drawn at the rail's width.
    bool rail_ = false;
 diff --git a/chrome/browser/ui/views/tabs/common/folder_view_unittest.cc b/chrome/browser/ui/views/tabs/common/folder_view_unittest.cc
-index ce82e5a1a3bce..1793e9c5bbcf6 100644
+index ce82e5a1a3bce..cc1cb24957e95 100644
 --- a/chrome/browser/ui/views/tabs/common/folder_view_unittest.cc
 +++ b/chrome/browser/ui/views/tabs/common/folder_view_unittest.cc
 @@ -25,6 +25,7 @@
@@ -5377,7 +5509,53 @@ index ce82e5a1a3bce..1793e9c5bbcf6 100644
    view.OnThemeChanged();
    view.ExecuteCommand(FolderView::kToggleCommand, /*event_flags=*/0);
  }
-@@ -504,6 +506,50 @@ TEST_F(FolderRowsTest, CollapsingKeepsThePathToTheActiveTabOnly) {
+@@ -371,9 +373,10 @@ TEST_F(FolderViewTest, TheHeaderOpensAndClosesThroughExpandAndCollapse) {
+   EXPECT_FALSE(folder.collapsed()) << "Expand on an open folder closed it";
+ }
+ 
+-// menus M7, folders F31, F32: the header's menu reads Rename Folder…,
+-// Collapse Folder -- New Tab in Folder, Alphabetize -- Move Tabs Out of
+-// Folder, Close Folder's Tabs. Alphabetize waits for a second row.
++// menus M7, folders F31, F32, F42: the header's menu reads Rename Folder…,
++// Change Icon…, Collapse Folder -- New Tab in Folder, Alphabetize -- Move
++// Tabs Out of Folder, Close Folder's Tabs. Alphabetize waits for a second
++// row; Remove Icon for an icon.
+ TEST_F(FolderViewTest, HeaderMenuOffersNewTabAndAlphabetize) {
+   tabs::FolderTabCollection folder(tabs::FolderId::GenerateNew(), "Work",
+                                    /*collapsed=*/false);
+@@ -383,7 +386,8 @@ TEST_F(FolderViewTest, HeaderMenuOffersNewTabAndAlphabetize) {
+   ASSERT_TRUE(menu);
+   // 0 marks a separator.
+   constexpr auto kRows = std::to_array<int>({
+-      FolderView::kRenameCommand,      FolderView::kToggleCommand,      0,
++      FolderView::kRenameCommand,      FolderView::kIconCommand,
++      FolderView::kToggleCommand,      0,
+       FolderView::kNewTabCommand,      FolderView::kAlphabetizeCommand, 0,
+       FolderView::kMoveTabsOutCommand, FolderView::kCloseTabsCommand});
+   ASSERT_EQ(kRows.size(), menu->GetItemCount());
+@@ -396,13 +400,14 @@ TEST_F(FolderViewTest, HeaderMenuOffersNewTabAndAlphabetize) {
+     }
+   }
+   EXPECT_EQ(u"Rename Folder…", menu->GetLabelAt(0));
+-  EXPECT_EQ(u"Collapse Folder", menu->GetLabelAt(1));
+-  EXPECT_EQ(u"New Tab in Folder", menu->GetLabelAt(3));
+-  EXPECT_EQ(u"Alphabetize", menu->GetLabelAt(4));
+-  EXPECT_EQ(u"Move Tabs Out of Folder", menu->GetLabelAt(6));
+-  EXPECT_EQ(u"Close Folder’s Tabs", menu->GetLabelAt(7));
+-  EXPECT_TRUE(menu->IsEnabledAt(3)) << "New Tab in Folder";
+-  EXPECT_FALSE(menu->IsEnabledAt(4)) << "fewer than two rows have no order";
++  EXPECT_EQ(u"Change Icon…", menu->GetLabelAt(1));
++  EXPECT_EQ(u"Collapse Folder", menu->GetLabelAt(2));
++  EXPECT_EQ(u"New Tab in Folder", menu->GetLabelAt(4));
++  EXPECT_EQ(u"Alphabetize", menu->GetLabelAt(5));
++  EXPECT_EQ(u"Move Tabs Out of Folder", menu->GetLabelAt(7));
++  EXPECT_EQ(u"Close Folder’s Tabs", menu->GetLabelAt(8));
++  EXPECT_TRUE(menu->IsEnabledAt(4)) << "New Tab in Folder";
++  EXPECT_FALSE(menu->IsEnabledAt(5)) << "fewer than two rows have no order";
+ }
+ 
+ constexpr SkColor kBlue = SkColorSetRGB(0x00, 0x00, 0xFF);
+@@ -504,6 +509,50 @@ TEST_F(FolderRowsTest, CollapsingKeepsThePathToTheActiveTabOnly) {
    EXPECT_FALSE(IsHidden(inner_tab));
  }
  

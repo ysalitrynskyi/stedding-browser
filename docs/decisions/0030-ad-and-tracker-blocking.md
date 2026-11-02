@@ -1,6 +1,6 @@
 # 0030 — Ad and tracker blocking on Chromium’s subresource filter, with lists fetched at run time
 
-Status: Proposed. Phase 1 is in the product (patch 0098, `docs/features/blocker.md` Bk1–Bk13), released in 0.3.0 beta 16, off by default. The owner has not accepted this record (Bk0, `BACKLOG.md` `S-88`).
+Status: Proposed. Phase 1 is in the product (patch 0098, `docs/features/blocker.md` Bk1–Bk13), released in 0.3.0 beta 16, off by default. The owner has not accepted this record (Bk0, `BACKLOG.md` `S-88`). On 2026-11-02 the owner asked for the switch to be offered in the welcome flow, with how it works and that an extension can block more; it stays off until the user chooses it there or in Settings (`docs/features/welcome.md` W19, `PLAN.md` decision 20).
 Date: 2026-10-25
 
 ## Context

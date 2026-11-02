@@ -289,8 +289,11 @@ A change takes effect after a restart (`features/privacy.md` Q4).
 
 ## Links you open
 
-A page you open, from a link, a new tab, the address field, a bookmark or
-another app, loads without the tracking parameters a copied link loses
+Off until you turn it on, in Settings or in the welcome flow's privacy step:
+the same parameters are how some sites credit a referral, so removing them is
+your choice, not a default (the owner, 2026-11-02). When it is on, a page you
+open, from a link, a new tab, the address field, a bookmark or another app,
+loads without the tracking parameters a copied link loses
 (`utm_*`, `fbclid`, `gclid` and the rest of one table, `features/copy-link.md`
 L2). History keeps the clean address. A link through a redirect page that
 carries its target in its own address (Google's `/url`, Facebook's and
@@ -303,8 +306,8 @@ reloads, back and forward, and a server's redirects are left as they are, so a
 page that needs a parameter can still ask for it. The tab's navigation entry
 keeps the address the navigation started with, and session restore writes that
 to disk. History does not. Settings › Stedding › Privacy › **Remove tracking
-from links you open** turns it off, and **Sites that keep their links** exempts
-a site (`features/clean-links.md`; `features/privacy.md` Q15).
+from links you open** turns it on or off, and **Sites that keep their links**
+exempts a site (`features/clean-links.md`; `features/privacy.md` Q15).
 
 ## Ad and tracker blocking
 
@@ -362,7 +365,7 @@ consequences:
 | Sidebar sync through a folder | Off. See "Sync" for what the file holds | Settings › Stedding › Sync and import |
 | WebRTC local IPs | Hidden (mDNS) | Stricter policies through an extension |
 | Global Privacy Control | On | Turn off. Takes effect after a restart |
-| Tracking parameters on links you open | Removed, and known redirect pages skipped. Nothing fetched | Turn off. Keep a site's links in Settings |
+| Tracking parameters on links you open | Left as written. Nothing fetched | Turn on, in Settings or the welcome flow: they are removed and known redirect pages skipped. Keep a site's links in Settings |
 | Ad and tracker blocking | Off. Nothing fetched | Turn on (lists from easylist.to). Then off or on for any site |
 | New-tab sponsored content | None. The new tab page makes no request | — |
 | Extensions | None installed | The user installs them. Store traffic follows |

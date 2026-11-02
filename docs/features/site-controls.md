@@ -1,6 +1,6 @@
 # Feature: Site controls
 
-Status: **Si1–Si11 built. Si12** is drawn in page info’s colours; its live check has no recorded run. The blocker’s per-site switch is the address-row shield, not a row here (blocker Bk6).
+Status: **Si1–Si11 and Si13 built. Si12** is drawn in page info’s colours; its live check has no recorded run. The blocker’s per-site switch is the address-row shield and, since 2026-11-02, a row here too (Si13).
 
 One panel for the site you are on. It is Chromium’s page info, opened from the site chip (toolbar T5), with Stedding’s controls in it: a strip under the title (Copy link, Copy title, Mute tab, Picture in picture, zoom); Chromium’s security, permissions and cookies rows; Chromium’s Extensions row; and, before Site settings, the session, Clear site data, and the dark-pages switches. The command bar’s View Site Information opens the same panel (commandbar K33), including from inside the page while the address row is hidden (toolbar T40). There is no second panel, no new button, no setting and no new chord. Each control runs the window’s own command.
 
@@ -22,6 +22,7 @@ On Windows every chord below is the Mac’s with ⌘ read as Ctrl and ⌥⌘ as 
 | Si10 | Chromium’s Extensions row is drawn when the window can open the extensions menu, so a window with extensions turned off by policy has no row. It closes the panel and opens the menu, each extension with its pin (toolbar T43): from the extensions button while the address row is drawn, and under the top container at the page card’s top left while it is not (T40). | browser: `SiteControlsTest.TheRowsUnderTheStripDoWhatTheyName`, `HiddenRowControlsTest.TheSiteControlsExtensionsRowOpensInsideThePage` | built |
 | Si11 | Tab goes through the close button, the strip, the zoom buttons, Chromium’s rows, Stedding’s rows, then Site settings. Escape closes the panel and the page has the focus. Every button is named for its action. Each switch is a toggle named for what it turns. The session row is read once: its name, then the mark’s meaning. | unit: `SiteControlsViewTest.EveryControlIsNamedAndShowsItsChord`, `SiteControlsViewTest.TabOrderFollowsThePanel`; live: `sc_voice` (`acceptance.md`) | built |
 | Si12 | The panel uses Chromium’s page info colours (`kColorPageInfoForeground` and the icon colours) in a light and a dark window. The strip’s buttons have Chromium’s hover and press. The panel does not take the page’s colour (toolbar T3). | live: `acceptance.md`, site controls, captures by window id through `tooling/capture-windows`, light and dark, Mac and Windows | built · not yet run |
+| Si13 | While ad and tracker blocking is on (blocker Bk1), on a page whose site it can be chosen for, "Block ads and trackers on <site>" is a switch after the dark pages rows, the same choice the address row's shield makes (blocker Bk6): off lets the site's ads load, and the tab reloads to show it (GitHub issue 45, version B; BACKLOG S-391). It is not there while blocking is off. | live: `look1.ps1 -OnlyB` | built |
 
 ## Privacy
 

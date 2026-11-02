@@ -63,15 +63,24 @@ still open is a BACKLOG row that names its id.
     (`status: needs decision`, `status: planned`, `done`).
 17. The address does not jump when the field takes focus (2026-10-23, GitHub issue 14;
     `S-275`; `docs/features/toolbar.md` T18). The field is the whole row in every state
-    (the owner, 2026-10-24; toolbar T34). Its width is a setting: full width, the default, or
-    a field centred on the page at 800, 640 or 480 DIP (the owner, 2026-10-28; toolbar T48).
+    (the owner, 2026-10-24; toolbar T34). Its width is a setting: full width, or a field
+    centred on the page at 800, 640 or 480 DIP (the owner, 2026-10-28; toolbar T48). Wide
+    and centred, 800, is the default (the owner, 2026-11-02).
 18. Sync has no account and no Stedding server. It goes through a folder the user picks,
     and it is off by default (2026-10-23, GitHub issue 20; `S-282`; ADR 0029;
     `docs/features/sidebar-file.md` Sf7–Sf41).
 19. A peek shows over the page, inside the pinned tab's window, as Arc's does (the owner,
     2026-11-01, GitHub issue 62: "current behaviour must be possible to set up in settings
     too"). "Show a peek: In a small window" keeps the little window; over the page is the
-    default (`stedding.peek.style`, `docs/features/peek.md` P20).
+    default (`stedding.peek.style`, `docs/features/peek.md` P20). Its card wears a frosted
+    rim, so it shows on a page as dark as itself; a soft glow or none is a setting (the owner,
+    2026-11-02, from four rendered styles; peek P21).
+20. Privacy choices that cost the user something are theirs, asked in the welcome flow's
+    privacy step (the owner, 2026-11-02; `docs/features/welcome.md` W19): Global Privacy
+    Control stays on by default, ad and tracker blocking stays off until chosen, and link
+    cleaning is off by default because it can strip the code a site credits a referral by.
+    The blocker's step says how it works and that an extension can block more, without
+    running Stedding down.
 
 The operator's own request in chat comes before any of this and before BACKLOG's order.
 

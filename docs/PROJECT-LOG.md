@@ -2,6 +2,38 @@
 
 What was built, newest first. Nothing here is needed to do a task: `AGENTS.md` carries what is true now, `BACKLOG.md` the order of work, `PLAN.md` the owner's decisions. This file was the "State of the project" section of `AGENTS.md` until 2026-09-30. This log starts at 2026-10-15. Closed work from before that is the table in [docs/history/archive.md](history/archive.md).
 
+## 2026-11-02, later -- the owner's list after beta 6: a peek's edge, the welcome flow's privacy step, issue 45's version B
+
+The owner chose the peek's edge from four styles rendered by a real build, then sent sixteen
+items for the next version; Windows had them first, since the owner was using the Mac. Each is a
+row of `BACKLOG.md`, S-377 to S-393. In this round:
+
+- **A peek's edge** (peek P21, settings T47; S-377): a frosted rim round the card by default, so
+  a dark card shows on a dark page; a soft glow or none is a setting.
+- **The welcome flow's privacy step** (welcome W19; S-387; `PLAN.md` decision 20): Global Privacy
+  Control (on), ad and tracker blocking (off; how it works, and that an extension can block more)
+  and link cleaning, now off by default because it can strip the code a site credits a referral
+  by. Seven steps.
+- **Settings**: wide and centred is the address field's default, and the centred field gives way
+  before the buttons at its end in a tight row (toolbar T48; S-379); the drift setting says what
+  it does and owns the slash too (pins H12, H28; S-381, S-382); each Space in two lines (settings
+  T48; S-384); Chromium's advertising features in plain words (T49; S-388).
+- **The address row**: the page-info chip's icon on its label's middle (toolbar T52; S-380); a
+  toast on the page's middle, as a card with a plain Undo (T53; S-383).
+- **The sidebar**: closing to nothing slides the rows out whole (Y50; S-385); folders line their
+  names up with the titles and can take an icon (folders F41, F42; GitHub issue 68; S-389).
+- **Issue 45, version B** (sidebar Y51, site-controls Si13; S-391): Back, Forward, Reload and the
+  menu at the top line's end; the field with the site button, Install App, Copy Link and the
+  extensions; the site panel's ad-blocking switch.
+
+Found on the way: Chromium's install command is on for every page, so Install App follows the
+page's installability instead; an observer of a page's install state outlived it (the banner
+manager is gone before `WebContentsDestroyed`), and 135 browser tests crashed at teardown until
+the field rechecked after loads instead. With the real pointer on Windows, the wheel scrolls a
+sidebar shown at the hidden edge, so S-386 is the Mac's. Still owed: the Mac's full screen (S-378),
+the wheel there (S-386), the traffic lights on hover (S-391), issue 65 across a real update (S-390),
+the notch (S-392), and the folder icon in the sidebar file and sync (S-393).
+
 ## 2026-11-02 -- 0.4.0 beta 6: peek over the page, Spaces that loop, the address row in the sidebar
 
 Released as 0.4.0 beta 6, on Chromium 157.0.8103.31, for both platforms, with the round below:

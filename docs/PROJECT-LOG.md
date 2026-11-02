@@ -2,6 +2,26 @@
 
 What was built, newest first. Nothing here is needed to do a task: `AGENTS.md` carries what is true now, `BACKLOG.md` the order of work, `PLAN.md` the owner's decisions. This file was the "State of the project" section of `AGENTS.md` until 2026-09-30. This log starts at 2026-10-15. Closed work from before that is the table in [docs/history/archive.md](history/archive.md).
 
+## 2026-11-02 -- 0.4.0 beta 6: peek over the page, Spaces that loop, the address row in the sidebar
+
+Released as 0.4.0 beta 6, on Chromium 157.0.8103.31, for both platforms, with the round below:
+issues 62, 65 and 66, the comment on issue 45 and the import step (patch 0119, and issue 65's fix
+in 0004). On Windows the final build passed every suite on the release build, on the build with
+DCHECKs and the dangling-pointer detector, and under AddressSanitizer, which found no memory
+errors (1349 unit tests, 666 browser tests); the new features were tried there with the real
+keyboard and pointer, an installed beta 5 updated itself to beta 6 from a copy of the feed, the
+installer's cycle passed, and the acceptance scripts passed on the installed copy (39 of 39). On
+the Mac (1358 unit tests, 707 browser tests) one test failed in both sweeps:
+`SpaceWheelTest.ASidewaysWheelStepsThroughTheSpaces`, whose new steps for the loop end on a slide
+that its reduced-motion step, right after them, found still going. The test now waits for that
+slide (0119; 3 of 3 runs on both platforms' release and checks builds); no shipped code changed.
+The Mac's acceptance run passed with 80 of its 87 captures as beta 5's: a clipboard manager
+(Maccy) ran and took ⇧⌘C and, with its popup, the ⌃⌘N after it (trap 94). On the same signed
+build ⌃⌘N alone made the split and Copy Link from the command bar showed its toast, and the
+real pointer and keyboard tried looping Spaces, each way a peek closes, ⌘O and ⇧⌘O from a peek,
+the hidden sidebar's edge and the import step, which found Arc and Chrome. Apple's distribution
+check passed.
+
 ## 2026-11-01, later -- issues 62, 65 and 66, issue 45's second round, and the import step
 
 The owner asked for GitHub issue 66 (Spaces that loop), a fix for issue 65 (the sidebar's width

@@ -17,11 +17,13 @@ infrastructure, then features. A request in chat comes before this list. A spec 
 
 ### Next
 
-The latest release is 0.4.0 beta 5, on Chromium 157.0.8103.31 (`S-278`). It carries the
+The latest release is 0.4.0 beta 6, on Chromium 157.0.8103.31 (`S-278`). It carries the
 fixes of the 2026-10-28 review below, from beta 2, the fixes for GitHub issues 14, 35 and 63
-from beta 3, S-323 (issue 43) from beta 4, and the command bar's site icons (issue 58) and
-issue 45's sidebar and appearance settings. Each row closes once its fix is checked on a real
-build.
+from beta 3, S-323 (issue 43) from beta 4, the command bar's site icons (issue 58) and issue
+45's sidebar and appearance settings from beta 5, and peek over the page (issue 62), Spaces
+that loop (issue 66), the sidebar's width after an update (issue 65), the address row in the
+sidebar (issue 45's second round) and the Chromium family's imports. Each row closes once its
+fix is checked on a real build.
 Google's schedule puts M157 on stable on 2026-11-03.
 
 S-306, shorter test runs, is the unfinished item of the 2026-10-26 order. Its Mac half
@@ -149,7 +151,6 @@ Rows the specs still leave open. M10 is in ROADMAP's order (ADR 0021).
 
 | Id | Item | Feature / spec | Notes |
 |---|---|---|---|
-| S-360 | Peek attached to its tab, as Arc's (GitHub issue 62) | `docs/features/peek.md` | Later, the owner (2026-10-30): it redesigns peek. Today a peek is a little window (peek P6), as the spec says; the reporter, on 0.4.0 beta 1 on the Mac, asks for Arc's peek, which sits over its tab and holds it until closed. |
 | S-320 | Bookmarks pinned in the sidebar (GitHub issue 40) | `docs/features/pins.md`; `docs/features/sidebar.md` | Waits for the owner. Space pins and essentials already keep a page and cost nothing while asleep (H3). Answer that pins serve this and ask what is missing, or plan a bookmarks block. |
 | S-235 | Apps made from pages, the rest | `docs/features/web-apps.md`; ADR 0025 | Built in patch 0072. The Windows install was seen on beta 20; Add to Dock from the command bar was seen on the Mac. Enter in the dialog is `MakeAppTest.EnterInTheDialogAddsTheApp`. Left, planned in the spec: Wa8 (the Windows browser test of the Start menu entry), Wa16 and Wa17 (updates and uninstall with an app installed), Wa19 (a missing Mac launcher), Wa22 (launching an app with Stedding quit). |
 | S-102 | Split view's open rows | `docs/features/splits.md` J2, J3, J5 | J3 and J5 are planned: what ⌘W does to the other pane, and whether a Space pin that joins a split leaves the pinned run. J2 is partial: ⌘1–9 and the badges counting a split once. Then resize, swap and dismiss by mouse and keyboard, and DevTools, find-in-page and full-screen video in a split. |

@@ -31,8 +31,8 @@ gif() {
   shift 3
   local parts="" labels="" n=0
   while [ $# -gt 0 ]; do
-    parts="$parts[0:v]trim=$1:$2,setpts=PTS-STARTPTS[s$n];"
-    labels="$labels[s$n]"
+    parts="${parts}[0:v]trim=$1:$2,setpts=PTS-STARTPTS[s${n}];"
+    labels="${labels}[s${n}]"
     n=$((n + 1))
     shift 2
   done

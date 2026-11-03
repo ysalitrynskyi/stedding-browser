@@ -138,8 +138,8 @@ already installed is a repair, and Stedding has to be closed first.
 ## First start
 
 The first window opens a welcome screen, with **Get started** and **Skip
-setup**, then six steps. Each step can be skipped. The names along the top are
-Search, Import, Appearance, Behaviour, Default browser and Keys.
+setup**, then seven steps. Each step can be skipped. The names along the top are
+Search, Import, Appearance, Behaviour, Privacy, Default browser and Keys.
 
 1. Choose a search engine. If you skip that step, or finish without picking
    one, a fresh profile keeps DuckDuckGo and records it as the choice.
@@ -161,8 +161,12 @@ Search, Import, Appearance, Behaviour, Default browser and Keys.
 4. How Stedding behaves. Idle tabs stay until you choose a time to archive
    them. The closed sidebar shrinks to icons, or hides. A Space stays awake
    after you leave it until you choose a time. A link from a pinned tab to another site opens in a peek on a click until you choose otherwise.
-5. Set Stedding as the default browser, if you want.
-6. The keys worth knowing.
+5. Privacy. What Stedding already does (third-party cookies blocked, Chromium's
+   own advertising features off), and three switches: asking sites not to sell
+   or share your data (on), blocking ads and trackers (off) and removing
+   tracking from links you open (off).
+6. Set Stedding as the default browser, if you want.
+7. The keys worth knowing.
 
 Each choice can be changed later in Settings.
 

@@ -70,7 +70,7 @@ a `+` (`features/sidebar.md` Y44). The Library is not this foot (§9).
   of replacing the pinned page**. A pin remembers its home. A Space pin with a title
   shows Arc's slash while it is away from that home (`features/pins.md` H12). The dot
   on an essentials card and in the rail, and the card's reset control, show only while
-  "Mark pinned tabs that left their page" is on, which is off by default (H28).
+  "Show when a pinned tab leaves its page" is on, which is off by default (H28).
   Option-click on the favicon, or **Reset to Pinned Page**, goes home; a plain click
   only selects. While "⌘W on a pinned tab puts it to sleep" is on, which it is at
   first, `⌘W`, a middle click or the menu's Close unloads a pin and sends it back to

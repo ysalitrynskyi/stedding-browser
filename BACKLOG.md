@@ -18,26 +18,36 @@ infrastructure, then features. A request in chat comes before this list. A spec 
 ### 0.4.0 beta 8
 
 The next release, from the owner's list of 2026-11-02 and the open issues and comments on
-GitHub (read 2026-11-03), in this order of work:
+GitHub (read 2026-11-03). Final order (the owner, 2026-11-03), by the machine each part
+needs, the Windows PC first while the owner uses the Mac:
 
-1. S-392: the Mac build, its tests and a try on the real screen; the rest is written.
-2. S-402 (GitHub issue 73): a site's device picker.
-3. S-399, S-394 and S-393: the fixes already decided.
-4. S-396 (issue 72): the empty Space page, rendered for the owner before it is built in.
-5. S-400: the download's animation, options rendered for the owner to pick.
-6. S-403 (issue 45): the owner's calls of 2026-11-03 are in its row.
-7. S-398: the spec, then the build; to the release after if it does not fit.
-8. The pin: the newest 157 stable point release before the cut (issue 70, `tooling/check-pin`,
-   `tooling/update-pin`). On 2026-11-03 the pin, 157.0.8103.31, is ahead of stable, which
-   Google rolled back to 156. Chromium's schedule puts M158 on stable on 2026-11-17 and M159
-   on 2026-12-08; the release after this one moves to M158, before builds on 157 lose the
-   built-in HTTPS-only list on 2026-12-13.
+1. On the PC, now:
+   1. S-402 (GitHub issue 73): a site's device picker; a browser test that fails first.
+   2. S-403 (issue 45): the extensions that come and go in the field, the window's buttons
+      to the top-right corner on Windows, Install App in the site panel; with S-399's
+      fourth and fifth items.
+   3. The rest of S-399, then S-393.
+   4. S-394's code: the import sources asked for only at the Import step, and no probe of
+      Safari's data.
+   5. S-396 (issue 72): the empty Space page, rendered from the PC's build for the owner
+      (window captures, no input), then built in.
+   6. S-400: the download's animation, options rendered the same way for the owner to pick.
+   7. S-398: the spec, then the build; to the release after if it does not fit.
+2. On the Mac, once it is free: S-392's tests and a try on the real screen, the traffic
+   lights always shown (S-403), S-394 checked on a signed build, the Mac's suites.
+3. Before the cut: the newest 157 stable point release (issue 70, `tooling/check-pin`,
+   `tooling/update-pin`; Chromium's schedule has the first 157 refresh on 2026-11-10), then
+   the usual pass: the suites on both platforms, with ASan on Windows, acceptance on both,
+   the owner's look at every changed state (PLAN.md), the site's what's-new entry, and
+   `tooling/publish-release`.
 
-Already on main: S-401. S-404 (issue 69) is put off (the owner's condition is in its row).
+On 2026-11-03 the pin, 157.0.8103.31, is ahead of stable, which Google rolled back to 156.
+The release after this one moves to M158 (stable 2026-11-17; M159 2026-12-08), before builds
+on 157 lose the built-in HTTPS-only list on 2026-12-13.
+
+Already on main: S-401. S-404 (issue 69) is put off (the owner's conditions are in its row).
 Issue 59 was declined on 2026-10-30 (S-362); issue 60 waits on S-75. Each row closes once it
-is checked on a real build. The release itself takes the usual pass: the suites on both
-platforms, with ASan on Windows, acceptance on both, the owner's look at every changed state
-(`dist/review-<date>/`, PLAN.md), the site's what's-new entry, then `tooling/publish-release`.
+is checked on a real build.
 
 | Id | Item | Feature / spec | Notes |
 |---|---|---|---|

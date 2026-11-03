@@ -79,12 +79,17 @@ Removable when: never; it is product behaviour.
  chrome/browser/ui/spaces/space_icon.cc        |  28 +
  chrome/browser/ui/spaces/space_icon.h         |  21 +
  .../browser/ui/spaces/space_icon_unittest.cc  |  33 +
- chrome/browser/ui/spaces/space_model.cc       |  78 +-
- chrome/browser/ui/spaces/space_model.h        |  19 +
+ chrome/browser/ui/spaces/space_model.cc       |  95 +-
+ chrome/browser/ui/spaces/space_model.h        |  27 +-
  .../browser/ui/spaces/space_model_unittest.cc |  59 ++
+ .../ui/spaces/space_model_window_unittest.cc  |  44 +
  chrome/browser/ui/spaces/space_registry.cc    |  19 +-
  chrome/browser/ui/spaces/space_registry.h     |   9 +-
  .../ui/spaces/space_registry_unittest.cc      |  36 +
+ chrome/browser/ui/stedding/BUILD.gn           |   2 +
+ chrome/browser/ui/stedding/pin_lifecycle.cc   |   8 +-
+ chrome/browser/ui/stedding/sleep_tabs.cc      |   8 +
+ chrome/browser/ui/stedding/sleep_tabs.h       |   2 +-
  chrome/browser/ui/stedding/stedding_prefs.cc  |   2 +
  chrome/browser/ui/stedding/stedding_prefs.h   |   4 +
  chrome/browser/ui/tabs/tab_strip_model.cc     |  13 +-
@@ -103,7 +108,7 @@ Removable when: never; it is product behaviour.
  .../test/stedding/edit_space_browsertest.cc   | 209 +++++
  .../test/stedding/pinned_run_browsertest.cc   | 368 ++++++++
  chrome/test/stedding/welcome_browsertest.cc   |  90 ++
- 37 files changed, 3256 insertions(+), 241 deletions(-)
+ 42 files changed, 3335 insertions(+), 251 deletions(-)
  create mode 100644 chrome/browser/ui/spaces/space_icon.cc
  create mode 100644 chrome/browser/ui/spaces/space_icon.h
  create mode 100644 chrome/browser/ui/spaces/space_icon_unittest.cc
@@ -2092,7 +2097,7 @@ index 0000000000000..4d1b9171fa629
 +}  // namespace
 +}  // namespace spaces
 diff --git a/chrome/browser/ui/spaces/space_model.cc b/chrome/browser/ui/spaces/space_model.cc
-index 7f67370fc5976..fd17c03f244b7 100644
+index 7f67370fc5976..af9ada97a70b0 100644
 --- a/chrome/browser/ui/spaces/space_model.cc
 +++ b/chrome/browser/ui/spaces/space_model.cc
 @@ -4,6 +4,8 @@
@@ -2139,6 +2144,24 @@ index 7f67370fc5976..fd17c03f244b7 100644
      // pins H17: a session from before the state existed is expanded.
      space->set_pins_collapsed(
          entry.FindBool("pins_collapsed").value_or(false));
+@@ -203,7 +210,7 @@ std::vector<std::unique_ptr<Space>> SpacesFromSessionList(
+ 
+ // tabs R5 (BACKLOG S-112): the row Sleep Tab shows, asked by the sleep code
+ // below this target (stedding::SetRowAfterSleep): in a window with Spaces,
+-// the row a close would show.
++// the row a close would show that is awake (GitHub issue 72).
+ std::optional<tabs::TabInterface*> RowAfterSleepIn(
+     BrowserWindowInterface* browser,
+     const std::vector<tabs::TabInterface*>& doomed) {
+@@ -211,7 +218,7 @@ std::optional<tabs::TabInterface*> RowAfterSleepIn(
+   if (!model) {
+     return std::nullopt;
+   }
+-  return model->RowToShowAfter(doomed);
++  return model->RowToShowAfter(doomed, /*awake_only=*/true);
+ }
+ }  // namespace
+ 
 @@ -349,6 +356,10 @@ SpaceModel::SpaceModel(BrowserWindowInterface& browser) : SpaceModel() {
    tab_strip_model_->SetBeforeDetachTabsCallback(
        base::BindRepeating(&SpaceModel::KeepAVisibleTabAsTabsLeave,
@@ -2218,24 +2241,43 @@ index 7f67370fc5976..fd17c03f244b7 100644
      RecordActivation(tab_strip_model->GetActiveTab());
      if (tabs::TabInterface* const active = tab_strip_model->GetActiveTab();
          active && !active->IsPinned()) {
-@@ -1589,20 +1625,32 @@ tabs::TabInterface* SpaceModel::RowToShowAfter(
+@@ -1581,7 +1617,8 @@ bool IsLeaving(const tabs::TabInterface* tab,
+ }  // namespace
+ 
+ tabs::TabInterface* SpaceModel::RowToShowAfter(
+-    const std::vector<tabs::TabInterface*>& leaving) const {
++    const std::vector<tabs::TabInterface*>& leaving,
++    bool awake_only) const {
+   if (!tab_strip_model_ || tab_strip_model_->closing_all() ||
+       leaving.empty()) {
+     return nullptr;
+@@ -1589,20 +1626,40 @@ tabs::TabInterface* SpaceModel::RowToShowAfter(
    // A row the sidebar shows that stays: the one rule for which rows show
    // (spaces B33) passes over another Space's tabs, a tab moved to another
    // Space since it was used, a collapsed folder's rows and a collapsed
 -  // pinned run's pins (R35). An essential is in every Space and says nothing
 -  // of where the user is (R33).
 +  // pinned run's pins (R35).
++  // After a sleep, not one that is asleep: shown, it would wake (GitHub
++  // issue 72: the pins put to sleep one by one woke each other in turn).
++  const auto awake = [&](tabs::TabInterface* tab) {
++    return !awake_only ||
++           (tab->GetContents() && !tab->GetContents()->WasDiscarded());
++  };
    const auto shows = [&](tabs::TabInterface* tab) {
      const int index = tab_strip_model_->GetIndexOfTab(tab);
      return index != TabStripModel::kNoTab && !tab->IsPinned() &&
-            !tab_strip_model_->IsTabHidden(index) && !IsLeaving(tab, leaving);
-   };
+-           !tab_strip_model_->IsTabHidden(index) && !IsLeaving(tab, leaving);
++           !tab_strip_model_->IsTabHidden(index) && !IsLeaving(tab, leaving) &&
++           awake(tab);
++  };
 +  // An essential this Space shows, which stays (R33, GitHub issue 30).
 +  const auto shows_essential = [&](tabs::TabInterface* tab) {
 +    const int index = tab_strip_model_->GetIndexOfTab(tab);
 +    return index != TabStripModel::kNoTab && tab->IsPinned() &&
-+           !tab_strip_model_->IsTabHidden(index) && !IsLeaving(tab, leaving);
-+  };
++           !tab_strip_model_->IsTabHidden(index) && !IsLeaving(tab, leaving) &&
++           awake(tab);
+   };
    // switcher X1's history: the row a Ctrl-Tab tap shows. A split's entry is
    // the pane used last, so the split comes back with that pane active. It
    // is shown only while its row is in the sidebar's view (the owner,
@@ -2255,7 +2297,7 @@ index 7f67370fc5976..fd17c03f244b7 100644
          if (row_in_view_.is_null() || row_in_view_.Run(tab)) {
            return tab;
          }
-@@ -1944,8 +1992,14 @@ void SpaceModel::SetSpaceName(const SpaceId& id, std::string name) {
+@@ -1944,8 +2001,14 @@ void SpaceModel::SetSpaceName(const SpaceId& id, std::string name) {
  }
  
  void SpaceModel::SetSpaceColor(const SpaceId& id, SkColor color) {
@@ -2271,7 +2313,7 @@ index 7f67370fc5976..fd17c03f244b7 100644
      return;
    }
    Space* space = GetSpace(id);
-@@ -1953,6 +2007,7 @@ void SpaceModel::SetSpaceColor(const SpaceId& id, SkColor color) {
+@@ -1953,6 +2016,7 @@ void SpaceModel::SetSpaceColor(const SpaceId& id, SkColor color) {
      return;
    }
    space->SetColor(color);
@@ -2279,7 +2321,7 @@ index 7f67370fc5976..fd17c03f244b7 100644
    observers_.Notify(&Observer::OnSpaceMetadataChanged, id);
    SaveToSession();
  }
-@@ -3458,6 +3513,9 @@ std::string SpaceModel::Serialize() const {
+@@ -3458,6 +3522,9 @@ std::string SpaceModel::Serialize() const {
      entry.Set("icon", space->icon());
      entry.Set("color", static_cast<int>(space->color()));
      entry.Set("color_chosen", space->color_chosen());
@@ -2290,10 +2332,26 @@ index 7f67370fc5976..fd17c03f244b7 100644
      list.Append(std::move(entry));
    }
 diff --git a/chrome/browser/ui/spaces/space_model.h b/chrome/browser/ui/spaces/space_model.h
-index 11a7d25798116..62e71215984de 100644
+index 11a7d25798116..c3f897504273a 100644
 --- a/chrome/browser/ui/spaces/space_model.h
 +++ b/chrome/browser/ui/spaces/space_model.h
-@@ -333,7 +333,13 @@ class SpaceModel : public TabStripModelObserver,
+@@ -266,9 +266,13 @@ class SpaceModel : public TabStripModelObserver,
+   // tab a Ctrl-Tab tap would show), else the next row below the one on
+   // screen, else the nearest one above. Never a tab of `leaving` or a pane of
+   // its split, or a row the sidebar hides (spaces B33). Null when the Space
+-  // has no such row, and without a window.
++  // has no such row, and without a window. `awake_only`: a sleep passes over
++  // rows that are asleep too, so that putting the row on screen to sleep
++  // wakes no other (tabs R5, pins H3; GitHub issue 72, the owner,
++  // 2026-11-02).
+   tabs::TabInterface* RowToShowAfter(
+-      const std::vector<tabs::TabInterface*>& leaving) const;
++      const std::vector<tabs::TabInterface*>& leaving,
++      bool awake_only = false) const;
+   // tabs R33 (the owner, 2026-10-22): whether a row is in the sidebar's
+   // view now, scrolled into it; set by the sidebar. The row used most
+   // recently is shown after a close only while it is in view: one scrolled
+@@ -333,7 +337,13 @@ class SpaceModel : public TabStripModelObserver,
    void CloseDuplicateTabs();
  
    void SetSpaceName(const SpaceId& id, std::string name);
@@ -2307,7 +2365,7 @@ index 11a7d25798116..62e71215984de 100644
    void SetSpaceIcon(const SpaceId& id, std::string icon);
  
    // sessions S2, S7: isolation is the registry's `profile_id`. No-op without
-@@ -573,6 +579,17 @@ class SpaceModel : public TabStripModelObserver,
+@@ -573,6 +583,17 @@ class SpaceModel : public TabStripModelObserver,
    bool HidesTab(const tabs::TabInterface* tab) const;
  
    // TabStripModelObserver:
@@ -2325,7 +2383,7 @@ index 11a7d25798116..62e71215984de 100644
    void OnTabStripModelChanged(
        TabStripModel* tab_strip_model,
        const TabStripModelChange& change,
-@@ -796,6 +813,8 @@ class SpaceModel : public TabStripModelObserver,
+@@ -796,6 +817,8 @@ class SpaceModel : public TabStripModelObserver,
    PrefChangeRegistrar pref_registrar_;
    raw_ptr<TabStripModel> tab_strip_model_ = nullptr;
    bool wrote_window_state_ = false;
@@ -2411,6 +2469,61 @@ index ffc4858611146..7046980dd066e 100644
  // pins H17: Collapse Pinned Tabs is per Space. A change tells the observers
  // once, the state the Space has already is no change, and the state comes
  // back from the session with the Space. A session written before the state
+diff --git a/chrome/browser/ui/spaces/space_model_window_unittest.cc b/chrome/browser/ui/spaces/space_model_window_unittest.cc
+index c6756adf89585..4f9c7bb9c6d4c 100644
+--- a/chrome/browser/ui/spaces/space_model_window_unittest.cc
++++ b/chrome/browser/ui/spaces/space_model_window_unittest.cc
+@@ -943,6 +943,50 @@ TEST_F(SpaceWindowTest, ASleepOnScreenShowsTheRowUsedBefore) {
+   }
+ }
+ 
++// tabs R5, pins H3, H11 (GitHub issue 72; the owner, 2026-11-02): a sleep
++// shows a row that is awake. With the pins put to sleep one by one, the row
++// used before each was often the one just slept, and it woke: two pins took
++// turns. With no row of the Space awake, a new tab opens there.
++TEST_F(SpaceWindowTest, ASleepPassesOverRowsAsleep) {
++  tabs::TabInterface* const a = AppendRow(tabs(), profile(), true);
++  tabs::TabInterface* const b = AppendRow(tabs(), profile());
++  tabs::TabInterface* const c = AppendRow(tabs(), profile());
++  for (tabs::TabInterface* const pin : {a, b, c}) {
++    model().SetSpacePinned(pin, true);
++  }
++  {
++    SCOPED_TRACE("Cmd-W on a pin");
++    for (tabs::TabInterface* const tab : {c, b, a}) {
++      Use(tabs(), tab);
++    }
++    chrome::ExecuteCommand(browser(), IDC_CLOSE_TAB);
++    EXPECT_EQ(b, tabs().GetActiveTab());
++    chrome::ExecuteCommand(browser(), IDC_CLOSE_TAB);
++    EXPECT_EQ(c, tabs().GetActiveTab()) << "not a: used before b, but asleep";
++    EXPECT_TRUE(a->GetContents()->WasDiscarded()) << "a woke";
++    chrome::ExecuteCommand(browser(), IDC_CLOSE_TAB);
++    ASSERT_EQ(4, tabs().count()) << "no new tab opened";
++    for (tabs::TabInterface* const pin : {a, b, c}) {
++      EXPECT_TRUE(pin->GetContents()->WasDiscarded()) << "a pin woke";
++    }
++    EXPECT_EQ(GURL(chrome::kChromeUINewTabURL),
++              tabs().GetActiveTab()->GetContents()->GetVisibleURL());
++  }
++  {
++    SCOPED_TRACE("Sleep Tab");
++    tabs::TabInterface* const fresh = tabs().GetActiveTab();
++    stedding::SleepTabs(browser(), fresh, stedding::SleepScope::kThisTab);
++    ASSERT_EQ(5, tabs().count()) << "no new tab opened";
++    EXPECT_TRUE(fresh->GetContents()->WasDiscarded());
++    for (tabs::TabInterface* const pin : {a, b, c}) {
++      EXPECT_TRUE(pin->GetContents()->WasDiscarded()) << "a pin woke";
++    }
++    EXPECT_EQ(GURL(chrome::kChromeUINewTabURL),
++              tabs().GetActiveTab()->GetContents()->GetVisibleURL());
++    EXPECT_NE(fresh, tabs().GetActiveTab());
++  }
++}
++
+ // B5
+ TEST_F(SpaceWindowTest, DeletingASpaceMovesItsTabsToTheActiveSpace) {
+   const SpaceId home = model().active_id();
 diff --git a/chrome/browser/ui/spaces/space_registry.cc b/chrome/browser/ui/spaces/space_registry.cc
 index ce296cf0c8c07..6c21595bdf597 100644
 --- a/chrome/browser/ui/spaces/space_registry.cc
@@ -2557,6 +2670,92 @@ index 91cae740fa7fd..7509e1bd62d5a 100644
  // sessions S35 (BACKLOG S-274): a Space added while "Give every new Space
  // its own session" is on starts with a jar of its own; one added while it is
  // off shares the session, and turning it on changes no Space already there.
+diff --git a/chrome/browser/ui/stedding/BUILD.gn b/chrome/browser/ui/stedding/BUILD.gn
+index c8f9dfd969422..0326cd79089a1 100644
+--- a/chrome/browser/ui/stedding/BUILD.gn
++++ b/chrome/browser/ui/stedding/BUILD.gn
+@@ -126,9 +126,11 @@ source_set("sleep_tabs") {
+     "//chrome/browser/ui:recently_audible_helper",
+     "//chrome/browser/ui/browser_window",
+     "//chrome/browser/ui/tabs:tab_strip",
++    "//chrome/common",
+     "//components/performance_manager",
+     "//components/tabs:public",
+     "//content/public/browser",
++    "//url",
+   ]
+ }
+ 
+diff --git a/chrome/browser/ui/stedding/pin_lifecycle.cc b/chrome/browser/ui/stedding/pin_lifecycle.cc
+index dca20d3c6cdda..199c0f039955c 100644
+--- a/chrome/browser/ui/stedding/pin_lifecycle.cc
++++ b/chrome/browser/ui/stedding/pin_lifecycle.cc
+@@ -248,14 +248,16 @@ void UnloadPinsAtHome(BrowserWindowInterface* browser,
+   // The active pin cannot sleep while it is on screen: move to another row
+   // of its Space first, or open a new tab there (H3, H11). The row is the
+   // one a close would show (tabs R33, BACKLOG S-112): the Space's row used
+-  // last, else the next row below, else the nearest above, never an
+-  // essential, a pin being slept or a row the sidebar hides.
++  // last, else the next row below, else the nearest above, never a pin
++  // being slept, a row the sidebar hides or a row asleep, which would wake
++  // (GitHub issue 72).
+   // TabStripModel::SelectNextTab chose it before 2026-10-18: it wrapped
+   // round the strip, and from a Space's last row landed on an essential.
+   tabs::TabInterface* const active = tabs->GetActiveTab();
+   if (active && std::ranges::contains(doomed, active)) {
+     if (tabs::TabInterface* const next =
+-            spaces::SpaceModel::From(browser)->RowToShowAfter(doomed)) {
++            spaces::SpaceModel::From(browser)->RowToShowAfter(
++                doomed, /*awake_only=*/true)) {
+       tabs->ActivateTabAt(tabs->GetIndexOfTab(next),
+                           TabStripUserGestureDetails(
+                               TabStripUserGestureDetails::GestureType::kOther));
+diff --git a/chrome/browser/ui/stedding/sleep_tabs.cc b/chrome/browser/ui/stedding/sleep_tabs.cc
+index 918cf501adadd..6d242963cfb90 100644
+--- a/chrome/browser/ui/stedding/sleep_tabs.cc
++++ b/chrome/browser/ui/stedding/sleep_tabs.cc
+@@ -16,6 +16,8 @@
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+ #include "chrome/browser/ui/recently_audible_helper.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "chrome/browser/ui/tabs/tab_strip_model_delegate.h"
++#include "chrome/common/webui_url_constants.h"
+ #include "components/performance_manager/public/graph/page_node.h"
+ #include "components/performance_manager/public/performance_manager.h"
+ #include "components/tabs/public/split_tab_data.h"
+@@ -24,6 +26,7 @@
+ #include "content/public/browser/render_frame_host.h"
+ #include "content/public/browser/web_contents.h"
+ #include "content/public/browser/web_contents_capability_type.h"
++#include "url/gurl.h"
+ 
+ namespace stedding {
+ 
+@@ -187,6 +190,11 @@ void ActivateANeighbour(BrowserWindowInterface* browser,
+                             : std::nullopt) {
+     if (*row) {
+       tabs->ActivateTabAt(tabs->GetIndexOfTab(*row));
++    } else {
++      // No row of the Space is awake: a new tab there, as when Cmd-W sleeps
++      // a Space's only row (pins H11; GitHub issue 72). Filed under the
++      // active Space on insertion, like every new tab (spaces B1).
++      tabs->delegate()->AddTabAt(GURL(chrome::kChromeUINewTabURL), -1, true);
+     }
+     return;
+   }
+diff --git a/chrome/browser/ui/stedding/sleep_tabs.h b/chrome/browser/ui/stedding/sleep_tabs.h
+index 51d789cc47726..798da93953dc5 100644
+--- a/chrome/browser/ui/stedding/sleep_tabs.h
++++ b/chrome/browser/ui/stedding/sleep_tabs.h
+@@ -71,7 +71,7 @@ void SleepTabs(BrowserWindowInterface* browser,
+ // to sleep with `doomed`, the row a close would show. spaces::SpaceModel
+ // answers: it sits above this target, so it sets this when a window's model
+ // is made. Nullopt for a window without Spaces; a null row when the Space
+-// has no other row, and the row on screen then stays awake.
++// has no other row awake, and a new tab then opens there (GitHub issue 72).
+ using RowAfterSleep = std::optional<tabs::TabInterface*> (*)(
+     BrowserWindowInterface* browser,
+     const std::vector<tabs::TabInterface*>& doomed);
 diff --git a/chrome/browser/ui/stedding/stedding_prefs.cc b/chrome/browser/ui/stedding/stedding_prefs.cc
 index 707528a19d9f3..6f8ccfbecc491 100644
 --- a/chrome/browser/ui/stedding/stedding_prefs.cc

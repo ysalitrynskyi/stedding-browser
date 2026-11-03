@@ -42,14 +42,29 @@ def glyph(arch, hearth, size=120):
     return M.svg(M.mark(s, arch, hearth), size, size, "Stedding", M.DESC)
 
 
-def wordmark(bg, arch, hearth, text_color, w=520, h=140):
-    """Mark plus the name, for headers and README banners."""
+# The name's width in the wordmark, in its own units: "Stedding" in Helvetica Neue
+# Medium at 52 px is 218 wide, plus the 1.5 of letter spacing after each of its
+# first seven letters. textLength holds it to that width in whatever font draws
+# it, so the wordmark stays centred where Helvetica Neue is missing.
+WORD_W = 228
+WORD_GAP = 26
+
+
+def wordmark(bg, arch, hearth, text_color, w=406, h=140):
+    """Mark plus the name, centred in the box, for headers and README banners.
+
+    The default box leaves 28 on every side of the mark and the name (until
+    2026-11-03 the box was 520 wide and the name ended 140 short of its right
+    edge, so the logo sat off centre wherever it was shown in a frame)."""
     s = 96 / M.BOX
+    x0 = (w - (96 + WORD_GAP + WORD_W)) / 2
+    y0 = (h - 96) / 2
     body = (("" if bg is None else f'<rect width="{w}" height="{h}" fill="{bg}"/>')
-            + f'<g transform="translate(28,22)">'
+            + f'<g transform="translate({x0:g},{y0:g})">'
             + f'<rect width="96" height="96" rx="{M.CORNER * s:.2f}" fill="{M.SLATE if bg != M.SLATE else M.INK}"/>'
             + M.mark(s, arch, hearth) + '</g>'
-            + f'<text x="150" y="86" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" '
+            + f'<text x="{x0 + 96 + WORD_GAP:g}" y="{y0 + 64:g}" textLength="{WORD_W}" lengthAdjust="spacingAndGlyphs" '
+              f'font-family="Helvetica Neue, Helvetica, Arial, sans-serif" '
               f'font-size="52" font-weight="500" letter-spacing="1.5" fill="{text_color}">Stedding</text>')
     return M.svg(body, w, h, "Stedding", M.DESC)
 

@@ -18,8 +18,8 @@ With the Mac free, its items of the owner's list, and what the owner saw on it:
 - **The owner's look at it**: the address row's buttons lent to the sidebar, the window's menu
   among them, in the sidebar's colours, not the row's dark ones (Y51); Back, Forward and Reload a
   size under the toggle, whose ink they now match (Y46).
-- **Page bars under the page** (toolbar T54): "Restore pages?", Translate and the like were
-  Chromium's grey band over the page. The owner chose from rendered designs a pill in the
+- **Page bars under the page** (toolbar T54): "Stedding isn't your default browser", the reload
+  a site's changed settings ask for and the like were Chromium's grey band over the page. The owner chose from rendered designs a pill in the
   window's colour under the page, rising over its bottom edge with a shadow so it is seen. A
   toast no longer steps under the bars (T38), and the page no longer moves down a point when
   one comes (T36).

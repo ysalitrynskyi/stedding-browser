@@ -105,9 +105,10 @@ function IsOpen { $a = Row 'Page A'; return [bool]($a -and $script:OpenWidth -gt
 # says whether one is. Read from the capture $Shot (Drive-Shot, so ShotOrigin is its), across the
 # left half of the card, every row from the window's top to the bar's (to the page's with none):
 #   Bar    an infobar up: UI Automation's infobar container (a Group) or infobar (a Window), named
-#          "Infobar...", whose bottom is the page's top (GUESS: the names and types from Chromium's
-#          source, not yet seen on a real window). A hidden container keeps its last bounds in the
-#          tree, which then overlap the page instead.
+#          "Infobar...", in one of its two places: over the page, its bottom on the page's top
+#          (Chromium's), or under it across the page's bottom edge, the page ending well above the
+#          bar's bottom (a Stedding window, toolbar T54; seen 2026-11-02 at 946..1018). A hidden
+#          container keeps its last bounds in the tree, which then lie inside the page instead.
 #   Lines  each thin run of rows in the page's colour, 1 to 3 rows with a row of another colour
 #          below it (and above, or the window's edge): 'y+rows'.
 #   Stop   the top of the first page-coloured run taller than that (the row itself, still drawn),
@@ -123,9 +124,11 @@ function PageColourScan([string]$Shot) {
   if (-not $Shot -or -not (Test-Path $Shot) -or -not $doc) { return $out }
   $named = @(@(Drive-Rows 'Group') + @(Drive-Rows 'Window') | Where-Object { $_ -and $_.Name -like 'Infobar*' })
   if ($named.Count -gt 0) { $out.BarSeen = ($named | ForEach-Object { '{0} {1}..{2}' -f $_.Name, $_.T, ($_.T + $_.H) }) -join '; ' }
-  $bar = $named | Where-Object { $_.H -ge 8 -and [math]::Abs($_.T + $_.H - $doc.T) -le 4 } | Sort-Object T | Select-Object -First 1
+  $docB = $doc.T + $doc.H
+  $bar = $named | Where-Object { $_.H -ge 8 -and ([math]::Abs($_.T + $_.H - $doc.T) -le 4 -or
+      ($_.T -lt $docB -and $docB -le $_.T + $_.H - 16)) } | Sort-Object T | Select-Object -First 1
   $out.Bar = [bool]$bar
-  $end = if ($bar) { $bar.T } else { $doc.T }
+  $end = if ($bar -and $bar.T -lt $doc.T) { $bar.T } else { $doc.T }
   $top = (Drive-VisibleRect).Top
   $ox = $script:Drive.ShotOrigin[0]; $oy = $script:Drive.ShotOrigin[1]
   $x0 = $doc.L + 8; $x1 = $doc.L + [int]($doc.W / 2)

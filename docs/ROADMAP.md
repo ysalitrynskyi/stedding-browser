@@ -319,7 +319,10 @@ licence terms are recorded in an ADR that supersedes
 8. The artifact is signed, and notarized on macOS. Checksums are generated.
 9. The n-1 auto-update is tested end to end on a real machine.
 10. The rollback procedure is verified against this release.
-11. The changelog is written: user-facing changes, known limits, the Chromium base.
+11. The changelog is written: user-facing changes, known limits, the Chromium base. The
+    page the browser opens after an update shows the release's new features and settings,
+    each with a capture from the release build (stedding.dev, `src/data/whats-new.mjs`;
+    `tooling/publish-release` checks it).
 12. The git tag matches the artifact. The release is published with the checksums and
     the changelog.
 13. The build is used for real on the platform being released, from the installer a user

@@ -1,0 +1,162 @@
+#!/usr/bin/env bash
+# Publish a side release: a build that is not the next version for everyone (ADR 0031).
+#
+# Usage:
+#   tooling/publish-side <kind> <version> --notes <file> [--check] <file>...
+#
+#   tooling/publish-side linux 0.4.0-beta.8.1 --notes ~/linux-notes.md \
+#       dist/Stedding-side-linux-0.4.0-beta.8.1-x86_64.AppImage
+#   tooling/publish-side mac-test 0.4.0-beta.8.2 --notes ~/test.md --check \
+#       dist/Stedding-side-mac-test-0.4.0-beta.8.2-arm64.dmg
+#
+# A Linux build, a Windows build for ARM, a test build for the Mac or Windows: each is a
+# side release. It is a GitHub pre-release that is never marked latest, under the tag
+# side-<kind>-<version>, with files named Stedding-side-..., and notes kept on its GitHub
+# page, not in docs/release-notes/. It never writes an update feed, the site, the
+# Homebrew cask or the README, so no installed copy is offered it and every page that
+# shows the newest release keeps showing the main one. A main release is
+# tooling/publish-release, and nothing else.
+#
+# What it refuses, each a way a side build has leaked into the main line elsewhere:
+#
+#   * A MAIN TAG. The tag is built from <kind> and <version>, and always starts side-;
+#     a <version> written as a main one (v0.4.0-beta.8) is refused too.
+#   * A MAIN FILE NAME. Every file's name starts Stedding-side-<kind>-: the site fills a
+#     platform the latest release lacks from older releases by file name
+#     (Stedding-<version>-arm64.dmg, -win-x64.exe), and would offer a side build there.
+#   * A TAG THAT EXISTS. A second publish under the same tag would mix two builds.
+#   * NOTES IN THE REPOSITORY. docs/release-notes/ holds the latest main release's notes
+#     alone (tooling/check-repo checks that).
+#   * BECOMING LATEST. After it publishes, GitHub's latest release is read back: it must
+#     still be the main one it was before. If it is not, the side release is turned back
+#     into a pre-release that is not latest, and the run fails.
+#
+# A .sha256 is written beside each file, uploaded with it, and named in the notes. Asks
+# nothing and needs the operator's word for this release, as any release does (AGENTS.md).
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=./lib.sh
+. "$(cd "$(dirname "$0")" && pwd)/lib.sh"
+
+MAIN_TAG_RE='^v[0-9]+\.[0-9]+\.[0-9]+(-beta\.[0-9]+)?$'
+
+sha256_of() {
+    if command -v shasum >/dev/null 2>&1; then
+      shasum -a 256 "$1" | cut -d' ' -f1
+    else
+      sha256sum "$1" | cut -d' ' -f1
+    fi
+}
+
+main() {
+    local check=0 notes="" kind="" version="" files=() missing=0
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --check) check=1; shift ;;
+        --notes) notes="${2:-}"; shift 2 ;;
+        -h|--help) sed -n '2,37p' "$0"; exit 0 ;;
+        -*) die "unknown argument: $1" ;;
+        *)
+          if [ -z "$kind" ]; then kind="$1"
+          elif [ -z "$version" ]; then version="$1"
+          else files+=("$1"); fi
+          shift ;;
+      esac
+    done
+    report() { printf '  %-10s %s\n' "$1" "$2" >&2; }
+
+    [ -n "$kind" ] && [ -n "$version" ] || die "usage: tooling/publish-side <kind> <version> --notes <file> <file>..."
+    printf '%s' "$kind" | grep -Eq '^[a-z0-9]+(-[a-z0-9]+)*$' \
+      || die "kind '$kind': lower-case letters, digits and single hyphens (linux, windows-arm64, mac-test)"
+    printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-beta\.[0-9]+)?(\.[0-9]+)?$' \
+      || die "version '$version': x.y.z[-beta.n][.k], with no leading v (0.4.0-beta.8.1)"
+    local tag="side-$kind-$version"
+    printf '%s' "$tag" | grep -Eq "$MAIN_TAG_RE" && die "'$tag' is a main tag (ADR 0031)"
+    report "tag" "$tag"
+
+    if [ -z "$notes" ] || [ ! -f "$notes" ]; then
+      report "notes" "MISSING: --notes <file>"; missing=1
+    else
+      local notes_dir
+      notes_dir="$(cd "$(dirname "$notes")" && pwd)"
+      case "$notes_dir/" in
+        "$STEDDING_ROOT/docs/release-notes/"*)
+          report "notes" "REFUSED: docs/release-notes/ holds the main release's notes alone"
+          missing=1 ;;
+        *) report "notes" "$notes" ;;
+      esac
+    fi
+
+    [ "${#files[@]}" -gt 0 ] || { report "files" "MISSING: no file to publish"; missing=1; }
+    local f name
+    for f in "${files[@]}"; do
+      name="$(basename "$f")"
+      if [ ! -f "$f" ]; then
+        report "file" "MISSING: $f"; missing=1
+      elif [[ "$name" != "Stedding-side-$kind-"* ]]; then
+        report "file" "REFUSED: $name must start Stedding-side-$kind-"; missing=1
+      elif printf '%s' "$name" | grep -Eq '^Stedding-[0-9].*-(arm64\.dmg|win-x64\.exe)$'; then
+        report "file" "REFUSED: $name is a main file name"; missing=1
+      else
+        report "file" "$name ($(du -h "$f" | cut -f1))"
+      fi
+    done
+
+    local repo
+    repo="$(git -C "$STEDDING_ROOT" remote get-url origin 2>/dev/null \
+            | sed -E 's#^git@github\.com:#https://github.com/#; s#\.git$##' \
+            | sed -E 's#^https://github\.com/##')"
+    printf '%s' "$repo" | grep -Eq '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' \
+      || { report "repo" "MISSING: cannot read owner/name from origin"; missing=1; }
+    if ! gh auth status >/dev/null 2>&1; then
+      report "gh" "MISSING: gh auth login"; missing=1
+    elif gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
+      report "tag" "REFUSED: $tag already exists"; missing=1
+    fi
+
+    local latest_before
+    latest_before="$(gh api "repos/$repo/releases/latest" --jq .tag_name 2>/dev/null || true)"
+    report "latest" "${latest_before:-none} (stays the latest)"
+
+    if [ "$check" -eq 1 ]; then
+      if [ "$missing" -eq 0 ]; then log "ready to publish $tag"; else warn "not ready"; fi
+      exit "$missing"
+    fi
+    [ "$missing" -eq 0 ] || die "not ready; run with --check for the list"
+
+    local body sums=() head
+    body="$(mktemp)"
+    trap 'rm -f "$body"' EXIT
+    cat "$notes" > "$body"
+    printf '\n\n## Checksums (SHA-256)\n\nA side release (ADR 0031): installed copies are not offered it.\n\n```\n' >> "$body"
+    for f in "${files[@]}"; do
+      sha256_of "$f" > "$f.sha256.tmp"
+      printf '%s  %s\n' "$(cat "$f.sha256.tmp")" "$(basename "$f")" > "$f.sha256"
+      rm -f "$f.sha256.tmp"
+      cat "$f.sha256" >> "$body"
+      sums+=("$f.sha256")
+    done
+    printf '```\n' >> "$body"
+
+    head="$(git -C "$STEDDING_ROOT" rev-parse HEAD)"
+    git -C "$STEDDING_ROOT" branch -r --contains "$head" 2>/dev/null | grep -q . \
+      || head="$(git -C "$STEDDING_ROOT" rev-parse origin/main)"
+    log "publishing $tag, a side release, at $(git -C "$STEDDING_ROOT" rev-parse --short "$head")"
+    gh release create "$tag" \
+      --repo "$repo" \
+      --target "$head" \
+      --prerelease \
+      --latest=false \
+      --title "Stedding $version ($kind, side release)" \
+      --notes-file "$body" \
+      "${files[@]}" "${sums[@]}" || die "gh release create failed"
+
+    local latest_after
+    latest_after="$(gh api "repos/$repo/releases/latest" --jq .tag_name 2>/dev/null || true)"
+    if [ "$latest_after" != "$latest_before" ]; then
+      gh release edit "$tag" --repo "$repo" --prerelease --latest=false >/dev/null 2>&1 || true
+      die "GitHub's latest became $latest_after; $tag was set back to a pre-release that is not latest. Check the release page."
+    fi
+    log "published: $(gh release view "$tag" --repo "$repo" --json url -q .url); latest is still $latest_after"
+}
+
+main "$@"

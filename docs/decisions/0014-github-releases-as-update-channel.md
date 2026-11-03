@@ -1,6 +1,6 @@
 # 0014 — GitHub hosts updates; stedding.dev is a website
 
-Status: Accepted. The check’s endpoint, its default and applying an update are [0022](0022-sparkle-updates-the-mac.md) on the Mac and [0023](0023-updates-on-windows-and-linux.md) and [0026](0026-a-windows-update-key.md) on Windows. Linux is 0023 and is not shipped. The site stays off the update path.
+Status: Accepted. The check’s endpoint, its default and applying an update are [0022](0022-sparkle-updates-the-mac.md) on the Mac and [0023](0023-updates-on-windows-and-linux.md) and [0026](0026-a-windows-update-key.md) on Windows. Linux is 0023 and is not shipped. The site stays off the update path. Amended 2026-11-03 by [0031](0031-main-and-side-releases.md): only main releases use the `v<x.y.z[-beta.n]>` tag; side releases use `side-<kind>-<version>` and never reach the feeds.
 Date: 2026-08-31
 
 ## Context

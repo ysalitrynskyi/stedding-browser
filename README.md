@@ -9,7 +9,7 @@
 and folders, and one command bar for everything. macOS (Apple silicon) and Windows. No
 account, no telemetry, BSD-3-Clause.
 
-[![Latest release](https://img.shields.io/github/v/release/ysalitrynskyi/stedding-browser?include_prereleases&label=download&color=2F4858)](https://github.com/ysalitrynskyi/stedding-browser/releases)
+[![Latest release](https://img.shields.io/github/v/release/ysalitrynskyi/stedding-browser?label=download&color=2F4858)](https://github.com/ysalitrynskyi/stedding-browser/releases)
 [![License: BSD-3-Clause](https://img.shields.io/badge/license-BSD--3--Clause-E8B04B)](LICENSE)
 ![Platforms: macOS and Windows](https://img.shields.io/badge/platforms-macOS%20%7C%20Windows-1C2B33)
 ![Chromium 157](https://img.shields.io/badge/Chromium-157%20stable-2F4858)

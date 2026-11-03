@@ -1046,6 +1046,8 @@ Windows joins the same release from the PC. Run `tooling\win\build-until-done.ps
 
 A newer Windows build installs over an older one as an ordinary upgrade, including two releases on the same Chromium milestone (patch 0073, S-72). An installer of the version already installed still repairs, and Stedding has to be closed for that (trap 62). The PC builds and tests its own image. A browser suite started over SSH lands in session 0 and fails (traps 67, 68).
 
+**Side releases.** A Linux or ARM build, or a test build, is a side release (ADR 0031): `tooling/publish-side`, never `publish-release`. It reaches none of the places below, and no feed: a test item put in a feed, even for a moment, makes the Windows updater refuse every later feed on the copies that saw it.
+
 **After a release.** Every place that names the release:
 
 | Where | What follows the release | By hand |
@@ -1053,7 +1055,7 @@ A newer Windows build installs over an older one as an ordinary upgrade, includi
 | GitHub Releases | `tooling/publish-release` | |
 | README, Download ("The newest release is ...") | written in the release commit; `publish-release` refuses a README that does not name the release | |
 | The feeds (`updates/appcast.xml`, `updates/appcast-windows.xml`) | `tooling/publish-appcast --push` and `tooling\win\publish-appcast.ps1 -Push`, each on the operator's yes | |
-| stedding.dev | its Rebuild workflow reads the release list, pre-releases included; `publish-release` starts it, and it runs every six hours | `gh workflow run rebuild.yml -R ysalitrynskyi/stedding.dev` |
+| stedding.dev | its Rebuild workflow reads GitHub's latest release, and older main releases for a platform that one lacks (ADR 0031: side releases are never read); `publish-release` starts it, and it runs every six hours | `gh workflow run rebuild.yml -R ysalitrynskyi/stedding.dev` |
 | stedding.dev's page after an update (`/thanks/updated/`) | what the release brought, each change with a capture and where its setting is: an entry in that repository's `src/data/whats-new.mjs` and its captures in `assets/whats-new/<tag>/`, pushed before the release; `publish-release` refuses a tag without one (the owner, 2026-11-02: people who update never read the notes) | the captures, from the release's own build, dark, window only (that repository's `README.md`, "What's new after an update") |
 | The Homebrew cask (`ysalitrynskyi/homebrew-stedding`, `Casks/stedding.rb`) | its Bump workflow reads the release marked latest and the DMG's `.sha256`; `publish-release` starts it once the Mac image is in, and it runs every six hours. A release with no Mac image yet changes nothing | `gh workflow run bump.yml -R ysalitrynskyi/homebrew-stedding` |
 

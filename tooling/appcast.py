@@ -16,6 +16,8 @@ Usage:
   appcast.py write --platform windows --feed updates/appcast-windows.xml --repo owner/name \
       --version 0.2.0-beta.19 --bundle-version 156.2.0.19 --minimum-system 10.0 \
       --length 176000000 --signature <base64> --date "..."   # the Windows installer's item
+      [--important "<reason>"]   # an important update (updates Up23, ADR 0031): Sparkle's
+                                # criticalUpdate and the reason, one line of plain text
   appcast.py attach-signature --feed f --signature <base64>
       # appends the feed's own signature, over every byte written before it, as Sparkle's
       # sign_update does; the Windows browser checks it (updates Up15)
@@ -30,6 +32,8 @@ import xml.etree.ElementTree as ET
 from xml.sax.saxutils import escape, quoteattr
 
 SPARKLE = 'http://www.andymatuschak.org/xml-namespaces/sparkle'
+# Stedding's own elements beside Sparkle's (ADR 0031): Sparkle ignores them.
+STEDDING = 'https://stedding.dev/xml/appcast'
 WINDOWS_OS = 'windows-x64'
 SIGNATURE_MARK = '<!-- sparkle-signatures:'
 KEEP = 5
@@ -61,12 +65,24 @@ def read_items(text):
             'url': enclosure.get('url', ''),
             'length': enclosure.get('length', ''),
             'signature': enclosure.get('{%s}edSignature' % SPARKLE, ''),
+            # updates Up23: kept when the feed is written again.
+            'important': _text(item, '{%s}important' % STEDDING),
         })
     return items
 
 
 def title_of(version):
     return 'Stedding ' + version.replace('-beta.', ' beta ')
+
+
+def important_xml(item):
+    """updates Up23: an important update, as Sparkle's critical one, with its reason."""
+    if not item.get('important'):
+        return []
+    return [
+        '      <sparkle:criticalUpdate></sparkle:criticalUpdate>',
+        '      <stedding:important>%s</stedding:important>' % escape(item['important']),
+    ]
 
 
 def item_xml(item):
@@ -82,6 +98,7 @@ def item_xml(item):
             % escape(item['version']),
             '      <sparkle:minimumSystemVersion>%s</sparkle:minimumSystemVersion>'
             % escape(item['minimum_system']),
+        ] + important_xml(item) + [
             '      <enclosure url=%s length=%s type="application/octet-stream" '
             'sparkle:os=%s sparkle:edSignature=%s/>' % (
                 quoteattr(item['url']), quoteattr(item['length']),
@@ -99,6 +116,7 @@ def item_xml(item):
         '      <sparkle:minimumSystemVersion>%s</sparkle:minimumSystemVersion>'
         % escape(item['minimum_system']),
         '      <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>',
+    ] + important_xml(item) + [
         '      <enclosure url=%s length=%s type="application/octet-stream" '
         'sparkle:edSignature=%s/>' % (quoteattr(item['url']),
                                       quoteattr(item['length']),
@@ -112,7 +130,8 @@ def feed_xml(repo, items, platform='mac'):
     where = 'Windows' if platform == 'windows' else 'the Mac'
     head = [
         '<?xml version="1.0" encoding="utf-8"?>',
-        '<rss version="2.0" xmlns:sparkle="%s">' % SPARKLE,
+        '<rss version="2.0" xmlns:sparkle="%s" xmlns:stedding="%s">' % (SPARKLE,
+                                                                        STEDDING),
         '  <channel>',
         '    <title>Stedding</title>',
         '    <link>%s</link>' % escape(releases),
@@ -138,6 +157,10 @@ def new_item(args):
     if not re.match(r'^[A-Za-z0-9+/]+={0,2}$', args.signature):
         raise SystemExit('not an EdDSA signature: %s' % args.signature)
     tag = 'v' + args.version
+    important = (getattr(args, 'important', None) or '').strip()
+    if important and (len(important) > 200 or '\n' in important or '<' in important):
+        raise SystemExit('an important update\'s reason is one line of plain text, '
+                         'at most 200 characters')
     if windows:
         return {
             'title': title_of(args.version),
@@ -152,6 +175,7 @@ def new_item(args):
             % (args.repo, tag, args.version),
             'length': args.length,
             'signature': args.signature,
+            'important': important,
         }
     return {
         'title': title_of(args.version),
@@ -166,6 +190,7 @@ def new_item(args):
         'length': args.length,
         'signature': args.signature,
         'os': '',
+        'important': important,
     }
 
 
@@ -253,6 +278,24 @@ def selftest():
     signed = text + SIGNATURE_MARK + '\nedSignature: abc=\nlength: %d\n-->\n' % len(text.encode())
     assert unsigned(signed) == text
     assert read_items(signed)[0]['version'] == '0.2.0-beta.19'
+    # updates Up23: an important item carries Sparkle's criticalUpdate and its reason,
+    # and both survive the next release's rewrite.
+    a.platform, a.version, a.bundle_version = 'mac', '0.4.0-beta.9', '10040.9'
+    a.important = 'Fixes a security hole in the PDF viewer'
+    urgent = new_item(a)
+    text = feed_xml('o/r', [urgent])
+    assert '<sparkle:criticalUpdate></sparkle:criticalUpdate>' in text, text
+    assert read_items(text)[0]['important'] == a.important
+    a.version, a.bundle_version, a.important = '0.4.0-beta.10', '10040.10', None
+    later = new_item(a)
+    items = read_items(feed_xml('o/r', [later] + read_items(text)))
+    assert items[0]['important'] == '' and items[1]['important'] == urgent['important']
+    a.important = 'two\nlines'
+    try:
+        new_item(a)
+        raise AssertionError('a reason of two lines passed')
+    except SystemExit:
+        pass
     print('appcast.py: ok')
     return 0
 
@@ -268,6 +311,8 @@ def main(argv):
     # "The updater"); a release's comes from the release.
     w.add_argument('--url')
     w.add_argument('--platform', choices=('mac', 'windows'), default='mac')
+    # updates Up23 (ADR 0031): an important update, with its reason.
+    w.add_argument('--important')
     s = sub.add_parser('attach-signature')
     s.add_argument('--feed', required=True)
     s.add_argument('--signature', required=True)

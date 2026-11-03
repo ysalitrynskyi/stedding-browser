@@ -1,0 +1,1828 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Tue, 3 Nov 2026 08:22:57 -0500
+Subject: feat: full screen beside the camera on the Mac, as a setting (S-392)
+
+On a Mac whose screen has a camera housing, with Settings > Stedding >
+Pages and menus > "Use the row beside the camera in full screen" on, full
+screen the person starts is Stedding's own: a borderless window over the
+whole screen, the menu bar and Dock hidden until the pointer reaches them,
+and the address row in the row beside the camera, with the field right of
+the housing. A page's own full screen stays macOS's. Off by default
+(docs/features/toolbar.md T55-T59, settings T51).
+
+Why: macOS's full screen keeps the row beside the camera for the menu
+bar, a black band over the page, and no public switch gives it to the
+window; the owner chose layout B, as a setting, on 2026-11-03.
+Removable when: macOS lets a full-screen window use the row beside the
+camera.
+---
+ .../api/settings_private/prefs_util.cc        |   3 +
+ .../stedding_page/stedding_page.html.ts       |   8 +
+ chrome/browser/ui/browser_commands.cc         |   8 +
+ chrome/browser/ui/stedding/BUILD.gn           |   1 +
+ chrome/browser/ui/stedding/address_row.cc     |  31 ++
+ chrome/browser/ui/stedding/address_row.h      |  29 ++
+ .../browser/ui/stedding/address_row_rules.cc  |   4 +
+ .../browser/ui/stedding/address_row_rules.h   |   3 +
+ .../ui/stedding/address_row_rules_unittest.cc |  16 +
+ chrome/browser/ui/stedding/stedding_prefs.cc  |   1 +
+ chrome/browser/ui/stedding/stedding_prefs.h   |   6 +
+ .../ui/stedding/stedding_prefs_unittest.cc    |   9 +-
+ .../theme/page_theme_color_controller.cc      |  15 +-
+ .../theme/page_theme_color_controller.h       |  17 +-
+ .../ui/views/commandbar/command_bar_view.cc   |   5 +
+ chrome/browser/ui/views/frame/BUILD.gn        |  14 +-
+ .../ui/views/frame/browser_frame_view_mac.mm  |  12 +
+ .../views/frame/browser_native_widget_mac.h   |  11 +
+ .../views/frame/browser_native_widget_mac.mm  |  41 ++-
+ .../layout/stedding_browser_view_layout.cc    |  86 ++++-
+ .../ui/views/frame/stedding_camera_row_mac.h  | 108 ++++++
+ .../ui/views/frame/stedding_camera_row_mac.mm | 307 ++++++++++++++++++
+ .../views/location_bar/location_bar_view.cc   |  17 +
+ .../ui/views/location_bar/location_bar_view.h |   5 +
+ .../vertical_tab_strip_top_container.cc       |  14 +-
+ .../vertical_tab_strip_top_container.h        |   1 +
+ .../browser/ui/views/toolbar/toolbar_view.cc  |  53 ++-
+ .../browser/ui/views/toolbar/toolbar_view.h   |   9 +
+ .../browser/ui/webui/settings/settings_ui.cc  |  11 +
+ chrome/test/stedding/BUILD.gn                 |   2 +
+ .../test/stedding/camera_row_browsertest.mm   | 265 +++++++++++++++
+ .../stedding/settings_spaces_browsertest.cc   |  15 +-
+ .../app_shim/native_widget_mac_nswindow.h     |   6 +
+ .../app_shim/native_widget_mac_nswindow.mm    |  12 +
+ 34 files changed, 1128 insertions(+), 17 deletions(-)
+ create mode 100644 chrome/browser/ui/views/frame/stedding_camera_row_mac.h
+ create mode 100644 chrome/browser/ui/views/frame/stedding_camera_row_mac.mm
+ create mode 100644 chrome/test/stedding/camera_row_browsertest.mm
+
+diff --git a/chrome/browser/extensions/api/settings_private/prefs_util.cc b/chrome/browser/extensions/api/settings_private/prefs_util.cc
+index fc0916200cbfb..9f0b24e9cd303 100644
+--- a/chrome/browser/extensions/api/settings_private/prefs_util.cc
++++ b/chrome/browser/extensions/api/settings_private/prefs_util.cc
+@@ -454,6 +454,9 @@ const PrefsUtil::TypedPrefMap& PrefsUtil::GetAllowlistedKeys() {
+   // toolbar T45, settings T24.
+   (*s_allowlist)[stedding::prefs::kFullscreenHint] =
+       settings_api::PrefType::kBoolean;
++  // toolbar T55, settings T51 (BACKLOG S-392).
++  (*s_allowlist)[stedding::prefs::kCameraRowFullscreen] =
++      settings_api::PrefType::kBoolean;
+   (*s_allowlist)[contextual_search::kDriveConsentState] =
+       settings_api::PrefType::kNumber;
+   (*s_allowlist)[::prefs::kShowForwardButton] =
+diff --git a/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts b/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
+index 57caf09a836f9..3c661d0cc92ff 100644
+--- a/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
++++ b/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
+@@ -698,6 +698,14 @@ export function getHtml(this: SettingsSteddingPageElement) {
+       label="$i18n{steddingFullscreenHintLabel}"
+       sub-label="$i18n{steddingFullscreenHintSubLabel}">
+   </settings-toggle-button>
++  ${isMac ? html`
++  <settings-toggle-button
++      id="cameraRowFullscreen"
++      class="hr"
++      pref-key="stedding.window.camera_row_fullscreen"
++      label="$i18n{steddingCameraRowFullscreenLabel}"
++      sub-label="$i18n{steddingCameraRowFullscreenSubLabel}">
++  </settings-toggle-button>` : ''}
+   <settings-toggle-button
+       id="darkPages"
+       class="hr"
+diff --git a/chrome/browser/ui/browser_commands.cc b/chrome/browser/ui/browser_commands.cc
+index 21767fecfd324..71df193146ad8 100644
+--- a/chrome/browser/ui/browser_commands.cc
++++ b/chrome/browser/ui/browser_commands.cc
+@@ -112,6 +112,7 @@
+ #include "chrome/browser/ui/spaces/space_storage_partition.h"
+ #include "chrome/browser/ui/startup/startup_tab.h"
+ #include "chrome/browser/ui/status_bubble.h"
++#include "chrome/browser/ui/stedding/address_row.h"
+ #include "chrome/browser/ui/stedding/copy_link.h"
+ #include "chrome/browser/ui/stedding/pin_lifecycle.h"
+ #include "chrome/browser/ui/stedding/tab_numbers.h"
+@@ -2960,6 +2961,13 @@ void SetAndroidOsForTabletSite(content::WebContents* current_tab) {
+ void ToggleFullscreenMode(BrowserWindowInterface* browser,
+                           bool user_initiated) {
+   DCHECK(browser);
++  // Stedding (docs/features/toolbar.md T55; BACKLOG S-392): on a Mac whose
++  // screen has a camera housing, with the switch on, the window's own full
++  // screen beside the camera; otherwise this platform's.
++  if (stedding::AddressRow* const row = stedding::AddressRow::From(browser);
++      row && row->ToggleCameraRow()) {
++    return;
++  }
+   ExclusiveAccessManager::From(browser)
+       ->fullscreen_controller()
+       ->ToggleBrowserFullscreenMode(user_initiated);
+diff --git a/chrome/browser/ui/stedding/BUILD.gn b/chrome/browser/ui/stedding/BUILD.gn
+index 35f03277b935c..fe3a8e3906ad8 100644
+--- a/chrome/browser/ui/stedding/BUILD.gn
++++ b/chrome/browser/ui/stedding/BUILD.gn
+@@ -420,6 +420,7 @@ source_set("address_row") {
+     ":prefs",
+     "//chrome/browser/profiles:profile",
+     "//chrome/browser/ui/browser_window",
++    "//chrome/browser/ui/stedding/theme",
+     "//content/public/browser",
+   ]
+ }
+diff --git a/chrome/browser/ui/stedding/address_row.cc b/chrome/browser/ui/stedding/address_row.cc
+index 9451d0b6a6026..43e79f88d526c 100644
+--- a/chrome/browser/ui/stedding/address_row.cc
++++ b/chrome/browser/ui/stedding/address_row.cc
+@@ -11,6 +11,7 @@
+ #include "chrome/browser/ui/stedding/address_row_rules.h"
+ #include "chrome/browser/ui/stedding/local_pages.h"
+ #include "chrome/browser/ui/stedding/stedding_prefs.h"
++#include "chrome/browser/ui/stedding/theme/page_theme_color_controller.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "chrome/browser/ui/tabs/vertical_tab_strip_state_controller.h"
+ #include "components/prefs/pref_service.h"
+@@ -86,6 +87,7 @@ bool AddressRow::IsVisible() {
+   }
+   signals.override = override_;
+   signals.caption_buttons_over_row = caption_buttons_over_row_;
++  signals.camera_row = camera_row_.has_value();
+   return ShouldShowAddressRow(signals);
+ }
+ 
+@@ -103,6 +105,35 @@ void AddressRow::SetSteddingHeldContents(content::WebContents* contents) {
+   Relayout();
+ }
+ 
++void AddressRow::SetCameraRow(std::optional<CameraRow> row) {
++  if (camera_row_ == row) {
++    return;
++  }
++  camera_row_ = row;
++  // T56: the row beside the camera is on the window's colour.
++  if (PageThemeColorController* const colours =
++          PageThemeColorController::From(&*browser_)) {
++    colours->SetBarSuppressed(camera_row_.has_value());
++  }
++  // The sidebar gives the address back first (T57), so the one layout that
++  // follows has the row whole.
++  camera_row_changed_.Notify();
++  Relayout();
++}
++
++base::CallbackListSubscription AddressRow::AddCameraRowChangedCallback(
++    base::RepeatingClosure callback) {
++  return camera_row_changed_.Add(std::move(callback));
++}
++
++void AddressRow::SetCameraRowToggle(base::RepeatingCallback<bool()> toggle) {
++  camera_row_toggle_ = std::move(toggle);
++}
++
++bool AddressRow::ToggleCameraRow() {
++  return camera_row_toggle_ && camera_row_toggle_.Run();
++}
++
+ void AddressRow::OnTabStripModelChanged(
+     TabStripModel* tab_strip_model,
+     const TabStripModelChange& change,
+diff --git a/chrome/browser/ui/stedding/address_row.h b/chrome/browser/ui/stedding/address_row.h
+index fcbf9f5b22bd7..5000b6ffea886 100644
+--- a/chrome/browser/ui/stedding/address_row.h
++++ b/chrome/browser/ui/stedding/address_row.h
+@@ -7,6 +7,8 @@
+ 
+ #include <optional>
+ 
++#include "base/callback_list.h"
++#include "base/functional/callback.h"
+ #include "base/memory/raw_ref.h"
+ #include "base/memory/weak_ptr.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
+@@ -59,6 +61,30 @@ class AddressRow : public TabStripModelObserver {
+   // again.
+   void SetSteddingHeldContents(content::WebContents* contents);
+ 
++  // toolbar T55-T59 (BACKLOG S-392): the row beside the camera, in the
++  // window's own DIPs, while the window is in Stedding's full screen on a
++  // screen with a camera housing (the Mac; SteddingCameraRowMac sets it).
++  // The row then takes the safe area across the screen's top, `height`
++  // tall, and nothing of it sits between `housing_left` and `housing_right`.
++  struct CameraRow {
++    int height = 0;
++    int housing_left = 0;
++    int housing_right = 0;
++    bool operator==(const CameraRow&) const = default;
++  };
++  const std::optional<CameraRow>& camera_row() const { return camera_row_; }
++  void SetCameraRow(std::optional<CameraRow> row);
++  // Runs whenever camera_row() changes, before the window lays out again.
++  base::CallbackListSubscription AddCameraRowChangedCallback(
++      base::RepeatingClosure callback);
++
++  // T55: the window's own full screen, where the platform has one. Full
++  // screen the person starts asks this first (chrome::ToggleFullscreenMode);
++  // `toggle` answers whether it entered or left the row beside the camera,
++  // and no means macOS's full screen goes ahead.
++  void SetCameraRowToggle(base::RepeatingCallback<bool()> toggle);
++  bool ToggleCameraRow();
++
+   // TabStripModelObserver: the localhost exception follows the active tab.
+   void OnTabStripModelChanged(
+       TabStripModel* tab_strip_model,
+@@ -78,6 +104,9 @@ class AddressRow : public TabStripModelObserver {
+   std::optional<bool> override_;
+   std::optional<Sidebar> last_sidebar_;
+   bool caption_buttons_over_row_ = false;
++  std::optional<CameraRow> camera_row_;
++  base::RepeatingClosureList camera_row_changed_;
++  base::RepeatingCallback<bool()> camera_row_toggle_;
+   // The page a drag holds on screen; see SetSteddingHeldContents().
+   base::WeakPtr<content::WebContents> held_contents_;
+   PrefChangeRegistrar pref_registrar_;
+diff --git a/chrome/browser/ui/stedding/address_row_rules.cc b/chrome/browser/ui/stedding/address_row_rules.cc
+index 93aaeacf49933..d0ee014a8848e 100644
+--- a/chrome/browser/ui/stedding/address_row_rules.cc
++++ b/chrome/browser/ui/stedding/address_row_rules.cc
+@@ -11,6 +11,10 @@ bool ShouldShowAddressRow(const AddressRowSignals& signals) {
+   // window -- the address in the sidebar, the row hidden with it, Shift-Cmd-D
+   // -- since the full-screen title bar now takes the row's height only while
+   // the row shows.
++  // T57: beside the camera the row always shows, whatever else says.
++  if (signals.camera_row) {
++    return true;
++  }
+   if (signals.override.has_value()) {
+     return *signals.override;
+   }
+diff --git a/chrome/browser/ui/stedding/address_row_rules.h b/chrome/browser/ui/stedding/address_row_rules.h
+index 8e75bada693e9..ed1cb7892a091 100644
+--- a/chrome/browser/ui/stedding/address_row_rules.h
++++ b/chrome/browser/ui/stedding/address_row_rules.h
+@@ -29,6 +29,9 @@ struct AddressRowSignals {
+   // buttons, the frame's trailing exclusion -- so a top strip exists
+   // whatever the sidebar does (T22).
+   bool caption_buttons_over_row = false;
++  // The window is in Stedding's full screen with the row beside the camera
++  // (T57): the row is that row, and hiding it would give the page nothing.
++  bool camera_row = false;
+ };
+ 
+ bool ShouldShowAddressRow(const AddressRowSignals& signals);
+diff --git a/chrome/browser/ui/stedding/address_row_rules_unittest.cc b/chrome/browser/ui/stedding/address_row_rules_unittest.cc
+index a0b0ab26c86bc..c9269e412b0fa 100644
+--- a/chrome/browser/ui/stedding/address_row_rules_unittest.cc
++++ b/chrome/browser/ui/stedding/address_row_rules_unittest.cc
+@@ -91,6 +91,22 @@ TEST(AddressRowRulesTest, Visibility) {
+     signals.override = row.override;
+     EXPECT_EQ(row.show, ShouldShowAddressRow(signals));
+   }
++  // T57 (BACKLOG S-392): beside the camera the row shows whatever hides it
++  // elsewhere: the sidebar's address, the sidebar collapsed with the setting
++  // on, and shift-cmd-D's answer.
++  {
++    AddressRowSignals signals;
++    signals.camera_row = true;
++    signals.address_in_sidebar = true;
++    signals.sidebar_open = true;
++    EXPECT_TRUE(ShouldShowAddressRow(signals));
++    signals.sidebar_open = false;
++    signals.sidebar_collapsed = true;
++    signals.hide_with_sidebar = true;
++    EXPECT_TRUE(ShouldShowAddressRow(signals));
++    signals.override = false;
++    EXPECT_TRUE(ShouldShowAddressRow(signals));
++  }
+   // Which pages are localhost pages is the local-tabs rule, tested with it
+   // (LocalPagesTest.LocalIsTheLoopbackHostsOverHttp).
+ }
+diff --git a/chrome/browser/ui/stedding/stedding_prefs.cc b/chrome/browser/ui/stedding/stedding_prefs.cc
+index 1c9f8b49bff06..342ece2202eb6 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs.cc
++++ b/chrome/browser/ui/stedding/stedding_prefs.cc
+@@ -108,6 +108,7 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
+   registry->RegisterBooleanPref(kSpaceNotices, false);
+   registry->RegisterBooleanPref(kSpacesOwnSession, false);
+   registry->RegisterBooleanPref(kFullscreenHint, false);
++  registry->RegisterBooleanPref(kCameraRowFullscreen, false);
+   registry->RegisterListPref(kArcImportedIds);
+   registry->RegisterDictionaryPref(kArcImportedSpaces);
+   registry->RegisterDictionaryPref(kArcImportedFolders);
+diff --git a/chrome/browser/ui/stedding/stedding_prefs.h b/chrome/browser/ui/stedding/stedding_prefs.h
+index 6d8e2fab669c4..6a7e1cf3a23d5 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs.h
++++ b/chrome/browser/ui/stedding/stedding_prefs.h
+@@ -284,6 +284,12 @@ inline constexpr char kSpacesOwnSession[] = "stedding.spaces.own_session";
+ // to leave it. Off by default (the owner, 2026-10-21). A page's own full
+ // screen always shows its note.
+ inline constexpr char kFullscreenHint[] = "stedding.window.fullscreen_hint";
++// toolbar T55-T59, settings T51 (BACKLOG S-392): on the Mac, full screen the
++// person starts on a screen with a camera housing is Stedding's own, the
++// address row in the row beside the camera. Off by default (the owner,
++// 2026-11-03).
++inline constexpr char kCameraRowFullscreen[] =
++    "stedding.window.camera_row_fullscreen";
+ // import I12: Arc's item ids already brought over, and Arc's Space ids to
+ // the Spaces they became, so a second import adds nothing twice.
+ inline constexpr char kArcImportedIds[] = "stedding.import.arc_ids";
+diff --git a/chrome/browser/ui/stedding/stedding_prefs_unittest.cc b/chrome/browser/ui/stedding/stedding_prefs_unittest.cc
+index eb3074fdebe14..ca361ceb3517f 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs_unittest.cc
++++ b/chrome/browser/ui/stedding/stedding_prefs_unittest.cc
+@@ -21,9 +21,10 @@ namespace {
+ // window, off until the user chooses it (sidebar Y23), the hints the owner
+ // turned off on 2026-10-21 -- the undo toast (tabs R30), the routed notice
+ // (routing D4) and the note on how to leave full screen
+-// (toolbar T45) --, child tabs' indent, off since 2026-10-22 (tabs R56), the
+-// Space sleep timer, which is Never until sleep is gated, and auto-archive,
+-// Never since 2026-10-11 (archive A6).
++// (toolbar T45) --, the row beside the camera in full screen, off until the
++// user chooses it (toolbar T55), child tabs' indent, off since 2026-10-22
++// (tabs R56), the Space sleep timer, which is Never until sleep is gated,
++// and auto-archive, Never since 2026-10-11 (archive A6).
+ TEST(SteddingPrefsTest, EveryPreferenceRegistersWithItsDefault) {
+   sync_preferences::TestingPrefServiceSyncable service;
+   RegisterProfilePrefs(service.registry());
+@@ -38,7 +39,7 @@ TEST(SteddingPrefsTest, EveryPreferenceRegistersWithItsDefault) {
+   for (const char* name :
+        {kToolbarHideWithSidebar, kSidebarPageFlush, kUndoToast,
+         kSpaceNotices, kFullscreenHint, kNestChildTabs, kSpacesOwnSession,
+-        kMarkDriftedPins, kSidebarAddressInSidebar}) {
++        kMarkDriftedPins, kSidebarAddressInSidebar, kCameraRowFullscreen}) {
+     ASSERT_TRUE(service.FindPreference(name)) << name;
+     EXPECT_FALSE(service.GetBoolean(name)) << name;
+   }
+diff --git a/chrome/browser/ui/stedding/theme/page_theme_color_controller.cc b/chrome/browser/ui/stedding/theme/page_theme_color_controller.cc
+index 9045e36e37887..342f8b191a577 100644
+--- a/chrome/browser/ui/stedding/theme/page_theme_color_controller.cc
++++ b/chrome/browser/ui/stedding/theme/page_theme_color_controller.cc
+@@ -196,6 +196,9 @@ PageThemeColorController::bar_supplier() const {
+   // a dark page sat on the pale ground beside it, and with the active page
+   // the one without a colour the row kept the theme's icons over the other's
+   // dark part.
++  if (bar_suppressed_) {
++    return nullptr;
++  }
+   const bool two_parts = RowHasTwoParts();
+   if (!color_ && !(two_parts && partner_color_)) {
+     return nullptr;
+@@ -279,14 +282,22 @@ std::optional<SkColor> PageThemeColorController::ColorOf(
+     return std::nullopt;
+   }
+   if (contents == web_contents()) {
+-    return color_;
++    return color();
+   }
+   if (contents == partner()) {
+-    return partner_color_;
++    return partner_color();
+   }
+   return std::nullopt;
+ }
+ 
++void PageThemeColorController::SetBarSuppressed(bool suppressed) {
++  if (bar_suppressed_ == suppressed) {
++    return;
++  }
++  bar_suppressed_ = suppressed;
++  PostNotify();
++}
++
+ base::CallbackListSubscription PageThemeColorController::AddChangedCallback(
+     base::RepeatingClosure callback) {
+   return changed_callbacks_.Add(std::move(callback));
+diff --git a/chrome/browser/ui/stedding/theme/page_theme_color_controller.h b/chrome/browser/ui/stedding/theme/page_theme_color_controller.h
+index 67b296fa83d9c..51d43feee7d4b 100644
+--- a/chrome/browser/ui/stedding/theme/page_theme_color_controller.h
++++ b/chrome/browser/ui/stedding/theme/page_theme_color_controller.h
+@@ -57,12 +57,17 @@ class PageThemeColorController : public TabStripModelObserver,
+ 
+   // The active page's colour, opaque, or nothing when the page has none (or
+   // has not painted yet).
+-  std::optional<SkColor> color() const { return color_; }
++  // Nothing while the row is beside the camera (SetBarSuppressed).
++  std::optional<SkColor> color() const {
++    return bar_suppressed_ ? std::nullopt : color_;
++  }
+ 
+   // toolbar T41: in a split, the other pane's page, and its colour by the
+   // same rules; null and nothing outside a split.
+   content::WebContents* partner() const;
+-  std::optional<SkColor> partner_color() const { return partner_color_; }
++  std::optional<SkColor> partner_color() const {
++    return bar_suppressed_ ? std::nullopt : partner_color_;
++  }
+ 
+   // The colour of the row over `contents`: color() for the active page,
+   // partner_color() for the other pane of its split, nothing for any other.
+@@ -74,6 +79,13 @@ class PageThemeColorController : public TabStripModelObserver,
+   // providers are cached by the supplier's address.
+   ui::ColorProviderKey::InitializerSupplier* bar_supplier() const;
+ 
++  // toolbar T56 (BACKLOG S-392): the row beside the camera sits on the
++  // window's colour, so while it does the window reads as one whose page has
++  // no colour: no bar is painted and the toolbar keeps its own icons. The
++  // page's colour is still followed, for when the row comes back.
++  void SetBarSuppressed(bool suppressed);
++  bool bar_suppressed() const { return bar_suppressed_; }
++
+   // Runs whenever color() changes.
+   base::CallbackListSubscription AddChangedCallback(
+       base::RepeatingClosure callback);
+@@ -182,6 +194,7 @@ class PageThemeColorController : public TabStripModelObserver,
+   // (the T21 rule, per pane).
+   std::unique_ptr<PartnerObserver> partner_observer_;
+   std::optional<SkColor> partner_color_;
++  bool bar_suppressed_ = false;
+   base::WeakPtr<content::WebContents> partner_shown_;
+   bool partner_sample_in_flight_ = false;
+   // T31: a read of the active page, or of the other pane, fell due while a
+diff --git a/chrome/browser/ui/views/commandbar/command_bar_view.cc b/chrome/browser/ui/views/commandbar/command_bar_view.cc
+index c5c7b1276a2ac..f10ce00c8c978 100644
+--- a/chrome/browser/ui/views/commandbar/command_bar_view.cc
++++ b/chrome/browser/ui/views/commandbar/command_bar_view.cc
+@@ -1432,6 +1432,11 @@ void CommandBarView::BuildActions() {
+            u"\u2303\u21E5 goes to a tab opened in the background first"},
+ #else
+            u"Ctrl+Tab goes to a tab opened in the background first"},
++#endif
++#if BUILDFLAG(IS_MAC)
++          // toolbar T55, settings T51 (BACKLOG S-392).
++          {stedding::prefs::kCameraRowFullscreen,
++           u"Use the row beside the camera in full screen"},
+ #endif
+           {stedding::prefs::kNewTabShowHint,
+            u"Command-bar hint on the new tab page"},
+diff --git a/chrome/browser/ui/views/frame/BUILD.gn b/chrome/browser/ui/views/frame/BUILD.gn
+index 223c0c9f29280..cc20412df9275 100644
+--- a/chrome/browser/ui/views/frame/BUILD.gn
++++ b/chrome/browser/ui/views/frame/BUILD.gn
+@@ -2073,6 +2073,7 @@ if (is_mac) {
+       "//chrome/browser/ui/exclusive_access",
+       "//chrome/browser/ui/immersive:immersive_mode_controller",
+       # Stedding little E8: a little window's traffic lights are in its row.
++      "//chrome/browser/ui/stedding:address_row",
+       "//chrome/browser/ui/stedding:little_window",
+       "//chrome/browser/ui/tabs",
+       "//chrome/browser/ui/views/bookmarks",
+@@ -2108,7 +2109,13 @@ if (is_mac) {
+   }
+ 
+   source_set("browser_native_widget_mac_impl") {
+-    sources = [ "browser_native_widget_mac.mm" ]
++    sources = [
++      "browser_native_widget_mac.mm",
++      # Stedding toolbar T55-T59 (BACKLOG S-392): full screen beside the
++      # camera.
++      "stedding_camera_row_mac.h",
++      "stedding_camera_row_mac.mm",
++    ]
+     public_deps = [
+       ":browser_native_widget_mac",
+       "//chrome/browser:browser_public_dependencies",
+@@ -2147,6 +2154,11 @@ if (is_mac) {
+       "//chrome/browser/ui/stedding:dark_pages",
+       # Stedding little E7: the File menu's rows in a little window.
+       "//chrome/browser/ui/stedding:little_window",
++      # Stedding toolbar T55-T59: the row beside the camera.
++      "//chrome/browser/ui/stedding:address_row",
++      "//chrome/browser/ui/stedding:prefs",
++      "//chrome/browser/profiles:profile",
++      "//components/prefs",
+       "//chrome/common:constants",
+       "//components/bookmarks/common",
+       "//components/dom_distiller/content/browser",
+diff --git a/chrome/browser/ui/views/frame/browser_frame_view_mac.mm b/chrome/browser/ui/views/frame/browser_frame_view_mac.mm
+index 3fb95ef5616b4..6ad02db6c3b07 100644
+--- a/chrome/browser/ui/views/frame/browser_frame_view_mac.mm
++++ b/chrome/browser/ui/views/frame/browser_frame_view_mac.mm
+@@ -30,6 +30,7 @@
+ #include "chrome/browser/ui/fullscreen_util_mac.h"
+ #include "chrome/browser/ui/immersive/immersive_mode_controller.h"
+ #include "chrome/browser/ui/layout_constants.h"
++#include "chrome/browser/ui/stedding/address_row.h"
+ #include "chrome/browser/ui/stedding/little_window.h"
+ #include "chrome/browser/ui/tabs/tab_style.h"
+ #include "chrome/browser/ui/view_ids.h"
+@@ -228,6 +229,17 @@ bool BrowserFrameViewMac::CaptionButtonsOnLeadingEdge() const {
+ 
+ BrowserLayoutParams BrowserFrameViewMac::GetBrowserLayoutParams() const {
+   auto params = BrowserFrameView::GetBrowserLayoutParams();
++  // Stedding (toolbar T56): beside the camera the window is borderless, with
++  // no traffic lights to clear.
++  const stedding::AddressRow* const camera_row =
++      GetBrowserView()->browser()
++          ? stedding::AddressRow::From(GetBrowserView()->browser())
++          : nullptr;
++  if (camera_row && camera_row->camera_row()) {
++    params.leading_exclusion = BrowserLayoutExclusionArea();
++    params.trailing_exclusion = BrowserLayoutExclusionArea();
++    return params;
++  }
+   if (GetBrowserView()->IsFullscreen()) {
+     // No insets for caption buttons in fullscreen, since caption buttons are on
+     // a separate pane that slides in. However, preserve the height of the
+diff --git a/chrome/browser/ui/views/frame/browser_native_widget_mac.h b/chrome/browser/ui/views/frame/browser_native_widget_mac.h
+index c1ffa079a86d2..7ed0a7fd55bbd 100644
+--- a/chrome/browser/ui/views/frame/browser_native_widget_mac.h
++++ b/chrome/browser/ui/views/frame/browser_native_widget_mac.h
+@@ -5,6 +5,7 @@
+ #ifndef CHROME_BROWSER_UI_VIEWS_FRAME_BROWSER_NATIVE_WIDGET_MAC_H_
+ #define CHROME_BROWSER_UI_VIEWS_FRAME_BROWSER_NATIVE_WIDGET_MAC_H_
+ 
++#include <memory>
+ #include <optional>
+ 
+ #include "base/callback_list.h"
+@@ -21,6 +22,9 @@
+ 
+ class BrowserWidget;
+ class BrowserView;
++namespace stedding {
++class CameraRowFullscreenMac;
++}  // namespace stedding
+ @class BrowserWindowTouchBarController;
+ @class BrowserWindowTouchBarViewsDelegate;
+ 
+@@ -56,6 +60,9 @@ class BrowserNativeWidgetMac : public views::NativeWidgetMac,
+   void OnFocusWindowToolbar() override;
+   void OnWindowFullscreenTransitionStart() override;
+   void OnWindowFullscreenTransitionComplete() override;
++  // Stedding (toolbar T58): a page's own full screen from the row beside the
++  // camera is macOS's; the window turns ordinary for it first.
++  void SetFullscreen(bool fullscreen, int64_t target_display_id) override;
+   void OnWindowWillStartLiveResize() override;
+   void OnWindowDidEndLiveResize() override;
+   void OnWidgetDestroyed(views::Widget* widget) override;
+@@ -137,6 +144,10 @@ class BrowserNativeWidgetMac : public views::NativeWidgetMac,
+   base::CallbackListSubscription multiple_open_profiles_subscription_;
+   base::CallbackListSubscription paint_as_active_subscription_;
+ 
++  // Stedding (toolbar T55-T59; BACKLOG S-392): the window's own full screen
++  // beside the camera; none for a window run from an app shim.
++  std::unique_ptr<stedding::CameraRowFullscreenMac> camera_row_;
++
+   base::WeakPtrFactory<BrowserNativeWidgetMac> weak_ptr_factory_{this};
+ };
+ 
+diff --git a/chrome/browser/ui/views/frame/browser_native_widget_mac.mm b/chrome/browser/ui/views/frame/browser_native_widget_mac.mm
+index 3d7a09e779f70..f74732e8a5f1c 100644
+--- a/chrome/browser/ui/views/frame/browser_native_widget_mac.mm
++++ b/chrome/browser/ui/views/frame/browser_native_widget_mac.mm
+@@ -45,6 +45,7 @@
+ #include "chrome/browser/ui/stedding/make_app.h"
+ #include "chrome/browser/ui/stedding/stedding_command_ids.h"
+ #include "chrome/browser/ui/stedding/stedding_prefs.h"
++#import "chrome/browser/ui/views/frame/stedding_camera_row_mac.h"
+ #include "chrome/browser/ui/tabs/split_tab_metrics.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "chrome/browser/ui/tabs/vertical_tab_strip_metrics.h"
+@@ -396,6 +397,19 @@ void BrowserNativeWidgetMac::OnWindowFullscreenTransitionComplete() {
+   if (browser_view_) {
+     browser_view_->FullscreenStateChanged();
+   }
++  // Stedding (toolbar T58): the page's full screen has ended, and the row
++  // beside the camera comes back.
++  if (camera_row_ && !IsFullscreen()) {
++    camera_row_->NativeFullscreenEnded();
++  }
++}
++
++void BrowserNativeWidgetMac::SetFullscreen(bool fullscreen,
++                                           int64_t target_display_id) {
++  if (fullscreen && camera_row_) {
++    camera_row_->WillEnterNativeFullscreen();
++  }
++  NativeWidgetMac::SetFullscreen(fullscreen, target_display_id);
+ }
+ 
+ void BrowserNativeWidgetMac::OnWindowWillStartLiveResize() {
+@@ -474,8 +488,10 @@ void BrowserNativeWidgetMac::ValidateUserInterfaceItem(
+       break;
+     case IDC_FULLSCREEN: {
+       result->new_title.emplace(l10n_util::GetStringUTF16(
+-          browser->GetWindow()->IsFullscreen() ? IDS_EXIT_FULLSCREEN_MAC
+-                                               : IDS_ENTER_FULLSCREEN_MAC));
++          browser->GetWindow()->IsFullscreen() ||
++                  (camera_row_ && camera_row_->active())
++              ? IDS_EXIT_FULLSCREEN_MAC
++              : IDS_ENTER_FULLSCREEN_MAC));
+       break;
+     }
+     // Stedding sidebar Y34, menus M13: the View menu's row names the side
+@@ -894,6 +910,16 @@ void BrowserNativeWidgetMac::OnWidgetInitDone() {
+   if (!GetWidget()->HasObserver(this)) {
+     GetWidget()->AddObserver(this);
+   }
++  // Stedding (toolbar T55; BACKLOG S-392): full screen beside the camera,
++  // for a window whose NSWindow is in this process.
++  if (GetInProcessNSWindowBridge() && !camera_row_) {
++    if (NativeWidgetMacNSWindow* const ns_window =
++            base::apple::ObjCCast<NativeWidgetMacNSWindow>(
++                GetNativeWindow().GetNativeNSWindow())) {
++      camera_row_ = std::make_unique<stedding::CameraRowFullscreenMac>(
++          browser_view_, ns_window);
++    }
++  }
+   paint_as_active_subscription_ =
+       GetWidget()->RegisterPaintAsActiveChangedCallback(
+           base::BindRepeating(&BrowserNativeWidgetMac::UpdateBackgroundColor,
+@@ -948,6 +974,7 @@ void BrowserNativeWidgetMac::OnWindowDestroying(
+       base::apple::ObjCCastStrict<NativeWidgetMacNSWindow>(
+           native_window.GetNativeNSWindow());
+   [ns_window setWindowTouchBarDelegate:nil];
++  camera_row_.reset();
+ }
+ 
+ void BrowserNativeWidgetMac::OnWidgetActivationChanged(views::Widget* widget,
+@@ -995,7 +1022,15 @@ bool BrowserNativeWidgetMac::ShouldSaveWindowPlacement() const {
+ void BrowserNativeWidgetMac::GetWindowPlacement(
+     gfx::Rect* bounds,
+     ui::mojom::WindowShowState* show_state) const {
+-  return NativeWidgetMac::GetWindowPlacement(bounds, show_state);
++  NativeWidgetMac::GetWindowPlacement(bounds, show_state);
++  // Stedding (toolbar T59): beside the camera, the frame from before, so the
++  // window opens again as it was rather than over the whole screen.
++  if (camera_row_) {
++    if (const std::optional<gfx::Rect> restored =
++            camera_row_->RestoredBounds()) {
++      *bounds = *restored;
++    }
++  }
+ }
+ 
+ content::KeyboardEventProcessingResult
+diff --git a/chrome/browser/ui/views/frame/layout/stedding_browser_view_layout.cc b/chrome/browser/ui/views/frame/layout/stedding_browser_view_layout.cc
+index 30b36fa2ad741..57fe3ac59f468 100644
+--- a/chrome/browser/ui/views/frame/layout/stedding_browser_view_layout.cc
++++ b/chrome/browser/ui/views/frame/layout/stedding_browser_view_layout.cc
+@@ -12,6 +12,7 @@
+ #include "chrome/browser/ui/animation/browser_animation_controller.h"
+ #include "chrome/browser/ui/immersive/immersive_mode_controller.h"
+ #include "chrome/browser/ui/layout_constants.h"
++#include "chrome/browser/ui/stedding/address_row.h"
+ #include "chrome/browser/ui/stedding_ui_metrics.h"
+ #include "chrome/browser/ui/views/animations/tab_strip_animations.h"
+ #include "chrome/browser/ui/views/frame/browser_view.h"
+@@ -27,6 +28,7 @@
+ #include "ui/gfx/geometry/rounded_corners_f.h"
+ #include "ui/gfx/geometry/size_f.h"
+ #include "ui/views/view_utils.h"
++#include "ui/views/widget/widget.h"
+ 
+ namespace {
+ 
+@@ -111,6 +113,57 @@ bool DrawnWiderThanItsColumn(const BrowserViewLayoutViews& views,
+          motion == TabStripAnimations::kCollapseOnHover;
+ }
+ 
++// toolbar T56 (BACKLOG S-392): the row beside the camera, while the window
++// is in Stedding's full screen on a screen with a camera housing.
++std::optional<stedding::AddressRow::CameraRow> CameraRowOf(
++    const BrowserViewLayoutViews& views) {
++  BrowserView* const browser_view =
++      views::AsViewClass<BrowserView>(views.browser_view.get());
++  const stedding::AddressRow* const row =
++      browser_view && browser_view->browser()
++          ? stedding::AddressRow::From(browser_view->browser())
++          : nullptr;
++  return row ? row->camera_row() : std::nullopt;
++}
++
++// toolbar T56: the address row as the row beside the camera, at the top
++// container's top, the safe area's height, and what the container holds
++// under it moved up with it. The card starts a gutter under all of it,
++// rounded at the top as with the row hidden (T8): the row is no longer the
++// card's top.
++// A template only because the layout type is the layout class's own.
++template <typename ProposedLayout>
++void PlaceRowBesideCamera(ProposedLayout& container_layout,
++                          gfx::Rect& container,
++                          views::View* toolbar,
++                          int height,
++                          int gutter) {
++  const auto row = container_layout.children.find(toolbar);
++  if (row == container_layout.children.end() ||
++      !row->second.visibility.value_or(toolbar->GetVisible())) {
++    return;
++  }
++  const int old_bottom = row->second.bounds.bottom();
++  const int rise = old_bottom - height;
++  row->second.bounds.set_y(0);
++  row->second.bounds.set_height(height);
++  int bottom = height;
++  for (auto& [child, child_layout] : container_layout.children) {
++    if (child == toolbar) {
++      continue;
++    }
++    if (child_layout.bounds.y() >= old_bottom) {
++      child_layout.bounds.Offset(0, -rise);
++    }
++    if (child_layout.visibility.value_or(child->GetVisible()) &&
++        !child_layout.bounds.IsEmpty()) {
++      bottom = std::max(bottom, child_layout.bounds.bottom());
++    }
++  }
++  container.set_y(0);
++  container.set_height(bottom + gutter);
++}
++
+ }  // namespace
+ 
+ SteddingBrowserViewLayout::SteddingBrowserViewLayout(
+@@ -269,6 +322,15 @@ SteddingBrowserViewLayout::CalculateProposedLayout(
+       lights_center = CardGutter(views()) + row / 2;
+     }
+ #endif
++    // toolbar T56: beside the camera the window has no traffic lights, and
++    // the toggle sits on the row's own centre, the row the safe area.
++    if (const std::optional<stedding::AddressRow::CameraRow> camera =
++            CameraRowOf(views())) {
++      strip->SetCaptionButtonWidthForLayout(0);
++      strip->SetCaptionButtonHeightForLayout(0);
++      strip->SetToolbarHeightForLayout(camera->height);
++      lights_center = camera->height / 2;
++    }
+     strip->SetCaptionButtonCenterForLayout(lights_center);
+   }
+   return layout;
+@@ -488,6 +550,12 @@ gfx::Rect SteddingBrowserViewLayout::CalculateTopContainerLayout(
+       break;
+     }
+   }
++  if (const std::optional<stedding::AddressRow::CameraRow> camera =
++          CameraRowOf(views());
++      camera && views().toolbar) {
++    PlaceRowBesideCamera(layout, result, views().toolbar, camera->height,
++                         kCardSideInset);
++  }
+   return result;
+ }
+ 
+@@ -538,6 +606,20 @@ void SteddingBrowserViewLayout::DoPostLayoutVisualAdjustments(
+     // window's right (sidebar Y42).
+     toolbar->SetSteddingTrailingReserve(
+         delegate().IsToolbarVisible() ? row_reserve_ : 0);
++    // toolbar T56: the housing's span across the row, which the window
++    // gives in its own coordinates.
++    std::optional<std::pair<int, int>> gap;
++    if (const std::optional<stedding::AddressRow::CameraRow> camera =
++            CameraRowOf(views());
++        camera && toolbar->GetWidget()) {
++      gfx::Point left(camera->housing_left, 0);
++      gfx::Point right(camera->housing_right, 0);
++      views::View* const root = toolbar->GetWidget()->GetRootView();
++      views::View::ConvertPointToTarget(root, toolbar, &left);
++      views::View::ConvertPointToTarget(root, toolbar, &right);
++      gap = std::make_pair(left.x(), right.x());
++    }
++    toolbar->SetSteddingCameraGap(gap);
+   }
+ 
+   MultiContentsView* const contents = views().multi_contents_view;
+@@ -566,7 +648,9 @@ void SteddingBrowserViewLayout::DoPostLayoutVisualAdjustments(
+   // Under Windows' caption buttons too: the bar runs on to the card's edge
+   // there (toolbar T19), so the card's top-right corner is under it like
+   // the left one.
+-  const float top = delegate().IsToolbarVisible() ? 0.f : ours;
++  // Beside the camera (toolbar T56) the row is not the card's top either.
++  const float top =
++      delegate().IsToolbarVisible() && !CameraRowOf(views()) ? 0.f : ours;
+   const gfx::RoundedCornersF current = contents->GetBackgroundRadii();
+   // Hidden, every corner is square, whatever an earlier layout left.
+   const gfx::RoundedCornersF merged =
+diff --git a/chrome/browser/ui/views/frame/stedding_camera_row_mac.h b/chrome/browser/ui/views/frame/stedding_camera_row_mac.h
+new file mode 100644
+index 0000000000000..31d561b770c9f
+--- /dev/null
++++ b/chrome/browser/ui/views/frame/stedding_camera_row_mac.h
+@@ -0,0 +1,108 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_VIEWS_FRAME_STEDDING_CAMERA_ROW_MAC_H_
++#define CHROME_BROWSER_UI_VIEWS_FRAME_STEDDING_CAMERA_ROW_MAC_H_
++
++#import <Foundation/Foundation.h>
++
++#include <optional>
++
++#include "base/memory/raw_ptr.h"
++#include "base/memory/weak_ptr.h"
++#include "components/prefs/pref_change_registrar.h"
++#include "ui/gfx/geometry/rect.h"
++
++class BrowserView;
++@class NativeWidgetMacNSWindow;
++@class NSScreen;
++
++namespace stedding {
++
++// docs/features/toolbar.md T55-T59 (BACKLOG S-392): Stedding's own full
++// screen on a Mac whose screen has a camera housing. macOS's full screen
++// keeps the row beside the camera for the menu bar, a black band over the
++// page; no public switch gives that row to the window. So with the switch on
++// (stedding.window.camera_row_fullscreen), full screen the person starts
++// turns the window into a borderless one over the whole screen, hides the
++// menu bar and the Dock while it is the main window, and tells the window
++// (stedding::AddressRow::SetCameraRow) where the row and the housing are,
++// for the address row to sit beside the camera. Leaving puts the window back
++// as it was. A page's own full screen stays macOS's (T58): the window turns
++// ordinary for it and comes back after.
++//
++// One per in-process browser window, owned by its BrowserNativeWidgetMac.
++class CameraRowFullscreenMac {
++ public:
++  // The row beside the camera on a screen, in points from the screen's left
++  // edge; a test sets one for the screen under test, whatever its hardware,
++  // and one with no height stands for a screen without a housing.
++  struct Housing {
++    int height = 0;
++    int left = 0;
++    int right = 0;
++  };
++  static void SetHousingForTesting(std::optional<Housing> housing);
++  static std::optional<Housing> HousingOn(NSScreen* screen);
++
++  CameraRowFullscreenMac(BrowserView* browser_view,
++                         NativeWidgetMacNSWindow* window);
++  CameraRowFullscreenMac(const CameraRowFullscreenMac&) = delete;
++  CameraRowFullscreenMac& operator=(const CameraRowFullscreenMac&) = delete;
++  ~CameraRowFullscreenMac();
++
++  // In it now; not while a page's own full screen has it turned ordinary.
++  bool active() const { return active_; }
++
++  // T55: full screen the person starts. Leaves it, or enters it when the
++  // switch is on and the window's screen has a housing; no means macOS's
++  // full screen goes ahead.
++  bool Toggle();
++
++  // T58: macOS's full screen is about to start for the window (a page asked
++  // for it). The window turns ordinary over the same frame, and comes back
++  // when that full screen has ended (NativeFullscreenEnded).
++  void WillEnterNativeFullscreen();
++  void NativeFullscreenEnded();
++
++  // T59: the frame the window had before; what the session saves.
++  std::optional<gfx::Rect> RestoredBounds() const;
++
++ private:
++  bool CanEnter() const;
++  void Enter();
++  // `restore_frame`: the frame from before; no keeps the window where it is,
++  // for macOS's own full screen to start from.
++  void Leave(bool restore_frame);
++  // Over the screen the window is on, with the row there; leaves when that
++  // screen has no housing.
++  void FitScreen();
++  void OnMainChanged(bool main);
++  void SetHidesMenuBar(bool hides);
++  void OnSwitchChanged();
++  void OnScreenChanged();
++
++  const raw_ptr<BrowserView> browser_view_;
++  NativeWidgetMacNSWindow* __weak window_;
++  bool active_ = false;
++  // Turned ordinary for a page's own full screen; comes back after (T58).
++  bool suspended_ = false;
++  bool hides_menu_bar_ = false;
++  // The window as it was, put back on leaving.
++  NSRect saved_frame_ = {};
++  NSUInteger saved_style_ = 0;
++  BOOL saved_movable_ = YES;
++  BOOL saved_shadow_ = YES;
++  NSUInteger saved_presentation_ = 0;
++  PrefChangeRegistrar switch_registrar_;
++  id __strong main_observer_;
++  id __strong resign_main_observer_;
++  id __strong screen_observer_;
++  id __strong screens_observer_;
++  base::WeakPtrFactory<CameraRowFullscreenMac> weak_factory_{this};
++};
++
++}  // namespace stedding
++
++#endif  // CHROME_BROWSER_UI_VIEWS_FRAME_STEDDING_CAMERA_ROW_MAC_H_
+diff --git a/chrome/browser/ui/views/frame/stedding_camera_row_mac.mm b/chrome/browser/ui/views/frame/stedding_camera_row_mac.mm
+new file mode 100644
+index 0000000000000..b40320f25b61d
+--- /dev/null
++++ b/chrome/browser/ui/views/frame/stedding_camera_row_mac.mm
+@@ -0,0 +1,307 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#import "chrome/browser/ui/views/frame/stedding_camera_row_mac.h"
++
++#import <AppKit/AppKit.h>
++
++#include <cmath>
++
++#include "base/functional/bind.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/stedding/address_row.h"
++#include "chrome/browser/ui/stedding/stedding_prefs.h"
++#include "chrome/browser/ui/views/frame/browser_view.h"
++#import "components/remote_cocoa/app_shim/native_widget_mac_nswindow.h"
++#include "components/prefs/pref_service.h"
++#include "ui/gfx/mac/coordinate_conversion.h"
++
++namespace stedding {
++
++namespace {
++
++std::optional<CameraRowFullscreenMac::Housing>& HousingForTesting() {
++  static std::optional<CameraRowFullscreenMac::Housing> housing;
++  return housing;
++}
++
++AddressRow* RowOf(BrowserView* browser_view) {
++  return browser_view && browser_view->browser()
++             ? AddressRow::From(browser_view->browser())
++             : nullptr;
++}
++
++}  // namespace
++
++// static
++void CameraRowFullscreenMac::SetHousingForTesting(
++    std::optional<Housing> housing) {
++  HousingForTesting() = housing;
++}
++
++// static
++std::optional<CameraRowFullscreenMac::Housing> CameraRowFullscreenMac::HousingOn(
++    NSScreen* screen) {
++  if (!screen) {
++    return std::nullopt;
++  }
++  // A test's housing; one with no height stands for a screen without one.
++  if (HousingForTesting()) {
++    return HousingForTesting()->height > 0 ? HousingForTesting()
++                                           : std::nullopt;
++  }
++  // The two halves of the row beside the camera, the housing between them
++  // (macOS 12 and later; on a screen without a housing both are empty).
++  const NSRect left = screen.auxiliaryTopLeftArea;
++  const NSRect right = screen.auxiliaryTopRightArea;
++  const CGFloat height = screen.safeAreaInsets.top;
++  if (NSIsEmptyRect(left) || NSIsEmptyRect(right) || height <= 0) {
++    return std::nullopt;
++  }
++  const CGFloat origin = NSMinX(screen.frame);
++  return Housing{
++      .height = static_cast<int>(std::lround(height)),
++      .left = static_cast<int>(std::floor(NSMaxX(left) - origin)),
++      .right = static_cast<int>(std::ceil(NSMinX(right) - origin)),
++  };
++}
++
++CameraRowFullscreenMac::CameraRowFullscreenMac(BrowserView* browser_view,
++                                               NativeWidgetMacNSWindow* window)
++    : browser_view_(browser_view), window_(window) {
++  if (AddressRow* const row = RowOf(browser_view_)) {
++    row->SetCameraRowToggle(base::BindRepeating(
++        [](base::WeakPtr<CameraRowFullscreenMac> self) {
++          return self && self->Toggle();
++        },
++        weak_factory_.GetWeakPtr()));
++  }
++  // The green button and its menu (T55): the same as the chord.
++  base::WeakPtr<CameraRowFullscreenMac> weak = weak_factory_.GetWeakPtr();
++  [window setSteddingFullScreenOverride:^BOOL {
++    return weak && weak->Toggle();
++  }];
++  switch_registrar_.Init(browser_view_->GetProfile()->GetPrefs());
++  switch_registrar_.Add(
++      prefs::kCameraRowFullscreen,
++      base::BindRepeating(&CameraRowFullscreenMac::OnSwitchChanged,
++                          base::Unretained(this)));
++  NSNotificationCenter* const center = NSNotificationCenter.defaultCenter;
++  main_observer_ = [center
++      addObserverForName:NSWindowDidBecomeMainNotification
++                  object:window
++                   queue:nil
++              usingBlock:^(NSNotification*) {
++                if (weak) {
++                  weak->OnMainChanged(true);
++                }
++              }];
++  resign_main_observer_ = [center
++      addObserverForName:NSWindowDidResignMainNotification
++                  object:window
++                   queue:nil
++              usingBlock:^(NSNotification*) {
++                if (weak) {
++                  weak->OnMainChanged(false);
++                }
++              }];
++  screen_observer_ = [center
++      addObserverForName:NSWindowDidChangeScreenNotification
++                  object:window
++                   queue:nil
++              usingBlock:^(NSNotification*) {
++                if (weak) {
++                  weak->OnScreenChanged();
++                }
++              }];
++  screens_observer_ = [center
++      addObserverForName:NSApplicationDidChangeScreenParametersNotification
++                  object:nil
++                   queue:nil
++              usingBlock:^(NSNotification*) {
++                if (weak) {
++                  weak->OnScreenChanged();
++                }
++              }];
++}
++
++CameraRowFullscreenMac::~CameraRowFullscreenMac() {
++  NSNotificationCenter* const center = NSNotificationCenter.defaultCenter;
++  for (id observer : {main_observer_, resign_main_observer_, screen_observer_,
++                      screens_observer_}) {
++    if (observer) {
++      [center removeObserver:observer];
++    }
++  }
++  SetHidesMenuBar(false);
++  [window_ setSteddingFullScreenOverride:nil];
++  if (AddressRow* const row = RowOf(browser_view_)) {
++    row->SetCameraRowToggle(base::RepeatingCallback<bool()>());
++  }
++}
++
++bool CameraRowFullscreenMac::Toggle() {
++  if (active_) {
++    Leave(/*restore_frame=*/true);
++    return true;
++  }
++  if (!CanEnter()) {
++    return false;
++  }
++  Enter();
++  return true;
++}
++
++bool CameraRowFullscreenMac::CanEnter() const {
++  NativeWidgetMacNSWindow* const window = window_;
++  if (!window || suspended_ || !browser_view_ || !browser_view_->browser() ||
++      browser_view_->browser()->GetType() !=
++          BrowserWindowInterface::TYPE_NORMAL ||
++      !browser_view_->GetProfile()->GetPrefs()->GetBoolean(
++          prefs::kCameraRowFullscreen)) {
++    return false;
++  }
++  if (window.styleMask & NSWindowStyleMaskFullScreen) {
++    return false;
++  }
++  return HousingOn(window.screen).has_value();
++}
++
++void CameraRowFullscreenMac::Enter() {
++  NativeWidgetMacNSWindow* const window = window_;
++  saved_frame_ = window.frame;
++  saved_style_ = window.styleMask;
++  saved_movable_ = window.movable;
++  saved_shadow_ = window.hasShadow;
++  active_ = true;
++  FitScreen();
++}
++
++void CameraRowFullscreenMac::FitScreen() {
++  NativeWidgetMacNSWindow* const window = window_;
++  if (!window || !active_) {
++    return;
++  }
++  NSScreen* const screen = window.screen;
++  const std::optional<Housing> housing = HousingOn(screen);
++  if (!housing) {
++    Leave(/*restore_frame=*/true);
++    return;
++  }
++  // Borderless, so AppKit neither keeps the frame below the menu bar nor
++  // rounds its corners, and there are no traffic lights; still a window
++  // that can be minimised. Not moved or resized by a drag (T59).
++  constexpr NSUInteger kStyle =
++      NSWindowStyleMaskBorderless | NSWindowStyleMaskMiniaturizable;
++  if (window.styleMask != kStyle) {
++    window.styleMask = kStyle;
++  }
++  window.movable = NO;
++  window.hasShadow = NO;
++  [window setFrame:screen.frame display:YES animate:NO];
++  if (window.isMainWindow) {
++    SetHidesMenuBar(true);
++  }
++  if (AddressRow* const row = RowOf(browser_view_)) {
++    row->SetCameraRow(AddressRow::CameraRow{.height = housing->height,
++                                            .housing_left = housing->left,
++                                            .housing_right = housing->right});
++  }
++}
++
++void CameraRowFullscreenMac::Leave(bool restore_frame) {
++  NativeWidgetMacNSWindow* const window = window_;
++  if (!active_) {
++    return;
++  }
++  active_ = false;
++  SetHidesMenuBar(false);
++  if (window) {
++    window.styleMask = saved_style_;
++    window.movable = saved_movable_;
++    window.hasShadow = saved_shadow_;
++    if (restore_frame) {
++      [window setFrame:saved_frame_ display:YES animate:NO];
++    }
++  }
++  if (AddressRow* const row = RowOf(browser_view_)) {
++    row->SetCameraRow(std::nullopt);
++  }
++}
++
++void CameraRowFullscreenMac::WillEnterNativeFullscreen() {
++  if (!active_) {
++    return;
++  }
++  Leave(/*restore_frame=*/false);
++  suspended_ = true;
++}
++
++void CameraRowFullscreenMac::NativeFullscreenEnded() {
++  if (!suspended_) {
++    return;
++  }
++  suspended_ = false;
++  NativeWidgetMacNSWindow* const window = window_;
++  if (!window) {
++    return;
++  }
++  // The switch turned off meanwhile, or the window is now on a screen with
++  // no housing: back to the frame from before, as leaving does.
++  if (!CanEnter()) {
++    [window setFrame:saved_frame_ display:YES animate:NO];
++    return;
++  }
++  // AppKit has put back the window it started from: the saved one is still
++  // the frame from before the row beside the camera.
++  active_ = true;
++  FitScreen();
++}
++
++std::optional<gfx::Rect> CameraRowFullscreenMac::RestoredBounds() const {
++  if (!active_ && !suspended_) {
++    return std::nullopt;
++  }
++  return gfx::ScreenRectFromNSRect(saved_frame_);
++}
++
++void CameraRowFullscreenMac::OnMainChanged(bool main) {
++  if (active_) {
++    SetHidesMenuBar(main);
++  }
++}
++
++void CameraRowFullscreenMac::SetHidesMenuBar(bool hides) {
++  if (hides_menu_bar_ == hides) {
++    return;
++  }
++  hides_menu_bar_ = hides;
++  // The menu bar and the Dock come in when the pointer reaches the screen's
++  // top or bottom edge, as in macOS's full screen. Only while this window is
++  // the main one, and only this app's: another app in front has its own.
++  if (hides) {
++    saved_presentation_ = NSApp.presentationOptions;
++    NSApp.presentationOptions = saved_presentation_ |
++                                NSApplicationPresentationAutoHideDock |
++                                NSApplicationPresentationAutoHideMenuBar;
++  } else {
++    NSApp.presentationOptions = saved_presentation_;
++  }
++}
++
++void CameraRowFullscreenMac::OnSwitchChanged() {
++  if (!browser_view_->GetProfile()->GetPrefs()->GetBoolean(
++          prefs::kCameraRowFullscreen)) {
++    Leave(/*restore_frame=*/true);
++  }
++}
++
++void CameraRowFullscreenMac::OnScreenChanged() {
++  if (active_) {
++    FitScreen();
++  }
++}
++
++}  // namespace stedding
+diff --git a/chrome/browser/ui/views/location_bar/location_bar_view.cc b/chrome/browser/ui/views/location_bar/location_bar_view.cc
+index ebc2519826777..a98caa5e9fe1c 100644
+--- a/chrome/browser/ui/views/location_bar/location_bar_view.cc
++++ b/chrome/browser/ui/views/location_bar/location_bar_view.cc
+@@ -785,6 +785,16 @@ void LocationBarView::ClearSteddingCentre() {
+   InvalidateLayout();
+ }
+ 
++void LocationBarView::SetSteddingBoxed(bool boxed) {
++  if (stedding_boxed_ == boxed) {
++    return;
++  }
++  stedding_boxed_ = boxed;
++  if (GetColorProvider()) {
++    RefreshBackground();
++  }
++}
++
+ void LocationBarView::SetSteddingCentre(int centre_x) {
+   if (stedding_centre_x_ == centre_x) {
+     return;
+@@ -1554,6 +1564,13 @@ void LocationBarView::RefreshBackground() {
+   SkColor normal = color_provider->GetColor(kColorLocationBarBackground);
+   SkColor hovered =
+       color_provider->GetColor(kColorLocationBarBackgroundHovered);
++  // Stedding (toolbar T56): the box beside the camera, in the icons' colour
++  // at the sidebar address field's strengths (sidebar_address.cc).
++  if (stedding_boxed_) {
++    const SkColor ink = color_provider->GetColor(kColorToolbarButtonIcon);
++    normal = SkColorSetA(ink, 0x16);
++    hovered = SkColorSetA(ink, 0x24);
++  }
+ 
+   background_color_ = gfx::Tween::ColorValueBetween(opacity, normal, hovered);
+   if (is_caret_visible) {
+diff --git a/chrome/browser/ui/views/location_bar/location_bar_view.h b/chrome/browser/ui/views/location_bar/location_bar_view.h
+index ceec8b4aba4c4..74ae626d3469e 100644
+--- a/chrome/browser/ui/views/location_bar/location_bar_view.h
++++ b/chrome/browser/ui/views/location_bar/location_bar_view.h
+@@ -141,6 +141,10 @@ class LocationBarView
+   // Stedding (toolbar T48): forgets that middle, for a bar centred at a width
+   // of its own, which gathers its contents on its own middle.
+   void ClearSteddingCentre();
++  // Stedding (toolbar T56): beside the camera the row sits on the window's
++  // colour, and the field has a box of its own there, the sidebar address
++  // field's (sidebar Y46), where elsewhere it is text on the bar (T5).
++  void SetSteddingBoxed(bool boxed);
+ 
+   // Returns the location bar border radius in DIPs.
+   int GetBorderRadius() const;
+@@ -363,6 +367,7 @@ class LocationBarView
+   void CentreSteddingCluster();
+   void SteddingClusterMayHaveChanged();
+   std::optional<int> stedding_centre_x_;
++  bool stedding_boxed_ = false;
+ 
+   // Returns the amount of space required to the left of the omnibox text.
+   int GetMinimumLeadingWidth() const;
+diff --git a/chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_top_container.cc b/chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_top_container.cc
+index e330439e1b61e..1218804fb5635 100644
+--- a/chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_top_container.cc
++++ b/chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_top_container.cc
+@@ -25,6 +25,7 @@
+ #include "chrome/browser/ui/views/tabs/organizer/organizer_panel_host.h"
+ #include "chrome/browser/ui/views/tabs/shared/tab_strip_combo_button.h"
+ #include "chrome/browser/ui/views/tabs/shared/tab_strip_flat_edge_button.h"
++#include "chrome/browser/ui/stedding/address_row.h"
+ #include "chrome/browser/ui/stedding/stedding_prefs.h"
+ #include "chrome/browser/ui/views/tabs/vertical/sidebar_address.h"
+ #include "chrome/browser/ui/views/tabs/vertical/top_container_button.h"
+@@ -165,14 +166,25 @@ VerticalTabStripTopContainer::VerticalTabStripTopContainer(
+           base::BindRepeating(
+               &VerticalTabStripTopContainer::OnAddressInSidebarChanged,
+               base::Unretained(this)));
++      // toolbar T57 (BACKLOG S-392): beside the camera the address is the
++      // row's, and comes back here after.
++      if (stedding::AddressRow* const row =
++              stedding::AddressRow::From(browser_)) {
++        camera_row_subscription_ = row->AddCameraRowChangedCallback(
++            base::BindRepeating(
++                &VerticalTabStripTopContainer::OnAddressInSidebarChanged,
++                base::Unretained(this)));
++      }
+       OnAddressInSidebarChanged();
+     }
+   }
+ }
+ 
+ void VerticalTabStripTopContainer::OnAddressInSidebarChanged() {
++  const stedding::AddressRow* const row = stedding::AddressRow::From(browser_);
+   address_in_sidebar_ = address_registrar_.prefs()->GetBoolean(
+-      stedding::prefs::kSidebarAddressInSidebar);
++                            stedding::prefs::kSidebarAddressInSidebar) &&
++                        !(row && row->camera_row());
+   // The layout shows them on the open row and hides them in the rail; off,
+   // they stay hidden.
+   nav_buttons_->SetVisible(address_in_sidebar_);
+diff --git a/chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_top_container.h b/chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_top_container.h
+index 9d0d05fc3f852..0c481ca8377ff 100644
+--- a/chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_top_container.h
++++ b/chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_top_container.h
+@@ -199,6 +199,7 @@ class VerticalTabStripTopContainer : public views::View,
+   raw_ptr<stedding::SidebarToolbarButtons> menu_host_ = nullptr;
+   bool address_in_sidebar_ = false;
+   PrefChangeRegistrar address_registrar_;
++  base::CallbackListSubscription camera_row_subscription_;
+   base::CallbackListSubscription collapse_subscription_;
+   base::CallbackListSubscription expand_on_hover_subscription_;
+   base::CallbackListSubscription resizing_subscription_;
+diff --git a/chrome/browser/ui/views/toolbar/toolbar_view.cc b/chrome/browser/ui/views/toolbar/toolbar_view.cc
+index 5c76e7a8c2351..d24295d65cf47 100644
+--- a/chrome/browser/ui/views/toolbar/toolbar_view.cc
++++ b/chrome/browser/ui/views/toolbar/toolbar_view.cc
+@@ -1720,8 +1720,10 @@ void ToolbarView::Layout(PassKey) {
+   // page's, so it is told where the page's middle is, in this view's
+   // coordinates, before it lays out. A capped bar is centred below instead,
+   // after its layout, and gathers its contents on its own middle.
++  // Beside the camera (T56) the field is a box right of the housing and
++  // gathers its contents on its own middle (SetSteddingCameraGap).
+   if (display_mode_ == DisplayMode::kNormal && location_bar_view_ &&
+-      !stedding_field_centred_ &&
++      !stedding_field_centred_ && !stedding_camera_gap_ &&
+       base::FeatureList::IsEnabled(stedding::kArcStyleWindow)) {
+     location_bar_view_->SetSteddingCentre(
+         stedding_pane ? (stedding_pane->first + stedding_pane->second) / 2
+@@ -1761,8 +1763,40 @@ void ToolbarView::Layout(PassKey) {
+       stedding_field_centred_ && stedding_left_spacer_ &&
+       stedding_right_spacer_ && stedding_left_spacer_->GetVisible() &&
+       stedding_right_spacer_->GetVisible();
++  // Stedding (toolbar T56; BACKLOG S-392): beside the camera the field
++  // starts just past the housing and runs to the row's buttons, whatever
++  // its width setting or a split's panes, so nothing of the row sits under
++  // the housing: Back, Forward and Reload are left of it, the sidebar's
++  // widest column ending well short of it.
+   if (display_mode_ == DisplayMode::kNormal && location_bar_view_ &&
+-      (stedding_spacers || (stedding_pane && !stedding_field_centred_))) {
++      stedding_camera_gap_) {
++    constexpr int kPastTheHousing = 8;
++    const gfx::Rect bar = location_bar_view_->bounds();
++    const int left_limit =
++        stedding_spacers ? stedding_left_spacer_->x() : bar.x();
++    const int right_limit = stedding_spacers
++                                ? stedding_right_spacer_->bounds().right()
++                                : bar.right();
++    const int x =
++        std::max(left_limit, stedding_camera_gap_->second + kPastTheHousing);
++    const int field_width =
++        std::max(right_limit - x, location_bar_view_->GetMinimumSize().width());
++    const gfx::Rect field(x, bar.y(), field_width, bar.height());
++    if (field != bar) {
++      location_bar_view_->SetBoundsRect(field);
++    }
++    if (stedding_spacers) {
++      stedding_left_spacer_->SetBounds(
++          left_limit, stedding_left_spacer_->y(), std::max(0, x - left_limit),
++          stedding_left_spacer_->height());
++      stedding_right_spacer_->SetBounds(
++          field.right(), stedding_right_spacer_->y(),
++          std::max(0, right_limit - field.right()),
++          stedding_right_spacer_->height());
++    }
++  } else if (display_mode_ == DisplayMode::kNormal && location_bar_view_ &&
++             (stedding_spacers ||
++              (stedding_pane && !stedding_field_centred_))) {
+     const gfx::Rect bar = location_bar_view_->bounds();
+     // The clusters bound the field: the spacers' far ends, or at full width
+     // the bar's own ends, which the layout gave the whole row between them.
+@@ -2002,6 +2036,21 @@ void ToolbarView::SetSteddingTrailingReserve(int reserve) {
+   InvalidateLayout();
+ }
+ 
++void ToolbarView::SetSteddingCameraGap(
++    std::optional<std::pair<int, int>> gap) {
++  if (stedding_camera_gap_ == gap) {
++    return;
++  }
++  stedding_camera_gap_ = gap;
++  if (location_bar_view_) {
++    location_bar_view_->SetSteddingBoxed(gap.has_value());
++    // Its own middle, as a centred field's (T48); a field across the whole
++    // row takes the page's again at the next layout.
++    location_bar_view_->ClearSteddingCentre();
++  }
++  InvalidateLayout();
++}
++
+ void ToolbarView::OnThemeChanged() {
+   views::AccessiblePaneView::OnThemeChanged();
+   if (!initialized_) {
+diff --git a/chrome/browser/ui/views/toolbar/toolbar_view.h b/chrome/browser/ui/views/toolbar/toolbar_view.h
+index 6922bc06cddd4..688e92efb4fcb 100644
+--- a/chrome/browser/ui/views/toolbar/toolbar_view.h
++++ b/chrome/browser/ui/views/toolbar/toolbar_view.h
+@@ -7,6 +7,7 @@
+ 
+ #include <memory>
+ #include <optional>
++#include <utility>
+ #include <vector>
+ 
+ #include "base/gtest_prod_util.h"
+@@ -252,6 +253,13 @@ class ToolbarView : public views::AccessiblePaneView,
+   // (T18), so the centre is computed over the width plus this.
+   void SetSteddingTrailingReserve(int reserve);
+ 
++  // Stedding (toolbar T56; BACKLOG S-392): the camera housing's left and
++  // right ends across this row, in this view's coordinates, while the row
++  // sits beside the camera; nothing outside that mode. The address field then runs from
++  // just past the housing to the row's buttons, in a box of its own, and
++  // nothing of the row sits under the housing.
++  void SetSteddingCameraGap(std::optional<std::pair<int, int>> gap);
++
+   // Stedding (sidebar Y49, toolbar T51; GitHub issue 45, a comment of
+   // 2026-11-01): while the open sidebar shows the address and this row is
+   // gone, the row lends its buttons -- the extensions and their menu, the
+@@ -440,6 +448,7 @@ class ToolbarView : public views::AccessiblePaneView,
+   raw_ptr<views::View> stedding_left_spacer_ = nullptr;
+   raw_ptr<views::View> stedding_right_spacer_ = nullptr;
+   int stedding_trailing_reserve_ = 0;
++  std::optional<std::pair<int, int>> stedding_camera_gap_;
+   // Stedding (toolbar T48, GitHub issue 14): the address field's width
+   // setting, and whether the field is centred at a width of its own (the
+   // spacers shown) rather than taking the whole row.
+diff --git a/chrome/browser/ui/webui/settings/settings_ui.cc b/chrome/browser/ui/webui/settings/settings_ui.cc
+index 344f0bf99a6ce..1f00cf36dc5d8 100644
+--- a/chrome/browser/ui/webui/settings/settings_ui.cc
++++ b/chrome/browser/ui/webui/settings/settings_ui.cc
+@@ -1430,6 +1430,17 @@ SettingsUI::SettingsUI(content::WebUI* web_ui)
+       "steddingFullscreenHintSubLabel",
+       "When you enter full screen, a note says how to leave. Videos always "
+       "show it.");
++  // toolbar T55, settings T51 (the owner, 2026-11-03): off by default; the
++  // page shows it on the Mac alone.
++  html_source->AddString("steddingCameraRowFullscreenLabel",
++                         "Use the row beside the camera in full screen");
++  html_source->AddString(
++      "steddingCameraRowFullscreenSubLabel",
++      "On a screen with a camera housing, full screen puts the address row "
++      "beside the camera, and the page gets that row\u2019s height. The "
++      "window stays on its desktop, without a Space of its own; the menu "
++      "bar and the Dock come in when the pointer reaches the screen\u2019s "
++      "edge.");
+   // dark-pages Dk1, Dk16, Dk17, Dk20.
+   html_source->AddString("steddingDarkPagesLabel", "Dark pages");
+   html_source->AddString(
+diff --git a/chrome/test/stedding/BUILD.gn b/chrome/test/stedding/BUILD.gn
+index be3c869ad04b2..9a8691ccd1d06 100644
+--- a/chrome/test/stedding/BUILD.gn
++++ b/chrome/test/stedding/BUILD.gn
+@@ -364,6 +364,8 @@ test("stedding_browser_tests") {
+   }
+   if (is_mac) {
+     sources += [
++      # toolbar T55-T59 (BACKLOG S-392): full screen beside the camera.
++      "camera_row_browsertest.mm",
+       "dark_pages_menu_mac_browsertest.mm",
+       "dock_reopen_browsertest.mm",
+       "little_window_menu_mac_browsertest.mm",
+diff --git a/chrome/test/stedding/camera_row_browsertest.mm b/chrome/test/stedding/camera_row_browsertest.mm
+new file mode 100644
+index 0000000000000..c6f6e823de732
+--- /dev/null
++++ b/chrome/test/stedding/camera_row_browsertest.mm
+@@ -0,0 +1,265 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++// docs/features/toolbar.md T55-T59 (BACKLOG S-392): on a Mac whose screen has
++// a camera housing, with "Use the row beside the camera in full screen" on,
++// full screen the person starts is Stedding's own: the window covers the
++// screen, borderless, the address row in the row beside the camera and
++// nothing of it under the housing. A test stands in a housing for the screen
++// the window is on, whatever the machine's own.
++
++#import <Cocoa/Cocoa.h>
++
++#include <optional>
++#include <string>
++
++#include "base/test/run_until.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/ui/browser_commands.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/stedding/address_row.h"
++#include "chrome/browser/ui/stedding/stedding_prefs.h"
++#include "chrome/browser/ui/stedding/theme/page_theme_color_controller.h"
++#include "chrome/browser/ui/views/frame/browser_view.h"
++#include "chrome/browser/ui/views/frame/multi_contents_view.h"
++#import "chrome/browser/ui/views/frame/stedding_camera_row_mac.h"
++#include "chrome/browser/ui/views/frame/toolbar_button_provider.h"
++#include "chrome/browser/ui/views/frame/top_container_view.h"
++#include "chrome/browser/ui/views/location_bar/location_bar_view.h"
++#include "chrome/browser/ui/views/test/vertical_tabs_browser_test_mixin.h"
++#include "chrome/browser/ui/views/toolbar/reload_button.h"
++#include "chrome/browser/ui/views/toolbar/toolbar_button.h"
++#include "chrome/browser/ui/views/toolbar/toolbar_view.h"
++#include "chrome/test/base/in_process_browser_test.h"
++#include "components/prefs/pref_service.h"
++#include "content/public/test/browser_test.h"
++#include "ui/base/mojom/window_show_state.mojom.h"
++#include "ui/base/test/scoped_fake_nswindow_fullscreen.h"
++#include "ui/gfx/geometry/rect.h"
++#include "ui/gfx/mac/coordinate_conversion.h"
++#include "ui/views/test/views_test_utils.h"
++#include "ui/views/view.h"
++#include "ui/views/widget/native_widget_private.h"
++#include "ui/views/widget/widget.h"
++
++namespace {
++
++using Housing = stedding::CameraRowFullscreenMac::Housing;
++
++class CameraRowTest
++    : public VerticalTabsBrowserTestMixin<InProcessBrowserTest> {
++ protected:
++  void SetUpOnMainThread() override {
++    VerticalTabsBrowserTestMixin<InProcessBrowserTest>::SetUpOnMainThread();
++    // A 14-inch screen's housing, 185 points across the middle of whichever
++    // screen the window is on.
++    const NSRect screen = window().screen.frame;
++    const int middle = static_cast<int>(NSWidth(screen) / 2);
++    housing_ = Housing{.height = 32, .left = middle - 92, .right = middle + 93};
++    stedding::CameraRowFullscreenMac::SetHousingForTesting(housing_);
++  }
++
++  void TearDownOnMainThread() override {
++    stedding::CameraRowFullscreenMac::SetHousingForTesting(std::nullopt);
++    VerticalTabsBrowserTestMixin<InProcessBrowserTest>::TearDownOnMainThread();
++  }
++
++  BrowserView* browser_view() {
++    return BrowserView::GetBrowserViewForBrowser(browser());
++  }
++  NSWindow* window() {
++    return browser_view()->GetWidget()->GetNativeWindow().GetNativeNSWindow();
++  }
++  const std::optional<stedding::AddressRow::CameraRow>& camera_row() {
++    return stedding::AddressRow::From(browser())->camera_row();
++  }
++  void SetSwitch(bool on) {
++    browser()->GetProfile()->GetPrefs()->SetBoolean(
++        stedding::prefs::kCameraRowFullscreen, on);
++  }
++  void Layout() { views::test::RunScheduledLayout(browser_view()->GetWidget()); }
++  // `view`'s bounds in the window's own coordinates.
++  gfx::Rect InWindow(views::View* view) {
++    return view->ConvertRectToWidget(view->GetLocalBounds());
++  }
++
++  Housing housing_;
++};
++
++// T55, T59: the green button enters it and the chord leaves it. The window
++// covers its screen, borderless, and comes back to the frame it had; the
++// session meanwhile keeps that frame, not the whole screen.
++IN_PROC_BROWSER_TEST_F(CameraRowTest, FullScreenTakesTheWholeScreenAndComesBack) {
++  SetSwitch(true);
++  NSWindow* const ns_window = window();
++  const NSRect before = ns_window.frame;
++  const NSUInteger style = ns_window.styleMask;
++  ASSERT_NE(NSWidth(before), NSWidth(ns_window.screen.frame))
++      << "the test window already covers its screen";
++
++  // The green button sends AppKit's toggle with itself as the sender.
++  [ns_window toggleFullScreen:[ns_window standardWindowButton:NSWindowZoomButton]];
++  Layout();
++  ASSERT_TRUE(camera_row()) << "the green button did not enter it";
++  EXPECT_EQ(32, camera_row()->height);
++  EXPECT_TRUE(NSEqualRects(ns_window.frame, ns_window.screen.frame));
++  EXPECT_EQ(0u, ns_window.styleMask & NSWindowStyleMaskTitled);
++  EXPECT_FALSE(ns_window.movable);
++  EXPECT_FALSE(browser_view()->GetWidget()->IsFullscreen())
++      << "it is not macOS's full screen";
++  gfx::Rect saved;
++  ui::mojom::WindowShowState state;
++  browser_view()->GetWidget()->native_widget_private()->GetWindowPlacement(
++      &saved, &state);
++  EXPECT_EQ(gfx::ScreenRectFromNSRect(before), saved);
++
++  chrome::ToggleFullscreenMode(browser());
++  Layout();
++  EXPECT_FALSE(camera_row());
++  EXPECT_TRUE(NSEqualRects(ns_window.frame, before));
++  EXPECT_EQ(style, ns_window.styleMask);
++  EXPECT_TRUE(ns_window.movable);
++}
++
++// T55: with the switch off, or on a screen without a housing, full screen is
++// macOS's own.
++IN_PROC_BROWSER_TEST_F(CameraRowTest, WithTheSwitchOffFullScreenIsMacOSs) {
++  ui::test::ScopedFakeNSWindowFullscreen fake_fullscreen;
++  for (const bool switch_on : {false, true}) {
++    SCOPED_TRACE(switch_on ? "no housing" : "the switch off");
++    SetSwitch(switch_on);
++    if (switch_on) {
++      stedding::CameraRowFullscreenMac::SetHousingForTesting(Housing());
++    }
++    chrome::ToggleFullscreenMode(browser());
++    ASSERT_TRUE(base::test::RunUntil(
++        [&] { return browser_view()->GetWidget()->IsFullscreen(); }));
++    EXPECT_FALSE(camera_row());
++    chrome::ToggleFullscreenMode(browser());
++    ASSERT_TRUE(base::test::RunUntil(
++        [&] { return !browser_view()->GetWidget()->IsFullscreen(); }));
++  }
++}
++
++// T56: the row is the row beside the camera: the safe area's height at the
++// window's top, Back, Forward and Reload left of the housing, the field from
++// just past it, nothing of the row under it, on the window's colour, and the
++// card a gutter under the row.
++IN_PROC_BROWSER_TEST_F(CameraRowTest, TheRowSitsBesideTheCamera) {
++  SetSwitch(true);
++  chrome::ToggleFullscreenMode(browser());
++  Layout();
++  ASSERT_TRUE(camera_row());
++  ASSERT_TRUE(browser_view()->IsToolbarVisible());
++  ToolbarView* const toolbar = browser_view()->toolbar();
++  const gfx::Rect row = InWindow(toolbar);
++  EXPECT_EQ(0, row.y());
++  EXPECT_EQ(32, row.height());
++  for (views::View* const button :
++       {static_cast<views::View*>(
++            browser_view()->toolbar_button_provider()->GetBackButton()),
++        static_cast<views::View*>(toolbar->forward_button()),
++        static_cast<views::View*>(toolbar->reload_button())}) {
++    if (button && button->GetVisible()) {
++      EXPECT_LE(InWindow(button).right(), housing_.left)
++          << button->GetClassName() << " at " << InWindow(button).ToString();
++    }
++  }
++  const gfx::Rect field = InWindow(toolbar->location_bar_view());
++  EXPECT_GE(field.x(), housing_.right) << field.ToString();
++  EXPECT_LE(field.x(), housing_.right + 16) << field.ToString();
++  EXPECT_LE(field.bottom(), 32);
++  // Nothing drawn under the housing: the row's own spacers, empty views
++  // that only take its width, are all that may span it.
++  for (views::View* const child : toolbar->children()) {
++    if (!child->GetVisible() || child->bounds().IsEmpty() ||
++        std::string(child->GetClassName()) == "View") {
++      continue;
++    }
++    const gfx::Rect bounds = InWindow(child);
++    EXPECT_TRUE(bounds.right() <= housing_.left ||
++                bounds.x() >= housing_.right)
++        << child->GetClassName() << " at " << bounds.ToString()
++        << " is under the housing";
++  }
++  const gfx::Rect card = InWindow(browser_view()->multi_contents_view());
++  EXPECT_GE(card.y(), 32) << card.ToString();
++  EXPECT_LE(card.y(), 32 + 12) << card.ToString();
++  const stedding::PageThemeColorController* const colours =
++      stedding::PageThemeColorController::From(browser());
++  ASSERT_TRUE(colours);
++  EXPECT_TRUE(colours->bar_suppressed());
++  EXPECT_FALSE(colours->color());
++
++  chrome::ToggleFullscreenMode(browser());
++  Layout();
++  EXPECT_FALSE(colours->bar_suppressed());
++}
++
++// T57: beside the camera the row always shows; the address in the sidebar
++// comes to it, with the row's buttons, and goes back after.
++IN_PROC_BROWSER_TEST_F(CameraRowTest, TheAddressLeavesTheSidebarForTheRow) {
++  browser()->GetProfile()->GetPrefs()->SetBoolean(
++      stedding::prefs::kSidebarAddressInSidebar, true);
++  Layout();
++  ASSERT_FALSE(browser_view()->IsToolbarVisible());
++  ASSERT_TRUE(browser_view()->toolbar()->stedding_buttons_host());
++
++  SetSwitch(true);
++  chrome::ToggleFullscreenMode(browser());
++  ASSERT_TRUE(base::test::RunUntil([&] {
++    Layout();
++    return browser_view()->toolbar()->stedding_buttons_host() == nullptr;
++  })) << "the row's buttons stayed in the sidebar";
++  EXPECT_TRUE(browser_view()->IsToolbarVisible());
++
++  chrome::ToggleFullscreenMode(browser());
++  ASSERT_TRUE(base::test::RunUntil([&] {
++    Layout();
++    return browser_view()->toolbar()->stedding_buttons_host() != nullptr;
++  })) << "the row's buttons did not go back to the sidebar";
++  EXPECT_FALSE(browser_view()->IsToolbarVisible());
++}
++
++// T58: a page's own full screen from it is macOS's: the window turns ordinary
++// for it and comes back to the row beside the camera after.
++IN_PROC_BROWSER_TEST_F(CameraRowTest, AVideosFullScreenIsMacOSsAndComesBack) {
++  ui::test::ScopedFakeNSWindowFullscreen fake_fullscreen;
++  SetSwitch(true);
++  NSWindow* const ns_window = window();
++  const NSRect before = ns_window.frame;
++  chrome::ToggleFullscreenMode(browser());
++  ASSERT_TRUE(camera_row());
++
++  // What a page's request comes to (BrowserView::ProcessFullscreen).
++  browser_view()->GetWidget()->SetFullscreen(true);
++  ASSERT_TRUE(base::test::RunUntil(
++      [&] { return browser_view()->GetWidget()->IsFullscreen(); }));
++  EXPECT_FALSE(camera_row());
++  EXPECT_NE(0u, ns_window.styleMask & NSWindowStyleMaskTitled);
++
++  browser_view()->GetWidget()->SetFullscreen(false);
++  ASSERT_TRUE(base::test::RunUntil([&] { return camera_row().has_value(); }))
++      << "the row beside the camera did not come back";
++  EXPECT_TRUE(NSEqualRects(ns_window.frame, ns_window.screen.frame));
++
++  chrome::ToggleFullscreenMode(browser());
++  EXPECT_FALSE(camera_row());
++  EXPECT_TRUE(NSEqualRects(ns_window.frame, before));
++}
++
++// T59: the switch turned off in it leaves it.
++IN_PROC_BROWSER_TEST_F(CameraRowTest, TurningTheSwitchOffLeaves) {
++  SetSwitch(true);
++  NSWindow* const ns_window = window();
++  const NSRect before = ns_window.frame;
++  chrome::ToggleFullscreenMode(browser());
++  ASSERT_TRUE(camera_row());
++  SetSwitch(false);
++  EXPECT_FALSE(camera_row());
++  EXPECT_TRUE(NSEqualRects(ns_window.frame, before));
++  EXPECT_NE(0u, ns_window.styleMask & NSWindowStyleMaskTitled);
++}
++
++}  // namespace
+diff --git a/chrome/test/stedding/settings_spaces_browsertest.cc b/chrome/test/stedding/settings_spaces_browsertest.cc
+index 89dd1bc92d916..56c8e106e8d41 100644
+--- a/chrome/test/stedding/settings_spaces_browsertest.cc
++++ b/chrome/test/stedding/settings_spaces_browsertest.cc
+@@ -459,6 +459,17 @@ IN_PROC_BROWSER_TEST_F(SettingsSpacesTest, ThePageBindsEveryControl) {
+         << keys;
+     // spaces B45, settings T44 (GitHub issue 66): the loop's switch.
+     EXPECT_NE(std::string::npos, keys.find("stedding.spaces.loop")) << keys;
++    // toolbar T55, settings T51 (BACKLOG S-392): the row beside the camera,
++    // on the Mac alone.
++#if BUILDFLAG(IS_MAC)
++    EXPECT_NE(std::string::npos,
++              keys.find("stedding.window.camera_row_fullscreen"))
++        << keys;
++#else
++    EXPECT_EQ(std::string::npos,
++              keys.find("stedding.window.camera_row_fullscreen"))
++        << keys;
++#endif
+   }
+   {
+     // settings T13 (BACKLOG S-313): a card per group, in this order, each
+@@ -505,9 +516,11 @@ IN_PROC_BROWSER_TEST_F(SettingsSpacesTest, ThePageBindsEveryControl) {
+     // profile, as the page reads them (the owner, 2026-10-21).
+     SCOPED_TRACE(
+         "the hints' switches are off, Copy Link on");
++    // toolbar T55: the row beside the camera is off until chosen.
+     for (const char* key :
+          {"stedding.tabs.undo_toast", "stedding.spaces.notices",
+-          "stedding.window.fullscreen_hint", "stedding.pins.mark_drifted"}) {
++          "stedding.window.fullscreen_hint", "stedding.pins.mark_drifted",
++          "stedding.window.camera_row_fullscreen"}) {
+       EXPECT_EQ(false,
+                 content::EvalJs(
+                     page, content::JsReplace("chrome.settingsPrivate.getPref($1)"
+diff --git a/components/remote_cocoa/app_shim/native_widget_mac_nswindow.h b/components/remote_cocoa/app_shim/native_widget_mac_nswindow.h
+index 48f47bf3eeb84..3536caf48fac8 100644
+--- a/components/remote_cocoa/app_shim/native_widget_mac_nswindow.h
++++ b/components/remote_cocoa/app_shim/native_widget_mac_nswindow.h
+@@ -48,6 +48,12 @@ REMOTE_COCOA_APP_SHIM_EXPORT
+ // create one.
+ - (void)setWindowTouchBarDelegate:(id<WindowTouchBarDelegate>)delegate;
+ 
++// Stedding (docs/features/toolbar.md T55): asked first when AppKit is to
++// start or end full screen for a sender -- the green button, its menu --
++// and not for the window's own calls, which pass none. YES means the
++// window's owner took it, as its own full screen.
++- (void)setSteddingFullScreenOverride:(BOOL (^)(void))handler;
++
+ // Enforce that this window never be made visible. In the event that it is made
+ // visible, it will log a crash report.
+ // https://crbug.com/960904
+diff --git a/components/remote_cocoa/app_shim/native_widget_mac_nswindow.mm b/components/remote_cocoa/app_shim/native_widget_mac_nswindow.mm
+index 0e5d0e59d926e..1c5a6bf8febe0 100644
+--- a/components/remote_cocoa/app_shim/native_widget_mac_nswindow.mm
++++ b/components/remote_cocoa/app_shim/native_widget_mac_nswindow.mm
+@@ -217,6 +217,7 @@ struct NSEdgeAndCornerThicknesses {
+   DefaultCommandDispatcherDelegate* __strong _defaultCommandDispatcherDelegate;
+   id<UserInterfaceItemCommandHandler> __strong _commandHandler;
+   id<WindowTouchBarDelegate> __weak _touchBarDelegate;
++  BOOL (^_steddingFullScreenOverride)(void);
+   NSData* __strong _lastSavedRestorableState;
+   uint64_t _bridgedNativeWidgetId;
+   // This field is not a raw_ptr<> because it requires @property rewrite.
+@@ -378,6 +379,17 @@ struct NSEdgeAndCornerThicknesses {
+   _touchBarDelegate = delegate;
+ }
+ 
++- (void)setSteddingFullScreenOverride:(BOOL (^)(void))handler {
++  _steddingFullScreenOverride = [handler copy];
++}
++
++- (void)toggleFullScreen:(id)sender {
++  if (sender && _steddingFullScreenOverride && _steddingFullScreenOverride()) {
++    return;
++  }
++  [super toggleFullScreen:sender];
++}
++
+ - (void)orderFrontKeepWindowKeyState {
+   _miniaturizationInProgress = NO;
+ 

@@ -190,6 +190,15 @@ show Chromium’s note about it unless Settings → Stedding → Pages and menus
 how to leave full screen** is on. A page that fills the screen by itself, such as a
 video, always shows its own note.
 
+**Can full screen use the row beside the camera?**
+On a Mac whose screen has a camera housing, yes: turn on Settings → Stedding → Pages and
+menus → **Use the row beside the camera in full screen**. Full screen then puts the
+address row beside the camera, and the page gets that row’s height. The window stays on
+its desktop instead of taking a Space of its own, so there is no swipe to it and no
+tiling; the menu bar and the Dock come in when the pointer reaches the screen’s edge.
+⌃⌘F, the green button or View → Exit Full Screen leave it; holding Esc does not. A
+video’s own full screen is still macOS’s.
+
 **Can a tab sit indented under the page it came from?**
 Yes, if you want it. A link you open in a new tab (a middle click, or ⌘-click (Ctrl+click on Windows)) opens just below its page. Settings → Stedding → Tabs → **Show tabs
 under the tab that opened them** draws it a level to the right, and a link opened

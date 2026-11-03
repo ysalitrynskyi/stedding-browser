@@ -8,6 +8,9 @@ gets it, trap 47):
   tooling\win\publish-appcast.ps1 -Check        what would be offered; changes nothing
   tooling\win\publish-appcast.ps1               sign, write the feed, sign it, commit it
   tooling\win\publish-appcast.ps1 -Push         the same, then push the commit to main
+  tooling\win\publish-appcast.ps1 -Important "<reason>"
+                                                an important update (updates Up23, ADR 0031):
+                                                shown strongly with its reason, never forced
   tooling\win\publish-appcast.ps1 -Feed <file> -Url <installer url>
                                                 the update test's local feed (docs/HANDOFF.md,
                                                 "The updater"): writes <file> only
@@ -31,6 +34,7 @@ param(
   [string]$Feed = '',
   [string]$Url = '',
   [string]$Installer = '',
+  [string]$Important = '',
   [string]$Repo = (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
 )
 $ErrorActionPreference = 'Stop'
@@ -111,9 +115,11 @@ Report 'signed' 'installer'
 $python = (Get-Command python -ErrorAction Stop).Source
 $date = [DateTime]::UtcNow.ToString('ddd, dd MMM yyyy HH:mm:ss +0000', [Globalization.CultureInfo]::InvariantCulture)
 $length = (Get-Item $Installer).Length
+$importantArgs = @()
+if ($Important) { $importantArgs = @('--important', $Important) }
 & $python -I (Join-Path $Repo 'tooling\appcast.py') write --platform windows --feed $Feed --repo $github `
   --version $version --bundle-version $windowsVersion --minimum-system 10.0 --length $length `
-  --signature $signature --date $date --url $Url
+  --signature $signature --date $date --url $Url @importantArgs
 if ($LASTEXITCODE -ne 0) { throw 'appcast.py write failed' }
 $feedSignature = (& powershell -NoProfile -ExecutionPolicy Bypass -File $key -Sign $Feed).Trim()
 & $python -I (Join-Path $Repo 'tooling\appcast.py') attach-signature --feed $Feed --signature $feedSignature

@@ -226,6 +226,11 @@ and, on the Mac, the launcher its Dock tile points at
 
 ## Imports from Dia and from Safari's export file
 
+Nothing looks at another app's data before you ask for an import. The welcome
+flow looks for other browsers only when you reach its Import step, and on the
+Mac Stedding never looks at Safari's data, which macOS keeps for Safari alone;
+Safari's export file is the way in (`features/import.md` I46).
+
 Importing from Dia (welcome step 2) reads Dia's files on this computer: its
 bookmarks, and copies of its history and logins, made in a temporary folder
 that is deleted when the read ends. Passwords are unsealed only after

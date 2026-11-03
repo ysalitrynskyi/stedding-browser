@@ -82,13 +82,13 @@ Removable when: never; it is product behaviour.
  chrome/browser/ui/spaces/space_model.cc       |  95 +-
  chrome/browser/ui/spaces/space_model.h        |  27 +-
  .../browser/ui/spaces/space_model_unittest.cc |  59 ++
- .../ui/spaces/space_model_window_unittest.cc  |  44 +
+ .../ui/spaces/space_model_window_unittest.cc  |  56 ++
  chrome/browser/ui/spaces/space_registry.cc    |  19 +-
  chrome/browser/ui/spaces/space_registry.h     |   9 +-
  .../ui/spaces/space_registry_unittest.cc      |  36 +
  chrome/browser/ui/stedding/BUILD.gn           |   2 +
  chrome/browser/ui/stedding/pin_lifecycle.cc   |   8 +-
- chrome/browser/ui/stedding/sleep_tabs.cc      |   8 +
+ chrome/browser/ui/stedding/sleep_tabs.cc      |  23 +
  chrome/browser/ui/stedding/sleep_tabs.h       |   2 +-
  chrome/browser/ui/stedding/stedding_prefs.cc  |   2 +
  chrome/browser/ui/stedding/stedding_prefs.h   |   4 +
@@ -108,7 +108,7 @@ Removable when: never; it is product behaviour.
  .../test/stedding/edit_space_browsertest.cc   | 209 +++++
  .../test/stedding/pinned_run_browsertest.cc   | 368 ++++++++
  chrome/test/stedding/welcome_browsertest.cc   |  90 ++
- 42 files changed, 3335 insertions(+), 251 deletions(-)
+ 42 files changed, 3362 insertions(+), 251 deletions(-)
  create mode 100644 chrome/browser/ui/spaces/space_icon.cc
  create mode 100644 chrome/browser/ui/spaces/space_icon.h
  create mode 100644 chrome/browser/ui/spaces/space_icon_unittest.cc
@@ -2470,10 +2470,10 @@ index ffc4858611146..7046980dd066e 100644
  // once, the state the Space has already is no change, and the state comes
  // back from the session with the Space. A session written before the state
 diff --git a/chrome/browser/ui/spaces/space_model_window_unittest.cc b/chrome/browser/ui/spaces/space_model_window_unittest.cc
-index c6756adf89585..4f9c7bb9c6d4c 100644
+index c6756adf89585..9cbdc160fbea7 100644
 --- a/chrome/browser/ui/spaces/space_model_window_unittest.cc
 +++ b/chrome/browser/ui/spaces/space_model_window_unittest.cc
-@@ -943,6 +943,50 @@ TEST_F(SpaceWindowTest, ASleepOnScreenShowsTheRowUsedBefore) {
+@@ -943,6 +943,62 @@ TEST_F(SpaceWindowTest, ASleepOnScreenShowsTheRowUsedBefore) {
    }
  }
  
@@ -2508,16 +2508,28 @@ index c6756adf89585..4f9c7bb9c6d4c 100644
 +  }
 +  {
 +    SCOPED_TRACE("Sleep Tab");
++    // A New Tab page with every other row asleep stays: another in its
++    // place would only add a row each time.
 +    tabs::TabInterface* const fresh = tabs().GetActiveTab();
 +    stedding::SleepTabs(browser(), fresh, stedding::SleepScope::kThisTab);
-+    ASSERT_EQ(5, tabs().count()) << "no new tab opened";
-+    EXPECT_TRUE(fresh->GetContents()->WasDiscarded());
++    ASSERT_EQ(4, tabs().count()) << "a New Tab page in place of a New Tab page";
++    EXPECT_EQ(fresh, tabs().GetActiveTab());
++    // A page sleeps, with every other row asleep, and a new tab takes its
++    // place.
++    tabs::TabInterface* const page = AppendRow(tabs(), profile(), true);
++    ASSERT_EQ(page, tabs().GetActiveTab());
++    stedding::SleepTabs(browser(), fresh, stedding::SleepScope::kThisTab);
++    ASSERT_TRUE(fresh->GetContents()->WasDiscarded());
++    stedding::SleepTabs(browser(), page, stedding::SleepScope::kThisTab);
++    ASSERT_EQ(6, tabs().count()) << "no new tab opened";
++    EXPECT_TRUE(page->GetContents()->WasDiscarded());
 +    for (tabs::TabInterface* const pin : {a, b, c}) {
 +      EXPECT_TRUE(pin->GetContents()->WasDiscarded()) << "a pin woke";
 +    }
++    EXPECT_TRUE(fresh->GetContents()->WasDiscarded()) << "the New Tab woke";
 +    EXPECT_EQ(GURL(chrome::kChromeUINewTabURL),
 +              tabs().GetActiveTab()->GetContents()->GetVisibleURL());
-+    EXPECT_NE(fresh, tabs().GetActiveTab());
++    EXPECT_NE(page, tabs().GetActiveTab());
 +  }
 +}
 +
@@ -2711,7 +2723,7 @@ index dca20d3c6cdda..199c0f039955c 100644
                            TabStripUserGestureDetails(
                                TabStripUserGestureDetails::GestureType::kOther));
 diff --git a/chrome/browser/ui/stedding/sleep_tabs.cc b/chrome/browser/ui/stedding/sleep_tabs.cc
-index 918cf501adadd..6d242963cfb90 100644
+index 918cf501adadd..420fd208f365a 100644
 --- a/chrome/browser/ui/stedding/sleep_tabs.cc
 +++ b/chrome/browser/ui/stedding/sleep_tabs.cc
 @@ -16,6 +16,8 @@
@@ -2723,22 +2735,44 @@ index 918cf501adadd..6d242963cfb90 100644
  #include "components/performance_manager/public/graph/page_node.h"
  #include "components/performance_manager/public/performance_manager.h"
  #include "components/tabs/public/split_tab_data.h"
-@@ -24,6 +26,7 @@
+@@ -24,6 +26,8 @@
  #include "content/public/browser/render_frame_host.h"
  #include "content/public/browser/web_contents.h"
  #include "content/public/browser/web_contents_capability_type.h"
++#include "content/public/common/url_constants.h"
 +#include "url/gurl.h"
  
  namespace stedding {
  
-@@ -187,6 +190,11 @@ void ActivateANeighbour(BrowserWindowInterface* browser,
+@@ -160,6 +164,18 @@ bool RowIsBusy(tabs::TabInterface* tab) {
+   });
+ }
+ 
++// A New Tab page, loaded or on its way.
++bool IsNewTabPage(tabs::TabInterface* tab) {
++  content::WebContents* const contents = tab->GetContents();
++  if (!contents) {
++    return false;
++  }
++  const GURL& url = contents->GetVisibleURL();
++  return url.SchemeIs(content::kChromeUIScheme) &&
++         (url.host() == chrome::kChromeUINewTabHost ||
++          url.host() == chrome::kChromeUINewTabPageHost);
++}
++
+ // The one check before any sleep. `may_be_on_screen`: Sleep Tab picks its row
+ // before SleepTabs() moves off it.
+ bool MaySleep(tabs::TabInterface* tab, bool may_be_on_screen) {
+@@ -187,6 +203,13 @@ void ActivateANeighbour(BrowserWindowInterface* browser,
                              : std::nullopt) {
      if (*row) {
        tabs->ActivateTabAt(tabs->GetIndexOfTab(*row));
-+    } else {
++    } else if (!IsNewTabPage(active)) {
 +      // No row of the Space is awake: a new tab there, as when Cmd-W sleeps
 +      // a Space's only row (pins H11; GitHub issue 72). Filed under the
-+      // active Space on insertion, like every new tab (spaces B1).
++      // active Space on insertion, like every new tab (spaces B1). A New Tab
++      // page on screen stays as it is: another in its place would only add a
++      // row each time.
 +      tabs->delegate()->AddTabAt(GURL(chrome::kChromeUINewTabURL), -1, true);
      }
      return;

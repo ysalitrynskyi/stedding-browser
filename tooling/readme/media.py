@@ -3,6 +3,7 @@
 
     media.py seed PROFILE --fixture demo|spaces|isolated --version-file VERSION
                   [--scheme light|dark|system] [--collapsed] [--dark-pages]
+                  [--pref dotted.name=JSON ...]
     media.py render OUT.steps --scenes a,b,... --marks DIR --shots DIR
     media.py check-captions --keys a,b,...
     media.py captions DIR --width W --height H --keys a,b,...     (PyObjC)
@@ -132,6 +133,23 @@ def cmd_seed(args: argparse.Namespace) -> int:
         # Dark pages' switch is Chromium's own preference
         # (prefs::kWebKitForceDarkModeEnabled).
         prefs["webkit"] = {"webprefs": {"force_dark_mode_enabled": True}}
+    # Any other preference a still needs, such as a setting a release brought:
+    # --pref stedding.sidebar.address_in_sidebar=true.
+    for pref in args.pref:
+        name, sep, raw = pref.partition("=")
+        if not sep or not name:
+            return fail("--pref %s: give dotted.name=JSON" % pref)
+        try:
+            value = json.loads(raw)
+        except ValueError:
+            return fail("--pref %s: the value is not JSON" % pref)
+        node = prefs
+        *path, leaf = name.split(".")
+        for key in path:
+            node = node.setdefault(key, {})
+            if not isinstance(node, dict):
+                return fail("--pref %s: %s is not a dictionary" % (pref, key))
+        node[leaf] = value
     os.makedirs(default, exist_ok=True)
     with open(prefs_path, "w", encoding="utf-8") as handle:
         json.dump(prefs, handle, ensure_ascii=False)
@@ -510,6 +528,7 @@ def main(argv: list[str]) -> int:
     p.add_argument("--scheme", choices=sorted(SCHEMES), default="light")
     p.add_argument("--collapsed", action="store_true")
     p.add_argument("--dark-pages", action="store_true")
+    p.add_argument("--pref", action="append", default=[], metavar="NAME=JSON")
     p.set_defaults(func=cmd_seed)
 
     p = sub.add_parser("render")

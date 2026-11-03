@@ -2,6 +2,45 @@
 
 What was built, newest first. Nothing here is needed to do a task: `AGENTS.md` carries what is true now, `BACKLOG.md` the order of work, `PLAN.md` the owner's decisions. This file was the "State of the project" section of `AGENTS.md` until 2026-09-30. This log starts at 2026-10-15. Closed work from before that is the table in [docs/history/archive.md](history/archive.md).
 
+## 2026-11-03 -- 0.4.0 beta 8, first part: main and side releases, important updates, tidy names, issue 45 on beta 7
+
+Not released. The owner's final order for beta 8 (BACKLOG), done on the Windows PC while the
+owner used the Mac.
+
+Releases (ADR 0031). Any release that is not the main line -- Linux, Windows on ARM, a test
+build for the Mac or Windows -- is a side release: `tooling/publish-side` makes it a GitHub
+pre-release that is never latest, tagged `side-<kind>-<version>`, its files named
+`Stedding-side-...`, and refuses anything that could pass for a main release. The updaters read
+only the two feeds on main, so no installed copy is offered one; the site shows main tags only.
+A release can be marked important (`tooling/publish-appcast --important "<reason>"`): the
+sidebar's pill turns red and a bar under the page says why, once per launch, with Restart Now;
+nothing restarts by itself (updates Up23, Up24).
+
+Tidy names, promised for this release (S-398): pinned tabs' titles without the site's name,
+counts and account, and downloads whose names say nothing saved under their page's title, two
+switches off by default, rules on the device. Folder icons travel in the sidebar file and sync
+(S-393). The welcome flow looks for other browsers only at its Import step, and the Mac no
+longer probes Safari's data (S-394).
+
+Issue 45's comment on beta 7 (S-403): on Windows the window's buttons go to the window's corner,
+shown on hover, when the sidebar is on the left; the Mac's traffic lights always show; Install
+App is a row of the site panel; the sidebar's field keeps the site's name and folds extension
+icons into their menu instead of letting them run out of the field. The review's list (S-399):
+a toast is centred when it is made, popups' and apps' bars are Chromium's band, the site's
+blocker switch on a sign-in page shows the site's own setting, the menu moves into the field on
+a line with no room.
+
+Issue 73 (a site's device picker) did not reproduce on Windows: a browser test asks for a serial
+port from a click and sees the picker.
+
+Checked: on Windows, `win-release` built from the series as pushed (patches 0001-0121): 123 unit
+tests of the round's areas passed, and 147 browser tests of them, after three tests were fixed in
+the tests alone (the welcome and import tests waited for the sources before the Import step, and
+the toast test read a toast after it had closed). Not checked: the Mac's tests of this round
+(the traffic lights, the camera row, Sparkle's important item), a look on the real screen on
+either platform, the full suites, ASan and acceptance, and the owner's review of every changed
+state.
+
 ## 2026-11-03 -- 0.4.0 beta 7: the owner's list, issues 71 and 72, and a review of every change
 
 Released as 0.4.0 beta 7, on Chromium 157.0.8103.31, for both platforms, with the owner's list of

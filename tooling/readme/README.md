@@ -5,7 +5,7 @@ The README's pictures and its animation, made on a Mac from a build, the same wa
 | File | What it does |
 |---|---|
 | `capture-stills.sh` | **(macOS)** Every still. Each one is `tooling/capture-state`: no pointer, no keys, no focus change, so it can run while someone works at the Mac. One function per picture. |
-| `make-animation.sh` | The README's animation as it is now: `demo.webp` and `demo-dark.webp`, the site's tour cut in its light and dark looks, as animated WebP at the lowest priority. `make-animation.sh <tour-video> <out>`; copy the pair into `docs/images/readme/` after a look. Needs `img2webp` (`brew install webp`). |
+| `make-animation.sh` | The README's animation as it is now: `demo.webp` and `demo-dark.webp`, the site's tour cut in its light and dark looks, as animated WebP at the lowest priority, ending on the end card as one still, lossless frame. `make-animation.sh <tour-video> <out>`; copy the pair into `docs/images/readme/` after a look. Needs `img2webp` (`brew install webp`). |
 | `record-demo.sh` | **(macOS)** The animation. The fixture and the scenes go through `tooling/drive` with real input, the window is recorded, then the GIF and the MP4 are made. Also `check` (no launch), `layout`, `rehearse`, `convert`, `slideshow` and `probe`. |
 | `steps/` | One steps file per scene, plus `setup` (the fixture) and `preroll` (the pages loaded before the first scene). `tooling/drive`'s language, plus `glide`, which `media.py render` turns into one eased `move`. |
 | `captions.tsv` | One caption per scene and per still: the keys, then the words. |

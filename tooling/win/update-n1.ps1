@@ -16,13 +16,18 @@ agent's app sees a virtualised %LOCALAPPDATA% and HKCU):
 and B's installer itself. The installed copy must be the older build (A), installed with
 tooling\win\test-installer.ps1 -Mode upgrade -Installer <A>. The log ends in N1_DONE; screenshots of
 the window go to <dir>\shots.
+
+-SidebarWidth <DIP> also checks the sidebar's width across the update, the way GitHub issue 65 was
+reported (docs/features/sidebar.md Y47): A starts with that width set, and after the restart into B
+the profile must still hold it. The log says WIDTH_KEPT or WIDTH_LOST.
 #>
 param(
   [Parameter(Mandatory = $true)][string]$Feed,
   [int]$Port = 8766,
   [string]$Profile = (Join-Path $env:TEMP 'stedding-update-n1'),
   [string]$Log = '',
-  [string]$Python = ''
+  [string]$Python = '',
+  [int]$SidebarWidth = 0
 )
 $ErrorActionPreference = 'Continue'
 if (-not $Log) { $Log = Join-Path $Feed 'n1.log' }
@@ -49,8 +54,15 @@ $server = Start-Process $Python -ArgumentList '-I', '-m', 'http.server', "$Port"
 Start-Sleep -Seconds 2
 Say "before: $(Keys) chrome.exe=$(Ver $exe) new_chrome.exe=$(Test-Path (Join-Path $app 'new_chrome.exe'))"
 
+$seed = @{ stedding = @{ welcome = @{ shown = $true } } }
+if ($SidebarWidth -gt 0) { $seed.vertical_tabs = @{ uncollapsed_width = $SidebarWidth } }
+# The width the profile holds, once the browser has written its preferences (they are committed
+# about ten seconds after a change).
+function Width {
+  try { (Get-Content (Join-Path $Profile 'Default\Preferences') -Raw | ConvertFrom-Json).vertical_tabs.uncollapsed_width } catch { 'unreadable' }
+}
 $null = Drive-Launch -Profile $Profile -Urls @('https://example.com/', 'https://example.org/') `
-  -Seed @{ stedding = @{ welcome = @{ shown = $true } } } `
+  -Seed $seed `
   -Extra @("--stedding-update-feed=http://127.0.0.1:$Port/appcast-windows.xml", '--no-first-run', '--disable-search-engine-choice-screen')
 $started = Get-Date
 Say "launched, pid $($script:Drive.Pid)"
@@ -65,6 +77,7 @@ while (((Get-Date) - $started).TotalSeconds -lt 300) {
 Say "pill: $(if ($pill) { "$($pill.Name) at $($pill.X),$($pill.Y) after $([int]((Get-Date) - $started).TotalSeconds) s" } else { 'none in 300 s' })"
 Say "after install: $(Keys) new_chrome.exe=$(Test-Path (Join-Path $app 'new_chrome.exe')) new version=$(Ver (Join-Path $app 'new_chrome.exe')) folders=$((Get-ChildItem $app -Directory | ForEach-Object Name) -join ',')"
 $null = Drive-Shot 'n1-pill'
+if ($SidebarWidth -gt 0) { Say "sidebar width before the update: $(Width)" }
 
 if ($pill) {
   $oldPid = $script:Drive.Pid
@@ -93,6 +106,11 @@ if ($pill) {
   $running = (Get-Process -Id $script:Drive.Pid -ErrorAction SilentlyContinue).Path
   Say "after restart: $(Keys) chrome.exe=$(Ver $exe) running=$running new_chrome.exe=$(Test-Path (Join-Path $app 'new_chrome.exe')) old_chrome.exe=$(Test-Path (Join-Path $app 'old_chrome.exe'))"
   Say "tabs: $((Drive-Pages | ForEach-Object { $_.title }) -join ' | ')"
+  if ($SidebarWidth -gt 0) {
+    Start-Sleep -Seconds 15
+    $w = Width
+    Say "sidebar width: set $SidebarWidth, after the update $w $(if ("$w" -eq "$SidebarWidth") { 'WIDTH_KEPT' } else { 'WIDTH_LOST' })"
+  }
   try {
     $req = [Net.HttpWebRequest]::Create("http://127.0.0.1:$($script:Drive.Port)/json/new?chrome://settings/help")
     $req.Method = 'PUT'; $req.Timeout = 5000; $req.Proxy = $null; $req.GetResponse().Close()

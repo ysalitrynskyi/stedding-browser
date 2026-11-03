@@ -5,6 +5,7 @@ The README's pictures and its animation, made on a Mac from a build, the same wa
 | File | What it does |
 |---|---|
 | `capture-stills.sh` | **(macOS)** Every still. Each one is `tooling/capture-state`: no pointer, no keys, no focus change, so it can run while someone works at the Mac. One function per picture. |
+| `make-gifs.sh` | The README's animations as they are now: `demo.gif` and the four clips under Highlights, cut from a release's window recordings (`take-day-2x.mp4`, `take-night-2x.mp4`, each with its `.timeline.txt`) at the seconds the script names, at the lowest priority. `make-gifs.sh <takes> <out>`; copy the ones that pass a look into `docs/images/readme/`. |
 | `record-demo.sh` | **(macOS)** The animation. The fixture and the scenes go through `tooling/drive` with real input, the window is recorded, then the GIF and the MP4 are made. Also `check` (no launch), `layout`, `rehearse`, `convert`, `slideshow` and `probe`. |
 | `steps/` | One steps file per scene, plus `setup` (the fixture) and `preroll` (the pages loaded before the first scene). `tooling/drive`'s language, plus `glide`, which `media.py render` turns into one eased `move`. |
 | `captions.tsv` | One caption per scene and per still: the keys, then the words. |

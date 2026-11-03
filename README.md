@@ -17,7 +17,10 @@ account, no telemetry, BSD-3-Clause.
 [stedding.dev](https://stedding.dev) · [Download](#download) · [Shortcuts](docs/SHORTCUTS.md) ·
 [FAQ](docs/FAQ.md) · [Privacy](docs/PRIVACY.md) · [Build](#building-from-source)
 
-<img src="docs/images/readme/demo.gif" alt="Stedding in use: choosing tabs in the sidebar turns the address row green, then blue, with each page; the command bar jumps to a map open in another Space; the Spaces switch, each in its own colour; a tab dragged onto the page lights half of it and makes a split view, the address row dark over one page and white over the other; both pages turn dark at once and back">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/readme/address-row-dark.png">
+  <img src="docs/images/readme/address-row.png" alt="The Stedding window as it starts: the address row on top over Wikipedia's Apollo 11 article, and beside it the sidebar with the traffic lights at its top, four essentials as cards, then the Work Space's folders and tabs">
+</picture>
 
 **[Download for macOS](https://github.com/ysalitrynskyi/stedding-browser/releases/latest)** ·
 Apple silicon, macOS 13 or later, signed with the project's Developer ID and notarized by Apple<br>
@@ -25,20 +28,22 @@ Apple silicon, macOS 13 or later, signed with the project's Developer ID and not
 Windows 10 and 11, x64, installs for you alone<br>
 Homebrew: `brew install --cask ysalitrynskyi/stedding/stedding` · [Install guide](docs/INSTALL.md)
 
+<img src="docs/images/readme/demo.gif" alt="Stedding 0.4.0 beta 7 in use: on the Linux kernel's GitHub page the address row is black; choosing tabs in the sidebar turns it green over Django's page and teal over a mail page; the command bar jumps to a map open in another Space, whose sidebar is purple; the NASA page is dragged onto Wikipedia's Apollo 11 and the two open side by side">
+
 ## Highlights
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/images/readme/clip-pinned-folder.gif" alt="A folder named Docs, holding a tab and a nested folder, is dragged up from the tabs over the line into the pinned tabs; a bar between the Django and PyPI pins shows the place, and the folder settles there with its tabs"><br>
-      <b>Folders in the pinned tabs.</b> Drag one over the line, to any place among the pins; a bar shows where it will land.</td>
-    <td width="50%"><img src="docs/images/readme/clip-space-scroll.gif" alt="The pointer rests on the sidebar while the mouse scrolls sideways: Work slides away to Personal and its map, then to Reading and its news page, and back again, one Space for each notch"><br>
-      <b>Spaces with the mouse.</b> Scroll sideways over the sidebar, with a tilt wheel or Shift and the wheel: one Space for each notch. On Windows, Ctrl and the wheel does it too.</td>
+    <td width="50%"><img src="docs/images/readme/clip-address-sidebar.gif" alt="The command bar turns on Show the address in the sidebar: the address row leaves the page, and the sidebar's top takes Back, Forward, Reload and the menu, with the field reading github.com under them, the traffic lights beside"><br>
+      <b>The address in the sidebar.</b> One setting moves the field, Back, Forward and Reload to the sidebar's top, and the page takes the row's height.</td>
+    <td width="50%"><img src="docs/images/readme/clip-site-panel.gif" alt="A click on the button at the start of the sidebar's address field opens the site panel for github.com: the connection, Camera and Microphone switches, cookies and site data, extensions, the Space's session, Clear site data, Dark pages and Site settings"><br>
+      <b>The site panel.</b> The button at the field's start: the site's permissions, its cookies and session, and dark pages for it.</td>
   </tr>
   <tr>
-    <td><img src="docs/images/readme/clip-little-window.gif" alt="A link from another app opens a small window over Stedding, its top row green like the Django page in it, the traffic lights in that row; a click on Open in Stedding at the row's right end moves the page into a tab of the main window"><br>
-      <b>Little windows, then a tab.</b> A link from another app opens small, its row in the page's colour; <b>Open in Stedding</b> (⌘O, Ctrl+O) moves it into a tab.</td>
-    <td><img src="docs/images/readme/clip-pin-close.gif" alt="A pinned Django tab that had wandered to another page is closed with Command-W: it stays in its place, asleep, with its own title again, and a click opens it on its pinned page"><br>
-      <b>⌘W (Ctrl+W) on a pinned tab</b>, as in Arc: it goes back to its pinned page, asleep, in its place.</td>
+    <td><img src="docs/images/readme/clip-peek.gif" alt="In the pinned mail page, a click on an order link opens the order page on a card over the mail page, which stays where it was"><br>
+      <b>Peek.</b> A link from a pinned tab that leaves its site opens on a card over the page; Esc closes it, and Open as Tab keeps it.</td>
+    <td><img src="docs/images/readme/clip-night.gif" alt="In a dark window Wikipedia's Apollo 11 article is white; dark pages turn the article dark, then off again"><br>
+      <b>Dark pages.</b> In a dark window a white page can go dark too: ⌥⇧⌘D (Ctrl+Alt+Shift+D) or the moon by the address. Keep some sites light.</td>
   </tr>
 </table>
 
@@ -81,15 +86,18 @@ Each release's notes are on the
 - **The sidebar**: vertical tabs, essentials as cards, pinned tabs that remember their page,
   nested folders (in the pinned tabs too), and ⌘S (Ctrl+S) to fold it to a rail of icons or
   hide it. ⌘W (Ctrl+W) on a pinned tab sends it back to its page, asleep, in its place. While it is awake the close button is a minus that does the same, on screen or not. Once it is asleep the button is an x that asks before it removes the pin.
-- **Spaces** with their own colour and icon: switch with the chips, ⌃1–⌃9 (Alt+1–Alt+9), a
-  two-finger swipe, or the mouse's sideways scroll over the sidebar. A Space can keep its own
-  cookies, so one site can be signed into twice.
+- **Spaces** with their own colour and icon, or one colour for light and another for dark:
+  switch with the chips, ⌃1–⌃9 (Alt+1–Alt+9), a two-finger swipe, or the mouse's sideways
+  scroll over the sidebar. A Space can keep its own cookies, so one site can be signed into
+  twice.
 - **⌘T (Ctrl+T)**: a URL, a search, or an open or archived tab in any Space. ⇧⌘P
   (Ctrl+Shift+P) lists the commands, each with its key.
 - **Split view**: drag a tab onto the page, and it opens beside it.
 - **Peek**: a link from a pinned tab that leaves its site opens on a card over the page, or in
   a small window if you prefer; keep it as a tab or beside the pin. On a click, or only on a
   held press, as you choose.
+- **The address row on top**, or **the address in the sidebar** with Back, Forward and Reload
+  at its top; the button at the field's start opens the **site panel**.
 - **History and Downloads in the sidebar**, the sidebar on the left or the right, and
   **shortcuts you can change**.
 - **Little windows** for links from other apps, with **Open in Stedding** to keep the page as
@@ -103,6 +111,8 @@ Each release's notes are on the
 - **Arc's keyboard** on both platforms, and **updates** in the sidebar. The feed and the
   download are checked against a signature. Stedding looks when you open it if the last look
   was over an hour ago, and every six hours while it runs. A switch turns that off.
+
+<img src="docs/images/readme/edit-space.png" alt="Edit Space for Work, on its Colour tab with Light and dark chosen: a green for the light look and a plum for the dark one, each shown as a small sidebar">
 
 Each feature has a specification naming the test behind every behaviour:
 [docs/features/](docs/features/).
@@ -141,8 +151,8 @@ Windows copy needs one install by hand). Checksums are in each release's notes;
 not supported. Linux is not shipped.
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/images/readme/hero-dark.png">
-  <img src="docs/images/readme/hero.png" alt="The Stedding window: four essentials as cards at the top of the sidebar, then the Work Space with a folder holding a nested one, tabs for Django, PyPI, a sample app on localhost:5173 and the project's own GitHub page, and three Space chips at the foot; GitHub's trending page for Swift projects on a card, its full address on the top row in the page's own black">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/readme/address-sidebar-dark.png">
+  <img src="docs/images/readme/address-sidebar.png" alt="The same window with Show the address in the sidebar on: the sidebar's top has the traffic lights, Back, Forward, Reload and the menu, and under them the field reading en.wikipedia.org; Wikipedia's Apollo 11 article takes the window's whole height">
 </picture>
 
 ## Keyboard shortcuts

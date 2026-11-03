@@ -2,6 +2,47 @@
 
 What was built, newest first. Nothing here is needed to do a task: `AGENTS.md` carries what is true now, `BACKLOG.md` the order of work, `PLAN.md` the owner's decisions. This file was the "State of the project" section of `AGENTS.md` until 2026-09-30. This log starts at 2026-10-15. Closed work from before that is the table in [docs/history/archive.md](history/archive.md).
 
+## 2026-11-03 -- 0.4.0 beta 7: the owner's list, issues 71 and 72, and a review of every change
+
+Released as 0.4.0 beta 7, on Chromium 157.0.8103.31, for both platforms, with the owner's list of
+2026-11-02 (a peek's edge, the welcome flow's privacy step, issue 45's version B, page bars
+under the page, folder icons for issue 68, full screen on the Mac) and two issues filed that day:
+a tab opened in the background is the next one Ctrl-Tab reaches (issue 71, switcher X6, a setting
+on by default), and a sleep shows a row that is awake, so pins put to sleep one by one no longer
+wake each other (issue 72, tabs R5, pins H3, H11).
+
+The first final run on Windows found two DCHECKs new in this round, each stopping about a hundred
+browser tests on `win-checks`: a page bar's text drawn on a layer that is not opaque with no
+background under it, and the rail's layout naming the extensions lent to the address field. Both
+were fixed with a test. Its first `win-checks` build had run clang out of memory at 20 jobs and
+the sweep ran on stale binaries; the leg runs at 10 jobs now.
+
+Before the release four reviewers read every change since beta 6, each an area. Fixed, each with a
+test: the window's menu left the sidebar's top line when the line grew too narrow, and with the
+address row gone it could be reached nowhere (sidebar Y51); on the Mac the traffic lights hid
+with the sidebar on the right, where nothing could show them (Y53); a folder's icon kept its size
+after a text size or density change, and its field kept the name field's accessible name (F42);
+Sleep Tab on a New Tab page with every other row asleep opened another each time (R5). Weak
+tests were made to fail when they should, and Chromium's infobar unit tests now run in the sweep.
+The rest is S-399, for the next release; the owner's note on the download's animation is S-400.
+The owner chose the empty Space's design from mockups (S-396), and tidy names for pinned tabs and
+downloads, as local rules, are S-398.
+
+The site's page after an update now shows what each release brought, with captures from the
+release's own build (`stedding.dev`, `src/data/whats-new.mjs`); `tooling/publish-release`
+refuses a tag the site has no entry for.
+
+Checked: on Windows, an installed beta 6 updated itself to beta 7 from a copy of the feed and kept
+its sidebar's width (S-390, twice, on two builds); the installer's cycle; every suite on
+`win-release`, `win-checks` and `win-asan` (1362 unit tests, 858 browser tests; no DCHECK,
+dangling-pointer or AddressSanitizer report), with two new tests fixed in the test alone; the
+acceptance scripts, 39 steps, on the installed copy. A run while the PC was busy lost the window's
+focus after a Space chip click (the logger showed the Claude desktop app in front) and lost the
+fixture's keys after a build; run on a quiet machine every step passed. On the Mac, the signed and
+notarized image passed Apple's distribution check, the acceptance run (87 captures, as beta 5's
+run), and every suite on the release build and `mac-checks` (1371 unit tests, 886 browser tests).
+Issues 71 and 72 were tried with the real pointer and keyboard on the signed build.
+
 ## 2026-11-02, evening -- the Mac's half of the owner's list, and page bars under the page
 
 With the Mac free, its items of the owner's list, and what the owner saw on it:

@@ -8,6 +8,8 @@ docs here or in the backlog. What each feature does now is its spec under
 
 | Id | Item | Closed by |
 |---|---|---|
+| S-397 | A tab opened in the background is the next one ⌃⇥ reaches (GitHub issue 71) | Closed 2026-11-03, 0.4.0 beta 7 (patch 0119; switcher X6, settings T50). On by default; on the signed Mac build a ⌘-click on a link, then one ⌃⇥ tap, showed the new tab. |
+| S-390 | The sidebar's width across a real update (GitHub issue 65) | Closed 2026-11-03, 0.4.0 beta 7. On Windows an installed 0.4.0 beta 6 with its sidebar set to 300 DIP updated itself to beta 7 from a copy of the feed, twice on two builds of beta 7, and kept 300 each time (`tooling/win/update-n1.ps1 -SidebarWidth`). |
 | S-377 | An edge round the peek over the page | Closed 2026-11-02, after 0.4.0 beta 6, for the next release (peek P21, settings T47). The owner chose the frosted rim from four rendered styles; a soft glow or none is a setting. |
 | S-378 | The address in the sidebar in macOS full screen | Closed 2026-11-02, after 0.4.0 beta 6, for the next release (toolbar T8, T10, T32). In macOS full screen the row follows its rules: hidden with the sidebar it does not slide in, ⇧⌘D works, and no empty band is left; the strip above the row is the window's colour, not grey. Checked with real keys on the Mac's release build. |
 | S-379 | "Address field" defaults to wide and centred | Closed 2026-11-02, after 0.4.0 beta 6, for the next release (toolbar T48, PLAN.md decision 19). |

@@ -91,8 +91,7 @@ Chromium gives a previewed page another way to be a tab's.
  .../frame/vertical_tab_strip_region_view.h    |  15 +
  chrome/browser/ui/views/infobars/BUILD.gn     |   1 +
  .../views/infobars/infobar_container_view.cc  |  10 +
- .../browser/ui/views/infobars/infobar_view.cc |  58 +-
- .../browser/ui/views/infobars/infobar_view.h  |   2 +
+ .../browser/ui/views/infobars/infobar_view.cc |  65 +-
  chrome/browser/ui/views/peek/BUILD.gn         |  16 +
  .../ui/views/peek/peek_navigation_throttle.cc |   5 +
  chrome/browser/ui/views/peek/peek_overlay.cc  | 851 ++++++++++++++++++
@@ -104,7 +103,7 @@ Chromium gives a previewed page another way to be a tab's.
  .../ui/views/tabs/vertical/sidebar_address.h  |  93 +-
  .../views/tabs/vertical/traffic_lights_mac.h  |  65 ++
  .../views/tabs/vertical/traffic_lights_mac.mm | 110 +++
- .../vertical_tab_strip_top_container.cc       | 157 +++-
+ .../vertical_tab_strip_top_container.cc       | 160 +++-
  .../vertical_tab_strip_top_container.h        |  51 ++
  .../ui/views/toolbar/toolbar_button.cc        |  12 +
  .../browser/ui/views/toolbar/toolbar_button.h |   7 +
@@ -116,20 +115,20 @@ Chromium gives a previewed page another way to be a tab's.
  .../stedding_welcome_handler.cc               | 158 +++-
  .../stedding_welcome_handler.h                |  31 +-
  chrome/test/stedding/BUILD.gn                 |   1 +
- .../test/stedding/address_band_browsertest.cc | 137 ++-
+ .../test/stedding/address_band_browsertest.cc | 165 +++-
  chrome/test/stedding/defaults_browsertest.cc  |  28 +-
  chrome/test/stedding/peek_browsertest.cc      |   4 +
  .../stedding/peek_over_page_browsertest.cc    | 483 ++++++++++
  chrome/test/stedding/restore_browsertest.cc   |  71 +-
  .../stedding/safari_dia_import_browsertest.cc | 127 ++-
  .../stedding/settings_spaces_browsertest.cc   |  64 ++
- .../stedding/sidebar_address_browsertest.cc   | 231 ++++-
+ .../stedding/sidebar_address_browsertest.cc   | 261 +++++-
  .../stedding/sidebar_forms_browsertest.cc     | 136 ++-
  .../test/stedding/sidebar_rail_browsertest.cc |  70 +-
  .../test/stedding/space_switch_browsertest.cc |  58 +-
  .../test/stedding/space_wheel_browsertest.cc  |  26 +-
  .../stedding/window_buttons_browsertest.mm    | 104 ++-
- 81 files changed, 5112 insertions(+), 610 deletions(-)
+ 80 files changed, 5177 insertions(+), 611 deletions(-)
  create mode 100644 chrome/browser/ui/views/peek/peek_overlay.cc
  create mode 100644 chrome/browser/ui/views/peek/peek_overlay.h
  create mode 100644 chrome/browser/ui/views/tabs/vertical/traffic_lights_mac.h
@@ -3259,7 +3258,7 @@ index b5436f8946b03..42e312009a619 100644
        views::CreateSolidBackground(kColorInfoBarContentAreaSeparator));
  
 diff --git a/chrome/browser/ui/views/infobars/infobar_view.cc b/chrome/browser/ui/views/infobars/infobar_view.cc
-index 46626ef61eb0f..ed8411073b7c6 100644
+index 46626ef61eb0f..7f9262e1f2c54 100644
 --- a/chrome/browser/ui/views/infobars/infobar_view.cc
 +++ b/chrome/browser/ui/views/infobars/infobar_view.cc
 @@ -10,7 +10,10 @@
@@ -3287,7 +3286,7 @@ index 46626ef61eb0f..ed8411073b7c6 100644
  #include "ui/gfx/text_constants.h"
  #include "ui/native_theme/native_theme.h"
  #include "ui/views/accessibility/view_accessibility.h"
-@@ -43,6 +49,23 @@
+@@ -43,6 +49,52 @@
  #include "ui/views/view_class_properties.h"
  #include "ui/views/widget/widget.h"
  
@@ -3306,24 +3305,53 @@ index 46626ef61eb0f..ed8411073b7c6 100644
 +                           stedding::kPageBarBottom, stedding::kPageBarSide);
 +}
 +
++// The pill, as the bar's background: a pill in the window's colour, a shade
++// off it (kColorInfoBarBackground), lifted off the page by its shadow. As a
++// background it names that colour, so the bar's text, which is all on the
++// pill, counts as drawn on an opaque ground, as it is: the bar's layer is not
++// opaque, and a build with DCHECKs stops on text with subpixel rendering over
++// it with no opaque background under it (views::Label::PaintText).
++class SteddingPillBackground : public views::Background {
++ public:
++  SteddingPillBackground() { set_color(kColorInfoBarBackground); }
++
++  // views::Background:
++  void Paint(gfx::Canvas* canvas, views::View* view) const override {
++    gfx::RectF pill(view->GetLocalBounds());
++    pill.Inset(gfx::InsetsF(SteddingPillMargins()));
++    if (pill.IsEmpty() || !view->GetColorProvider()) {
++      return;
++    }
++    cc::PaintFlags flags;
++    flags.setAntiAlias(true);
++    flags.setColor(color().ResolveToSkColor(view->GetColorProvider()));
++    flags.setLooper(gfx::CreateShadowDrawLooper(
++        {gfx::ShadowValue(gfx::Vector2d(0, 1), 3,
++                          SkColorSetA(SK_ColorBLACK, 0x33)),
++         gfx::ShadowValue(gfx::Vector2d(0, 3), 10,
++                          SkColorSetA(SK_ColorBLACK, 0x29))}));
++    canvas->DrawRoundRect(pill, kSteddingPillRadius, flags);
++  }
++};
++
 +}  // namespace
 +
  template <typename T>
  void InfoBarView::AssignLabelDetails(T* view) const {
    view->SizeToPreferredSize();
-@@ -103,6 +126,11 @@ InfoBarView::InfoBarView(std::unique_ptr<infobars::InfoBarDelegate> delegate)
+@@ -103,6 +155,11 @@ InfoBarView::InfoBarView(std::unique_ptr<infobars::InfoBarDelegate> delegate)
    layer()->SetMasksToBounds(true);
  
    SetBackground(views::CreateSolidBackground(kColorInfoBarBackground));
 +  if (IsSteddingPill()) {
-+    // OnPaintBackground draws the pill; round it, the page shows.
-+    SetBackground(nullptr);
++    // The pill; round it, the page shows.
++    SetBackground(std::make_unique<SteddingPillBackground>());
 +    layer()->SetFillsBoundsOpaquely(false);
 +  }
  
    const int kRefreshMargin = ChromeLayoutProvider::Get()->GetDistanceMetric(
        views::DISTANCE_UNRELATED_CONTROL_HORIZONTAL);
-@@ -120,7 +148,10 @@ InfoBarView::InfoBarView(std::unique_ptr<infobars::InfoBarDelegate> delegate)
+@@ -120,7 +177,10 @@ InfoBarView::InfoBarView(std::unique_ptr<infobars::InfoBarDelegate> delegate)
    auto* layout = SetLayoutManager(std::make_unique<views::FlexLayout>());
    layout->SetOrientation(views::LayoutOrientation::kHorizontal)
        .SetCrossAxisAlignment(views::LayoutAlignment::kCenter)
@@ -3335,7 +3363,7 @@ index 46626ef61eb0f..ed8411073b7c6 100644
  
    // Add a balancer for elements for centered layout.
    left_balancer_ = AddChildView(std::make_unique<views::View>());
-@@ -209,7 +240,8 @@ InfoBarView::InfoBarView(std::unique_ptr<infobars::InfoBarDelegate> delegate)
+@@ -209,7 +269,8 @@ InfoBarView::InfoBarView(std::unique_ptr<infobars::InfoBarDelegate> delegate)
      InstallCircleHighlightPathGenerator(close_button_);
    }
    SetTargetHeight(
@@ -3345,48 +3373,6 @@ index 46626ef61eb0f..ed8411073b7c6 100644
  
    GetViewAccessibility().SetRole(ax::mojom::Role::kAlertDialog);
    GetViewAccessibility().SetName(l10n_util::GetStringUTF8(IDS_ACCNAME_INFOBAR));
-@@ -276,6 +308,28 @@ gfx::Size InfoBarView::CalculatePreferredSize(
-   return gfx::Size(width + trailing_space, computed_height());
- }
- 
-+void InfoBarView::OnPaintBackground(gfx::Canvas* canvas) {
-+  if (!IsSteddingPill()) {
-+    views::View::OnPaintBackground(canvas);
-+    return;
-+  }
-+  // A pill in the window's colour, a shade off it (kColorInfoBarBackground),
-+  // lifted off the page by its shadow.
-+  gfx::RectF pill(GetLocalBounds());
-+  pill.Inset(gfx::InsetsF(SteddingPillMargins()));
-+  if (pill.IsEmpty()) {
-+    return;
-+  }
-+  cc::PaintFlags flags;
-+  flags.setAntiAlias(true);
-+  flags.setColor(GetColorProvider()->GetColor(kColorInfoBarBackground));
-+  flags.setLooper(gfx::CreateShadowDrawLooper(
-+      {gfx::ShadowValue(gfx::Vector2d(0, 1), 3, SkColorSetA(SK_ColorBLACK, 0x33)),
-+       gfx::ShadowValue(gfx::Vector2d(0, 3), 10,
-+                        SkColorSetA(SK_ColorBLACK, 0x29))}));
-+  canvas->DrawRoundRect(pill, kSteddingPillRadius, flags);
-+}
-+
- void InfoBarView::OnThemeChanged() {
-   views::View::OnThemeChanged();
- 
-diff --git a/chrome/browser/ui/views/infobars/infobar_view.h b/chrome/browser/ui/views/infobars/infobar_view.h
-index ea753618af059..dd55cfeaef09c 100644
---- a/chrome/browser/ui/views/infobars/infobar_view.h
-+++ b/chrome/browser/ui/views/infobars/infobar_view.h
-@@ -55,6 +55,8 @@ class InfoBarView : public infobars::InfoBar,
-   gfx::Size CalculatePreferredSize(
-       const views::SizeBounds& available_size) const override;
-   void OnThemeChanged() override;
-+  // Stedding (toolbar T54): the pill under the page.
-+  void OnPaintBackground(gfx::Canvas* canvas) override;
- 
-   // views::ExternalFocusTracker:
-   void OnWillChangeFocus(View* focused_before, View* focused_now) override;
 diff --git a/chrome/browser/ui/views/peek/BUILD.gn b/chrome/browser/ui/views/peek/BUILD.gn
 index f424f60c23cf9..2fc6625c1f623 100644
 --- a/chrome/browser/ui/views/peek/BUILD.gn
@@ -5324,7 +5310,7 @@ index 0000000000000..a673868032d7c
 +
 +}  // namespace stedding
 diff --git a/chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_top_container.cc b/chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_top_container.cc
-index f648d5b1be956..f5fe531e69cf3 100644
+index f648d5b1be956..205df3e0dc1b5 100644
 --- a/chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_top_container.cc
 +++ b/chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_top_container.cc
 @@ -4,6 +4,7 @@
@@ -5454,18 +5440,23 @@ index f648d5b1be956..f5fe531e69cf3 100644
  
  views::ProposedLayout VerticalTabStripTopContainer::CalculateProposedLayout(
      const views::SizeBounds& size_bounds) const {
-@@ -353,7 +437,9 @@ views::ProposedLayout VerticalTabStripTopContainer::CalculateProposedLayout(
-     // sidebar Y46: the rail has no room for the address or its buttons.
+@@ -350,10 +434,13 @@ views::ProposedLayout VerticalTabStripTopContainer::CalculateProposedLayout(
+     }
+ 
+     host_size.SetToMax(gfx::Size(0, current_y));
+-    // sidebar Y46: the rail has no room for the address or its buttons.
++    // sidebar Y46: the rail has no room for the address or its buttons. The
++    // lent extensions are the field's (Y51), not the top's, and go with it.
      for (views::View* const view :
           {static_cast<views::View*>(nav_buttons_.get()),
 -          static_cast<views::View*>(address_field_.get())}) {
 +          static_cast<views::View*>(address_field_.get()),
-+          static_cast<views::View*>(toolbar_buttons_.get()),
++          static_cast<views::View*>(menu_host_.get()),
 +          static_cast<views::View*>(window_buttons_.get())}) {
        if (view) {
          layout.child_layouts.emplace_back(view, false, gfx::Rect());
        }
-@@ -380,9 +466,17 @@ views::ProposedLayout VerticalTabStripTopContainer::CalculateProposedLayout(
+@@ -380,9 +467,17 @@ views::ProposedLayout VerticalTabStripTopContainer::CalculateProposedLayout(
      // the traffic lights. Leaving expand-on-hover used to put it there for
      // the length of the animation; it drops below them instead, as the
      // wrapped layout does.
@@ -5484,7 +5475,7 @@ index f648d5b1be956..f5fe531e69cf3 100644
      // Stedding (sidebar Y42): a box at the trailing corner leaves the
      // leading side free.
      const int left_alignment =
-@@ -480,24 +574,55 @@ views::ProposedLayout VerticalTabStripTopContainer::CalculateProposedLayout(
+@@ -480,24 +575,55 @@ views::ProposedLayout VerticalTabStripTopContainer::CalculateProposedLayout(
                                          combo_button_->GetVisible(), bounds);
      }
  
@@ -5544,7 +5535,7 @@ index f648d5b1be956..f5fe531e69cf3 100644
      }
      if (address_field_ && address_in_sidebar_) {
        const int field_y = host_size.height() + kSidebarAddressGapAbove;
-@@ -505,8 +630,10 @@ views::ProposedLayout VerticalTabStripTopContainer::CalculateProposedLayout(
+@@ -505,8 +631,10 @@ views::ProposedLayout VerticalTabStripTopContainer::CalculateProposedLayout(
            address_field_.get(), true,
            gfx::Rect(0, field_y, layout_width,
                      stedding::SidebarAddressField::kHeight));
@@ -5557,7 +5548,7 @@ index f648d5b1be956..f5fe531e69cf3 100644
      }
    }
  
-@@ -567,6 +694,20 @@ bool VerticalTabStripTopContainer::IsPositionInWindowCaption(
+@@ -567,6 +695,20 @@ bool VerticalTabStripTopContainer::IsPositionInWindowCaption(
        IsHitInView(address_field_, point)) {
      return false;
    }
@@ -6448,10 +6439,18 @@ index 08164fc773a40..dfa2d76239359 100644
      "privacy_defaults_browsertest.cc",
      "private_coat_browsertest.cc",
 diff --git a/chrome/test/stedding/address_band_browsertest.cc b/chrome/test/stedding/address_band_browsertest.cc
-index 8cb5fd3581a0a..3f1b8cf40f5d8 100644
+index 8cb5fd3581a0a..c808a2b1748de 100644
 --- a/chrome/test/stedding/address_band_browsertest.cc
 +++ b/chrome/test/stedding/address_band_browsertest.cc
-@@ -66,6 +66,7 @@
+@@ -34,6 +34,7 @@
+ #include "base/strings/strcat.h"
+ #include "base/strings/string_number_conversions.h"
+ #include "base/strings/string_util.h"
++#include "base/strings/utf_string_conversions.h"
+ #include "base/task/single_thread_task_runner.h"
+ #include "base/test/bind.h"
+ #include "base/strings/stringprintf.h"
+@@ -66,6 +67,7 @@
  #include "chrome/browser/ui/stedding/theme/page_bar_color_supplier.h"
  #include "chrome/browser/ui/stedding/theme/page_theme_color_controller.h"
  #include "chrome/browser/ui/stedding/theme/page_top_color.h"
@@ -6459,7 +6458,7 @@ index 8cb5fd3581a0a..3f1b8cf40f5d8 100644
  #include "chrome/browser/ui/tabs/public/tab_features.h"
  #include "chrome/browser/ui/tabs/split_tab_metrics.h"
  #include "chrome/browser/ui/tabs/tab_strip_model.h"
-@@ -87,6 +88,7 @@
+@@ -87,6 +89,7 @@
  #include "chrome/browser/ui/views/frame/toolbar_button_provider.h"
  #include "chrome/browser/ui/views/frame/top_container_view.h"
  #include "chrome/browser/ui/views/infobars/infobar_container_view.h"
@@ -6467,7 +6466,7 @@ index 8cb5fd3581a0a..3f1b8cf40f5d8 100644
  #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
  #include "chrome/browser/ui/views/location_bar/location_icon_view.h"
  #include "chrome/browser/ui/views/location_bar/selected_keyword_view.h"
-@@ -155,6 +157,7 @@
+@@ -155,6 +158,7 @@
  #include "ui/views/controls/image_view.h"
  #include "ui/views/controls/label.h"
  #include "ui/views/controls/textfield/textfield_test_api.h"
@@ -6475,7 +6474,7 @@ index 8cb5fd3581a0a..3f1b8cf40f5d8 100644
  #include "ui/views/focus/focus_manager.h"
  #include "ui/views/test/views_test_utils.h"
  #include "ui/views/test/widget_test.h"
-@@ -780,12 +783,12 @@ IN_PROC_BROWSER_TEST_F(AddressBandTest, TheRowsEmptyPartsAreTheCaption) {
+@@ -780,12 +784,12 @@ IN_PROC_BROWSER_TEST_F(AddressBandTest, TheRowsEmptyPartsAreTheCaption) {
  }
  #endif  // BUILDFLAG(IS_WIN)
  
@@ -6494,7 +6493,7 @@ index 8cb5fd3581a0a..3f1b8cf40f5d8 100644
  IN_PROC_BROWSER_TEST_F(AddressBandTest, AHiddenRowLeavesNoLineOverABar) {
    views::View* separator = nullptr;
    for (views::View* const child : view()->top_container()->children()) {
-@@ -813,11 +816,8 @@ IN_PROC_BROWSER_TEST_F(AddressBandTest, AHiddenRowLeavesNoLineOverABar) {
+@@ -813,11 +817,8 @@ IN_PROC_BROWSER_TEST_F(AddressBandTest, AHiddenRowLeavesNoLineOverABar) {
      return bar->GetVisible() && bar->height() > 0;
    })) << "the restore bar did not show";
  
@@ -6507,7 +6506,7 @@ index 8cb5fd3581a0a..3f1b8cf40f5d8 100644
  
    ASSERT_TRUE(
        chrome::ExecuteCommand(browser(), IDC_STEDDING_TOGGLE_ADDRESS_ROW));
-@@ -832,15 +832,86 @@ IN_PROC_BROWSER_TEST_F(AddressBandTest, AHiddenRowLeavesNoLineOverABar) {
+@@ -832,15 +833,113 @@ IN_PROC_BROWSER_TEST_F(AddressBandTest, AHiddenRowLeavesNoLineOverABar) {
        chrome::ExecuteCommand(browser(), IDC_STEDDING_TOGGLE_ADDRESS_ROW));
    views::test::RunScheduledLayout(view());
    ASSERT_TRUE(view()->IsToolbarVisible());
@@ -6569,10 +6568,29 @@ index 8cb5fd3581a0a..3f1b8cf40f5d8 100644
 +  EXPECT_NEAR(stedding::kPageBarOverPage,
 +              page_now.bottom() - (bar.y() + stedding::kPageBarShadowRoom), 1)
 +      << "the pill does not rise over the page's edge";
-+  // Its buttons are under the page's edge.
++  // Its buttons are under the page's edge. Its text is drawn on an opaque
++  // ground, the pill, though the bar's layer is not opaque: the first view up
++  // from each label with an opaque background comes before any layer that is
++  // not opaque, as a build with DCHECKs requires of text drawn with subpixel
++  // rendering (views::Label::PaintText).
++  const auto on_opaque_ground = [](const views::View* label) {
++    for (const views::View* view = label; view; view = view->parent()) {
++      const views::Background* const background = view->background();
++      if (background && view->GetColorProvider() &&
++          SkColorGetA(background->color().ResolveToSkColor(
++              view->GetColorProvider())) == SK_AlphaOPAQUE) {
++        return true;
++      }
++      if (view->layer()) {
++        return view->layer()->fills_bounds_opaquely();
++      }
++    }
++    return false;
++  };
 +  std::vector<views::View*> pending(bars->children().begin(),
 +                                    bars->children().end());
 +  int buttons = 0;
++  int labels = 0;
 +  while (!pending.empty()) {
 +    views::View* const child = pending.back();
 +    pending.pop_back();
@@ -6584,8 +6602,16 @@ index 8cb5fd3581a0a..3f1b8cf40f5d8 100644
 +          << "a button over the page, at "
 +          << child->GetBoundsInScreen().ToString();
 +    }
++    if (views::IsViewClass<views::Label>(child) && child->IsDrawn()) {
++      ++labels;
++      EXPECT_TRUE(on_opaque_ground(child))
++          << "text not on an opaque ground: "
++          << base::UTF16ToUTF8(
++                 views::AsViewClass<views::Label>(child)->GetText());
++    }
 +  }
 +  EXPECT_GT(buttons, 0) << "no button on the bar to check";
++  EXPECT_GT(labels, 0) << "no text on the bar to check";
 +
 +  manager->RemoveAllInfoBars(/*animate=*/false);
 +  ASSERT_TRUE(base::test::RunUntil([&]() { return !bars_up(); }));
@@ -6601,7 +6627,7 @@ index 8cb5fd3581a0a..3f1b8cf40f5d8 100644
    content::WebContents* const contents =
        browser()->GetTabStripModel()->GetActiveWebContents();
    infobars::ContentInfoBarManager* const manager =
-@@ -876,11 +947,8 @@ IN_PROC_BROWSER_TEST_F(AddressBandTest, AToastSitsUnderTheInfobars) {
+@@ -876,11 +975,8 @@ IN_PROC_BROWSER_TEST_F(AddressBandTest, AToastSitsUnderTheInfobars) {
    const auto row_bottom = [&]() {
      return view()->toolbar()->GetBoundsInScreen().bottom();
    };
@@ -6615,7 +6641,7 @@ index 8cb5fd3581a0a..3f1b8cf40f5d8 100644
    };
  
    {
-@@ -898,22 +966,22 @@ IN_PROC_BROWSER_TEST_F(AddressBandTest, AToastSitsUnderTheInfobars) {
+@@ -898,22 +994,22 @@ IN_PROC_BROWSER_TEST_F(AddressBandTest, AToastSitsUnderTheInfobars) {
      ASSERT_TRUE(base::test::RunUntil(bars_up)) << "the bar went with the tab";
      // It stays up for the steps below.
      toasts->GetToastCloseTimerForTesting()->Stop();
@@ -6648,7 +6674,7 @@ index 8cb5fd3581a0a..3f1b8cf40f5d8 100644
    }
    {
      SCOPED_TRACE("a tab's toast");
-@@ -923,9 +991,8 @@ IN_PROC_BROWSER_TEST_F(AddressBandTest, AToastSitsUnderTheInfobars) {
+@@ -923,9 +1019,8 @@ IN_PROC_BROWSER_TEST_F(AddressBandTest, AToastSitsUnderTheInfobars) {
      ASSERT_TRUE(base::test::RunUntil([&]() {
        return toast_up() && toasts->GetCurrentToastId() == ToastId::kLinkCopied;
      }));
@@ -7547,7 +7573,7 @@ index 840c52140c6d9..89dd1bc92d916 100644
  // docs/history/plan-2026-09-26.md WEB-20): Settings' bin, clicked on the
  // rendered page, asks the question every deletion of a Space asks, over the
 diff --git a/chrome/test/stedding/sidebar_address_browsertest.cc b/chrome/test/stedding/sidebar_address_browsertest.cc
-index 62cdbd95b5e5e..e0820d85ec76e 100644
+index 62cdbd95b5e5e..58156875bf3a0 100644
 --- a/chrome/test/stedding/sidebar_address_browsertest.cc
 +++ b/chrome/test/stedding/sidebar_address_browsertest.cc
 @@ -19,6 +19,12 @@
@@ -7563,12 +7589,14 @@ index 62cdbd95b5e5e..e0820d85ec76e 100644
  #include "chrome/browser/ui/views/tabs/vertical/sidebar_address.h"
  #include "chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_top_container.h"
  #include "chrome/browser/ui/views/test/vertical_tabs_browser_test_mixin.h"
-@@ -36,10 +42,13 @@
+@@ -36,10 +42,15 @@
  #include "ui/events/event.h"
  #include "ui/events/event_constants.h"
  #include "ui/gfx/geometry/point.h"
 +#include "ui/views/controls/button/label_button.h"
  #include "ui/views/controls/textfield/textfield.h"
++#include "ui/views/layout/layout_manager_base.h"
++#include "ui/views/layout/proposed_layout.h"
  #include "ui/views/test/button_test_api.h"
  #include "ui/views/test/views_test_utils.h"
  #include "url/gurl.h"
@@ -7577,7 +7605,7 @@ index 62cdbd95b5e5e..e0820d85ec76e 100644
  
  namespace {
  
-@@ -137,6 +146,18 @@ IN_PROC_BROWSER_TEST_F(SidebarAddressTest, TheAddressMovesToTheSidebar) {
+@@ -137,6 +148,18 @@ IN_PROC_BROWSER_TEST_F(SidebarAddressTest, TheAddressMovesToTheSidebar) {
                nav()->bounds().CenterPoint().y(), 1);
    EXPECT_GE(field()->y(), toggle->bounds().bottom());
    EXPECT_EQ(top()->width(), field()->width());
@@ -7596,7 +7624,7 @@ index 62cdbd95b5e5e..e0820d85ec76e 100644
    EXPECT_GE(top()->height(),
              top_height + stedding::SidebarAddressField::kHeight);
    {
-@@ -146,18 +167,18 @@ IN_PROC_BROWSER_TEST_F(SidebarAddressTest, TheAddressMovesToTheSidebar) {
+@@ -146,18 +169,18 @@ IN_PROC_BROWSER_TEST_F(SidebarAddressTest, TheAddressMovesToTheSidebar) {
      const gfx::Point on_nav = nav()->bounds().CenterPoint();
      EXPECT_FALSE(top()->IsPositionInWindowCaption(on_nav));
    }
@@ -7623,7 +7651,7 @@ index 62cdbd95b5e5e..e0820d85ec76e 100644
    EXPECT_FALSE(Shows(nav())) << "the rail has no room for them";
    EXPECT_FALSE(Shows(field()));
    controller()->RequestCollapse(false);
-@@ -208,13 +229,205 @@ IN_PROC_BROWSER_TEST_F(SidebarAddressTest, TheAddressMovesToTheSidebar) {
+@@ -208,13 +231,233 @@ IN_PROC_BROWSER_TEST_F(SidebarAddressTest, TheAddressMovesToTheSidebar) {
    // Off again: the row stays whatever the sidebar does, and the top row is as
    // it was.
    prefs()->SetBoolean(stedding::prefs::kSidebarAddressInSidebar, false);
@@ -7786,6 +7814,34 @@ index 62cdbd95b5e5e..e0820d85ec76e 100644
 +  EXPECT_FALSE(buttons->IsDrawn());
 +}
 +#endif  // BUILDFLAG(IS_WIN)
++
++// sidebar Y46, Y51: the top lays out its own views alone, in the rail and in
++// the open sidebar, with the address in the sidebar or not. The extensions
++// lent to the field are the field's: the rail's layout named them, and a
++// build with DCHECKs stopped on it (views::LayoutManagerBase::ApplyLayout).
++IN_PROC_BROWSER_TEST_F(SidebarAddressTest, TheTopLaysOutOnlyItsOwnViews) {
++  const auto own = [&]() -> testing::AssertionResult {
++    const auto* const manager =
++        static_cast<const views::LayoutManagerBase*>(top()->GetLayoutManager());
++    for (const views::ChildLayout& child :
++         manager->GetProposedLayout(top()->size()).child_layouts) {
++      if (child.child_view->parent() != top()) {
++        return testing::AssertionFailure()
++               << child.child_view->GetClassName() << " is not the top's";
++      }
++    }
++    return testing::AssertionSuccess();
++  };
++  for (const bool in_sidebar : {false, true}) {
++    prefs()->SetBoolean(stedding::prefs::kSidebarAddressInSidebar, in_sidebar);
++    for (const bool rail : {true, false}) {
++      controller()->RequestCollapse(rail);
++      Settle();
++      EXPECT_TRUE(own()) << "address in the sidebar " << in_sidebar
++                         << ", rail " << rail;
++    }
++  }
++}
 +
 +// sidebar Y51 (GitHub issue 45, version B): the field's own buttons are the
 +// page's. A web page has the site button, which opens the site panel from

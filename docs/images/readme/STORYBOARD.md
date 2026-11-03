@@ -1,6 +1,6 @@
 # The README's animation: storyboard
 
-Since 0.4.0 beta 7, `demo.gif` and the clips under the README's Highlights are cut from that release's window recordings by `tooling/readme/make-gifs.sh`, and `demo.mp4` is gone. What follows is the storyboard `record-demo.sh` takes its own animation from.
+Since 0.4.0 beta 7 the README's animation is the site's tour cut, `demo.webp` and `demo-dark.webp`, made by `tooling/readme/make-animation.sh`: every shot, the words beside the window, in the reader's light or dark look. `demo.gif` and `demo.mp4` are gone. What follows is the storyboard `record-demo.sh` takes its own animation from.
 
 One animated GIF under the README's header, `docs/images/readme/demo.gif`, and `demo.mp4` of the same take. It shows what Stedding is in under 40 seconds, at a pace a person can follow, and loops without a seam. `tooling/readme/record-demo.sh` makes it from the steps in [tooling/readme/steps/](../../../tooling/readme/steps/). How to run it is [tooling/readme/README.md](../../../tooling/readme/README.md).
 

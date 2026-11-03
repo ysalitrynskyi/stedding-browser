@@ -18,8 +18,8 @@ account, no telemetry, BSD-3-Clause.
 [FAQ](docs/FAQ.md) · [Privacy](docs/PRIVACY.md) · [Build](#building-from-source)
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/images/readme/address-row-dark.png">
-  <img src="docs/images/readme/address-row.png" alt="The Stedding window as it starts: the address row on top over Wikipedia's Apollo 11 article, and beside it the sidebar with the traffic lights at its top, four essentials as cards, then the Work Space's folders and tabs">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/readme/demo-dark.webp">
+  <img src="docs/images/readme/demo.webp" alt="A 51-second tour of Stedding 0.4.0 beta 7, each shot named beside the window: every page brings its colour to the address row; two accounts in two Spaces; the command bar (Cmd-T) jumps to anything in any Space; a tab dragged onto the page makes a split view; the address in the sidebar; the site panel; peek; Sync; Privacy; the sidebar folded to a rail and hidden (Cmd-S); row heights; a Space's colours for light and dark; importing from Arc and other browsers; the night look and dark pages; then stedding.dev">
 </picture>
 
 **[Download for macOS](https://github.com/ysalitrynskyi/stedding-browser/releases/latest)** ·
@@ -27,28 +27,6 @@ Apple silicon, macOS 13 or later, signed with the project's Developer ID and not
 **[Download for Windows](https://github.com/ysalitrynskyi/stedding-browser/releases/latest)** ·
 Windows 10 and 11, x64, installs for you alone<br>
 Homebrew: `brew install --cask ysalitrynskyi/stedding/stedding` · [Install guide](docs/INSTALL.md)
-
-<img src="docs/images/readme/demo.gif" alt="Stedding 0.4.0 beta 7 in use: on the Linux kernel's GitHub page the address row is black; choosing tabs in the sidebar turns it green over Django's page and teal over a mail page; the command bar jumps to a map open in another Space, whose sidebar is purple; the NASA page is dragged onto Wikipedia's Apollo 11 and the two open side by side">
-
-## Highlights
-
-<table>
-  <tr>
-    <td width="50%"><img src="docs/images/readme/clip-address-sidebar.gif" alt="The command bar turns on Show the address in the sidebar: the address row leaves the page, and the sidebar's top takes Back, Forward, Reload and the menu, with the field reading github.com under them, the traffic lights beside"><br>
-      <b>The address in the sidebar.</b> One setting moves the field, Back, Forward and Reload to the sidebar's top, and the page takes the row's height.</td>
-    <td width="50%"><img src="docs/images/readme/clip-site-panel.gif" alt="A click on the button at the start of the sidebar's address field opens the site panel for github.com: the connection, Camera and Microphone switches, cookies and site data, extensions, the Space's session, Clear site data, Dark pages and Site settings"><br>
-      <b>The site panel.</b> The button at the field's start: the site's permissions, its cookies and session, and dark pages for it.</td>
-  </tr>
-  <tr>
-    <td><img src="docs/images/readme/clip-peek.gif" alt="In the pinned mail page, a click on an order link opens the order page on a card over the mail page, which stays where it was"><br>
-      <b>Peek.</b> A link from a pinned tab that leaves its site opens on a card over the page; Esc closes it, and Open as Tab keeps it.</td>
-    <td><img src="docs/images/readme/clip-night.gif" alt="In a dark window Wikipedia's Apollo 11 article is white; dark pages turn the article dark, then off again"><br>
-      <b>Dark pages.</b> In a dark window a white page can go dark too: ⌥⇧⌘D (Ctrl+Alt+Shift+D) or the moon by the address. Keep some sites light.</td>
-  </tr>
-</table>
-
-Each release's notes are on the
-[Releases page](https://github.com/ysalitrynskyi/stedding-browser/releases).
 
 ## What Arc never had
 
@@ -112,8 +90,6 @@ Each release's notes are on the
   download are checked against a signature. Stedding looks when you open it if the last look
   was over an hour ago, and every six hours while it runs. A switch turns that off.
 
-<img src="docs/images/readme/edit-space.png" alt="Edit Space for Work, on its Colour tab with Light and dark chosen: a green for the light look and a plum for the dark one, each shown as a small sidebar">
-
 Each feature has a specification naming the test behind every behaviour:
 [docs/features/](docs/features/).
 
@@ -149,11 +125,6 @@ After that it updates itself (the Mac from 0.2.0 beta 16, Windows from 0.2.0 bet
 Windows copy needs one install by hand). Checksums are in each release's notes;
 [docs/INSTALL.md](docs/INSTALL.md) covers verifying, updating and uninstalling. Intel Macs are
 not supported. Linux is not shipped.
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/images/readme/address-sidebar-dark.png">
-  <img src="docs/images/readme/address-sidebar.png" alt="The same window with Show the address in the sidebar on: the sidebar's top has the traffic lights, Back, Forward, Reload and the menu, and under them the field reading en.wikipedia.org; Wikipedia's Apollo 11 article takes the window's whole height">
-</picture>
 
 ## Keyboard shortcuts
 

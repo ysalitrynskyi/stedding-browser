@@ -15,7 +15,9 @@ that opens with "draft notes"), and refuses while
   - a target does not exist, pictures included: the media come from
     tooling/readme/capture-stills.sh and record-demo.sh and are copied into
     docs/images/readme/ by hand, after a look at each;
-  - docs/images/readme/demo.gif is over 8 MB.
+  - the README's animation (docs/images/readme/demo.gif, or demo.webp and
+    demo-dark.webp, which tooling/readme/make-animation.sh makes) is over
+    8 MB.
 
 Code blocks and inline code are left as they are.
 """
@@ -96,10 +98,12 @@ def main(argv: list[str]) -> int:
     readme = promote(NOTES.sub("", draft, count=1), missing)
     for target in sorted(set(missing)):
         blocks.append("missing: %s" % target)
-    gif = os.path.join(ROOT, "docs", "images", "readme", "demo.gif")
-    if os.path.exists(gif) and os.path.getsize(gif) > GIF_BUDGET:
-        blocks.append("docs/images/readme/demo.gif is %.1f MB, over 8 MB"
-                      % (os.path.getsize(gif) / 1048576))
+    for name in ("demo.gif", "demo.webp", "demo-dark.webp"):
+        animation = os.path.join(ROOT, "docs", "images", "readme", name)
+        if (os.path.exists(animation) and
+                os.path.getsize(animation) > GIF_BUDGET):
+            blocks.append("docs/images/readme/%s is %.1f MB, over 8 MB"
+                          % (name, os.path.getsize(animation) / 1048576))
     if blocks:
         print("\n".join(blocks))
         print("README.md not written: %d thing(s) above block it" % len(blocks))

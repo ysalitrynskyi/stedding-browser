@@ -279,8 +279,8 @@ tab with a new one. A tab’s right-click menu has **New Split View with Current
 
 **A link from another app opened in a small window. How do I keep it?**
 When Stedding is your default browser, a link from another app opens in a little
-window, to read and close. It opens as big as a tab of your window; resize one, and
-the next opens at your size. **Open in Stedding**, ⌘O (Ctrl+O on Windows), or the
+window, to read and close. It opens over your window, most of its size; resize one,
+and the next opens at your size. **Open in Stedding**, ⌘O (Ctrl+O on Windows), or the
 page’s right-click menu moves the page into a tab of your window, without reloading
 it. ⇧⌘O (Ctrl+Shift+O) puts it in a split with the tab on screen, or in a tab of its own when that tab is already split, pinned, or outside the active Space. Settings → Stedding → Peek and
 little windows turns little windows off. On Windows the little window keeps Windows’

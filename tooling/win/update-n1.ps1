@@ -49,8 +49,11 @@ function Keys {
 }
 
 $serverLog = Join-Path $Feed 'server.log'
-Remove-Item $serverLog -ErrorAction SilentlyContinue
-$server = Start-Process $Python -ArgumentList '-I', '-m', 'http.server', "$Port", '--bind', '127.0.0.1', '--directory', $Feed -PassThru -WindowStyle Hidden -RedirectStandardError $serverLog
+$serverOut = Join-Path $Feed 'server.out'
+Remove-Item $serverLog, $serverOut -ErrorAction SilentlyContinue
+# Its output goes to a file too: run from a scheduled task there is no console, and the
+# server stopped at its first line ("Bad file descriptor"), so the feed was never served.
+$server = Start-Process $Python -ArgumentList '-I', '-m', 'http.server', "$Port", '--bind', '127.0.0.1', '--directory', $Feed -PassThru -WindowStyle Hidden -RedirectStandardError $serverLog -RedirectStandardOutput $serverOut
 Start-Sleep -Seconds 2
 Say "before: $(Keys) chrome.exe=$(Ver $exe) new_chrome.exe=$(Test-Path (Join-Path $app 'new_chrome.exe'))"
 

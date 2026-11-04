@@ -42,6 +42,7 @@ Why: the owner, 2026-11-04 (a screenshot of an empty Space beside an
 extension's tab group; the Install chip), and GitHub issues 45, 74 and 76.
 Removable when: never as behaviour.
 ---
+ .../browser/resources/stedding_space/app.ts   |   9 +-
  chrome/browser/ui/spaces/space_model.cc       | 105 ++++++++++++++----
  chrome/browser/ui/spaces/space_model.h        |  17 ++-
  .../ui/spaces/space_model_window_unittest.cc  |  83 ++++++++++++--
@@ -52,19 +53,51 @@ Removable when: never as behaviour.
  .../ui/views/tabs/vertical/sidebar_address.h  |   9 ++
  .../pwa_install_page_action.cc                |  11 +-
  .../browser/ui/webui/settings/settings_ui.cc  |   9 +-
+ .../browser/ui/webui/stedding_space/BUILD.gn  |   1 +
+ .../stedding_space/stedding_space_handler.cc  |  15 +++
  chrome/test/stedding/BUILD.gn                 |   3 +
  .../test/stedding/clear_space_browsertest.cc  |  26 ++++-
  chrome/test/stedding/defaults_browsertest.cc  |  40 +++++++
  .../test/stedding/folder_tabs_browsertest.cc  |   3 +
  .../stedding/isolation_mark_browsertest.cc    |   4 +
  chrome/test/stedding/peek_browsertest.cc      |  14 ++-
+ .../test/stedding/pinned_run_browsertest.cc   |  24 ++++
  chrome/test/stedding/restore_browsertest.cc   |  12 +-
  .../stedding/sidebar_address_browsertest.cc   |  78 +++++++++++++
  .../stedding/site_controls_browsertest.cc     |  15 +++
  .../test/stedding/space_switch_browsertest.cc |  16 ++-
  .../bookmarks/browser/bookmark_utils.cc       |   6 +-
- 21 files changed, 455 insertions(+), 63 deletions(-)
+ 25 files changed, 502 insertions(+), 65 deletions(-)
 
+diff --git a/chrome/browser/resources/stedding_space/app.ts b/chrome/browser/resources/stedding_space/app.ts
+index fb513bd223b22..916176b32b208 100644
+--- a/chrome/browser/resources/stedding_space/app.ts
++++ b/chrome/browser/resources/stedding_space/app.ts
+@@ -15,6 +15,8 @@ interface SpaceInfo {
+   name: string;
+   color: string;
+   mac: boolean;
++  // Whether the Space has rows, asleep; false for a Space with no tab.
++  hasRows: boolean;
+ }
+ 
+ // A tip's words, with keys between braces: {Cmd+T} on the Mac's list and the
+@@ -226,10 +228,13 @@ function showSpace(space: SpaceInfo) {
+   document.documentElement.style.setProperty('--space', space.color);
+   document.title = space.name;
+   $('title').textContent = `Nothing open in ${space.name}`;
++  const key = mac ? '{⌘T}' : '{Ctrl+T}';
+   writeWithKeys(
+       $('sub'),
+-      `${mac ? '{⌘T}' : '{Ctrl+T}'} opens the command bar. Your tabs are ` +
+-          'asleep in the sidebar; a click wakes one.');
++      space.hasRows ?
++          `${key} opens the command bar. Your tabs are asleep in the ` +
++              'sidebar; a click wakes one.' :
++          `${key} opens the command bar, to open a page in this Space.`);
+   showTip(current);
+ }
+ 
 diff --git a/chrome/browser/ui/spaces/space_model.cc b/chrome/browser/ui/spaces/space_model.cc
 index 0ceccdb1f147a..1a9e0ab029867 100644
 --- a/chrome/browser/ui/spaces/space_model.cc
@@ -630,6 +663,59 @@ index 333dd408b68a6..b14d58e84d06e 100644
    html_source->AddString("steddingPeekStyleOverPage", "Over the page");
    html_source->AddString("steddingPeekStyleSmallWindow", "In a small window");
    // peek P21, settings T47.
+diff --git a/chrome/browser/ui/webui/stedding_space/BUILD.gn b/chrome/browser/ui/webui/stedding_space/BUILD.gn
+index 78b14280c198b..cbcafa1fd5e74 100644
+--- a/chrome/browser/ui/webui/stedding_space/BUILD.gn
++++ b/chrome/browser/ui/webui/stedding_space/BUILD.gn
+@@ -25,6 +25,7 @@ source_set("stedding_space") {
+     "//chrome/browser/ui/browser_window",
+     "//chrome/browser/ui/navigator",
+     "//chrome/browser/ui/stedding:empty_space",
++    "//chrome/browser/ui/tabs:tab_strip",
+     "//components/tabs:public",
+     "//content/public/common",
+     "//skia",
+diff --git a/chrome/browser/ui/webui/stedding_space/stedding_space_handler.cc b/chrome/browser/ui/webui/stedding_space/stedding_space_handler.cc
+index c8960434acb9b..40bfadc734d36 100644
+--- a/chrome/browser/ui/webui/stedding_space/stedding_space_handler.cc
++++ b/chrome/browser/ui/webui/stedding_space/stedding_space_handler.cc
+@@ -12,6 +12,8 @@
+ #include "chrome/browser/ui/navigator/browser_navigator.h"
+ #include "chrome/browser/ui/navigator/browser_navigator_params.h"
+ #include "chrome/browser/ui/spaces/space.h"
++#include "chrome/browser/ui/stedding/empty_space.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "components/tabs/public/tab_interface.h"
+ #include "content/public/browser/web_contents.h"
+ #include "content/public/browser/web_ui.h"
+@@ -87,7 +89,19 @@ base::DictValue SpacePageHandler::Describe() {
+   base::DictValue space;
+   std::string name = "this Space";
+   SkColor color = SkColorSetRGB(0x5B, 0x6B, 0x8C);
++  // tabs R66: whether the Space has rows, asleep, or none at all -- an empty
++  // Space shows this page too (the owner, 2026-11-04). An essential is every
++  // Space's, not this one's.
++  bool has_rows = false;
+   if (spaces::SpaceModel* const model = Model()) {
++    if (BrowserWindowInterface* const window = WindowOf(web_ui())) {
++      TabStripModel* const tabs = window->GetTabStripModel();
++      for (int i = 0; tabs && i < tabs->count() && !has_rows; ++i) {
++        tabs::TabInterface* const tab = tabs->GetTabAtIndex(i);
++        has_rows = !tab->IsPinned() && !IsEmptySpaceStandIn(tab) &&
++                   model->IsTabInActiveSpace(tab);
++      }
++    }
+     if (const spaces::Space* const active = model->active_space()) {
+       const std::u16string shown = model->DisplayName(active->id());
+       if (!shown.empty()) {
+@@ -101,6 +115,7 @@ base::DictValue SpacePageHandler::Describe() {
+                                         SkColorGetG(color),
+                                         SkColorGetB(color)));
+   space.Set("mac", BUILDFLAG(IS_MAC));
++  space.Set("hasRows", has_rows);
+   return space;
+ }
+ 
 diff --git a/chrome/test/stedding/BUILD.gn b/chrome/test/stedding/BUILD.gn
 index 99857c4929418..c1eaaec787c25 100644
 --- a/chrome/test/stedding/BUILD.gn
@@ -844,6 +930,48 @@ index f2aaf880f8882..8c1c1485f4358 100644
  }
  
  // P14: a click on the window closes the peek; the same link opens it again
+diff --git a/chrome/test/stedding/pinned_run_browsertest.cc b/chrome/test/stedding/pinned_run_browsertest.cc
+index 0380bbd9ef30b..1d4242f3aa727 100644
+--- a/chrome/test/stedding/pinned_run_browsertest.cc
++++ b/chrome/test/stedding/pinned_run_browsertest.cc
+@@ -338,6 +338,24 @@ IN_PROC_BROWSER_TEST_F(PinnedRunTest, CmdWOnAPinShowsARowOfItsSpace) {
+   }
+ }
+ 
++// tabs R66 (the owner, 2026-11-04): a Space with no tab at all shows the same
++// page, which then says nothing of tabs asleep in the sidebar.
++IN_PROC_BROWSER_TEST_F(PinnedRunTest, AnEmptySpacesPageSaysNothingIsAsleep) {
++  const spaces::SpaceId empty = model().AddSpace("Empty", SK_ColorGREEN)->id();
++  ASSERT_TRUE(model().SetActiveSpace(empty));
++  tabs::TabInterface* const page = tabs().GetActiveTab();
++  ASSERT_TRUE(stedding::IsEmptySpaceStandIn(page)) << "a New Tab opened";
++  content::WebContents* const contents = page->GetContents();
++  ASSERT_TRUE(content::WaitForLoadStop(contents));
++  std::string sub;
++  EXPECT_TRUE(base::test::RunUntil([&]() {
++    sub = content::EvalJs(contents, "document.getElementById('sub').textContent")
++              .ExtractString();
++    return sub.find("to open a page in this Space") != std::string::npos;
++  })) << sub;
++  EXPECT_EQ(std::string::npos, sub.find("asleep")) << sub;
++}
++
+ // tabs R66 (BACKLOG S-396, GitHub issue 72): Cmd-W on a Space's only row, a
+ // pin, leaves nothing awake there, and the window shows the Space with no
+ // page: a stand-in the sidebar does not list, on chrome://stedding-space,
+@@ -387,6 +405,12 @@ IN_PROC_BROWSER_TEST_F(PinnedRunTest, ASpaceWithNothingAwakeShowsItsPage) {
+                              "document.getElementById('title').textContent")
+                  .ExtractString() == "Nothing open in Quiet";
+     })) << "the page did not follow the Space's new name";
++    EXPECT_NE(std::string::npos,
++              content::EvalJs(contents,
++                              "document.getElementById('sub').textContent")
++                  .ExtractString()
++                  .find("asleep in the sidebar"))
++        << "the page does not say the Space's tabs are asleep";
+     EXPECT_FALSE(ShouldTrackURLForRestore(GURL(stedding::kEmptySpaceURL)))
+         << "the session would keep the Space's page";
+   }
 diff --git a/chrome/test/stedding/restore_browsertest.cc b/chrome/test/stedding/restore_browsertest.cc
 index 86bf1b8ddbad2..dc1f4462bb505 100644
 --- a/chrome/test/stedding/restore_browsertest.cc

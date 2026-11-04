@@ -290,8 +290,9 @@ a `+` (`features/sidebar.md` Y44). The Library is not this foot (§9).
   welcome flow. "Open a peek with" can ask for a press held 0.3 s or 0.5 s instead of
   a click, so a plain click follows the link in the pinned tab (P18).
 - **Little Arc** **[1.0]** — the little window: a link from another application opens
-  in a small window of its own, to read and dismiss. On the Mac its top is one row,
-  the main window's address row on the page's colour, with the traffic lights inline
+  in a window of its own as big as a tab, or at the size the user last gave one, to
+  read and dismiss (E1). On the Mac its top is one row, the main window's address
+  row on the page's colour, with the traffic lights inline
   (`features/little.md` E8, E9). `⌘O` or the row's "Open in Stedding" button moves the
   page into the main window (a new one when none is open) and `⇧⌘O` into a split, as
   the page's menu and the File menu also offer (E7). On Windows the same moves are

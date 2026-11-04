@@ -30,6 +30,14 @@ a toast is centred when it is made, popups' and apps' bars are Chromium's band, 
 blocker switch on a sign-in page shows the site's own setting, the menu moves into the field on
 a line with no room.
 
+The little window is as big as a tab (S-407; the owner, 2026-11-03: on a laptop it took about
+a third of the screen, capped at 1000×700). It takes the place of the page of the main window's
+tab; once the user resizes one, the next opens at that size; with no window it is four fifths
+of the screen, centred (patch 0122, little E1). On the Windows release build, over a maximised
+1728×1036 window, a handed-over link opened at 1350×939 over the page; resized to 886×613 and
+closed, the next link opened at 886×613 on the same centre. Its unit test and browser test pass
+there, with the rest of the little window's and the peek's tests (10 unit, 33 browser).
+
 Issue 73 (a site's device picker) did not reproduce on Windows: a browser test asks for a serial
 port from a click and sees the picker.
 

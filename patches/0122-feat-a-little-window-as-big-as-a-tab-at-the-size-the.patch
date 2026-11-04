@@ -1,0 +1,495 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Tue, 3 Nov 2026 20:48:00 -0500
+Subject: feat: a little window as big as a tab, at the size the user last gave
+ one (S-407)
+
+A link from another app opened in a window capped at 1000x700, about a third
+of a laptop's screen at a high resolution (docs/features/little.md E1). It
+now takes the place of the page of the main window's tab, as big as a tab
+there. Once the user resizes a little window, the next one opens at that
+size (stedding.little.width and .height), centred on the page; the size one
+opened at, a peek's and a restored window's are never kept. With no normal
+window on screen it is four fifths of the screen, centred, where it had been
+uncentred (S-157). It is never under 400x300 nor over the work area, and is
+moved onto the screen.
+
+BrowserView reports each save of a window's placement; only a window
+OpenLittleWindow opened, and only once its size differs from the one it
+opened at, writes the size.
+
+Why: the owner, 2026-11-03: on a laptop the little window took about a
+third of the screen, where Arc's was as big as a real tab; chosen: tab-sized,
+and a size the user gives one is kept.
+Removable when: never as a feature.
+---
+ chrome/browser/ui/stedding/BUILD.gn           |   2 +
+ chrome/browser/ui/stedding/little_window.cc   | 120 ++++++++++++++++--
+ chrome/browser/ui/stedding/little_window.h    |  21 +++
+ .../ui/stedding/little_window_unittest.cc     |  29 +++++
+ chrome/browser/ui/stedding/stedding_prefs.cc  |   2 +
+ chrome/browser/ui/stedding/stedding_prefs.h   |   4 +
+ .../ui/stedding/stedding_prefs_unittest.cc    |   5 +
+ chrome/browser/ui/views/frame/browser_view.cc |   4 +
+ .../stedding/little_window_browsertest.cc     |  91 ++++++++++++-
+ 9 files changed, 263 insertions(+), 15 deletions(-)
+
+diff --git a/chrome/browser/ui/stedding/BUILD.gn b/chrome/browser/ui/stedding/BUILD.gn
+index 3c8a86ae6b0d5..0b7c64a9c12ff 100644
+--- a/chrome/browser/ui/stedding/BUILD.gn
++++ b/chrome/browser/ui/stedding/BUILD.gn
+@@ -551,6 +551,8 @@ source_set("little_window") {
+     "//content/public/browser",
+     "//third_party/blink/public/common",
+     "//ui/base",
++    "//ui/display",
++    "//ui/gfx/geometry",
+     "//url",
+   ]
+ }
+diff --git a/chrome/browser/ui/stedding/little_window.cc b/chrome/browser/ui/stedding/little_window.cc
+index 0f4b16f97fd12..062177dd648a1 100644
+--- a/chrome/browser/ui/stedding/little_window.cc
++++ b/chrome/browser/ui/stedding/little_window.cc
+@@ -5,6 +5,7 @@
+ #include "chrome/browser/ui/stedding/little_window.h"
+ 
+ #include <algorithm>
++#include <cstdlib>
+ #include <map>
+ #include <memory>
+ #include <optional>
+@@ -35,13 +36,18 @@
+ #include "chrome/grit/branded_strings.h"
+ #include "chrome/grit/generated_resources.h"
+ #include "components/prefs/pref_service.h"
++#include "components/sessions/core/session_id.h"
+ #include "components/sessions/core/session_service_commands.h"
+ #include "components/tabs/public/tab_interface.h"
+ #include "content/public/browser/web_contents.h"
+ #include "third_party/blink/public/mojom/window_features/window_features.mojom.h"
+ #include "ui/base/base_window.h"
+ #include "ui/base/l10n/l10n_util.h"
++#include "ui/display/display.h"
++#include "ui/display/screen.h"
++#include "ui/gfx/geometry/point.h"
+ #include "ui/gfx/geometry/rect.h"
++#include "ui/gfx/geometry/size.h"
+ #include "url/gurl.h"
+ #include "url/origin.h"
+ 
+@@ -49,8 +55,44 @@ namespace stedding {
+ 
+ namespace {
+ 
+-constexpr int kLittleWidth = 1000;
+-constexpr int kLittleHeight = 700;
++// E1: the smallest a little window opens.
++constexpr int kLittleMinWidth = 400;
++constexpr int kLittleMinHeight = 300;
++// E1: a size within this many DIP of the one a window opened at is that
++// size, rounded at a fractional scale factor, not one the user chose.
++constexpr int kLittleSizeSlack = 2;
++
++// E1: a little window from another app, while it is open: the size it
++// opened at, and whether the user has resized it since.
++struct OpenedLittleWindow {
++  gfx::Size opened;
++  bool resized = false;
++};
++
++std::map<SessionID, OpenedLittleWindow>& OpenedLittleWindows() {
++  static base::NoDestructor<std::map<SessionID, OpenedLittleWindow>> windows;
++  return *windows;
++}
++
++// E1: the screen bounds of the page of `anchor`'s tab on screen; empty when
++// there is no anchor on screen to open over.
++gfx::Rect PageBoundsOf(BrowserWindowInterface* anchor) {
++  if (!anchor || !anchor->GetWindow() || anchor->GetWindow()->IsMinimized()) {
++    return gfx::Rect();
++  }
++  TabStripModel* const tabs = anchor->GetTabStripModel();
++  content::WebContents* const contents =
++      tabs ? tabs->GetActiveWebContents() : nullptr;
++  const gfx::Rect page =
++      contents ? contents->GetContainerBounds() : gfx::Rect();
++  if (!page.IsEmpty()) {
++    return page;
++  }
++  // No page laid out yet: the window, less a margin all round.
++  gfx::Rect over = anchor->GetWindow()->GetBounds();
++  over.Inset(40);
++  return over;
++}
+ 
+ // E8 (BACKLOG S-326): the mark again at every rewrite of the session's log,
+ // which knows nothing of the extra data written into the old one
+@@ -171,16 +213,18 @@ BrowserWindowInterface* OpenLittleWindow(Profile* profile,
+   if (!anchor && profile) {
+     anchor = LastActiveNormalWindow(profile);
+   }
+-  gfx::Rect bounds(kLittleWidth, kLittleHeight);
+-  if (anchor && anchor->GetWindow()) {
+-    const gfx::Rect over = anchor->GetWindow()->GetBounds();
+-    bounds.set_width(std::min(kLittleWidth, std::max(400, over.width() - 80)));
+-    bounds.set_height(
+-        std::min(kLittleHeight, std::max(300, over.height() - 80)));
+-    bounds.set_origin(
+-        gfx::Point(over.x() + (over.width() - bounds.width()) / 2,
+-                   over.y() + (over.height() - bounds.height()) / 2));
++  const gfx::Rect page = PageBoundsOf(anchor);
++  gfx::Size remembered;
++  if (profile) {
++    const PrefService* const pref_service = profile->GetPrefs();
++    remembered = gfx::Size(pref_service->GetInteger(prefs::kLittleWidth),
++                           pref_service->GetInteger(prefs::kLittleHeight));
+   }
++  const display::Display display =
++      page.IsEmpty() ? display::Screen::Get()->GetDisplayForNewWindows()
++                     : display::Screen::Get()->GetDisplayMatching(page);
++  const gfx::Rect bounds =
++      LittleWindowBounds(page, remembered, display.work_area());
+   BrowserWindowInterface* const window =
+       CreateLittleWindow(profile, bounds, /*keep_out_of_session=*/false);
+   if (!window) {
+@@ -195,9 +239,63 @@ BrowserWindowInterface* OpenLittleWindow(Profile* profile,
+   }
+   Navigate(&navigate);
+   window->GetWindow()->Show();
++  // From here on, a size other than this one is the user's.
++  OpenedLittleWindows()[window->GetSessionID()] =
++      OpenedLittleWindow{window->GetWindow()->GetBounds().size()};
+   return window;
+ }
+ 
++gfx::Rect LittleWindowBounds(const gfx::Rect& page,
++                             const gfx::Size& remembered,
++                             const gfx::Rect& work_area) {
++  gfx::Size size = remembered;
++  if (size.IsEmpty()) {
++    size = page.size();
++  }
++  if (size.IsEmpty()) {
++    size = gfx::Size(work_area.width() * 4 / 5, work_area.height() * 4 / 5);
++  }
++  size.SetToMax(gfx::Size(kLittleMinWidth, kLittleMinHeight));
++  if (!work_area.IsEmpty()) {
++    size.SetToMin(work_area.size());
++  }
++  const gfx::Point centre =
++      page.IsEmpty() ? work_area.CenterPoint() : page.CenterPoint();
++  gfx::Rect bounds(centre.x() - size.width() / 2,
++                   centre.y() - size.height() / 2, size.width(),
++                   size.height());
++  if (!work_area.IsEmpty()) {
++    bounds.AdjustToFit(work_area);
++  }
++  return bounds;
++}
++
++void LittleWindowPlaced(BrowserWindowInterface* window,
++                        const gfx::Size& size,
++                        bool closing) {
++  if (!window) {
++    return;
++  }
++  std::map<SessionID, OpenedLittleWindow>& windows = OpenedLittleWindows();
++  const auto it = windows.find(window->GetSessionID());
++  if (it == windows.end()) {
++    return;
++  }
++  if (std::abs(size.width() - it->second.opened.width()) > kLittleSizeSlack ||
++      std::abs(size.height() - it->second.opened.height()) >
++          kLittleSizeSlack) {
++    it->second.resized = true;
++  }
++  if (it->second.resized && !size.IsEmpty()) {
++    PrefService* const pref_service = window->GetProfile()->GetPrefs();
++    pref_service->SetInteger(prefs::kLittleWidth, size.width());
++    pref_service->SetInteger(prefs::kLittleHeight, size.height());
++  }
++  if (closing) {
++    windows.erase(it);
++  }
++}
++
+ namespace {
+ 
+ // little E2, E7, peek P7, P9: puts the page `take_page` gives into
+diff --git a/chrome/browser/ui/stedding/little_window.h b/chrome/browser/ui/stedding/little_window.h
+index e49e7b3231f0c..173ced1ac6d79 100644
+--- a/chrome/browser/ui/stedding/little_window.h
++++ b/chrome/browser/ui/stedding/little_window.h
+@@ -20,6 +20,7 @@ class WebContents;
+ 
+ namespace gfx {
+ class Rect;
++class Size;
+ }  // namespace gfx
+ 
+ namespace tabs {
+@@ -51,6 +52,26 @@ BrowserWindowInterface* OpenLittleWindow(Profile* profile,
+                                          BrowserWindowInterface* anchor,
+                                          bool untrusted_launch);
+ 
++// E1: where a little window from another app opens. `page`: the screen
++// bounds of the page of the tab on screen in the window it opens over, empty
++// when there is none. `remembered`: the size the user last gave such a
++// window, empty while they never resized one. `work_area`: the work area of
++// the display it opens on. The window is `remembered`'s size, or else the
++// page's, or else four fifths of the work area each way; never under
++// 400 x 300 nor over the work area; centred on the page, or on the work area,
++// and moved inside the work area.
++gfx::Rect LittleWindowBounds(const gfx::Rect& page,
++                             const gfx::Size& remembered,
++                             const gfx::Rect& work_area);
++
++// E1: `window` has been placed at `size` (its view, at every save of its
++// placement; `closing` at the last one). A little window OpenLittleWindow
++// opened that the user has resized hands its size to the next one. The
++// size it opened at, a peek's and a restored window's are never kept.
++void LittleWindowPlaced(BrowserWindowInterface* window,
++                        const gfx::Size& size,
++                        bool closing);
++
+ // A little window of `profile` at `bounds`, marked, with no tab yet and not
+ // shown: the caller gives it its page and shows it (a peek, peek P6). With
+ // `keep_out_of_session` the session never saves it, so a quit and a restore
+diff --git a/chrome/browser/ui/stedding/little_window_unittest.cc b/chrome/browser/ui/stedding/little_window_unittest.cc
+index 04d0c2d03bdb8..cf411bcda4f3d 100644
+--- a/chrome/browser/ui/stedding/little_window_unittest.cc
++++ b/chrome/browser/ui/stedding/little_window_unittest.cc
+@@ -19,6 +19,8 @@
+ #include "components/tabs/public/tab_interface.h"
+ #include "content/public/browser/web_contents.h"
+ #include "testing/gtest/include/gtest/gtest.h"
++#include "ui/gfx/geometry/rect.h"
++#include "ui/gfx/geometry/size.h"
+ #include "url/gurl.h"
+ 
+ namespace stedding {
+@@ -134,5 +136,32 @@ TEST_F(LittleWindowTest, ShiftCmdOSplitsOrOpensATab) {
+   EXPECT_EQ(0, second->GetTabStripModel()->count());
+ }
+ 
++// E1: as big as the page of the main window's tab, or as the user last left
++// a little window; most of the screen with no window to open over; at least
++// 400 x 300, centred, and on the screen.
++TEST_F(LittleWindowTest, ItIsAsBigAsATabOrAsYouLeftIt) {
++  const gfx::Rect work_area(0, 25, 1800, 1100);
++  const gfx::Rect page(300, 100, 1400, 950);
++  EXPECT_EQ(page, LittleWindowBounds(page, gfx::Size(), work_area));
++  // The user's size, centred on the page.
++  EXPECT_EQ(gfx::Rect(700, 325, 600, 500),
++            LittleWindowBounds(page, gfx::Size(600, 500), work_area));
++  // No window to open over: four fifths of the screen, centred on it.
++  EXPECT_EQ(gfx::Rect(180, 135, 1440, 880),
++            LittleWindowBounds(gfx::Rect(), gfx::Size(), work_area));
++  // Never under 400 x 300.
++  EXPECT_EQ(gfx::Size(400, 300),
++            LittleWindowBounds(gfx::Rect(100, 100, 200, 150), gfx::Size(),
++                               work_area)
++                .size());
++  // Kept on the screen: a size bigger than it shrinks to it, and a window
++  // over the screen's edge moves in.
++  EXPECT_EQ(work_area,
++            LittleWindowBounds(page, gfx::Size(2560, 1440), work_area));
++  EXPECT_EQ(gfx::Rect(1000, 25, 800, 600),
++            LittleWindowBounds(gfx::Rect(1700, 0, 300, 200),
++                               gfx::Size(800, 600), work_area));
++}
++
+ }  // namespace
+ }  // namespace stedding
+diff --git a/chrome/browser/ui/stedding/stedding_prefs.cc b/chrome/browser/ui/stedding/stedding_prefs.cc
+index 0f147b5fdb671..2e63e9e1b0f5d 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs.cc
++++ b/chrome/browser/ui/stedding/stedding_prefs.cc
+@@ -41,6 +41,8 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
+   registry->RegisterBooleanPref(kBookmarksConverted, false);
+   registry->RegisterListPref(kSpaceRegistry);
+   registry->RegisterBooleanPref(kLittleEnabled, true);
++  registry->RegisterIntegerPref(kLittleWidth, 0);
++  registry->RegisterIntegerPref(kLittleHeight, 0);
+   registry->RegisterBooleanPref(kWelcomeShown, false);
+   registry->RegisterBooleanPref(kCopyStripTracking, true);
+   // clean-links Cl7, Cl8: off until the user turns it on, in Settings or the
+diff --git a/chrome/browser/ui/stedding/stedding_prefs.h b/chrome/browser/ui/stedding/stedding_prefs.h
+index 92a4a93bb783a..07d984c7355a1 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs.h
++++ b/chrome/browser/ui/stedding/stedding_prefs.h
+@@ -74,6 +74,10 @@ inline constexpr char kToolbarFieldWidth[] = "stedding.toolbar.field_width";
+ inline constexpr int kToolbarFieldWidthDefault = 800;
+ // little E4: links from other apps open in a small window.
+ inline constexpr char kLittleEnabled[] = "stedding.little.enabled";
++// little E1: the size of the last little window the user resized, which the
++// next one opens at; 0 while they never resized one.
++inline constexpr char kLittleWidth[] = "stedding.little.width";
++inline constexpr char kLittleHeight[] = "stedding.little.height";
+ // windows G3: the profile's Space list (ADR 0016).
+ inline constexpr char kSpaceRegistry[] = "stedding.spaces.registry";
+ // import I14: the bookmarks became pins; the bar and the star stay hidden.
+diff --git a/chrome/browser/ui/stedding/stedding_prefs_unittest.cc b/chrome/browser/ui/stedding/stedding_prefs_unittest.cc
+index 657a0f1c69102..2dfef40ab1cd1 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs_unittest.cc
++++ b/chrome/browser/ui/stedding/stedding_prefs_unittest.cc
+@@ -75,6 +75,11 @@ TEST(SteddingPrefsTest, EveryPreferenceRegistersWithItsDefault) {
+   EXPECT_FALSE(service.GetBoolean(kPeekNoticeAnswered));
+   ASSERT_TRUE(service.FindPreference(kPeekNoticeShown));
+   EXPECT_EQ(0, service.GetInteger(kPeekNoticeShown));
++  // little E1: no size of the user's until they resize a little window.
++  ASSERT_TRUE(service.FindPreference(kLittleWidth));
++  EXPECT_EQ(0, service.GetInteger(kLittleWidth));
++  ASSERT_TRUE(service.FindPreference(kLittleHeight));
++  EXPECT_EQ(0, service.GetInteger(kLittleHeight));
+   // tabs R39: no tab sleeps on a timer until the user chooses a time.
+   ASSERT_TRUE(service.FindPreference(kTabsIdleSleepMinutes));
+   EXPECT_EQ(0, service.GetInteger(kTabsIdleSleepMinutes));
+diff --git a/chrome/browser/ui/views/frame/browser_view.cc b/chrome/browser/ui/views/frame/browser_view.cc
+index 08fd8eb4c69e1..a19391aaba266 100644
+--- a/chrome/browser/ui/views/frame/browser_view.cc
++++ b/chrome/browser/ui/views/frame/browser_view.cc
+@@ -4344,6 +4344,10 @@ void BrowserView::SaveWindowPlacement(const gfx::Rect& bounds,
+                                       ui::mojom::WindowShowState show_state) {
+   DCHECK(ShouldSaveWindowPlacement());
+ 
++  // Stedding little E1: a little window the user resized hands its size to
++  // the next one.
++  stedding::LittleWindowPlaced(browser_.get(), bounds.size(),
++                               GetWidget()->IsClosed());
+   WidgetDelegate::SaveWindowPlacement(bounds, show_state);
+   gfx::Rect saved_bounds = bounds;
+   if (chrome::SavedBoundsAreContentBounds(browser_.get())) {
+diff --git a/chrome/test/stedding/little_window_browsertest.cc b/chrome/test/stedding/little_window_browsertest.cc
+index daf821b310244..8ca91db327a84 100644
+--- a/chrome/test/stedding/little_window_browsertest.cc
++++ b/chrome/test/stedding/little_window_browsertest.cc
+@@ -11,6 +11,7 @@
+ 
+ #include "chrome/browser/ui/stedding/little_window.h"
+ 
++#include <cstdlib>
+ #include <memory>
+ #include <optional>
+ #include <string>
+@@ -51,6 +52,7 @@
+ #include "chrome/test/base/ui_test_utils.h"
+ #include "components/policy/core/common/policy_pref_names.h"
+ #include "components/prefs/pref_service.h"
++#include "components/sessions/core/session_id.h"
+ #include "components/tabs/public/tab_interface.h"
+ #include "content/public/browser/context_menu_params.h"
+ #include "content/public/browser/navigation_controller.h"
+@@ -66,8 +68,12 @@
+ #include "ui/base/l10n/l10n_util.h"
+ #include "ui/events/event.h"
+ #include "ui/events/event_constants.h"
++#include "ui/display/display.h"
++#include "ui/display/screen.h"
+ #include "ui/events/keycodes/keyboard_codes.h"
++#include "ui/gfx/geometry/point.h"
+ #include "ui/gfx/geometry/rect.h"
++#include "ui/gfx/geometry/size.h"
+ #include "ui/menus/simple_menu_model.h"
+ #include "ui/shell_dialogs/fake_select_file_dialog.h"
+ #include "ui/views/accessibility/view_accessibility.h"
+@@ -108,10 +114,6 @@ class LittleWindowTest : public InProcessBrowserTest {
+         browser()->GetProfile(), embedded_test_server()->GetURL("/little"),
+         /*anchor=*/nullptr, untrusted_launch);
+     ASSERT_TRUE(little);
+-    // E1: at most 1000 x 700; the window sizer had set that aside.
+-    const gfx::Rect bounds = little->GetWindow()->GetBounds();
+-    EXPECT_LE(bounds.width(), 1000);
+-    EXPECT_LE(bounds.height(), 700);
+     ASSERT_TRUE(base::test::RunUntil([&]() {
+       base::AutoLock lock(lock_);
+       return seen_;
+@@ -178,6 +180,87 @@ IN_PROC_BROWSER_TEST_F(LittleWindowTest,
+   }
+ }
+ 
++// little E1 (the owner, 2026-11-03): a little window takes the place of the
++// page of the main window's tab, as big as a tab, where the window sizer
++// would have set its bounds aside. One the user resizes hands its size to
++// the next; a window it did not open that way -- a peek, a normal window --
++// never does.
++IN_PROC_BROWSER_TEST_F(LittleWindowTest, ItOpensAsBigAsATabAndKeepsYourSize) {
++  PrefService* const prefs = browser()->GetProfile()->GetPrefs();
++  const GURL url = embedded_test_server()->GetURL("/title1.html");
++  const gfx::Rect page = browser()
++                             ->GetTabStripModel()
++                             ->GetActiveWebContents()
++                             ->GetContainerBounds();
++  ASSERT_FALSE(page.IsEmpty());
++  const gfx::Rect work_area =
++      display::Screen::Get()->GetDisplayMatching(page).work_area();
++  // Within 2 DIP: a fractional scale factor rounds a window's size.
++  const auto within2 = [](int a, int b) { return std::abs(a - b) <= 2; };
++  const auto same_size = [&](const gfx::Size& a, const gfx::Size& b) {
++    return within2(a.width(), b.width()) && within2(a.height(), b.height());
++  };
++  const auto close_window = [&](BrowserWindowInterface* window) {
++    const SessionID id = window->GetSessionID();
++    window->GetWindow()->Close();
++    return base::test::RunUntil([&]() {
++      bool still_open = false;
++      ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
++          [&](BrowserWindowInterface* other) {
++            still_open = still_open || other->GetSessionID() == id;
++            return !still_open;
++          });
++      return !still_open;
++    });
++  };
++
++  {
++    SCOPED_TRACE("as big as the tab's page, over it");
++    BrowserWindowInterface* const little = stedding::OpenLittleWindow(
++        browser()->GetProfile(), url, browser(), /*untrusted_launch=*/false);
++    ASSERT_TRUE(little);
++    const gfx::Rect expected =
++        stedding::LittleWindowBounds(page, gfx::Size(), work_area);
++    const gfx::Rect bounds = little->GetWindow()->GetBounds();
++    EXPECT_TRUE(same_size(expected.size(), bounds.size()))
++        << bounds.ToString() << " for the page at " << page.ToString();
++    const gfx::Point centre = bounds.CenterPoint();
++    EXPECT_TRUE(within2(expected.CenterPoint().x(), centre.x()) &&
++                within2(expected.CenterPoint().y(), centre.y()))
++        << bounds.ToString() << " for the page at " << page.ToString();
++    EXPECT_EQ(0, prefs->GetInteger(stedding::prefs::kLittleWidth))
++        << "the size it opened at was kept as the user's";
++
++    little->GetWindow()->SetBounds(
++        gfx::Rect(work_area.x() + 40, work_area.y() + 40, 640, 480));
++    EXPECT_TRUE(base::test::RunUntil([&]() {
++      return within2(640, prefs->GetInteger(stedding::prefs::kLittleWidth)) &&
++             within2(480, prefs->GetInteger(stedding::prefs::kLittleHeight));
++    })) << prefs->GetInteger(stedding::prefs::kLittleWidth) << " x "
++        << prefs->GetInteger(stedding::prefs::kLittleHeight);
++    ASSERT_TRUE(close_window(little));
++  }
++  const gfx::Size kept(prefs->GetInteger(stedding::prefs::kLittleWidth),
++                       prefs->GetInteger(stedding::prefs::kLittleHeight));
++  {
++    SCOPED_TRACE("the next one opens at the user's size");
++    BrowserWindowInterface* const little = stedding::OpenLittleWindow(
++        browser()->GetProfile(), url, browser(), /*untrusted_launch=*/false);
++    ASSERT_TRUE(little);
++    EXPECT_TRUE(same_size(kept, little->GetWindow()->GetBounds().size()))
++        << little->GetWindow()->GetBounds().ToString();
++    ASSERT_TRUE(close_window(little));
++  }
++  {
++    SCOPED_TRACE("a window it did not open that way keeps nothing");
++    stedding::LittleWindowPlaced(browser(), gfx::Size(900, 600),
++                                 /*closing=*/false);
++    EXPECT_EQ(kept.width(), prefs->GetInteger(stedding::prefs::kLittleWidth));
++    EXPECT_EQ(kept.height(),
++              prefs->GetInteger(stedding::prefs::kLittleHeight));
++  }
++}
++
+ #if BUILDFLAG(IS_WIN)
+ // little E1, routing D3 (BACKLOG S-56): on Windows a link another app hands
+ // over -- the address after --single-argument, as the installer registers

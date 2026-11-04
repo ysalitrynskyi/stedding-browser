@@ -2,6 +2,62 @@
 
 What was built, newest first. Nothing here is needed to do a task: `AGENTS.md` carries what is true now, `BACKLOG.md` the order of work, `PLAN.md` the owner's decisions. This file was the "State of the project" section of `AGENTS.md` until 2026-09-30. This log starts at 2026-10-15. Closed work from before that is the table in [docs/history/archive.md](history/archive.md).
 
+## 2026-11-04 -- 0.4.0 beta 8: the empty Space page, the download's start, the Mac's first run, a review of every change
+
+The owner, overnight: finish everything planned for beta 8, have separate reviewers read the
+changes, fix what they find, test both machines with a look at every changed state, and release.
+
+Built. A Space with no row awake shows its own page (S-396, tabs R66): a stand-in tab the
+sidebar does not list, on `chrome://stedding-space`, version A of the owner's mockups with six
+tips drawn by the page rather than screenshots; it closes when another row shows and becomes an
+ordinary row when an address is typed on it, and the session keeps none. A download's start
+flies a 48 DIP chip from the page to the sidebar's downloads button, which rings once
+(S-400, sidebar-panels Pn18); Chromium's flew a 26 DIP icon to the toolbar's button, which the
+sidebar keeps hidden.
+
+Reviewed. Three reviewers read every change since beta 7 (the Mac's window code; the sidebar's
+top line, toolbar, toasts and site panel; updates, tidy names, the little window, imports and
+sync). Fixed, each with a test: tidied download names pass Chromium's own file-name checks (a
+right-to-left override, a name Windows reserves, a title's dot as an extension) and meaningful
+names such as "annual-report-2026" stay; a year in a title is not a count; the important-update
+bar retries when its window comes to the front, in the window in front; an empty folder icon
+from before icons synced no longer erases another computer's; the welcome screen looks for Arc
+and the Chromium family again, leaving only Chromium's importer list for the Import step; the
+address field lays itself out when Copy Link is turned off; on Windows a shown address row ends
+before the corner's window buttons; the camera row's mode keeps Close Window, a reachable frame
+after a screen change, the window still under a tab drag, a torn-out tab's size, and kiosk mode.
+
+The Mac. The round's Mac tests ran for the first time and found, all fixed: a crash at a quit
+from full screen (the camera row's destructor read the freed browser); the row beside the
+camera coming back 50 points down after a page's own full screen (seen on the real screen; the
+menu bar is now hidden before the frame is set); on a 126 DIP sidebar the line showing the
+address stacked as the rail's, hiding the field and the window's menu; and four camera-row
+tests that waited too little or tested the wrong thing. The owner's question about the little
+window over a full-screen Stedding: with a test copy full screen in its own Space and a Finder
+window on another, a link handed over opened the little window on Finder's Space with no
+switch, exactly as beta 7 does; only its size differs (1382×836 against 1000×700).
+
+Not moved: the pin. Chromium 157.0.8103.39 is the stable point release on both platforms; a
+move rebuilds most of the tree on both machines, which did not fit the night with the tests
+after it. It is the first item for the next release.
+
+The Mac's build with DCHECKs then found the camera row holding the BrowserView past its free at
+every window's close (the dangling-pointer detector, in most browser tests); it now goes with the
+widget, as the widget's own pointer does, and the Mac's image was signed again after it.
+
+Released as 0.4.0 beta 8, on Chromium 157.0.8103.31, for both platforms. Checked: on Windows the
+installed beta 7 updated itself to beta 8 from a signed copy of the feed (the update test's feed
+server had stopped at its first line when run from a scheduled task, fixed in the tool) and kept a
+300 DIP sidebar; the installer's upgrade, uninstall keeping the profile, and install; acceptance
+on the installed copy, 39 steps; every suite on `win-release` and `win-checks` (1372 unit, 874
+browser), and the same under ASan, with no report. On the Mac the signed and notarized image passed
+`syspolicy_check distribution` and `verify-build`, acceptance on a test copy of it passed twice
+(before and after the last fix), and every suite passed on `release` (1381 unit, 912 browser)
+and on `mac-checks` (1381 unit, 912 browser, after the dangling pointer above was fixed; a toast test read the toast while it was still sliding in, and now waits for it). The captures are in `dist/review-2026-11-04/` (not in the
+repository); the site's after-update page shows tidy names, the empty Space page and the bigger
+little window. Not checked: S-394's notice (a look at the unified log could not see it on beta 7
+either), S-393 with two computers, and S-399's last two tests.
+
 ## 2026-11-03 -- 0.4.0 beta 8, first part: main and side releases, important updates, tidy names, issue 45 on beta 7
 
 Not released. The owner's final order for beta 8 (BACKLOG), done on the Windows PC while the

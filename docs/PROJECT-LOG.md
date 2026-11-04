@@ -2,6 +2,32 @@
 
 What was built, newest first. Nothing here is needed to do a task: `AGENTS.md` carries what is true now, `BACKLOG.md` the order of work, `PLAN.md` the owner's decisions. This file was the "State of the project" section of `AGENTS.md` until 2026-09-30. This log starts at 2026-10-15. Closed work from before that is the table in [docs/history/archive.md](history/archive.md).
 
+## 2026-11-04 -- 0.4.0 beta 9: an empty Space's page, issues 74, 75 and 76, issue 45 on beta 8
+
+The owner, in the morning: a screenshot of an empty Space beside an AI extension's tab group, a
+look at the open issues, the Install chip still in the address bar, and a release fast; the pin
+moves to beta 10.
+
+Built, each with a test. An empty Space -- a switch to one, its last row closed, a Clear that
+leaves nothing -- shows its own page rather than a New Tab row (S-408, tabs R66), and the page
+says nothing of tabs asleep when the Space has none. "Show tab groups" on the bookmarks bar is
+off at first: every saved group, the extension's included, had brought a chip and the bar to
+each New Tab page (new-tab N9). A collapse folds a folder's awake pins but the one on screen;
+the issue 35 rule had kept every awake pin listed, so a pinned folder seemed never to collapse
+(S-409, issue 76). The sidebar's address field offers the extensions' row its whole room, so
+pinned icons come back (S-412, issue 45). The toolbar's field shows no Install chip (S-413). The
+peek settings say they are for links from pinned tabs; issue 74's recording showed the little
+window, which they never change (S-410). A link's menu opens it in another Space, in that
+Space's jar from the first request (S-411, issue 75).
+
+Found and not fixed: at 125% on Windows the sidebar's icons sit a pixel left of their hover
+circles, a rounding to pixels (S-415). Page buttons in the site panel when the top line has no
+room for them waits (S-414).
+
+Checked: the suites on both platforms, release and DCHECK builds, and ASan on Windows;
+acceptance on both; the update from beta 8 on Windows; the Mac image notarized. Tests found
+test-only dangling pointers to the empty Space's page, which closes itself, in three tests.
+
 ## 2026-11-04 -- 0.4.0 beta 8: the empty Space page, the download's start, the Mac's first run, a review of every change
 
 The owner, overnight: finish everything planned for beta 8, have separate reviewers read the

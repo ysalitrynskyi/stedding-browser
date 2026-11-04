@@ -1,0 +1,406 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Wed, 4 Nov 2026 11:47:46 -0500
+Subject: fix: a second window's corner buttons show on Windows; links from
+ other apps can open as a peek (S-416, S-417)
+
+The window's buttons at the corner (sidebar Y54; GitHub issue 45, a comment
+on 0.4.0 beta 8): the corner's event monitor reports the pointer in screen
+coordinates, which the corner read as the window's. A maximized window sits
+at the screen's top-left and its buttons showed; a window at an offset -- a
+moved tab's, New Blank Window, any cascaded one -- missed its corner by that
+offset, and its buttons never showed while the frame's own were hidden. The
+pointer is now converted from the screen.
+
+Links from other apps as a peek (little E11, settings T54; GitHub issue 74):
+"Open links from other apps as a peek", off by default, opens such a link
+as a peek over the active tab of the window it would have opened over, over
+the page or in a small window as "Show a peek" says, and brings that window
+to the front. With no normal window, or a peek that cannot show, the little
+window opens as before. The peek over the page now registers with the first
+navigation, so a peek no pin started finds it.
+
+Why: GitHub issue 45 (a second window could only be closed by dragging its
+tab back) and issue 74 (the reporter asked; the owner agreed to an option,
+off by default), 2026-11-04.
+Removable when: never as behaviour.
+---
+ .../api/settings_private/prefs_util.cc        |  2 +
+ .../stedding_page/stedding_page.html.ts       |  7 ++
+ chrome/browser/ui/stedding/little_window.cc   | 24 +++++++
+ chrome/browser/ui/stedding/stedding_prefs.cc  |  1 +
+ chrome/browser/ui/stedding/stedding_prefs.h   |  3 +
+ .../ui/stedding/stedding_prefs_unittest.cc    |  2 +-
+ .../ui/views/peek/peek_navigation_throttle.cc |  3 +
+ .../ui/views/tabs/vertical/sidebar_address.cc | 12 +++-
+ .../ui/views/tabs/vertical/sidebar_address.h  |  7 +-
+ .../browser/ui/webui/settings/settings_ui.cc  |  8 +++
+ .../stedding/little_window_browsertest.cc     | 69 ++++++++++++++++++
+ .../stedding/sidebar_address_browsertest.cc   | 70 +++++++++++++++++++
+ 12 files changed, 201 insertions(+), 7 deletions(-)
+
+diff --git a/chrome/browser/extensions/api/settings_private/prefs_util.cc b/chrome/browser/extensions/api/settings_private/prefs_util.cc
+index 1403b25828ca1..4323fa36f85d6 100644
+--- a/chrome/browser/extensions/api/settings_private/prefs_util.cc
++++ b/chrome/browser/extensions/api/settings_private/prefs_util.cc
+@@ -323,6 +323,8 @@ const PrefsUtil::TypedPrefMap& PrefsUtil::GetAllowlistedKeys() {
+       settings_api::PrefType::kNumber;
+   (*s_allowlist)[stedding::prefs::kLittleEnabled] =
+       settings_api::PrefType::kBoolean;
++  (*s_allowlist)[stedding::prefs::kLittleAsPeek] =
++      settings_api::PrefType::kBoolean;
+   // privacy Q4, Q5: the rows Chromium's own pages do not carry.
+   (*s_allowlist)[stedding::prefs::kGlobalPrivacyControl] =
+       settings_api::PrefType::kBoolean;
+diff --git a/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts b/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
+index 685f3e3f5083f..48e3efb13e959 100644
+--- a/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
++++ b/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
+@@ -462,6 +462,13 @@ export function getHtml(this: SettingsSteddingPageElement) {
+       label="$i18n{steddingLittleLabel}"
+       sub-label="$i18n{steddingLittleSubLabel}">
+   </settings-toggle-button>
++  <settings-toggle-button
++      id="littleAsPeek"
++      class="hr"
++      pref-key="stedding.little.as_peek"
++      label="$i18n{steddingLittleAsPeekLabel}"
++      sub-label="$i18n{steddingLittleAsPeekSubLabel}">
++  </settings-toggle-button>
+   <settings-toggle-button
+       id="peek"
+       class="hr"
+diff --git a/chrome/browser/ui/stedding/little_window.cc b/chrome/browser/ui/stedding/little_window.cc
+index 386f27c0e6342..f42ba28dca181 100644
+--- a/chrome/browser/ui/stedding/little_window.cc
++++ b/chrome/browser/ui/stedding/little_window.cc
+@@ -202,6 +202,30 @@ BrowserWindowInterface* OpenLittleWindow(Profile* profile,
+   if (!anchor && profile) {
+     anchor = LastActiveNormalWindow(profile);
+   }
++  // little E11 (GitHub issue 74; the owner, 2026-11-04): with "Open links
++  // from other apps as a peek" on, the link opens as a peek over the active
++  // tab of the window it would have opened over -- over the page or in a
++  // small window, as "Show a peek" says (peek P20) -- and that window comes
++  // to the front. With no normal window to peek over, or a peek that cannot
++  // show, the little window opens as before.
++  if (profile && anchor &&
++      anchor->GetType() == BrowserWindowInterface::Type::TYPE_NORMAL &&
++      anchor->GetProfile() == profile &&
++      profile->GetPrefs()->GetBoolean(prefs::kLittleAsPeek)) {
++    TabStripModel* const tabs = anchor->GetTabStripModel();
++    if (tabs::TabInterface* const tab = tabs ? tabs->GetActiveTab() : nullptr) {
++      PeekLink link;
++      link.url = url;
++      if (untrusted_launch) {
++        // As below: nothing vouches for the address.
++        link.initiator_origin = url::Origin();
++      }
++      if (BrowserWindowInterface* const peek = OpenPeek(tab, link)) {
++        anchor->GetWindow()->Activate();
++        return peek;
++      }
++    }
++  }
+   const gfx::Rect over = WindowBoundsOf(anchor);
+   gfx::Size remembered;
+   if (profile) {
+diff --git a/chrome/browser/ui/stedding/stedding_prefs.cc b/chrome/browser/ui/stedding/stedding_prefs.cc
+index 2e63e9e1b0f5d..33ce8d7a60d08 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs.cc
++++ b/chrome/browser/ui/stedding/stedding_prefs.cc
+@@ -41,6 +41,7 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
+   registry->RegisterBooleanPref(kBookmarksConverted, false);
+   registry->RegisterListPref(kSpaceRegistry);
+   registry->RegisterBooleanPref(kLittleEnabled, true);
++  registry->RegisterBooleanPref(kLittleAsPeek, false);
+   registry->RegisterIntegerPref(kLittleWidth, 0);
+   registry->RegisterIntegerPref(kLittleHeight, 0);
+   registry->RegisterBooleanPref(kWelcomeShown, false);
+diff --git a/chrome/browser/ui/stedding/stedding_prefs.h b/chrome/browser/ui/stedding/stedding_prefs.h
+index 07d984c7355a1..00159cf8e400a 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs.h
++++ b/chrome/browser/ui/stedding/stedding_prefs.h
+@@ -74,6 +74,9 @@ inline constexpr char kToolbarFieldWidth[] = "stedding.toolbar.field_width";
+ inline constexpr int kToolbarFieldWidthDefault = 800;
+ // little E4: links from other apps open in a small window.
+ inline constexpr char kLittleEnabled[] = "stedding.little.enabled";
++// little E11 (GitHub issue 74): those links open as a peek over the window
++// instead, shown as "Show a peek" says. Off by default.
++inline constexpr char kLittleAsPeek[] = "stedding.little.as_peek";
+ // little E1: the size of the last little window the user resized, which the
+ // next one opens at; 0 while they never resized one.
+ inline constexpr char kLittleWidth[] = "stedding.little.width";
+diff --git a/chrome/browser/ui/stedding/stedding_prefs_unittest.cc b/chrome/browser/ui/stedding/stedding_prefs_unittest.cc
+index 2dfef40ab1cd1..be017383ea812 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs_unittest.cc
++++ b/chrome/browser/ui/stedding/stedding_prefs_unittest.cc
+@@ -41,7 +41,7 @@ TEST(SteddingPrefsTest, EveryPreferenceRegistersWithItsDefault) {
+        {kToolbarHideWithSidebar, kSidebarPageFlush, kUndoToast,
+         kSpaceNotices, kFullscreenHint, kNestChildTabs, kSpacesOwnSession,
+         kMarkDriftedPins, kSidebarAddressInSidebar, kCameraRowFullscreen,
+-        kTabsTidyTitles, kDownloadsTidyNames}) {
++        kTabsTidyTitles, kDownloadsTidyNames, kLittleAsPeek}) {
+     ASSERT_TRUE(service.FindPreference(name)) << name;
+     EXPECT_FALSE(service.GetBoolean(name)) << name;
+   }
+diff --git a/chrome/browser/ui/views/peek/peek_navigation_throttle.cc b/chrome/browser/ui/views/peek/peek_navigation_throttle.cc
+index fd2fddbcf35c8..d9dbec25d447c 100644
+--- a/chrome/browser/ui/views/peek/peek_navigation_throttle.cc
++++ b/chrome/browser/ui/views/peek/peek_navigation_throttle.cc
+@@ -254,6 +254,9 @@ bool MaybePeekInsteadOfNewTab(NavigateParams* params) {
+ // static
+ void PeekNavigationThrottle::MaybeCreateAndAdd(
+     content::NavigationThrottleRegistry& registry) {
++  // P20, little E11: the peek over the page is this layer's to show, a peek
++  // from another app's link too, which no navigation of a pin's starts.
++  RegisterPeekOverPage();
+   content::NavigationHandle& handle = registry.GetNavigationHandle();
+   if (!handle.IsInPrimaryMainFrame() || !handle.IsRendererInitiated()) {
+     return;
+diff --git a/chrome/browser/ui/views/tabs/vertical/sidebar_address.cc b/chrome/browser/ui/views/tabs/vertical/sidebar_address.cc
+index 120ec0d63aaa0..d2c9454bf38a4 100644
+--- a/chrome/browser/ui/views/tabs/vertical/sidebar_address.cc
++++ b/chrome/browser/ui/views/tabs/vertical/sidebar_address.cc
+@@ -376,6 +376,7 @@ class WindowCornerButtons::Watcher : public ui::EventObserver {
+ 
+   // ui::EventObserver:
+   void OnEvent(const ui::Event& event) override {
++    // An event monitor's located events carry the screen location.
+     if (event.IsLocatedEvent()) {
+       corner_->OnPointerAt(event.AsLocatedEvent()->root_location_f());
+     }
+@@ -424,12 +425,17 @@ bool WindowCornerButtons::InCorner(const gfx::Point& point) const {
+   return wanted_ && GetMirroredBounds().Contains(point);
+ }
+ 
+-void WindowCornerButtons::OnPointerAt(const gfx::PointF& root_location) {
++void WindowCornerButtons::OnPointerAt(const gfx::PointF& screen_location) {
+   if (!wanted_ || !parent() || !GetWidget()) {
+     return;
+   }
+-  gfx::Point point = gfx::ToFlooredPoint(root_location);
+-  views::View::ConvertPointFromWidget(parent(), &point);
++  // GitHub issue 45, a comment on 0.4.0 beta 8: the window's event monitor
++  // hands over the pointer in screen coordinates. Read as the widget's, it
++  // was off by the window's place on the screen: a maximized window sits at
++  // the screen's corner and its buttons showed, a second window, cascaded or
++  // moved, missed its own corner and they never did.
++  gfx::Point point = gfx::ToFlooredPoint(screen_location);
++  views::View::ConvertPointFromScreen(parent(), &point);
+   SetRevealed(InCorner(point));
+ }
+ 
+diff --git a/chrome/browser/ui/views/tabs/vertical/sidebar_address.h b/chrome/browser/ui/views/tabs/vertical/sidebar_address.h
+index f751fc5e4dd44..3ea9f20ff2283 100644
+--- a/chrome/browser/ui/views/tabs/vertical/sidebar_address.h
++++ b/chrome/browser/ui/views/tabs/vertical/sidebar_address.h
+@@ -174,9 +174,10 @@ class WindowCornerButtons : public views::View {
+   // shows the buttons.
+   bool InCorner(const gfx::Point& point) const;
+ 
+-  // The pointer, or a touch, at `root_location` in the widget: over the
+-  // corner it shows them, anywhere else it hides them.
+-  void OnPointerAt(const gfx::PointF& root_location);
++  // The pointer, or a touch, at `screen_location`, as the window's event
++  // monitor reports it: over the corner it shows them, anywhere else it
++  // hides them.
++  void OnPointerAt(const gfx::PointF& screen_location);
+ 
+   // views::View:
+   gfx::Size CalculatePreferredSize(
+diff --git a/chrome/browser/ui/webui/settings/settings_ui.cc b/chrome/browser/ui/webui/settings/settings_ui.cc
+index b14d58e84d06e..f46b63a45433b 100644
+--- a/chrome/browser/ui/webui/settings/settings_ui.cc
++++ b/chrome/browser/ui/webui/settings/settings_ui.cc
+@@ -831,6 +831,14 @@ SettingsUI::SettingsUI(content::WebUI* web_ui)
+                     key("\u2318O", "Ctrl+O"), " keeps the page as a tab, ",
+                     key("\u21E7\u2318O", "Ctrl+Shift+O"),
+                     " in a split. Off, they open as tabs."}));
++  // little E11 (GitHub issue 74).
++  html_source->AddString("steddingLittleAsPeekLabel",
++                         "Open links from other apps as a peek");
++  html_source->AddString(
++      "steddingLittleAsPeekSubLabel",
++      "With the row above on, such a link opens over Stedding's window, as "
++      "\"Show a peek\" below says, instead of in a window of its own. "
++      "Stedding comes to the front.");
+   // peek P1, P10.
+   html_source->AddString("steddingPeekLabel",
+                          "Open links from pinned tabs in a peek");
+diff --git a/chrome/test/stedding/little_window_browsertest.cc b/chrome/test/stedding/little_window_browsertest.cc
+index 422f0252d746b..733b1bbda16f0 100644
+--- a/chrome/test/stedding/little_window_browsertest.cc
++++ b/chrome/test/stedding/little_window_browsertest.cc
+@@ -41,6 +41,7 @@
+ #include "chrome/browser/ui/startup/startup_browser_creator_impl.h"
+ #include "chrome/browser/ui/startup/startup_types.h"
+ #include "chrome/browser/ui/stedding/stedding_command_ids.h"
++#include "chrome/browser/ui/stedding/peek.h"
+ #include "chrome/browser/ui/stedding/stedding_prefs.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "chrome/browser/ui/views/frame/browser_view.h"
+@@ -145,6 +146,74 @@ class LittleWindowTest : public InProcessBrowserTest {
+   std::string cookie_ GUARDED_BY(lock_);
+ };
+ 
++// little E11 (GitHub issue 74; the owner, 2026-11-04): with "Open links from
++// other apps as a peek" on, such a link opens as a peek over the active tab
++// of the window, over the page by default and in a small window when "Show a
++// peek" says so, and no little window opens. Off, the default, it opens in a
++// little window as before.
++IN_PROC_BROWSER_TEST_F(LittleWindowTest, ALinkFromAnotherAppCanOpenAsAPeek) {
++  PrefService* const prefs = browser()->GetProfile()->GetPrefs();
++  ASSERT_FALSE(prefs->GetBoolean(stedding::prefs::kLittleAsPeek));
++  const GURL url = embedded_test_server()->GetURL("/title2.html");
++  const auto little_windows = [&]() {
++    int count = 0;
++    ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
++        [&](BrowserWindowInterface* window) {
++          count += stedding::IsLittleWindow(window) &&
++                   !stedding::IsPeekWindow(window);
++          return true;
++        });
++    return count;
++  };
++  const int tabs_before = browser()->GetTabStripModel()->count();
++
++  prefs->SetBoolean(stedding::prefs::kLittleAsPeek, true);
++  {
++    SCOPED_TRACE("over the page");
++    BrowserWindowInterface* const opened = stedding::OpenLittleWindow(
++        browser()->GetProfile(), url, /*anchor=*/nullptr,
++        /*untrusted_launch=*/false);
++    ASSERT_TRUE(opened);
++    content::WebContents* page = nullptr;
++    ASSERT_TRUE(base::test::RunUntil([&]() {
++      page = stedding::PeekOverPageOfActiveTab(browser());
++      return page != nullptr;
++    })) << "no peek over the window's page";
++    EXPECT_EQ(url, page->GetVisibleURL());
++    EXPECT_EQ(0, little_windows()) << "a little window opened as well";
++    EXPECT_EQ(tabs_before, browser()->GetTabStripModel()->count());
++    ASSERT_TRUE(stedding::RunPeekOverPageCommand(
++        browser(), stedding::PeekCommand::kClose));
++    ASSERT_TRUE(base::test::RunUntil([&]() {
++      return stedding::PeekOverPageOfActiveTab(browser()) == nullptr;
++    }));
++  }
++  {
++    SCOPED_TRACE("Show a peek: In a small window");
++    prefs->SetInteger(stedding::prefs::kPeekStyle, 1);
++    BrowserWindowInterface* const peek = stedding::OpenLittleWindow(
++        browser()->GetProfile(), url, /*anchor=*/nullptr,
++        /*untrusted_launch=*/false);
++    ASSERT_TRUE(peek);
++    EXPECT_TRUE(stedding::IsPeekWindow(peek));
++    EXPECT_EQ(0, little_windows());
++    CloseBrowserSynchronously(peek);
++    prefs->ClearPref(stedding::prefs::kPeekStyle);
++  }
++  prefs->SetBoolean(stedding::prefs::kLittleAsPeek, false);
++  {
++    SCOPED_TRACE("the setting off");
++    BrowserWindowInterface* const little = stedding::OpenLittleWindow(
++        browser()->GetProfile(), url, /*anchor=*/nullptr,
++        /*untrusted_launch=*/false);
++    ASSERT_TRUE(little);
++    EXPECT_TRUE(stedding::IsLittleWindow(little));
++    EXPECT_FALSE(stedding::IsPeekWindow(little));
++    EXPECT_EQ(nullptr, stedding::PeekOverPageOfActiveTab(browser()));
++    CloseBrowserSynchronously(little);
++  }
++}
++
+ // An untrusted address is cross-site, a trusted one sends the cookie, and a
+ // profile that may open only private windows gets no little window (little
+ // E6).
+diff --git a/chrome/test/stedding/sidebar_address_browsertest.cc b/chrome/test/stedding/sidebar_address_browsertest.cc
+index 936da33d5fafb..b8bc1539d7ecf 100644
+--- a/chrome/test/stedding/sidebar_address_browsertest.cc
++++ b/chrome/test/stedding/sidebar_address_browsertest.cc
+@@ -16,7 +16,9 @@
+ #include "chrome/browser/extensions/chrome_test_extension_loader.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/ui/animation/browser_animation_controller.h"
++#include "chrome/browser/ui/browser_commands.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/stedding/stedding_command_ids.h"
+ #include "chrome/browser/ui/stedding/stedding_prefs.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "chrome/browser/ui/toolbar/toolbar_actions_model.h"
+@@ -542,6 +544,74 @@ IN_PROC_BROWSER_TEST_F(SidebarAddressTest, TheWindowsButtonsGoToTheCorner) {
+   }));
+   EXPECT_FALSE(corner->GetVisible());
+ }
++
++// sidebar Y54 (GitHub issue 45, a comment on 0.4.0 beta 8): every window has
++// the corner's buttons, a second one too -- New Window, Move Tab to New
++// Window -- and shows them while the pointer is in its corner. A window whose
++// frame hid its own buttons without the corner's could only be closed by
++// dragging its tab back to the first.
++IN_PROC_BROWSER_TEST_F(SidebarAddressTest, ASecondWindowHasTheCornersButtons) {
++  prefs()->SetBoolean(stedding::prefs::kSidebarAddressInSidebar, true);
++  ASSERT_TRUE(
++      ui_test_utils::NavigateToURL(browser(), Page("a.test", "/title1.html")));
++  ASSERT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
++      browser(), Page("b.test", "/title1.html"),
++      WindowOpenDisposition::NEW_FOREGROUND_TAB,
++      ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
++
++  const auto check = [&](BrowserWindowInterface* window) {
++    BrowserView* const view = BrowserView::GetBrowserViewForBrowser(window);
++    ASSERT_TRUE(view);
++    views::Widget* const widget = view->GetWidget();
++    const auto* const frame = static_cast<const BrowserFrameViewWin*>(
++        view->browser_widget()->GetFrameView());
++    ASSERT_TRUE(base::test::RunUntil([&]() {
++      views::test::RunScheduledLayout(widget);
++      const stedding::WindowCornerButtons* const corner =
++          view->stedding_corner_buttons_for_testing();
++      return !frame->caption_button_container_for_testing()->GetVisible() &&
++             corner && corner->wanted();
++    })) << "the frame's buttons are hidden and the corner has none";
++    stedding::WindowCornerButtons* const corner =
++        view->stedding_corner_buttons_for_testing();
++    EXPECT_EQ(view->width(), corner->bounds().right());
++    ui::test::EventGenerator generator(views::GetRootWindow(widget),
++                                       widget->GetNativeWindow());
++    gfx::Point in_corner = corner->bounds().CenterPoint();
++    views::View::ConvertPointToScreen(view, &in_corner);
++    generator.MoveMouseTo(in_corner);
++    EXPECT_TRUE(base::test::RunUntil([&]() { return corner->GetVisible(); }))
++        << "the pointer in the corner did not show the buttons";
++  };
++  {
++    SCOPED_TRACE("the first window");
++    ASSERT_NO_FATAL_FAILURE(check(browser()));
++  }
++  {
++    SCOPED_TRACE("New Window");
++    ui_test_utils::BrowserCreatedObserver created;
++    chrome::ExecuteCommand(browser(), IDC_NEW_WINDOW);
++    BrowserWindowInterface* const second = created.Wait();
++    ASSERT_TRUE(second);
++    ASSERT_NO_FATAL_FAILURE(check(second));
++  }
++  {
++    SCOPED_TRACE("Move Tab to New Window");
++    ui_test_utils::BrowserCreatedObserver created;
++    chrome::ExecuteCommand(browser(), IDC_MOVE_TAB_TO_NEW_WINDOW);
++    BrowserWindowInterface* const moved = created.Wait();
++    ASSERT_TRUE(moved);
++    ASSERT_NO_FATAL_FAILURE(check(moved));
++  }
++  {
++    SCOPED_TRACE("New Blank Window");
++    ui_test_utils::BrowserCreatedObserver created;
++    chrome::ExecuteCommand(browser(), IDC_STEDDING_NEW_BLANK_WINDOW);
++    BrowserWindowInterface* const blank = created.Wait();
++    ASSERT_TRUE(blank);
++    ASSERT_NO_FATAL_FAILURE(check(blank));
++  }
++}
+ #endif  // BUILDFLAG(IS_WIN)
+ 
+ // sidebar Y51: on a top line too narrow for Back, Forward, Reload and the

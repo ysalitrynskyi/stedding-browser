@@ -1,0 +1,1343 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Wed, 4 Nov 2026 16:15:19 -0500
+Subject: fix: device pickers in a Space's own session; selected pins stay out
+ of a collapsed folder; page buttons in the site panel (S-402, S-414, S-415,
+ S-418, S-419)
+
+Device pickers in a Space with an independent session (spaces B47; GitHub
+issue 73): Chromium refuses Web Serial, WebUSB, WebHID, Web Bluetooth, the
+File System Access pickers and on-device translation and speech to a web
+page in any storage partition but the profile's default, because their
+grants are the profile's and a <webview>'s partition must not share them. A
+Space's jar is one of the profile's own, whose site permissions are the
+profile's in every Space, so those checks count it as the default.
+
+A collapse keeps the selected pins out (folders F3, settings T55; GitHub
+issue 78): collapsing a folder keeps listed the pins selected in it, each
+while awake, until the folder opens. "Keep open tabs out of a collapsed
+folder", off by default and a row of the command bar, keeps every awake pin
+listed instead. "Open links from other apps as a peek" is a command bar row
+too.
+
+The page's buttons in the site panel (site-controls Si15; GitHub issue 45):
+while the window shows no Back button -- the sidebar's line too narrow for
+the three, the toolbar hidden -- the strip starts with Back, Forward and
+Reload.
+
+Centred icons (sidebar Y51; GitHub issue 45): TopContainerButton centres its
+image. Left aligned, a LabelButton puts it at its border's 6 DIP inset, which
+centres only a 20 DIP icon in the 32 DIP button.
+
+A new window steps 22 DIPs on Windows, as on the Mac (windows G11): with 10,
+a second window looked as if it sat on the first.
+
+Why: GitHub issues 73, 78 and 45, and the owner's test on the PC,
+2026-11-04.
+Removable when: never as behaviour; the partition checks when Chromium
+scopes device grants to a storage partition (crbug.com/40068594).
+---
+ chrome/browser/bluetooth/BUILD.gn             |   2 +
+ .../bluetooth/chrome_bluetooth_delegate.cc    |   5 +-
+ .../api/settings_private/prefs_util.cc        |   2 +
+ chrome/browser/file_system_access/BUILD.gn    |   2 +
+ ...e_file_system_access_permission_context.cc |   3 +
+ chrome/browser/hid/BUILD.gn                   |   2 +
+ chrome/browser/hid/chrome_hid_delegate.cc     |   5 +-
+ chrome/browser/on_device_translation/BUILD.gn |   2 +
+ .../translation_manager_impl.cc               |   5 +-
+ .../stedding_page/stedding_page.html.ts       |   7 +
+ chrome/browser/serial/BUILD.gn                |   2 +
+ .../browser/serial/chrome_serial_delegate.cc  |   5 +-
+ chrome/browser/speech/BUILD.gn                |   2 +
+ .../on_device_speech_recognition_impl.cc      |   5 +-
+ .../browser/ui/browser_element_identifiers.cc |   1 +
+ .../browser/ui/browser_element_identifiers.h  |   2 +
+ chrome/browser/ui/spaces/BUILD.gn             |   8 ++
+ chrome/browser/ui/spaces/space_model.cc       |  18 +++
+ chrome/browser/ui/spaces/space_model.h        |   3 +
+ .../ui/spaces/space_model_window_unittest.cc  |  92 ++++++++++++
+ .../ui/spaces/space_partition_domain.h        |  36 +++++
+ .../ui/spaces/space_storage_partition.h       |   4 +-
+ chrome/browser/ui/stedding/stedding_prefs.cc  |   3 +
+ chrome/browser/ui/stedding/stedding_prefs.h   |   6 +
+ .../ui/stedding/stedding_prefs_unittest.cc    |   3 +-
+ .../ui/views/commandbar/command_bar_view.cc   |   6 +
+ .../commandbar/command_bar_view_unittest.cc   |  13 ++
+ chrome/browser/ui/views/page_info/BUILD.gn    |   1 +
+ .../page_info/stedding_site_controls_view.cc  |  74 ++++++++++
+ .../page_info/stedding_site_controls_view.h   |  22 +++
+ .../ui/views/tabs/vertical/sidebar_address.cc |   5 +
+ .../tabs/vertical/top_container_button.cc     |   6 +
+ .../browser/ui/webui/settings/settings_ui.cc  |   8 ++
+ .../ui/window_sizer/window_sizer_aura.cc      |   5 +-
+ chrome/browser/usb/BUILD.gn                   |   2 +
+ chrome/browser/usb/chrome_usb_delegate.cc     |   5 +-
+ .../stedding/sidebar_address_browsertest.cc   | 136 +++++++++++++++++-
+ chrome/test/stedding/space_jar_browsertest.cc |  43 ++++++
+ .../test/stedding/space_switch_browsertest.cc |  25 ++++
+ 39 files changed, 564 insertions(+), 12 deletions(-)
+ create mode 100644 chrome/browser/ui/spaces/space_partition_domain.h
+
+diff --git a/chrome/browser/bluetooth/BUILD.gn b/chrome/browser/bluetooth/BUILD.gn
+index 45f75a6c9dba0..7f8e5d078815f 100644
+--- a/chrome/browser/bluetooth/BUILD.gn
++++ b/chrome/browser/bluetooth/BUILD.gn
+@@ -29,6 +29,8 @@ source_set("impl") {
+     "chrome_bluetooth_delegate_impl_client.cc",
+   ]
+   deps = [
++    # Stedding spaces B47.
++    "//chrome/browser/ui/spaces:partition_domain",
+     ":bluetooth",
+     "//chrome/browser/chooser_controller",
+     "//chrome/browser/content_settings:content_settings_factory",
+diff --git a/chrome/browser/bluetooth/chrome_bluetooth_delegate.cc b/chrome/browser/bluetooth/chrome_bluetooth_delegate.cc
+index d13b97618bcef..21c5a7c68eae4 100644
+--- a/chrome/browser/bluetooth/chrome_bluetooth_delegate.cc
++++ b/chrome/browser/bluetooth/chrome_bluetooth_delegate.cc
+@@ -9,6 +9,7 @@
+ #include "base/metrics/field_trial_params.h"
+ #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
+ #include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/ui/spaces/space_partition_domain.h"
+ #include "components/content_settings/core/browser/host_content_settings_map.h"
+ #include "components/content_settings/core/common/content_settings_types.h"
+ #include "components/permissions/bluetooth_delegate_impl.h"
+@@ -33,8 +34,10 @@ bool ChromeBluetoothDelegate::MayUseBluetooth(content::RenderFrameHost* rfh) {
+ 
+   // Disable any other non-default StoragePartition contexts, unless it has a
+   // non-http/https scheme.
++  // Stedding spaces B47: a Space's jar counts as the profile's.
+   if (rfh->GetStoragePartition() !=
+-      rfh->GetBrowserContext()->GetDefaultStoragePartition()) {
++          rfh->GetBrowserContext()->GetDefaultStoragePartition() &&
++      !spaces::IsSpacePartition(rfh->GetStoragePartition())) {
+     return !rfh->GetLastCommittedURL().SchemeIsHTTPOrHTTPS();
+   }
+ 
+diff --git a/chrome/browser/extensions/api/settings_private/prefs_util.cc b/chrome/browser/extensions/api/settings_private/prefs_util.cc
+index 4323fa36f85d6..fdc0a122f5a72 100644
+--- a/chrome/browser/extensions/api/settings_private/prefs_util.cc
++++ b/chrome/browser/extensions/api/settings_private/prefs_util.cc
+@@ -432,6 +432,8 @@ const PrefsUtil::TypedPrefMap& PrefsUtil::GetAllowlistedKeys() {
+       settings_api::PrefType::kBoolean;
+   (*s_allowlist)[stedding::prefs::kMarkDriftedPins] =
+       settings_api::PrefType::kBoolean;
++  (*s_allowlist)[stedding::prefs::kCollapseKeepsOpenPins] =
++      settings_api::PrefType::kBoolean;
+   (*s_allowlist)[stedding::prefs::kCtrlTabMru] =
+       settings_api::PrefType::kBoolean;
+   (*s_allowlist)[stedding::prefs::kCtrlTabBackgroundTabs] =
+diff --git a/chrome/browser/file_system_access/BUILD.gn b/chrome/browser/file_system_access/BUILD.gn
+index 01c5f8e2c7671..e65b4fe6dca07 100644
+--- a/chrome/browser/file_system_access/BUILD.gn
++++ b/chrome/browser/file_system_access/BUILD.gn
+@@ -45,6 +45,8 @@ source_set("impl") {
+     "file_system_access_tab_helper.cc",
+   ]
+   deps = [
++    # Stedding spaces B47.
++    "//chrome/browser/ui/spaces:partition_domain",
+     ":file_system_access",
+     "//chrome/browser:browser_process",
+     "//chrome/browser/content_settings",
+diff --git a/chrome/browser/file_system_access/chrome_file_system_access_permission_context.cc b/chrome/browser/file_system_access/chrome_file_system_access_permission_context.cc
+index 0764246c2627d..dd287012053fe 100644
+--- a/chrome/browser/file_system_access/chrome_file_system_access_permission_context.cc
++++ b/chrome/browser/file_system_access/chrome_file_system_access_permission_context.cc
+@@ -47,6 +47,7 @@
+ #include "chrome/browser/profiles/profile_manager.h"
+ #include "chrome/browser/ui/file_system_access/file_system_access_dialogs.h"
+ #include "chrome/browser/ui/file_system_access/file_system_access_restricted_directory_dialog.h"
++#include "chrome/browser/ui/spaces/space_partition_domain.h"
+ #include "chrome/common/chrome_paths.h"
+ #include "chrome/grit/generated_resources.h"
+ #include "components/content_settings/core/browser/host_content_settings_map.h"
+@@ -2658,8 +2659,10 @@ ChromeFileSystemAccessPermissionContext::CanShowFilePicker(
+ 
+   // Disable any other non-default StoragePartition contexts. However, unique
+   // schemes (e.g. isolated-app://) are exempt here.
++  // Stedding spaces B47: a Space's jar counts as the profile's.
+   if (rfh->GetStoragePartition() !=
+           rfh->GetBrowserContext()->GetDefaultStoragePartition() &&
++      !spaces::IsSpacePartition(rfh->GetStoragePartition()) &&
+       rfh->GetLastCommittedURL().SchemeIsHTTPOrHTTPS()) {
+     return base::unexpected(kDefaultNotAllowedMessage);
+   }
+diff --git a/chrome/browser/hid/BUILD.gn b/chrome/browser/hid/BUILD.gn
+index 64c7cee956e8b..ae195dce65a67 100644
+--- a/chrome/browser/hid/BUILD.gn
++++ b/chrome/browser/hid/BUILD.gn
+@@ -63,6 +63,8 @@ source_set("impl") {
+   public_deps = [ ":hid" ]
+ 
+   deps = [
++    # Stedding spaces B47.
++    "//chrome/browser/ui/spaces:partition_domain",
+     "//base",
+     "//chrome/app:branded_strings",
+     "//chrome/app:generated_resources",
+diff --git a/chrome/browser/hid/chrome_hid_delegate.cc b/chrome/browser/hid/chrome_hid_delegate.cc
+index db8a46cb3d1c0..f7522279c01ac 100644
+--- a/chrome/browser/hid/chrome_hid_delegate.cc
++++ b/chrome/browser/hid/chrome_hid_delegate.cc
+@@ -20,6 +20,7 @@
+ #include "chrome/browser/ui/dialogs/browser_dialogs.h"
+ #include "chrome/browser/ui/hid/hid_chooser.h"
+ #include "chrome/browser/ui/hid/hid_chooser_controller.h"
++#include "chrome/browser/ui/spaces/space_partition_domain.h"
+ #include "chrome/common/chrome_features.h"
+ #include "components/permissions/object_permission_context_base.h"
+ #include "content/public/browser/browser_context.h"
+@@ -222,8 +223,10 @@ bool ChromeHidDelegate::IsHidAllowedForFrame(
+     return false;
+   }
+ 
++  // Stedding spaces B47: a Space's jar counts as the profile's.
+   if (main_rfh->GetStoragePartition() !=
+-      main_rfh->GetBrowserContext()->GetDefaultStoragePartition()) {
++          main_rfh->GetBrowserContext()->GetDefaultStoragePartition() &&
++      !spaces::IsSpacePartition(main_rfh->GetStoragePartition())) {
+     const auto& origin = main_rfh->GetLastCommittedOrigin();
+     if (origin.opaque()) {
+       return false;
+diff --git a/chrome/browser/on_device_translation/BUILD.gn b/chrome/browser/on_device_translation/BUILD.gn
+index 66db9fc180f86..ca232ee378752 100644
+--- a/chrome/browser/on_device_translation/BUILD.gn
++++ b/chrome/browser/on_device_translation/BUILD.gn
+@@ -24,6 +24,8 @@ source_set("on_device_translation") {
+     "//components/on_device_translation/service:service_launcher",
+   ]
+   deps = [
++    # Stedding spaces B47.
++    "//chrome/browser/ui/spaces:partition_domain",
+     "//base",
+     "//chrome/browser:browser_process",
+     "//chrome/browser/content_settings",
+diff --git a/chrome/browser/on_device_translation/translation_manager_impl.cc b/chrome/browser/on_device_translation/translation_manager_impl.cc
+index 0964270da92b4..3667115bfafaa 100644
+--- a/chrome/browser/on_device_translation/translation_manager_impl.cc
++++ b/chrome/browser/on_device_translation/translation_manager_impl.cc
+@@ -10,6 +10,7 @@
+ #include "base/i18n/language_tag.h"
+ #include "base/i18n/tag_converters.h"
+ #include "chrome/browser/on_device_translation/service_controller_manager_factory.h"
++#include "chrome/browser/ui/spaces/space_partition_domain.h"
+ #include "components/component_updater/component_updater_service.h"
+ #include "components/content_settings/core/browser/host_content_settings_map.h"
+ #include "components/content_settings/core/common/content_settings.h"
+@@ -187,8 +188,10 @@ TranslationManagerImpl* TranslationManagerImpl::GetOrCreate(
+ }
+ 
+ bool TranslationManagerImpl::AccessedFromValidStoragePartition() {
++  // Stedding spaces B47: a Space's jar counts as the profile's.
+   if (process_host()->GetStoragePartition() !=
+-      browser_context()->GetDefaultStoragePartition()) {
++          browser_context()->GetDefaultStoragePartition() &&
++      !spaces::IsSpacePartition(process_host()->GetStoragePartition())) {
+     return !origin_.GetURL().SchemeIsHTTPOrHTTPS();
+   }
+ 
+diff --git a/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts b/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
+index 48e3efb13e959..d201fd3364b6e 100644
+--- a/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
++++ b/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
+@@ -319,6 +319,13 @@ export function getHtml(this: SettingsSteddingPageElement) {
+       label="$i18n{steddingMarkDriftedPinsLabel}"
+       sub-label="$i18n{steddingMarkDriftedPinsSubLabel}">
+   </settings-toggle-button>
++  <settings-toggle-button
++      id="collapseKeepsOpen"
++      class="hr"
++      pref-key="stedding.folders.collapse_keeps_open"
++      label="$i18n{steddingCollapseKeepsOpenLabel}"
++      sub-label="$i18n{steddingCollapseKeepsOpenSubLabel}">
++  </settings-toggle-button>
+   <settings-toggle-button
+       id="undoToast"
+       class="hr"
+diff --git a/chrome/browser/serial/BUILD.gn b/chrome/browser/serial/BUILD.gn
+index 6122d26b0a6b1..87758db73e7de 100644
+--- a/chrome/browser/serial/BUILD.gn
++++ b/chrome/browser/serial/BUILD.gn
+@@ -45,6 +45,8 @@ source_set("impl") {
+     "web_serial_chooser.cc",
+   ]
+   deps = [
++    # Stedding spaces B47.
++    "//chrome/browser/ui/spaces:partition_domain",
+     ":serial",
+     "//base",
+     "//chrome/app:generated_resources",
+diff --git a/chrome/browser/serial/chrome_serial_delegate.cc b/chrome/browser/serial/chrome_serial_delegate.cc
+index 164657e85360d..269c6c7f8d62d 100644
+--- a/chrome/browser/serial/chrome_serial_delegate.cc
++++ b/chrome/browser/serial/chrome_serial_delegate.cc
+@@ -11,6 +11,7 @@
+ #include "chrome/browser/serial/serial_chooser_context_factory.h"
+ #include "chrome/browser/serial/web_serial_chooser.h"
+ #include "chrome/browser/ui/serial/serial_chooser_controller.h"
++#include "chrome/browser/ui/spaces/space_partition_domain.h"
+ #include "content/public/browser/browser_context.h"
+ #include "content/public/browser/render_frame_host.h"
+ #include "content/public/browser/security_principal.h"
+@@ -41,8 +42,10 @@ bool ChromeSerialDelegate::MayUseSerial(content::RenderFrameHost* frame) {
+     return false;
+   }
+ 
++  // Stedding spaces B47: a Space's jar counts as the profile's.
+   if (main_rfh->GetStoragePartition() !=
+-      main_rfh->GetBrowserContext()->GetDefaultStoragePartition()) {
++          main_rfh->GetBrowserContext()->GetDefaultStoragePartition() &&
++      !spaces::IsSpacePartition(main_rfh->GetStoragePartition())) {
+     return !main_rfh->GetLastCommittedURL().SchemeIsHTTPOrHTTPS();
+   }
+ 
+diff --git a/chrome/browser/speech/BUILD.gn b/chrome/browser/speech/BUILD.gn
+index a2140384a0333..67d787dc77c24 100644
+--- a/chrome/browser/speech/BUILD.gn
++++ b/chrome/browser/speech/BUILD.gn
+@@ -96,6 +96,8 @@ source_set("impl") {
+   ]
+ 
+   deps = [
++    # Stedding spaces B47.
++    "//chrome/browser/ui/spaces:partition_domain",
+     ":speech",
+     "//base",
+     "//chrome/browser:browser_process",
+diff --git a/chrome/browser/speech/on_device_speech_recognition_impl.cc b/chrome/browser/speech/on_device_speech_recognition_impl.cc
+index e03a15d411477..dbd55b86d32a5 100644
+--- a/chrome/browser/speech/on_device_speech_recognition_impl.cc
++++ b/chrome/browser/speech/on_device_speech_recognition_impl.cc
+@@ -13,6 +13,7 @@
+ #include "base/strings/string_util.h"
+ #include "chrome/browser/browser_process.h"
+ #include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/ui/spaces/space_partition_domain.h"
+ #include "components/content_settings/core/common/content_settings.h"
+ #include "components/content_settings/core/common/content_settings_types.h"
+ #include "components/language/core/browser/pref_names.h"
+@@ -431,8 +432,10 @@ bool OnDeviceSpeechRecognitionImpl::
+ 
+   // Allow trusted/special app contexts (like Chrome Extensions and Isolated Web
+   // Apps) that use non-HTTP/HTTPS schemes within custom StoragePartitions.
++  // Stedding spaces B47: a Space's jar counts as the profile's.
+   if (main_frame->GetStoragePartition() !=
+-      main_frame->GetBrowserContext()->GetDefaultStoragePartition()) {
++          main_frame->GetBrowserContext()->GetDefaultStoragePartition() &&
++      !spaces::IsSpacePartition(main_frame->GetStoragePartition())) {
+     return !main_frame->GetLastCommittedURL().SchemeIsHTTPOrHTTPS();
+   }
+ 
+diff --git a/chrome/browser/ui/browser_element_identifiers.cc b/chrome/browser/ui/browser_element_identifiers.cc
+index 8d38874a27966..de0aba6e35890 100644
+--- a/chrome/browser/ui/browser_element_identifiers.cc
++++ b/chrome/browser/ui/browser_element_identifiers.cc
+@@ -205,6 +205,7 @@ DEFINE_ELEMENT_IDENTIFIER_VALUE(kToolbarAppMenuButtonElementId);
+ DEFINE_ELEMENT_IDENTIFIER_VALUE(kToolbarAvatarBubbleElementId);
+ DEFINE_ELEMENT_IDENTIFIER_VALUE(kToolbarAvatarButtonElementId);
+ DEFINE_ELEMENT_IDENTIFIER_VALUE(kToolbarBackButtonElementId);
++DEFINE_ELEMENT_IDENTIFIER_VALUE(kSteddingSidebarBackButtonElementId);
+ DEFINE_ELEMENT_IDENTIFIER_VALUE(kToolbarBackButtonMenuElementId);
+ DEFINE_ELEMENT_IDENTIFIER_VALUE(kToolbarBatterySaverBubbleElementId);
+ DEFINE_ELEMENT_IDENTIFIER_VALUE(kToolbarBatterySaverButtonElementId);
+diff --git a/chrome/browser/ui/browser_element_identifiers.h b/chrome/browser/ui/browser_element_identifiers.h
+index 1eb310d1f4855..90e4410c9bdb8 100644
+--- a/chrome/browser/ui/browser_element_identifiers.h
++++ b/chrome/browser/ui/browser_element_identifiers.h
+@@ -247,6 +247,8 @@ DECLARE_ELEMENT_IDENTIFIER_VALUE(kToolbarAppMenuButtonElementId);
+ DECLARE_ELEMENT_IDENTIFIER_VALUE(kToolbarAvatarBubbleElementId);
+ DECLARE_ELEMENT_IDENTIFIER_VALUE(kToolbarAvatarButtonElementId);
+ DECLARE_ELEMENT_IDENTIFIER_VALUE(kToolbarBackButtonElementId);
++// Stedding (site-controls Si15): Back on the sidebar's top line.
++DECLARE_ELEMENT_IDENTIFIER_VALUE(kSteddingSidebarBackButtonElementId);
+ DECLARE_ELEMENT_IDENTIFIER_VALUE(kToolbarBackButtonMenuElementId);
+ DECLARE_ELEMENT_IDENTIFIER_VALUE(kToolbarBatterySaverBubbleElementId);
+ DECLARE_ELEMENT_IDENTIFIER_VALUE(kToolbarBatterySaverButtonElementId);
+diff --git a/chrome/browser/ui/spaces/BUILD.gn b/chrome/browser/ui/spaces/BUILD.gn
+index 75b03d5c10a8f..bca0fe61ddf1a 100644
+--- a/chrome/browser/ui/spaces/BUILD.gn
++++ b/chrome/browser/ui/spaces/BUILD.gn
+@@ -19,6 +19,13 @@ source_set("router") {
+ # sessions S32: the mark of a Space with an Independent session, its glyph and
+ # its words, with no model behind them, so the tab strip's menu and the toasts
+ # draw it without a cycle.
++# spaces B47: the Space jar's domain, for the checks that would refuse a
++# device picker outside the profile's default partition.
++source_set("partition_domain") {
++  public = [ "space_partition_domain.h" ]
++  deps = [ "//content/public/browser" ]
++}
++
+ source_set("isolation_mark") {
+   public = [ "isolation_mark.h" ]
+   sources = [ "isolation_mark.cc" ]
+@@ -84,6 +91,7 @@ source_set("spaces") {
+   public_deps = [
+     # sessions S32: IsolationMarkForSpace says IsolationMarkDescription.
+     ":isolation_mark",
++    ":partition_domain",
+     ":router",
+     "//base",
+     "//chrome/browser/ui/tabs:tab_strip",
+diff --git a/chrome/browser/ui/spaces/space_model.cc b/chrome/browser/ui/spaces/space_model.cc
+index 1a9e0ab029867..208620d22b6d3 100644
+--- a/chrome/browser/ui/spaces/space_model.cc
++++ b/chrome/browser/ui/spaces/space_model.cc
+@@ -1625,8 +1625,26 @@ void SpaceModel::OnCollectionDataChanged(
+   const auto* const folder =
+       static_cast<const tabs::FolderTabCollection*>(collection);
+   if (folder->collapsed()) {
++    if (!collapsed_folders_.insert(changed).second || !tab_strip_model_) {
++      return;
++    }
++    // folders F3 (GitHub issue 78): the collapse keeps listed the pins the
++    // user selected in the folder, to put the rest away and keep working in
++    // those; and, with "Keep open tabs out of a collapsed folder" on, every
++    // pin that is awake. Each stays as a pin left under the folder does:
++    // while awake, until the folder opens.
++    const bool keep_open =
++        profile_->GetPrefs()->GetBoolean(stedding::prefs::kCollapseKeepsOpenPins);
++    for (tabs::TabInterface* const tab : folder->GetTabsRecursive()) {
++      const int index = tab_strip_model_->GetIndexOfTab(tab);
++      if (index != TabStripModel::kNoTab &&
++          (keep_open || tab_strip_model_->IsTabSelected(index))) {
++        left_under_collapsed_folder_.insert(tab->GetHandle());
++      }
++    }
+     return;
+   }
++  collapsed_folders_.erase(changed);
+   for (const tabs::TabInterface* const tab : folder->GetTabsRecursive()) {
+     left_under_collapsed_folder_.erase(tab->GetHandle());
+   }
+diff --git a/chrome/browser/ui/spaces/space_model.h b/chrome/browser/ui/spaces/space_model.h
+index 8091bf3e30417..668dca3b4ca6b 100644
+--- a/chrome/browser/ui/spaces/space_model.h
++++ b/chrome/browser/ui/spaces/space_model.h
+@@ -646,6 +646,9 @@ class SpaceModel : public TabStripModelObserver,
+   // one on screen: a pinned folder whose pins were all awake kept them all
+   // listed, and seemed never to collapse.
+   std::set<tabs::TabHandle> left_under_collapsed_folder_;
++  // folders F3 (GitHub issue 78): the folders seen collapsed, so a collapse
++  // is told from another change to a collapsed folder (a rename, a colour).
++  std::set<tabs::TabCollection::Handle> collapsed_folders_;
+ 
+   // Writes the Spaces into the session, so they come back after a restart.
+   void SaveToSession();
+diff --git a/chrome/browser/ui/spaces/space_model_window_unittest.cc b/chrome/browser/ui/spaces/space_model_window_unittest.cc
+index 43dc3f6c59702..1894b14b1775f 100644
+--- a/chrome/browser/ui/spaces/space_model_window_unittest.cc
++++ b/chrome/browser/ui/spaces/space_model_window_unittest.cc
+@@ -2980,6 +2980,98 @@ TEST_F(SpaceWindowTest, ACollapseFoldsThePinsThatAreAwake) {
+       << "the next collapse left the pin kept before listed";
+ }
+ 
++// folders F3 (GitHub issue 78): a collapse keeps listed the pins selected in
++// the folder, to put the rest away and keep working in those. They stay while
++// awake, after another tab is on screen, until the folder opens.
++TEST_F(SpaceWindowTest, ACollapseKeepsTheSelectedPinsListed) {
++  Space* const work = model().AddSpace("Work", kBlue);
++  model().SetActiveSpace(work->id());
++  std::vector<tabs::TabInterface*> pins;
++  for (int i = 0; i < 3; ++i) {
++    pins.push_back(OpenTab());
++    model().SetSpacePinned(pins.back(), true);
++  }
++  auto index = [&](tabs::TabInterface* tab) {
++    return tabs().GetIndexOfTab(tab);
++  };
++  std::vector<int> indices = {index(pins[0]), index(pins[1]), index(pins[2])};
++  std::ranges::sort(indices);
++  tabs::FolderTabCollection* const folder = tabs().AddToNewFolder(indices);
++  ASSERT_NE(nullptr, folder);
++  tabs::TabInterface* const loose = OpenTab();
++  // pins[0] on screen and pins[1] selected with it, as a Ctrl-click (a
++  // Cmd-click) on its row leaves them.
++  ui::ListSelectionModel selection;
++  selection.AddIndexToSelection(index(pins[0]));
++  selection.AddIndexToSelection(index(pins[1]));
++  selection.set_active(index(pins[0]));
++  selection.set_anchor(index(pins[0]));
++  tabs().SetSelectionFromModel(selection);
++  ASSERT_TRUE(tabs().IsTabSelected(index(pins[0])));
++  ASSERT_TRUE(tabs().IsTabSelected(index(pins[1])));
++  ASSERT_FALSE(tabs().IsTabSelected(index(pins[2])));
++
++  folder->SetCollapsed(true);
++  for (int i : {0, 1}) {
++    EXPECT_FALSE(tabs().IsTabHidden(index(pins[i])))
++        << "the collapse folded selected pin " << i;
++  }
++  EXPECT_TRUE(tabs().IsTabHidden(index(pins[2])))
++      << "the collapse left a pin that was not selected listed";
++
++  tabs().ActivateTabAt(index(loose));
++  ASSERT_FALSE(tabs().IsTabSelected(index(pins[1])));
++  for (int i : {0, 1}) {
++    EXPECT_FALSE(tabs().IsTabHidden(index(pins[i])))
++        << "selected pin " << i << " folded once another tab was on screen";
++  }
++
++  // Selected no more, they fold at the next collapse.
++  folder->SetCollapsed(false);
++  folder->SetCollapsed(true);
++  for (int i : {0, 1, 2}) {
++    EXPECT_TRUE(tabs().IsTabHidden(index(pins[i])))
++        << "the next collapse left pin " << i << " listed";
++  }
++}
++
++// folders F3 (GitHub issue 78): with "Keep open tabs out of a collapsed
++// folder" on, a collapse keeps every pin that is awake listed; asleep, it
++// folds, and a tab that is not a pin folds as before.
++TEST_F(SpaceWindowTest, TheSettingKeepsOpenPinsOutOfACollapsedFolder) {
++  profile()->GetPrefs()->SetBoolean(stedding::prefs::kCollapseKeepsOpenPins,
++                                    true);
++  Space* const work = model().AddSpace("Work", kBlue);
++  model().SetActiveSpace(work->id());
++  tabs::TabInterface* const awake = OpenTab();
++  model().SetSpacePinned(awake, true);
++  tabs::TabInterface* const asleep = OpenTab();
++  model().SetSpacePinned(asleep, true);
++  tabs::TabInterface* const not_a_pin = OpenTab();
++  model().SetSpaceForTab(not_a_pin, work->id());
++  std::vector<int> indices = {tabs().GetIndexOfTab(awake),
++                              tabs().GetIndexOfTab(asleep),
++                              tabs().GetIndexOfTab(not_a_pin)};
++  std::ranges::sort(indices);
++  tabs::FolderTabCollection* const folder = tabs().AddToNewFolder(indices);
++  ASSERT_NE(nullptr, folder);
++  tabs::TabInterface* const loose = OpenTab();
++  tabs().ActivateTabAt(tabs().GetIndexOfTab(loose));
++  asleep->GetContents()->SetWasDiscarded(true);
++
++  folder->SetCollapsed(true);
++  EXPECT_FALSE(tabs().IsTabHidden(tabs().GetIndexOfTab(awake)))
++      << "the collapse folded a pin that is awake";
++  EXPECT_TRUE(tabs().IsTabHidden(tabs().GetIndexOfTab(asleep)))
++      << "the collapse listed a pin that is asleep";
++  EXPECT_TRUE(tabs().IsTabHidden(tabs().GetIndexOfTab(not_a_pin)))
++      << "the collapse listed a tab that is not a pin";
++
++  awake->GetContents()->SetWasDiscarded(true);
++  EXPECT_TRUE(tabs().IsTabHidden(tabs().GetIndexOfTab(awake)))
++      << "the pin stayed listed once asleep";
++}
++
+ // folders F19: Close Folder's Tabs closes the folder's tabs in this Space,
+ // collapsed ones included, and leaves a tab moved to another Space open.
+ TEST_F(SpaceWindowTest, CloseFolderTabsLeavesAnotherSpacesTabOpen) {
+diff --git a/chrome/browser/ui/spaces/space_partition_domain.h b/chrome/browser/ui/spaces/space_partition_domain.h
+new file mode 100644
+index 0000000000000..9ac94efe580bd
+--- /dev/null
++++ b/chrome/browser/ui/spaces/space_partition_domain.h
+@@ -0,0 +1,36 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_SPACES_SPACE_PARTITION_DOMAIN_H_
++#define CHROME_BROWSER_UI_SPACES_SPACE_PARTITION_DOMAIN_H_
++
++#include "content/public/browser/storage_partition.h"
++#include "content/public/browser/storage_partition_config.h"
++
++namespace spaces {
++
++// Partition domain for isolated Spaces (ADR 0019). Must be [a-z]*.
++inline constexpr char kSpacePartitionDomain[] = "spaces";
++
++// True for the jar of a Space with an independent session. It keeps that
++// Space's sign-ins apart, and nothing else: the Space's site permissions are
++// the profile's, as in every other Space. Chromium refuses the device and
++// file pickers (Web Serial, WebUSB, WebHID, Web Bluetooth, File System
++// Access) and the on-device translation and speech services to a web page in
++// any partition but the profile's default, because their grants are the
++// profile's and a <webview>'s partition must not share them. A Space's jar is
++// one of the profile's own, so those checks count it as the default
++// (spaces B47, GitHub issue 73).
++inline bool IsSpacePartition(const content::StoragePartition* partition) {
++  if (!partition) {
++    return false;
++  }
++  const content::StoragePartitionConfig& config = partition->GetConfig();
++  return config.partition_domain() == kSpacePartitionDomain &&
++         !config.partition_name().empty();
++}
++
++}  // namespace spaces
++
++#endif  // CHROME_BROWSER_UI_SPACES_SPACE_PARTITION_DOMAIN_H_
+diff --git a/chrome/browser/ui/spaces/space_storage_partition.h b/chrome/browser/ui/spaces/space_storage_partition.h
+index e23f9620042bf..d5ccabf2fefaf 100644
+--- a/chrome/browser/ui/spaces/space_storage_partition.h
++++ b/chrome/browser/ui/spaces/space_storage_partition.h
+@@ -14,6 +14,7 @@
+ #include "base/functional/callback.h"
+ #include "base/memory/scoped_refptr.h"
+ #include "chrome/browser/ui/spaces/space_id.h"
++#include "chrome/browser/ui/spaces/space_partition_domain.h"
+ #include "content/public/browser/navigation_controller.h"
+ #include "content/public/browser/storage_partition_config.h"
+ #include "url/gurl.h"
+@@ -34,9 +35,6 @@ namespace spaces {
+ 
+ class SpaceRegistry;
+ 
+-// Partition domain for isolated Spaces (ADR 0019). Must be [a-z]*.
+-inline constexpr char kSpacePartitionDomain[] = "spaces";
+-
+ // The on-disk partition for `profile_id`, or nullopt when `profile_id` is
+ // empty (the Space shares the profile's default jar).
+ std::optional<content::StoragePartitionConfig> StoragePartitionConfigForProfileId(
+diff --git a/chrome/browser/ui/stedding/stedding_prefs.cc b/chrome/browser/ui/stedding/stedding_prefs.cc
+index 33ce8d7a60d08..1f8060cf63af7 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs.cc
++++ b/chrome/browser/ui/stedding/stedding_prefs.cc
+@@ -62,6 +62,9 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
+   // pins H28 (GitHub issue 36): the dot read as a notification, and the
+   // card's reset control drew clicks meant for the card.
+   registry->RegisterBooleanPref(kMarkDriftedPins, false);
++  // folders F3 (GitHub issue 78): a collapse that hides everything is how a
++  // folder is put away for a while, as in Arc.
++  registry->RegisterBooleanPref(kCollapseKeepsOpenPins, false);
+   // Never, until sleep refuses audible, capturing, picture-in-picture and
+   // form tabs. A 15-minute default discarded those.
+   registry->RegisterIntegerPref(kSpaceSleepMinutes, 0);
+diff --git a/chrome/browser/ui/stedding/stedding_prefs.h b/chrome/browser/ui/stedding/stedding_prefs.h
+index 00159cf8e400a..a229f5cf2b161 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs.h
++++ b/chrome/browser/ui/stedding/stedding_prefs.h
+@@ -159,6 +159,12 @@ inline constexpr char kPinsCloseSleeps[] = "stedding.pins.close_sleeps";
+ // shows and the menu's Reset to Pinned Page stays (docs/features/pins.md
+ // H4, H10, H28; GitHub issue 36).
+ inline constexpr char kMarkDriftedPins[] = "stedding.pins.mark_drifted";
++// Collapsing a folder keeps its pins that are awake listed, each until it
++// sleeps, closes or the folder opens; off, a collapse folds all but the tab
++// on screen and the tabs selected (docs/features/folders.md F3; GitHub
++// issue 78).
++inline constexpr char kCollapseKeepsOpenPins[] =
++    "stedding.folders.collapse_keeps_open";
+ 
+ // Minutes after leaving a Space before its tabs sleep; 0 never
+ // (docs/features/tabs.md R6, R8).
+diff --git a/chrome/browser/ui/stedding/stedding_prefs_unittest.cc b/chrome/browser/ui/stedding/stedding_prefs_unittest.cc
+index be017383ea812..588888bd4168c 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs_unittest.cc
++++ b/chrome/browser/ui/stedding/stedding_prefs_unittest.cc
+@@ -41,7 +41,8 @@ TEST(SteddingPrefsTest, EveryPreferenceRegistersWithItsDefault) {
+        {kToolbarHideWithSidebar, kSidebarPageFlush, kUndoToast,
+         kSpaceNotices, kFullscreenHint, kNestChildTabs, kSpacesOwnSession,
+         kMarkDriftedPins, kSidebarAddressInSidebar, kCameraRowFullscreen,
+-        kTabsTidyTitles, kDownloadsTidyNames, kLittleAsPeek}) {
++        kTabsTidyTitles, kDownloadsTidyNames, kLittleAsPeek,
++        kCollapseKeepsOpenPins}) {
+     ASSERT_TRUE(service.FindPreference(name)) << name;
+     EXPECT_FALSE(service.GetBoolean(name)) << name;
+   }
+diff --git a/chrome/browser/ui/views/commandbar/command_bar_view.cc b/chrome/browser/ui/views/commandbar/command_bar_view.cc
+index 8e6f87e9365d4..2b88cc973d893 100644
+--- a/chrome/browser/ui/views/commandbar/command_bar_view.cc
++++ b/chrome/browser/ui/views/commandbar/command_bar_view.cc
+@@ -1412,6 +1412,12 @@ void CommandBarView::BuildActions() {
+           // pins H28 (GitHub issue 36).
+           {stedding::prefs::kMarkDriftedPins,
+            u"Show when a pinned tab leaves its page"},
++          // folders F3 (GitHub issue 78).
++          {stedding::prefs::kCollapseKeepsOpenPins,
++           u"Keep open tabs out of a collapsed folder"},
++          // little E11 (GitHub issue 74).
++          {stedding::prefs::kLittleAsPeek,
++           u"Open links from other apps as a peek"},
+           // sidebar Y23 (BACKLOG S-124).
+           {stedding::prefs::kSidebarPageFlush,
+            u"Page flush against the window"},
+diff --git a/chrome/browser/ui/views/commandbar/command_bar_view_unittest.cc b/chrome/browser/ui/views/commandbar/command_bar_view_unittest.cc
+index 6f77fd44dceca..25f417afe2914 100644
+--- a/chrome/browser/ui/views/commandbar/command_bar_view_unittest.cc
++++ b/chrome/browser/ui/views/commandbar/command_bar_view_unittest.cc
+@@ -1444,6 +1444,19 @@ TEST_F(CommandBarViewTest, APreferenceRowCyclesItsValue) {
+        {u"Show when a pinned tab leaves its page: Off",
+         u"Show when a pinned tab leaves its page: On",
+         u"Show when a pinned tab leaves its page: Off"}},
++      // folders F3 (GitHub issue 78): off by default, on, and off again.
++      {"keeping open tabs out of a collapsed folder turns on and off",
++       u"open tabs out", nullptr, stedding::prefs::kCollapseKeepsOpenPins,
++       3, {0, 1, 0},
++       {u"Keep open tabs out of a collapsed folder: Off",
++        u"Keep open tabs out of a collapsed folder: On",
++        u"Keep open tabs out of a collapsed folder: Off"}},
++      // little E11 (GitHub issue 74): off by default, on, and off again.
++      {"links from other apps as a peek turn on and off", u"other apps as a",
++       nullptr, stedding::prefs::kLittleAsPeek, 3, {0, 1, 0},
++       {u"Open links from other apps as a peek: Off",
++        u"Open links from other apps as a peek: On",
++        u"Open links from other apps as a peek: Off"}},
+       // tabs R65, sidebar-panels Pn17 (BACKLOG S-398): off by default, on,
+       // and off again.
+       {"tidy titles turn on and off", u"tidy the titles", nullptr,
+diff --git a/chrome/browser/ui/views/page_info/BUILD.gn b/chrome/browser/ui/views/page_info/BUILD.gn
+index 7b06269531fcd..2e43cd208180f 100644
+--- a/chrome/browser/ui/views/page_info/BUILD.gn
++++ b/chrome/browser/ui/views/page_info/BUILD.gn
+@@ -97,6 +97,7 @@ source_set("impl") {
+     "//chrome/app/vector_icons",
+     "//chrome/browser/profiles:profile",
+     "//chrome/browser/ui:browser_commands",
++    "//chrome/browser/ui:browser_element_identifiers",
+     "//chrome/browser/ui:bubble_anchor_util",
+     "//chrome/browser/ui:stedding_ui_metrics",
+     "//chrome/browser/ui/spaces",
+diff --git a/chrome/browser/ui/views/page_info/stedding_site_controls_view.cc b/chrome/browser/ui/views/page_info/stedding_site_controls_view.cc
+index 71f747b6f07d9..8bf023fffadd1 100644
+--- a/chrome/browser/ui/views/page_info/stedding_site_controls_view.cc
++++ b/chrome/browser/ui/views/page_info/stedding_site_controls_view.cc
+@@ -26,6 +26,7 @@
+ #include "chrome/app/vector_icons/vector_icons.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/ui/browser_commands.h"
++#include "chrome/browser/ui/browser_element_identifiers.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/color/chrome_color_id.h"
+ #include "chrome/browser/ui/spaces/isolation_mark.h"
+@@ -53,6 +54,7 @@
+ #include "chrome/browser/ui/views/stedding/isolation_mark_view.h"
+ #include "chrome/grit/generated_resources.h"
+ #include "components/content_settings/core/common/content_settings_pattern.h"
++#include "components/strings/grit/components_strings.h"
+ #include "components/tabs/public/tab_interface.h"
+ #include "components/url_formatter/url_formatter.h"
+ #include "components/webapps/browser/banners/app_banner_manager.h"
+@@ -83,6 +85,7 @@
+ #include "ui/views/controls/button/image_button_factory.h"
+ #include "ui/views/controls/button/label_button.h"
+ #include "ui/views/controls/button/toggle_button.h"
++#include "ui/views/interaction/element_tracker_views.h"
+ #include "ui/views/layout/box_layout.h"
+ #include "ui/views/style/typography.h"
+ #include "ui/views/view_class_properties.h"
+@@ -182,6 +185,12 @@ SiteControlsContext ContextFor(content::WebContents* contents) {
+ std::u16string NameFor(SiteControlsStripView::Action action,
+                        const SiteControlsStripView::State& state) {
+   switch (action) {
++    case SiteControlsStripView::Action::kBack:
++      return l10n_util::GetStringUTF16(IDS_ACCNAME_BACK);
++    case SiteControlsStripView::Action::kForward:
++      return l10n_util::GetStringUTF16(IDS_ACCNAME_FORWARD);
++    case SiteControlsStripView::Action::kReload:
++      return l10n_util::GetStringUTF16(IDS_ACCNAME_RELOAD);
+     case SiteControlsStripView::Action::kCopyLink:
+     case SiteControlsStripView::Action::kCopyMarkdownLink:
+       return l10n_util::GetStringUTF16(IDS_STEDDING_SITE_CONTROLS_COPY_LINK);
+@@ -210,6 +219,12 @@ std::u16string NameFor(SiteControlsStripView::Action action,
+ const gfx::VectorIcon& IconFor(SiteControlsStripView::Action action,
+                                const SiteControlsStripView::State& state) {
+   switch (action) {
++    case SiteControlsStripView::Action::kBack:
++      return vector_icons::kArrowBackIcon;
++    case SiteControlsStripView::Action::kForward:
++      return vector_icons::kArrowForwardIcon;
++    case SiteControlsStripView::Action::kReload:
++      return vector_icons::kRefreshIcon;
+     case SiteControlsStripView::Action::kCopyLink:
+     case SiteControlsStripView::Action::kCopyMarkdownLink:
+       return vector_icons::kLinkIcon;
+@@ -236,6 +251,12 @@ const gfx::VectorIcon& IconFor(SiteControlsStripView::Action action,
+ // The window command whose chord a strip button shows, or 0 for none.
+ int CommandFor(SiteControlsStripView::Action action) {
+   switch (action) {
++    case SiteControlsStripView::Action::kBack:
++      return IDC_BACK;
++    case SiteControlsStripView::Action::kForward:
++      return IDC_FORWARD;
++    case SiteControlsStripView::Action::kReload:
++      return IDC_RELOAD;
+     case SiteControlsStripView::Action::kCopyLink:
+       return IDC_COPY_URL;
+     case SiteControlsStripView::Action::kCopyMarkdownLink:
+@@ -262,6 +283,29 @@ void SetIcon(views::ImageButton* button, const gfx::VectorIcon& icon) {
+       views::IconColors(ui::kColorIcon, ui::kColorIconDisabled));
+ }
+ 
++// Si15: whether the window shows a Back button: the toolbar's, or the one on
++// the sidebar's top line, which steps out where the line is too narrow for
++// the page's three buttons.
++bool ShowsBackButton(BrowserWindowInterface* browser) {
++  BrowserView* const browser_view =
++      BrowserView::GetBrowserViewForBrowser(browser);
++  if (!browser_view) {
++    return true;
++  }
++  const ui::ElementContext context = browser_view->GetElementContext();
++  for (const ui::ElementIdentifier id :
++       {kToolbarBackButtonElementId, kSteddingSidebarBackButtonElementId}) {
++    for (views::View* const view :
++         views::ElementTrackerViews::GetInstance()->GetAllMatchingViews(
++             id, context)) {
++      if (view->IsDrawn() && !view->size().IsEmpty()) {
++        return true;
++      }
++    }
++  }
++  return false;
++}
++
+ // The strip's delegate for a page in a tab: the window's own commands and
+ // functions, as its keys run them, and the page's state, watched while the
+ // panel is open.
+@@ -291,6 +335,9 @@ class PageStripDelegate : public SiteControlsStripView::Delegate,
+     if (!browser) {
+       return state;
+     }
++    state.page_buttons = !ShowsBackButton(browser);
++    state.can_go_back = chrome::IsCommandEnabled(browser, IDC_BACK);
++    state.can_go_forward = chrome::IsCommandEnabled(browser, IDC_FORWARD);
+     state.copy_link_enabled = chrome::IsCommandEnabled(browser, IDC_COPY_URL);
+     state.mute_would_mute = MuteKeyWouldMute(browser);
+     switch (PictureInPictureKeyFor(browser)) {
+@@ -332,6 +379,14 @@ class PageStripDelegate : public SiteControlsStripView::Delegate,
+       return;
+     }
+     switch (action) {
++      // Si15: the page's buttons take the panel's page away, and close it
++      // as the keys leave none open.
++      case SiteControlsStripView::Action::kBack:
++      case SiteControlsStripView::Action::kForward:
++      case SiteControlsStripView::Action::kReload:
++        chrome::ExecuteCommand(browser, CommandFor(action));
++        Close();
++        return;
+       // Si2: the copies and picture in picture close the panel, as the
+       // keys leave none open; mute and zoom leave it open.
+       case SiteControlsStripView::Action::kCopyLink:
+@@ -690,6 +745,9 @@ DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(SiteControlsStripView, kZoomOutElementId);
+ DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(SiteControlsStripView,
+                                       kZoomResetElementId);
+ DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(SiteControlsStripView, kZoomInElementId);
++DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(SiteControlsStripView, kBackElementId);
++DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(SiteControlsStripView, kForwardElementId);
++DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(SiteControlsStripView, kReloadElementId);
+ 
+ SiteControlsStripView::SiteControlsStripView(std::unique_ptr<Delegate> delegate)
+     : delegate_(std::move(delegate)) {
+@@ -701,6 +759,13 @@ SiteControlsStripView::SiteControlsStripView(std::unique_ptr<Delegate> delegate)
+       views::BoxLayout::CrossAxisAlignment::kCenter);
+ 
+   // Si11: the order Tab goes through them is the order they are drawn in.
++  // Si15: the page's buttons first, as on the sidebar's line, while the
++  // window shows no Back of its own.
++  back_ = AddIconButton(Action::kBack, kBackElementId, this);
++  forward_ = AddIconButton(Action::kForward, kForwardElementId, this);
++  reload_ = AddIconButton(Action::kReload, kReloadElementId, this);
++  page_gap_ = AddChildView(std::make_unique<views::View>());
++  page_gap_->SetPreferredSize(gfx::Size(kStripSpacing, 0));
+   copy_link_ = AddIconButton(Action::kCopyLink, kCopyLinkElementId, this);
+   copy_title_ = AddIconButton(Action::kCopyTitle, kCopyTitleElementId, this);
+   mute_ = AddIconButton(Action::kToggleMute, kMuteElementId, this);
+@@ -771,6 +836,15 @@ void SiteControlsStripView::OnPressed(Action action, const ui::Event& event) {
+ void SiteControlsStripView::Update() {
+   const State state = delegate_->GetState();
+ 
++  for (views::View* const view :
++       {static_cast<views::View*>(back_.get()),
++        static_cast<views::View*>(forward_.get()),
++        static_cast<views::View*>(reload_.get()), page_gap_.get()}) {
++    view->SetVisible(state.page_buttons);
++  }
++  back_->SetEnabled(state.can_go_back);
++  forward_->SetEnabled(state.can_go_forward);
++
+   copy_link_->SetEnabled(state.copy_link_enabled);
+ 
+   const std::u16string mute = NameFor(Action::kToggleMute, state);
+diff --git a/chrome/browser/ui/views/page_info/stedding_site_controls_view.h b/chrome/browser/ui/views/page_info/stedding_site_controls_view.h
+index cbe403aa1e2ee..9f9aa98a8bcbb 100644
+--- a/chrome/browser/ui/views/page_info/stedding_site_controls_view.h
++++ b/chrome/browser/ui/views/page_info/stedding_site_controls_view.h
+@@ -68,6 +68,9 @@ class SiteControlsStripView : public views::View {
+ 
+  public:
+   DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kElementId);
++  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kBackElementId);
++  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kForwardElementId);
++  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kReloadElementId);
+   DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kCopyLinkElementId);
+   DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kCopyTitleElementId);
+   DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kMuteElementId);
+@@ -77,6 +80,10 @@ class SiteControlsStripView : public views::View {
+   DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kZoomInElementId);
+ 
+   enum class Action {
++    // Si15: the page's buttons, while the window shows no Back of its own.
++    kBack,
++    kForward,
++    kReload,
+     kCopyLink,
+     // An Option-click (Alt-click) on Copy link: the Markdown link (L7).
+     kCopyMarkdownLink,
+@@ -92,6 +99,13 @@ class SiteControlsStripView : public views::View {
+   enum class PictureInPicture { kNothing, kEnter, kExit };
+ 
+   struct State {
++    // Si15: whether the window shows no Back button -- the sidebar's line too
++    // narrow for the page's three, the toolbar hidden -- so the strip offers
++    // Back, Forward and Reload; and which of the first two have somewhere to
++    // go.
++    bool page_buttons = false;
++    bool can_go_back = false;
++    bool can_go_forward = false;
+     // Si2: whether the window's Copy link command is on: the sharing policy
+     // that turns off Shift-Cmd-C turns this off too (copy-link L7).
+     bool copy_link_enabled = true;
+@@ -125,6 +139,9 @@ class SiteControlsStripView : public views::View {
+   // words and whether it is enabled, the zoom.
+   void Update();
+ 
++  views::ImageButton* back() { return back_; }
++  views::ImageButton* forward() { return forward_; }
++  views::ImageButton* reload() { return reload_; }
+   views::ImageButton* copy_link() { return copy_link_; }
+   views::ImageButton* copy_title() { return copy_title_; }
+   views::ImageButton* mute() { return mute_; }
+@@ -142,6 +159,11 @@ class SiteControlsStripView : public views::View {
+   std::u16string Tooltip(const std::u16string& name, int command_id);
+ 
+   std::unique_ptr<Delegate> delegate_;
++  raw_ptr<views::ImageButton> back_ = nullptr;
++  raw_ptr<views::ImageButton> forward_ = nullptr;
++  raw_ptr<views::ImageButton> reload_ = nullptr;
++  // Between the page's buttons and the rest, shown with them.
++  raw_ptr<views::View> page_gap_ = nullptr;
+   raw_ptr<views::ImageButton> copy_link_ = nullptr;
+   raw_ptr<views::ImageButton> copy_title_ = nullptr;
+   raw_ptr<views::ImageButton> mute_ = nullptr;
+diff --git a/chrome/browser/ui/views/tabs/vertical/sidebar_address.cc b/chrome/browser/ui/views/tabs/vertical/sidebar_address.cc
+index d2c9454bf38a4..07dd764115f21 100644
+--- a/chrome/browser/ui/views/tabs/vertical/sidebar_address.cc
++++ b/chrome/browser/ui/views/tabs/vertical/sidebar_address.cc
+@@ -17,6 +17,7 @@
+ #include "chrome/app/chrome_command_ids.h"
+ #include "chrome/app/vector_icons/vector_icons.h"
+ #include "chrome/browser/ui/browser_commands.h"
++#include "chrome/browser/ui/browser_element_identifiers.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/color/chrome_color_id.h"
+ #include "chrome/browser/ui/layout_constants.h"
+@@ -219,6 +220,10 @@ SidebarNavButtons::SidebarNavButtons(BrowserWindowInterface* browser)
+       views::BoxLayout::Orientation::kHorizontal, gfx::Insets(),
+       kNavButtonGap));
+   back_ = AddChildView(std::make_unique<SidebarNavButton>(browser, IDC_BACK));
++  // site-controls Si15: the site panel looks for it, to offer the page's
++  // buttons itself while the line has no room for them.
++  back_->SetProperty(views::kElementIdentifierKey,
++                     kSteddingSidebarBackButtonElementId);
+   back_->SetCommand(IDC_BACK, BackIcon(),
+                     l10n_util::GetStringUTF16(IDS_TOOLTIP_BACK),
+                     l10n_util::GetStringUTF16(IDS_ACCNAME_BACK));
+diff --git a/chrome/browser/ui/views/tabs/vertical/top_container_button.cc b/chrome/browser/ui/views/tabs/vertical/top_container_button.cc
+index 1029f4c7295e8..497bef088b3a6 100644
+--- a/chrome/browser/ui/views/tabs/vertical/top_container_button.cc
++++ b/chrome/browser/ui/views/tabs/vertical/top_container_button.cc
+@@ -41,6 +41,12 @@ class TopContainerButtonActionViewInterface
+ }  // namespace
+ 
+ TopContainerButton::TopContainerButton() {
++  // Stedding sidebar Y51 (BACKLOG S-415, GitHub issue 45): the icon at the
++  // centre of the button and of its hover circle, whatever its size. Left
++  // aligned, a LabelButton puts it at its border's 6 DIP inset, which centres
++  // only a 20 DIP icon in the 32 DIP button: the sidebar's 18 DIP buttons
++  // sat a DIP left of their circle, and its 22 DIP ones a DIP right.
++  SetHorizontalAlignment(gfx::ALIGN_CENTER);
+   views::FocusRing::Get(this)->SetColorId(kColorNewTabButtonFocusRing);
+   ConfigureInkDrop(this);
+   SetPaintToLayer();
+diff --git a/chrome/browser/ui/webui/settings/settings_ui.cc b/chrome/browser/ui/webui/settings/settings_ui.cc
+index f46b63a45433b..ebbb484f1d80d 100644
+--- a/chrome/browser/ui/webui/settings/settings_ui.cc
++++ b/chrome/browser/ui/webui/settings/settings_ui.cc
+@@ -1513,6 +1513,14 @@ SettingsUI::SettingsUI(content::WebUI* web_ui)
+       "After you follow a link or go to another page in a pinned tab: a / "
+       "before its title, a dot on an essential, and \u21BA to go back to the "
+       "page you pinned.");
++  // folders F3 (GitHub issue 78).
++  html_source->AddString("steddingCollapseKeepsOpenLabel",
++                         "Keep open tabs out of a collapsed folder");
++  html_source->AddString(
++      "steddingCollapseKeepsOpenSubLabel",
++      "A pinned tab that is awake stays listed when its folder collapses, "
++      "until it sleeps or you close it. Off, a collapse hides every tab in "
++      "the folder but the one on screen and the ones you selected.");
+   // tabs R30, settings T17 (BACKLOG S-97).
+   html_source->AddString("steddingUndoToastLabel",
+                          "Offer Undo after closing tabs");
+diff --git a/chrome/browser/ui/window_sizer/window_sizer_aura.cc b/chrome/browser/ui/window_sizer/window_sizer_aura.cc
+index f9b5c8a9055ac..ed4faaa39a288 100644
+--- a/chrome/browser/ui/window_sizer/window_sizer_aura.cc
++++ b/chrome/browser/ui/window_sizer/window_sizer_aura.cc
+@@ -5,8 +5,11 @@
+ #include "chrome/browser/ui/window_sizer/window_sizer.h"
+ 
+ // This doesn't matter for aura, which has different tiling.
++// Stedding windows G11: a new window steps 22 DIPs right and down from the
++// window it opens from, as on the Mac (window_sizer_mac.mm). Chromium's 10
++// left a second window on Windows looking as if it sat on the first.
+ // static
+-const int WindowSizer::kWindowTilePixels = 10;
++const int WindowSizer::kWindowTilePixels = 22;
+ const int WindowSizer::kWindowMaxDefaultWidth = 1050;
+ 
+ // static
+diff --git a/chrome/browser/usb/BUILD.gn b/chrome/browser/usb/BUILD.gn
+index 3a9667bce6e6d..63b2f823e1531 100644
+--- a/chrome/browser/usb/BUILD.gn
++++ b/chrome/browser/usb/BUILD.gn
+@@ -75,6 +75,8 @@ source_set("impl") {
+     "web_usb_histograms.cc",
+   ]
+   deps = [
++    # Stedding spaces B47.
++    "//chrome/browser/ui/spaces:partition_domain",
+     ":usb",
+     "//base",
+     "//chrome/app:generated_resources",
+diff --git a/chrome/browser/usb/chrome_usb_delegate.cc b/chrome/browser/usb/chrome_usb_delegate.cc
+index 7115fc54ef5c5..57a468c0a3e46 100644
+--- a/chrome/browser/usb/chrome_usb_delegate.cc
++++ b/chrome/browser/usb/chrome_usb_delegate.cc
+@@ -13,6 +13,7 @@
+ #include "base/scoped_observation.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/ui/dialogs/browser_dialogs.h"
++#include "chrome/browser/ui/spaces/space_partition_domain.h"
+ #include "chrome/browser/usb/usb_blocklist.h"
+ #include "chrome/browser/usb/usb_chooser_context.h"
+ #include "chrome/browser/usb/usb_chooser_context_factory.h"
+@@ -285,8 +286,10 @@ bool ChromeUsbDelegate::PageMayUseUsb(content::Page& page) {
+   // HTTP(S) as that presents a clear risk for inappropriate sharing.
+   // TODO(crbug.com/40068594): USB permissions should be explicitly scoped to
+   // StoragePartitions.
++  // Stedding spaces B47: a Space's jar counts as the profile's.
+   if (main_rfh.GetStoragePartition() !=
+-      main_rfh.GetBrowserContext()->GetDefaultStoragePartition()) {
++          main_rfh.GetBrowserContext()->GetDefaultStoragePartition() &&
++      !spaces::IsSpacePartition(main_rfh.GetStoragePartition())) {
+     return !main_rfh.GetLastCommittedURL().SchemeIsHTTPOrHTTPS();
+   }
+ 
+diff --git a/chrome/test/stedding/sidebar_address_browsertest.cc b/chrome/test/stedding/sidebar_address_browsertest.cc
+index b8bc1539d7ecf..919916f2112ec 100644
+--- a/chrome/test/stedding/sidebar_address_browsertest.cc
++++ b/chrome/test/stedding/sidebar_address_browsertest.cc
+@@ -29,12 +29,14 @@
+ #include "chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h"
+ #include "chrome/browser/ui/views/extensions/extensions_toolbar_button.h"
+ #include "chrome/browser/ui/views/extensions/extensions_toolbar_desktop.h"
++#include "chrome/browser/ui/views/page_info/stedding_site_controls_view.h"
+ #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
+ #if BUILDFLAG(IS_WIN)
+ #include "chrome/browser/ui/views/frame/browser_caption_button_container_win.h"
+ #include "chrome/browser/ui/views/frame/browser_frame_view_win.h"
+ #endif
+ #include "chrome/browser/ui/views/tabs/vertical/sidebar_address.h"
++#include "chrome/browser/ui/views/tabs/vertical/top_container_button.h"
+ #include "chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_top_container.h"
+ #include "chrome/browser/ui/views/test/vertical_tabs_browser_test_mixin.h"
+ #include "chrome/common/webui_url_constants.h"
+@@ -57,7 +59,10 @@
+ #include "ui/gfx/animation/animation_test_api.h"
+ #include "ui/gfx/geometry/point.h"
+ #include "ui/views/controls/button/label_button.h"
++#include "ui/views/controls/image_view.h"
++#include "ui/views/controls/label.h"
+ #include "ui/views/controls/textfield/textfield.h"
++#include "ui/views/interaction/element_tracker_views.h"
+ #include "ui/views/layout/animating_layout_manager.h"
+ #include "ui/views/layout/layout_manager_base.h"
+ #include "ui/views/layout/proposed_layout.h"
+@@ -215,7 +220,7 @@ IN_PROC_BROWSER_TEST_F(SidebarAddressTest, TheAddressMovesToTheSidebar) {
+   EXPECT_EQ(IDC_RELOAD, nav()->reload()->command()) << "loaded: Reload";
+   {
+     content::WebContents* const contents =
+-        browser()->tab_strip_model()->GetActiveWebContents();
++        browser()->GetTabStripModel()->GetActiveWebContents();
+     content::TestNavigationObserver back(contents);
+     Press(nav()->back());
+     back.Wait();
+@@ -878,6 +883,135 @@ IN_PROC_BROWSER_TEST_F(SidebarAddressTest,
+   }
+ }
+ 
++// site-controls Si15, sidebar Y51 (BACKLOG S-414, GitHub issue 45, a comment
++// on 0.4.0 beta 8): while the sidebar's top line is too narrow for Back,
++// Forward and Reload, the site panel's strip starts with them, and they run
++// the window's commands; with them on the line, the strip has none. The keys
++// were the three's only place.
++IN_PROC_BROWSER_TEST_F(SidebarAddressTest, ThePanelHasThePagesButtonsOffTheLine) {
++  ASSERT_TRUE(
++      ui_test_utils::NavigateToURL(browser(), Page("a.test", "/title1.html")));
++  ASSERT_TRUE(
++      ui_test_utils::NavigateToURL(browser(), Page("b.test", "/title2.html")));
++  prefs()->SetBoolean(stedding::prefs::kSidebarAddressInSidebar, true);
++  ASSERT_TRUE(base::test::RunUntil(
++      [&]() { return !browser_view()->IsToolbarVisible(); }));
++  Settle();
++  ASSERT_TRUE(Shows(nav()));
++
++  stedding::SidebarAddressField* const address = field();
++  ASSERT_TRUE(address);
++  const auto open_strip = [&]() -> stedding::SiteControlsStripView* {
++    views::test::RunScheduledLayout(browser_view()->GetWidget());
++    if (!browser_view()->ShowSteddingSitePanel(
++            address->site_button_for_testing())) {
++      return nullptr;
++    }
++    views::BubbleDialogDelegateView* const panel =
++        PageInfoBubbleViewBase::GetPageInfoBubbleForTesting();
++    if (!panel) {
++      return nullptr;
++    }
++    return views::AsViewClass<stedding::SiteControlsStripView>(
++        views::ElementTrackerViews::GetInstance()->GetFirstMatchingView(
++            stedding::SiteControlsStripView::kElementId,
++            views::ElementTrackerViews::GetContextForView(
++                panel->GetContentsView())));
++  };
++  const auto close_panel = [&]() {
++    if (views::BubbleDialogDelegateView* const panel =
++            PageInfoBubbleViewBase::GetPageInfoBubbleForTesting()) {
++      panel->GetWidget()->CloseNow();
++    }
++  };
++
++  {
++    SCOPED_TRACE("the line has the three");
++    stedding::SiteControlsStripView* const strip = open_strip();
++    ASSERT_TRUE(strip) << "no site panel strip";
++    EXPECT_FALSE(strip->back()->GetVisible());
++    EXPECT_FALSE(strip->forward()->GetVisible());
++    EXPECT_FALSE(strip->reload()->GetVisible());
++    close_panel();
++  }
++
++  bool stepped_out = false;
++  for (int width = 400; width >= 160 && !stepped_out; width -= 10) {
++    controller()->SetUncollapsedWidth(width);
++    ASSERT_TRUE(base::test::RunUntil([&]() {
++      views::test::RunScheduledLayout(browser_view()->GetWidget());
++      return region()->width() <= width + 24;
++    })) << "the sidebar did not narrow to " << width;
++    stepped_out = !Shows(nav());
++  }
++  ASSERT_TRUE(stepped_out) << "Back, Forward and Reload never stepped out";
++  ASSERT_TRUE(Shows(address->site_button_for_testing()));
++
++  stedding::SiteControlsStripView* const strip = open_strip();
++  ASSERT_TRUE(strip) << "no site panel strip on the narrow line";
++  EXPECT_TRUE(strip->back()->GetVisible()) << "the panel has no Back";
++  EXPECT_TRUE(strip->forward()->GetVisible());
++  EXPECT_TRUE(strip->reload()->GetVisible());
++  EXPECT_TRUE(strip->back()->GetEnabled()) << "Back has a page to go to";
++  EXPECT_FALSE(strip->forward()->GetEnabled()) << "Forward has none";
++  EXPECT_LT(strip->back()->x(), strip->copy_link()->x())
++      << "the page's buttons do not come first";
++
++  // Back runs the window's Back.
++  content::WebContents* const page =
++      browser()->GetTabStripModel()->GetActiveWebContents();
++  content::TestNavigationObserver went_back(page);
++  Press(strip->back());
++  went_back.Wait();
++  EXPECT_EQ(Page("a.test", "/title1.html"), page->GetLastCommittedURL());
++  close_panel();
++}
++
++// sidebar Y51 (BACKLOG S-415, GitHub issue 45, a comment on 0.4.0 beta 8):
++// every button of the sidebar's top line and of its field draws its icon at
++// the centre of the button, where its hover circle is. Left aligned, the
++// 18 DIP icons sat at the border's 6 DIP inset, a DIP left of centre: a
++// pixel and more at 125%.
++IN_PROC_BROWSER_TEST_F(SidebarAddressTest, EachButtonsIconIsCentred) {
++  prefs()->SetBoolean(stedding::prefs::kSidebarAddressInSidebar, true);
++  ASSERT_TRUE(
++      ui_test_utils::NavigateToURL(browser(), Page("a.test", "/title1.html")));
++  views::test::RunScheduledLayout(browser_view());
++
++  std::vector<views::View*> pending = {browser_view()};
++  int checked = 0;
++  while (!pending.empty()) {
++    views::View* const view = pending.back();
++    pending.pop_back();
++    for (views::View* const child : view->children()) {
++      pending.push_back(child);
++    }
++    auto* const button = views::AsViewClass<TopContainerButton>(view);
++    if (!button || !button->IsDrawn() || button->size().IsEmpty()) {
++      continue;
++    }
++    // The button's own image comes first; Downloads draws a badge after it.
++    views::View* image = nullptr;
++    for (views::View* const child : button->children()) {
++      if (views::IsViewClass<views::ImageView>(child)) {
++        image = child;
++        break;
++      }
++    }
++    if (!image || image->size().IsEmpty()) {
++      continue;
++    }
++    ++checked;
++    EXPECT_EQ(button->GetLocalBounds().CenterPoint(),
++              image->bounds().CenterPoint())
++        << button->GetClassName() << " \"" << button->GetTooltipText()
++        << "\" is " << button->size().ToString() << ", its icon at "
++        << image->bounds().ToString();
++  }
++  // The toggle, Back, Forward, Reload, the site button and Copy Link.
++  EXPECT_GE(checked, 6);
++}
++
+ // sidebar Y51 (GitHub issue 45, a comment on 0.4.0 beta 8): with room in the
+ // field, the pinned extensions' icons show, extensions pinned after the
+ // address moved to the sidebar too, and they come back when the sidebar is
+diff --git a/chrome/test/stedding/space_jar_browsertest.cc b/chrome/test/stedding/space_jar_browsertest.cc
+index 76b15d26749b6..ba6f9d23d9637 100644
+--- a/chrome/test/stedding/space_jar_browsertest.cc
++++ b/chrome/test/stedding/space_jar_browsertest.cc
+@@ -29,6 +29,8 @@
+ #include "chrome/app/chrome_command_ids.h"
+ #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
+ #include "chrome/browser/extensions/chrome_test_extension_loader.h"
++#include "chrome/browser/file_system_access/chrome_file_system_access_permission_context.h"
++#include "chrome/browser/file_system_access/file_system_access_permission_context_factory.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/renderer_context_menu/render_view_context_menu_test_util.h"
+ #include "chrome/browser/ui/browser_commands.h"
+@@ -38,6 +40,7 @@
+ #include "chrome/browser/ui/navigator/browser_navigator_params.h"
+ #include "chrome/browser/ui/spaces/space.h"
+ #include "chrome/browser/ui/spaces/space_model.h"
++#include "chrome/browser/ui/spaces/space_partition_domain.h"
+ #include "chrome/browser/ui/spaces/space_router.h"
+ #include "chrome/browser/ui/spaces/space_storage_partition.h"
+ #include "chrome/browser/ui/stedding/sleep_tabs.h"
+@@ -64,16 +67,22 @@
+ #include "components/content_settings/core/common/content_settings_types.h"
+ #include "components/prefs/pref_service.h"
+ #include "components/tabs/public/tab_interface.h"
++#include "content/public/browser/bluetooth_delegate.h"
+ #include "content/public/browser/browsing_data_remover.h"
++#include "content/public/browser/content_browser_client.h"
+ #include "content/public/browser/context_menu_params.h"
++#include "content/public/browser/hid_delegate.h"
+ #include "content/public/browser/navigation_controller.h"
+ #include "content/public/browser/navigation_entry.h"
+ #include "content/public/browser/reload_type.h"
+ #include "content/public/browser/render_frame_host.h"
++#include "content/public/browser/serial_delegate.h"
+ #include "content/public/browser/storage_partition.h"
+ #include "content/public/browser/storage_partition_config.h"
++#include "content/public/browser/usb_delegate.h"
+ #include "content/public/browser/web_contents.h"
+ #include "content/public/browser/web_contents_observer.h"
++#include "content/public/common/content_client.h"
+ #include "content/public/common/page_type.h"
+ #include "content/public/common/url_constants.h"
+ #include "content/public/test/browser_test.h"
+@@ -1997,4 +2006,38 @@ IN_PROC_BROWSER_TEST_F(SpaceMenuJarTest,
+   ui_test_utils::WaitForBrowserToClose(blank);
+ }
+ 
++// spaces B47 (GitHub issue 73): a page in a Space with an independent session
++// may open the device and file pickers, as it may in the profile's own jar.
++// Chromium refuses them in any partition but the default one; a Space's jar is
++// the profile's own.
++IN_PROC_BROWSER_TEST_F(SpaceJarTest, ASpacesJarMayOpenTheDevicePickers) {
++  tabs::TabInterface* home_page = nullptr;
++  ASSERT_NO_FATAL_FAILURE(OpenWebPage(home_, &home_page));
++  tabs::TabInterface* work_page = nullptr;
++  ASSERT_NO_FATAL_FAILURE(OpenWebPage(work_, &work_page));
++  content::StoragePartition* const profile_jar =
++      browser()->GetProfile()->GetDefaultStoragePartition();
++  content::RenderFrameHost* const in_work =
++      work_page->GetContents()->GetPrimaryMainFrame();
++  ASSERT_NE(profile_jar, in_work->GetStoragePartition());
++  ASSERT_TRUE(spaces::IsSpacePartition(in_work->GetStoragePartition()));
++  content::RenderFrameHost* const in_home =
++      home_page->GetContents()->GetPrimaryMainFrame();
++  ASSERT_EQ(profile_jar, in_home->GetStoragePartition());
++
++  content::ContentBrowserClient* const client =
++      content::GetContentClientForTesting()->browser();
++  ChromeFileSystemAccessPermissionContext* const files =
++      FileSystemAccessPermissionContextFactory::GetForProfile(
++          browser()->GetProfile());
++  for (content::RenderFrameHost* frame : {in_home, in_work}) {
++    SCOPED_TRACE(frame == in_work ? "Work's jar" : "the profile's jar");
++    EXPECT_TRUE(client->GetSerialDelegate()->CanRequestPortPermission(frame));
++    EXPECT_TRUE(client->GetHidDelegate()->IsHidAllowedForFrame(frame));
++    EXPECT_TRUE(client->GetUsbDelegate()->PageMayUseUsb(frame->GetPage()));
++    EXPECT_TRUE(client->GetBluetoothDelegate()->MayUseBluetooth(frame));
++    EXPECT_TRUE(files->CanShowFilePicker(frame).has_value());
++  }
++}
++
+ }  // namespace
+diff --git a/chrome/test/stedding/space_switch_browsertest.cc b/chrome/test/stedding/space_switch_browsertest.cc
+index 1b9cc3e8eb42b..2fcd74cc7fa10 100644
+--- a/chrome/test/stedding/space_switch_browsertest.cc
++++ b/chrome/test/stedding/space_switch_browsertest.cc
+@@ -41,6 +41,7 @@
+ #include "chrome/browser/themes/theme_service_factory.h"
+ #include "chrome/browser/ui/animation/browser_animation_controller.h"
+ #include "chrome/browser/ui/browser_commands.h"
++#include "chrome/browser/ui/browser_window.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/spaces/space.h"
+ #include "chrome/browser/ui/spaces/space_colors.h"
+@@ -101,6 +102,7 @@
+ #include "ui/accessibility/ax_enums.mojom.h"
+ #include "ui/accessibility/ax_node_data.h"
+ #include "ui/base/accelerators/accelerator.h"
++#include "ui/base/base_window.h"
+ #include "ui/base/hit_test.h"
+ #include "ui/base/window_open_disposition.h"
+ #include "ui/color/color_id.h"
+@@ -116,6 +118,8 @@
+ #include "ui/gfx/color_utils.h"
+ #include "ui/gfx/geometry/point.h"
+ #include "ui/gfx/geometry/point_f.h"
++#include "ui/gfx/geometry/rect.h"
++#include "ui/gfx/geometry/size.h"
+ #include "ui/gfx/geometry/transform.h"
+ #include "ui/gfx/geometry/vector2d.h"
+ #include "ui/gfx/scoped_animation_duration_scale_mode.h"
+@@ -3669,4 +3673,25 @@ IN_PROC_BROWSER_TEST_F(SpaceSwitchTest, CmdNOpensOnTheSpaceItIsPressedIn) {
+       << "a window from nowhere took the last Cmd-N's Space";
+ }
+ 
++// windows G11: New Window opens 22 DIPs right of and below the window it is
++// opened from, on both platforms, clearly apart from it. On Windows it was
++// 10, and the second window looked as if it sat on the first.
++IN_PROC_BROWSER_TEST_F(SpaceSwitchTest, ANewWindowStepsClearOfTheFirst) {
++  browser()->GetWindow()->SetBounds(gfx::Rect(120, 120, 900, 680));
++  ASSERT_TRUE(base::test::RunUntil([&]() {
++    return browser()->GetWindow()->GetRestoredBounds().size() ==
++           gfx::Size(900, 680);
++  }));
++  const gfx::Rect first = browser()->GetWindow()->GetRestoredBounds();
++
++  ui_test_utils::BrowserCreatedObserver opened;
++  chrome::ExecuteCommand(browser(), IDC_NEW_WINDOW);
++  BrowserWindowInterface* const window = opened.Wait();
++  ASSERT_TRUE(window);
++  const gfx::Rect second = window->GetWindow()->GetRestoredBounds();
++  EXPECT_EQ(first.origin() + gfx::Vector2d(22, 22), second.origin())
++      << "the first window is at " << first.ToString();
++  EXPECT_EQ(first.size(), second.size());
++}
++
+ }  // namespace

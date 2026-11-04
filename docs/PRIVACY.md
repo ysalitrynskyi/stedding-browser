@@ -166,6 +166,12 @@ with the same time range and the same sites (sessions S24). **Clear
 Independent Session** empties that Space's jar. Deleting the Space deletes
 the jar.
 
+An independent session keeps sign-ins apart, not permissions. A site's
+permissions are the profile's, in every Space: camera, location and
+notifications, and the devices and files a site was allowed to use (a serial
+port, a USB or HID device, a Bluetooth device, a folder). A device a site
+may use in one Space it may use in the others (`features/spaces.md` B47).
+
 **Clear Site Cookies and Reload** (⌥⇧⌘R, Ctrl+Alt+Shift+R, or the command
 bar) deletes the cookies of the page's site from the jar that tab uses, and
 from no other jar, then reloads the tab. Site storage, cache, history and

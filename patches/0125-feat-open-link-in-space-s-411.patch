@@ -1,0 +1,385 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Wed, 4 Nov 2026 07:07:46 -0500
+Subject: feat: Open Link in Space (S-411)
+
+A link's page menu has "Open Link in Space" ("Open link in Space" off the
+Mac) after Open Link in Split View, in a window with more than one Space:
+a row for each other Space, in switcher order, a Space with an independent
+session marked as Move to Space marks it. A row opens the link in a new tab
+filed in that Space and made in its jar, so its first request carries that
+Space's cookies, and the window goes to that Space. The Space named wins
+over a route (spaces::ScopedNewTabSpace, read by ChooseSpaceForNewTab). Not
+in a popup, an app, a private window or a peek over the page (menus M14,
+spaces B46).
+
+Why: GitHub issue 75, as Zen has it; the owner asked for the issues'
+improvements on 2026-11-04.
+Removable when: never as a feature.
+---
+ chrome/browser/renderer_context_menu/BUILD.gn |   2 +
+ .../render_view_context_menu.cc               | 105 +++++++++++++++++-
+ .../render_view_context_menu.h                |   2 +
+ chrome/browser/ui/spaces/new_tab_space.cc     |  23 ++++
+ chrome/browser/ui/spaces/new_tab_space.h      |  20 ++++
+ .../ui/stedding/stedding_command_ids.h        |   8 +-
+ chrome/test/stedding/space_jar_browsertest.cc |  58 ++++++++++
+ 7 files changed, 216 insertions(+), 2 deletions(-)
+
+diff --git a/chrome/browser/renderer_context_menu/BUILD.gn b/chrome/browser/renderer_context_menu/BUILD.gn
+index 5dce3595d5984..451fe563138e0 100644
+--- a/chrome/browser/renderer_context_menu/BUILD.gn
++++ b/chrome/browser/renderer_context_menu/BUILD.gn
+@@ -152,6 +152,8 @@ source_set("impl") {
+       "//chrome/browser/translate",
+       "//chrome/browser/ui:browser_commands",
+       "//chrome/browser/ui:browser_window_header",
++      "//chrome/browser/ui/spaces",
++      "//chrome/browser/ui/spaces:isolation_mark",
+       "//chrome/browser/ui/stedding:address_row",
+       "//chrome/browser/ui/stedding:dark_pages",
+       "//chrome/browser/ui/stedding:little_window",
+diff --git a/chrome/browser/renderer_context_menu/render_view_context_menu.cc b/chrome/browser/renderer_context_menu/render_view_context_menu.cc
+index 85d9079931605..869f981cb52ad 100644
+--- a/chrome/browser/renderer_context_menu/render_view_context_menu.cc
++++ b/chrome/browser/renderer_context_menu/render_view_context_menu.cc
+@@ -139,6 +139,11 @@
+ #include "chrome/browser/ui/read_anything/read_anything_side_panel_controller_utils.h"
+ #include "chrome/browser/ui/send_tab_to_self/send_tab_to_self_bubble.h"
+ #include "chrome/browser/ui/send_tab_to_self/send_tab_to_self_sub_menu_model.h"
++#include "chrome/browser/ui/spaces/isolation_mark.h"
++#include "chrome/browser/ui/spaces/new_tab_space.h"
++#include "chrome/browser/ui/spaces/space.h"
++#include "chrome/browser/ui/spaces/space_model.h"
++#include "chrome/browser/ui/spaces/space_storage_partition.h"
+ #include "chrome/browser/ui/stedding/dark_pages.h"
+ #include "chrome/browser/ui/stedding/little_window.h"
+ #include "chrome/browser/ui/stedding/peek.h"
+@@ -802,7 +807,10 @@ int FindUMAEnumValueForCommand(int id, UmaEnumIdLookupType type) {
+   // RecordUsedItem's NOTREACHED.
+   if (id == IDC_STEDDING_TOGGLE_DARK_PAGES_FOR_SITE ||
+       id == IDC_STEDDING_LITTLE_PROMOTE ||
+-      id == IDC_STEDDING_LITTLE_PROMOTE_SPLIT) {
++      id == IDC_STEDDING_LITTLE_PROMOTE_SPLIT ||
++      id == IDC_STEDDING_OPEN_LINK_IN_SPACE_MENU ||
++      (id >= IDC_STEDDING_OPEN_LINK_IN_SPACE_FIRST &&
++       id <= IDC_STEDDING_OPEN_LINK_IN_SPACE_LAST)) {
+     return 0;
+   }
+ 
+@@ -821,6 +829,25 @@ bool IsCommandForOpenLink(int id) {
+           id <= IDC_OPEN_LINK_IN_PROFILE_LAST);
+ }
+ 
++// Stedding menus M14 (GitHub issue 75): the Spaces "Open Link in Space"
++// names for `window`, every Space but the one on screen, in switcher order;
++// none in a window without Spaces (a popup, an app, a private window).
++std::vector<spaces::SpaceId> SpacesToOpenLinkIn(
++    BrowserWindowInterface* window) {
++  std::vector<spaces::SpaceId> others;
++  const spaces::SpaceModel* const model =
++      window ? spaces::SpaceModel::From(window) : nullptr;
++  if (!model) {
++    return others;
++  }
++  for (const std::unique_ptr<spaces::Space>& space : model->spaces()) {
++    if (space->id() != model->active_id()) {
++      others.push_back(space->id());
++    }
++  }
++  return others;
++}
++
+ // Returns the preference of the profile represented by the |context|.
+ PrefService* GetPrefs(content::BrowserContext* context) {
+   return user_prefs::UserPrefs::Get(context);
+@@ -2087,6 +2114,51 @@ void RenderViewContextMenu::AppendLinkItems() {
+                                            kOpenLinkInSplitMenuItem);
+       }
+     }
++    // Stedding menus M14, spaces B46 (GitHub issue 75): the link in another
++    // Space of the window, made in that Space's session. Not from a peek
++    // over the page, which is no tab of the window.
++    if (show_open_in_new_tab && !in_app && params_.link_url.is_valid() &&
++        !stedding::PeekOverPageSourceOf(source_web_contents_)) {
++      const std::vector<spaces::SpaceId> others =
++          SpacesToOpenLinkIn(GetBrowser());
++      const spaces::SpaceModel* const model =
++          others.empty() ? nullptr : spaces::SpaceModel::From(GetBrowser());
++      if (model) {
++        open_link_in_space_submenu_ =
++            std::make_unique<ui::SimpleMenuModel>(this);
++        const size_t slots = IDC_STEDDING_OPEN_LINK_IN_SPACE_LAST -
++                             IDC_STEDDING_OPEN_LINK_IN_SPACE_FIRST + 1;
++        for (size_t i = 0; i < others.size() && i < slots; ++i) {
++          const std::u16string name = model->DisplayName(others[i]);
++          open_link_in_space_submenu_->AddItem(
++              IDC_STEDDING_OPEN_LINK_IN_SPACE_FIRST + static_cast<int>(i),
++              name);
++          // sessions S32: a Space with an independent session is marked, as
++          // the tab menu's Move to Space marks it.
++          if (!spaces::IsolationMarkForSpace(model->registry(), others[i])
++                   .empty()) {
++            open_link_in_space_submenu_->SetIcon(
++                i, ui::ImageModel::FromVectorIcon(spaces::IsolationMarkIcon(),
++                                                  ui::kColorMenuIcon,
++                                                  kTabMenuIconSize));
++#if BUILDFLAG(IS_MAC)
++            open_link_in_space_submenu_->SetLabel(
++                i, spaces::NameWithIsolationMark(name));
++#else
++            open_link_in_space_submenu_->SetMinorText(
++                i, spaces::IsolationMarkName());
++#endif
++          }
++        }
++        menu_model_.AddSubMenu(IDC_STEDDING_OPEN_LINK_IN_SPACE_MENU,
++#if BUILDFLAG(IS_MAC)
++                               u"Open Link in Space",
++#else
++                               u"Open link in Space",
++#endif
++                               open_link_in_space_submenu_.get());
++      }
++    }
+ #endif
+ 
+     if (params_.link_url.is_valid()) {
+@@ -3601,6 +3673,13 @@ bool RenderViewContextMenu::IsCommandIdEnabled(int id) const {
+     return params_.link_url.is_valid();
+   }
+ 
++  // Stedding menus M14.
++  if (id == IDC_STEDDING_OPEN_LINK_IN_SPACE_MENU ||
++      (id >= IDC_STEDDING_OPEN_LINK_IN_SPACE_FIRST &&
++       id <= IDC_STEDDING_OPEN_LINK_IN_SPACE_LAST)) {
++    return params_.link_url.is_valid();
++  }
++
+   // On ChromeOS a dedicated OTR profile is used for captive portal signin to
+   // protect user privacy. Since some policies prevent Incognito browsing,
+   // disable options that trigger navigation in the context menu.
+@@ -3991,6 +4070,30 @@ void RenderViewContextMenu::ExecuteCommand(int id, int event_flags) {
+     return;
+   }
+ 
++  // Stedding menus M14, spaces B46 (GitHub issue 75): a tab of the window in
++  // the Space named, in its jar from the first request, and the window goes
++  // to that Space with it, as Move to Space's does. The list is read again:
++  // a Space deleted while the menu was open is not one to open in.
++  if (id >= IDC_STEDDING_OPEN_LINK_IN_SPACE_FIRST &&
++      id <= IDC_STEDDING_OPEN_LINK_IN_SPACE_LAST) {
++    const std::vector<spaces::SpaceId> others =
++        SpacesToOpenLinkIn(GetBrowser());
++    const size_t index =
++        static_cast<size_t>(id - IDC_STEDDING_OPEN_LINK_IN_SPACE_FIRST);
++    if (index < others.size() && params_.link_url.is_valid()) {
++      const spaces::ScopedNewTabSpace in_space(others[index]);
++      source_web_contents_->OpenURL(
++          GetOpenURLParamsWithExtraHeaders(
++              params_.link_url, params_.frame_url, params_.frame_origin,
++              WindowOpenDisposition::NEW_FOREGROUND_TAB,
++              ui::PAGE_TRANSITION_LINK, /*extra_headers=*/std::string(),
++              /*started_from_context_menu=*/true),
++          page_load_metrics::NavigationInitiatorHolder::AttacherCallback(
++              chrome_navigation_initiator::kContextMenuOpenLink));
++    }
++    return;
++  }
++
+   switch (id) {
+     case IDC_CONTENT_CONTEXT_OPENLINKNEWTAB: {
+       WindowOpenDisposition new_tab_disposition =
+diff --git a/chrome/browser/renderer_context_menu/render_view_context_menu.h b/chrome/browser/renderer_context_menu/render_view_context_menu.h
+index 4734822d37774..acac2aa265888 100644
+--- a/chrome/browser/renderer_context_menu/render_view_context_menu.h
++++ b/chrome/browser/renderer_context_menu/render_view_context_menu.h
+@@ -650,6 +650,8 @@ class RenderViewContextMenu
+ 
+   std::unique_ptr<ui::SimpleMenuModel> send_tab_to_self_submenu_;
+   std::unique_ptr<ui::SimpleMenuModel> split_layout_submenu_;
++  // Stedding menus M14: Open Link in Space's rows.
++  std::unique_ptr<ui::SimpleMenuModel> open_link_in_space_submenu_;
+ 
+   //  Used for CTR metrics of menu item for opening Glic.
+   bool glic_item_shown_ = false;
+diff --git a/chrome/browser/ui/spaces/new_tab_space.cc b/chrome/browser/ui/spaces/new_tab_space.cc
+index 877d16c9732ac..5235da4284280 100644
+--- a/chrome/browser/ui/spaces/new_tab_space.cc
++++ b/chrome/browser/ui/spaces/new_tab_space.cc
+@@ -96,6 +96,11 @@ std::optional<NewTabSpaceChoice> ChooseSpaceForNewTab(
+   if (!model) {
+     return std::nullopt;
+   }
++  // menus M14: the Space the page menu named, in its own jar.
++  if (const SpaceId* const named = ScopedNewTabSpace::Current();
++      named && !essential && model->GetSpace(*named)) {
++    return NewTabSpaceChoice{.space = *named};
++  }
+   NewTabSpaceChoice choice{
+       .space = essential ? model->active_id()
+                          : SourceSpace(*model, window, source, opened_by_page)
+@@ -206,6 +211,24 @@ std::unique_ptr<content::WebContents> PlaceOpenedContents(
+   return contents;
+ }
+ 
++namespace {
++const ScopedNewTabSpace* g_new_tab_space = nullptr;
++}  // namespace
++
++ScopedNewTabSpace::ScopedNewTabSpace(const SpaceId& space)
++    : space_(space), previous_(g_new_tab_space) {
++  g_new_tab_space = this;
++}
++
++ScopedNewTabSpace::~ScopedNewTabSpace() {
++  g_new_tab_space = previous_;
++}
++
++// static
++const SpaceId* ScopedNewTabSpace::Current() {
++  return g_new_tab_space ? &g_new_tab_space->space_ : nullptr;
++}
++
+ ScopedServiceWorkerWindow::ScopedServiceWorkerWindow(
+     const content::StoragePartitionConfig& worker_partition)
+     : worker_partition_(worker_partition), previous_(g_service_worker_window) {
+diff --git a/chrome/browser/ui/spaces/new_tab_space.h b/chrome/browser/ui/spaces/new_tab_space.h
+index cbaefcc02fac4..ba2c5e8de3f1a 100644
+--- a/chrome/browser/ui/spaces/new_tab_space.h
++++ b/chrome/browser/ui/spaces/new_tab_space.h
+@@ -106,6 +106,26 @@ std::unique_ptr<content::WebContents> PlaceOpenedContents(
+     const GURL& url,
+     WindowOpenDisposition disposition);
+ 
++// menus M14 (GitHub issue 75): while one is alive, the tab Navigate() makes
++// is filed in `space` and made in its jar, whatever a route says: the page
++// menu's Open Link in Space holds one around its OpenURL, which makes the
++// tab before it returns. Ignored when the window has no such Space. UI
++// thread only.
++class ScopedNewTabSpace {
++ public:
++  explicit ScopedNewTabSpace(const SpaceId& space);
++  ScopedNewTabSpace(const ScopedNewTabSpace&) = delete;
++  ScopedNewTabSpace& operator=(const ScopedNewTabSpace&) = delete;
++  ~ScopedNewTabSpace();
++
++  // The Space named while one is alive, else null.
++  static const SpaceId* Current();
++
++ private:
++  const SpaceId space_;
++  const raw_ptr<const ScopedNewTabSpace> previous_;
++};
++
+ // sessions S30: while one is alive, the tab Navigate() makes for a service
+ // worker's window (clients.openWindow) is made in the worker's own jar,
+ // `worker_partition`, and filed in the Space whose jar it is, whichever
+diff --git a/chrome/browser/ui/stedding/stedding_command_ids.h b/chrome/browser/ui/stedding/stedding_command_ids.h
+index 087f34b93d549..66b0b544a6aa9 100644
+--- a/chrome/browser/ui/stedding/stedding_command_ids.h
++++ b/chrome/browser/ui/stedding/stedding_command_ids.h
+@@ -9,7 +9,7 @@
+ // that header is included by most of the browser, and a new line there is a
+ // rebuild of it all. Ids here sit in Stedding's 551xx block, past the ones
+ // chrome_command_ids.h holds (55100-55122) and the app menu's placeholders
+-// (55140, 55141).
++// (55140, 55141), and a range of rows at 55200-55298.
+ 
+ // toolbar T10: shift-cmd-D shows or hides the address row for the window.
+ inline constexpr int IDC_STEDDING_TOGGLE_ADDRESS_ROW = 55142;
+@@ -52,5 +52,11 @@ inline constexpr int IDC_STEDDING_LITTLE_PROMOTE = 55157;
+ // sidebar Y34 (BACKLOG S-96): the sidebar to the window's other edge, from
+ // the sidebar's own menu, the Mac View menu and the command bar.
+ inline constexpr int IDC_STEDDING_SIDEBAR_SIDE = 55158;
++// menus M14 (GitHub issue 75): a link's page menu, "Open Link in Space", a
++// row for each other Space of the window, in switcher order, as the tab
++// menu's Move to Space lists them (99 rows, as many as that has).
++inline constexpr int IDC_STEDDING_OPEN_LINK_IN_SPACE_MENU = 55159;
++inline constexpr int IDC_STEDDING_OPEN_LINK_IN_SPACE_FIRST = 55200;
++inline constexpr int IDC_STEDDING_OPEN_LINK_IN_SPACE_LAST = 55298;
+ 
+ #endif  // CHROME_BROWSER_UI_STEDDING_STEDDING_COMMAND_IDS_H_
+diff --git a/chrome/test/stedding/space_jar_browsertest.cc b/chrome/test/stedding/space_jar_browsertest.cc
+index dcc97428c44f6..76b15d26749b6 100644
+--- a/chrome/test/stedding/space_jar_browsertest.cc
++++ b/chrome/test/stedding/space_jar_browsertest.cc
+@@ -30,6 +30,7 @@
+ #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
+ #include "chrome/browser/extensions/chrome_test_extension_loader.h"
+ #include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/renderer_context_menu/render_view_context_menu_test_util.h"
+ #include "chrome/browser/ui/browser_commands.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+@@ -64,6 +65,7 @@
+ #include "components/prefs/pref_service.h"
+ #include "components/tabs/public/tab_interface.h"
+ #include "content/public/browser/browsing_data_remover.h"
++#include "content/public/browser/context_menu_params.h"
+ #include "content/public/browser/navigation_controller.h"
+ #include "content/public/browser/navigation_entry.h"
+ #include "content/public/browser/reload_type.h"
+@@ -745,6 +747,62 @@ IN_PROC_BROWSER_TEST_F(SpaceJarTest,
+   }
+ }
+ 
++// menus M14, spaces B46 (GitHub issue 75): a link's page menu opens it in
++// another Space of the window, in that Space's jar from the first request,
++// and the window shows that Space. Only the other Spaces are listed. The
++// Space named wins over a route.
++IN_PROC_BROWSER_TEST_F(SpaceJarTest, OpenLinkInSpaceCarriesThatSpacesJar) {
++  RouteToWork("routed.test");
++  const auto menu_for = [](content::WebContents* contents, const GURL& link) {
++    content::ContextMenuParams params;
++    params.page_url = contents->GetLastCommittedURL();
++    params.frame_url = params.page_url;
++    params.link_url = link;
++    params.unfiltered_link_url = link;
++    auto menu = std::make_unique<TestRenderViewContextMenu>(
++        *contents->GetPrimaryMainFrame(), params);
++    menu->Init();
++    return menu;
++  };
++
++  {
++    std::unique_ptr<TestRenderViewContextMenu> menu =
++        menu_for(home_tab_.Get()->GetContents(),
++                 Url("b.test", "/echo?menu-work"));
++    const std::optional<std::pair<ui::MenuModel*, size_t>> row =
++        menu->GetMenuModelAndItemIndex(IDC_STEDDING_OPEN_LINK_IN_SPACE_FIRST);
++    ASSERT_TRUE(row) << "no Open Link in Space row";
++    EXPECT_EQ(1u, row->first->GetItemCount()) << "Home listed itself";
++    EXPECT_NE(std::u16string::npos,
++              row->first->GetLabelAt(row->second).find(u"Work"));
++    ASSERT_TRUE(menu->IsCommandIdEnabled(IDC_STEDDING_OPEN_LINK_IN_SPACE_FIRST));
++    menu->ExecuteCommand(IDC_STEDDING_OPEN_LINK_IN_SPACE_FIRST, 0);
++  }
++  EXPECT_EQ("jar=work", FirstCookieFor("/echo?menu-work"))
++      << "the first request did not carry Work's jar";
++  tabs::TabInterface* const opened = tabs()->GetActiveTab();
++  EXPECT_EQ(work_, model_->FindSpaceForTab(opened));
++  EXPECT_EQ(JarOf(work_tab_.Get()), JarOf(opened));
++  EXPECT_TRUE(base::test::RunUntil([&] { return model_->active_id() == work_; }))
++      << "the window stayed on Home";
++  EXPECT_EQ(home_, model_->FindSpaceForTab(home_tab_.Get()));
++
++  {
++    // A route names Work for routed.test; the menu names Home.
++    std::unique_ptr<TestRenderViewContextMenu> menu = menu_for(
++        opened->GetContents(), Url("routed.test", "/echo?menu-home"));
++    // The rows are in a submenu, which IsItemPresent does not look into.
++    ASSERT_TRUE(
++        menu->GetMenuModelAndItemIndex(IDC_STEDDING_OPEN_LINK_IN_SPACE_FIRST));
++    EXPECT_FALSE(menu->GetMenuModelAndItemIndex(
++        IDC_STEDDING_OPEN_LINK_IN_SPACE_FIRST + 1));
++    menu->ExecuteCommand(IDC_STEDDING_OPEN_LINK_IN_SPACE_FIRST, 0);
++  }
++  EXPECT_EQ("jar=shared", FirstCookieFor("/echo?menu-home"));
++  EXPECT_EQ(home_, model_->FindSpaceForTab(tabs()->GetActiveTab()));
++  EXPECT_TRUE(base::test::RunUntil([&] { return model_->active_id() == home_; }));
++}
++
+ // A new tab page, an address typed there, a link from it, and a settings
+ // page in an isolated Space stay on the profile's jar. The site a settings
+ // page opens does not.

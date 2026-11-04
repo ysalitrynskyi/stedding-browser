@@ -1,6 +1,6 @@
 # Feature: New tab page
 
-Status: **N1–N5 built; N6–N8 planned** (BACKLOG S-61).
+Status: **N1–N5 and N9 built; N6–N8 planned** (BACKLOG S-61).
 Owner: `docs/PRIVACY.md`, `docs/PRODUCT.md`. Patches: 0003, 0044.
 
 A new tab opens Chromium's local third-party page, whichever search engine is the default. Nothing on that page leaves the machine. It is a place to press the command-bar shortcut.
@@ -17,3 +17,4 @@ A new tab opens Chromium's local third-party page, whichever search engine is th
 | N6 | A new tab in a Space lists that Space's pins, recents and yesterday's archive. No feed, no network (N1). | `MorningDigestTest.CardIsForTheTabsSpace` (not written yet) | planned · BACKLOG S-61 |
 | N7 | After local midnight, one card of local facts: archived, slept with a recorded reason, downloads started in that Space. Counts and titles, never a generated paragraph. It can be turned off. | `MorningDigestTest.EmptySpaceHasNoCard` (not written yet) | planned · BACKLOG S-61 |
 | N8 | Visits in an Independent session do not rank in ⌘T of another Space unless a modifier is held. `@Space` in the command bar is commandbar K19, which is built and is not this. | its own test is not written yet | planned · BACKLOG S-61 |
+| N9 | The New Tab page's bookmarks bar lists no tab groups: "Show tab groups" (`bookmark_bar.show_tab_groups`) is off at first. The sidebar lists a window's groups in their Space. A group the profile saved, one an extension made to drive a tab included, had put a chip and the tab groups button on the New Tab page of every Space, and with no bookmarks they alone brought the bar out (the owner, 2026-11-04; BACKLOG S-408). | browser: `DefaultsTest.ASavedTabGroupBringsNoBarToTheNewTab` | built |

@@ -1,6 +1,6 @@
 # Feature: Menus
 
-Status: **M1–M13 built.**
+Status: **M1–M14 built.**
 Owner: `docs/PRODUCT.md`, `docs/PRIVACY.md`.
 
 The tab, page and app menus lead with what this browser does, with every chord drawn. "Short context menus" (`stedding.menus.short`, on by default) is that set. Off, Chromium's rows come back.
@@ -22,6 +22,7 @@ The tab, page and app menus lead with what this browser does, with every chord d
 | M11 | While dark pages is on, the page menu of an http(s) page has a check item, "Darken This Site" on the Mac and "Darken this site" elsewhere, checked while that site is darkened. Choosing it keeps the site light or darkens it again (dark-pages Dk15). The short menus keep it. It is absent while dark pages is off, and on a browser, file or data page. The app menu has no dark-pages row (dark-pages Dk24). The Mac View menu has one (M12). | unit: `RenderViewContextMenuPrefsTest.SteddingShortMenusKeepDarkenThisSite`; browser: `DarkPagesMenuTest.ThePageMenuKeepsASiteLight` | built |
 | M12 | The Mac View menu has "Dark Pages" right after Zoom Out, with ⌥⇧⌘D, checked while dark pages is on for the profile. Choosing it turns dark pages on or off in every window (dark-pages Dk24). An app's own menu bar keeps the row (web apps Wa10). | Mac: `MainMenuBuilderTest.TheViewMenuHasDarkPagesWithItsChord`; browser: `DarkPagesMenuMacTest.TheViewMenuRowIsCheckedWhileOnAndRuns`, `DarkPagesMenuMacTest.TheChordIsTheViewMenuRows` | built |
 | M13 | The sidebar's own menu has "Move Sidebar to the Right", or "Move Sidebar to the Left" while it is on the right, under the collapse row, short menus included. The Mac View menu has the same row under the sidebar's collapse, named for the side it will move to, and hidden with horizontal tabs. Choosing it moves the sidebar in every window of the profile (sidebar Y34). | browser: `SidebarRightTest.TheSidebarIsOnTheRightAndSwitchesSidesAtOnce`; Mac: `WindowButtonsTest.OnTheRightTheLightsSitOnTheRow` | built |
+| M14 | A link's page menu has "Open Link in Space" ("Open link in Space" off the Mac) after Open Link in Split View, in a window with Spaces and more than one: a row for each other Space, in switcher order, named as the switcher names it, a Space with an independent session marked as Move to Space marks it (sessions S32). A row opens the link in a new tab of the window filed in that Space and made in its jar, so its first request carries that Space's cookies, and the window goes to that Space. The Space named wins over a route (routing D2). Not in a popup, an app, a private window or a peek over the page (GitHub issue 75; the owner, 2026-11-04; BACKLOG S-411). | browser: `SpaceJarTest.OpenLinkInSpaceCarriesThatSpacesJar` | built |
 
 ## Notes
 

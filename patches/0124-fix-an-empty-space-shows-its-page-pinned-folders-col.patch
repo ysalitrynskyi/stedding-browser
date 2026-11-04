@@ -1,0 +1,1042 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Wed, 4 Nov 2026 07:07:43 -0500
+Subject: fix: an empty Space shows its page; pinned folders collapse; the
+ sidebar field's icons come back (S-408, S-409, S-410, S-412, S-413)
+
+An empty Space (tabs R66; spaces B3, B4, B20): a switch to a Space with no
+tab, the close of a Space's last row and a Clear that leaves nothing opened
+a New Tab there, a row the Space had not asked for. They now show the
+Space's own page, the stand-in a sleep shows since beta 8, which the
+sidebar does not list. A switch from it to another empty Space keeps it for
+that Space, closing it opens another, and Clear leaves it alone. A tab that
+leaves for another window, mid-drag, still leaves a New Tab behind it.
+
+The New Tab page's bookmarks bar (new-tab N9): "Show tab groups" is off at
+first. The profile saves every tab group, one an extension makes around a
+tab it drives included, and its chip with the tab groups button showed on
+the New Tab page of every Space; with no bookmarks it alone brought the bar
+out. The sidebar lists a window's groups in their Space.
+
+Folders F3 (GitHub issue 76): a collapsed folder kept every awake pin of
+the Space listed, so a pinned folder whose pins were all awake seemed never
+to collapse. A collapse now folds every row but the one on screen; a pin
+the user leaves while the folder is collapsed stays listed while awake
+(issue 35), until the folder is opened.
+
+The sidebar's address field (sidebar Y49; GitHub issue 45): the field
+offered the extensions' row only the width it had, and the row sizes itself
+to what it is offered, so pinned icons once folded into the menu never came
+back while animations were on. It is offered the field's room less the
+site's name's minimum.
+
+Install as an app (site-controls Si14): Chromium's Install chip and icon
+are gone from the toolbar's address field as from the sidebar's, with the
+prompt that points at them; the site panel's row installs the page.
+
+Settings (T3, T46; GitHub issue 74): the little-window row says first that
+a link from another app opens in a window of its own whatever the peek
+settings say, and "Show a peek" that it is for a link from a pinned tab.
+
+Why: the owner, 2026-11-04 (a screenshot of an empty Space beside an
+extension's tab group; the Install chip), and GitHub issues 45, 74 and 76.
+Removable when: never as behaviour.
+---
+ chrome/browser/ui/spaces/space_model.cc       | 105 ++++++++++++++----
+ chrome/browser/ui/spaces/space_model.h        |  17 ++-
+ .../ui/spaces/space_model_window_unittest.cc  |  83 ++++++++++++--
+ chrome/browser/ui/stedding/empty_space.cc     |  19 +++-
+ chrome/browser/ui/stedding/empty_space.h      |   9 ++
+ .../ui/stedding/tab_numbers_unittest.cc       |   6 +-
+ .../ui/views/tabs/vertical/sidebar_address.cc |  33 ++++++
+ .../ui/views/tabs/vertical/sidebar_address.h  |   9 ++
+ .../pwa_install_page_action.cc                |  11 +-
+ .../browser/ui/webui/settings/settings_ui.cc  |   9 +-
+ chrome/test/stedding/BUILD.gn                 |   3 +
+ .../test/stedding/clear_space_browsertest.cc  |  26 ++++-
+ chrome/test/stedding/defaults_browsertest.cc  |  40 +++++++
+ .../test/stedding/folder_tabs_browsertest.cc  |   3 +
+ .../stedding/isolation_mark_browsertest.cc    |   4 +
+ chrome/test/stedding/restore_browsertest.cc   |  12 +-
+ .../stedding/sidebar_address_browsertest.cc   |  78 +++++++++++++
+ .../stedding/site_controls_browsertest.cc     |  15 +++
+ .../test/stedding/space_switch_browsertest.cc |  16 ++-
+ .../bookmarks/browser/bookmark_utils.cc       |   6 +-
+ 20 files changed, 446 insertions(+), 58 deletions(-)
+
+diff --git a/chrome/browser/ui/spaces/space_model.cc b/chrome/browser/ui/spaces/space_model.cc
+index 0ceccdb1f147a..1a9e0ab029867 100644
+--- a/chrome/browser/ui/spaces/space_model.cc
++++ b/chrome/browser/ui/spaces/space_model.cc
+@@ -89,6 +89,19 @@ namespace spaces {
+ 
+ namespace {
+ 
++// folders F3: whether a collapsed folder holds `tab`, at any depth.
++bool InCollapsedFolder(const tabs::TabInterface& tab) {
++  for (const tabs::TabCollection* collection = tab.GetParentCollection();
++       collection; collection = collection->GetParentCollection()) {
++    if (collection->type() == tabs::TabCollection::Type::FOLDER &&
++        static_cast<const tabs::FolderTabCollection*>(collection)
++            ->collapsed()) {
++      return true;
++    }
++  }
++  return false;
++}
++
+ // windows G4: set by SetNextWindowBlank, consumed by the next model made.
+ bool& NextWindowIsBlank() {
+   static bool blank = false;
+@@ -426,15 +439,17 @@ SpaceModel::SpaceModel(BrowserWindowInterface& browser) : SpaceModel() {
+         return model->HidesTab(tab);
+       },
+       base::Unretained(this)));
+-  // folders F3 (GitHub issue 35): a collapsed folder keeps listing a pin of
+-  // its Space that is awake, so switching away from it and back does not take
+-  // opening the folder. Asleep, it folds away with the rest. Unretained for
+-  // the same reason as the predicate above.
++  // folders F3 (GitHub issues 35, 76): a collapsed folder keeps listing a pin
++  // of its Space the user left there awake, so switching away from it and
++  // back does not take opening the folder. Asleep, it folds away with the
++  // rest, and the next collapse after the folder opens folds it too.
++  // Unretained for the same reason as the predicate above.
+   tab_strip_model_->SetKeptUnderCollapsedFolderPredicate(base::BindRepeating(
+       [](SpaceModel* model, const tabs::TabInterface* tab) {
+         content::WebContents* const contents = tab->GetContents();
+         return model->IsSpacePinned(tab) && contents &&
+-               !contents->WasDiscarded();
++               !contents->WasDiscarded() &&
++               model->left_under_collapsed_folder_.contains(tab->GetHandle());
+       },
+       base::Unretained(this)));
+   // B4: a close never leaves another Space's tab on screen. Unretained for
+@@ -459,6 +474,8 @@ SpaceModel::SpaceModel(BrowserWindowInterface& browser) : SpaceModel() {
+   // before its first tab, so this normally observes an empty strip; any tab
+   // already there joins now so the two paths cannot disagree.
+   tab_strip_model_->AddObserver(this);
++  // folders F3: a folder opening.
++  tab_strip_model_->Root()->AddObserver(this);
+   for (int i = 0; i < tab_strip_model_->count(); ++i) {
+     SpaceForTab(tab_strip_model_->GetTabAtIndex(i));
+   }
+@@ -519,6 +536,7 @@ SpaceModel::~SpaceModel() {
+     tab_strip_model_->SetNewTabIndexCallback(
+         TabStripModel::NewTabIndexCallback());
+     tab_strip_model_->RemoveObserver(this);
++    tab_strip_model_->Root()->RemoveObserver(this);
+     tab_strip_model_ = nullptr;
+   }
+ }
+@@ -1261,14 +1279,18 @@ void SpaceModel::EnsureActiveSpaceHasAVisibleTab(bool essential_gives_way) {
+     return;
+   }
+ 
+-  // Nothing to show: the Space is empty. A window cannot have no active tab,
+-  // and Arc's answer is the same -- an empty Space opens on a new tab. The
+-  // insertion observer files it under the active Space, and takes it out of
+-  // another Space's folder if it lands in one (folders F37).
+-  if (TabStripModelDelegate* const delegate = tab_strip_model_->delegate()) {
+-    delegate->AddTabAt(GURL(chrome::kChromeUINewTabURL), /*index=*/-1,
+-                       /*foreground=*/true);
++  // Nothing to show: the Space is empty. A window cannot have no active tab:
++  // the Space shows its own page, a stand-in the sidebar does not list (tabs
++  // R66; the owner, 2026-11-04). It opened a New Tab, a row the Space had not
++  // asked for. The insertion observer files it under the active Space, and
++  // takes it out of another Space's folder if it lands in one (folders F37).
++  // The page of the Space left, still on screen, moves to this one.
++  if (tabs::TabInterface* const shown = tab_strip_model_->GetActiveTab();
++      stedding::IsEmptySpaceStandIn(shown)) {
++    SetSpaceForTab(shown, active_id_);
++    return;
+   }
++  stedding::ShowEmptySpace(tab_strip_model_);
+ }
+ 
+ void SpaceModel::KeepAVisibleTabAsTabsLeave(
+@@ -1297,7 +1319,15 @@ void SpaceModel::KeepAVisibleTabAsTabsLeave(
+       return;
+     }
+   }
+-  // Filed under the active Space on insertion, like every new tab (B1).
++  // A close that empties the Space shows the Space's page (tabs R66; the
++  // owner, 2026-11-04), in front before the close, so the strip never picks
++  // a row of another Space; closing that page opens another. Filed under the
++  // active Space on insertion, like every new tab (B1).
++  if (closing) {
++    stedding::OpenEmptySpace(tab_strip_model_);
++    return;
++  }
++  // A tab that leaves for another window goes mid-drag: a New Tab behind it.
+   if (TabStripModelDelegate* const delegate = tab_strip_model_->delegate()) {
+     delegate->AddTabAt(GURL(chrome::kChromeUINewTabURL), /*index=*/-1,
+                        /*foreground=*/false);
+@@ -1360,6 +1390,22 @@ void SpaceModel::OnTabStripModelChanged(
+     }
+   }
+ 
++  // folders F3 (GitHub issues 35, 76): a pin the user leaves under a
++  // collapsed folder stays listed there while it is awake. Looked up by
++  // pointer first: the tab left may be one closing.
++  if (selection.active_tab_changed() && selection.old_tab &&
++      tab_strip_model->GetIndexOfTab(selection.old_tab) !=
++          TabStripModel::kNoTab &&
++      InCollapsedFolder(*selection.old_tab)) {
++    left_under_collapsed_folder_.insert(selection.old_tab->GetHandle());
++  }
++  if (change.type() == TabStripModelChange::Type::kRemoved) {
++    for (const TabStripModelChange::RemovedTab& removed :
++         change.GetRemove()->contents) {
++      left_under_collapsed_folder_.erase(removed.tab->GetHandle());
++    }
++  }
++
+   // Remember where the user is in the active Space, but only a tab that is
+   // really in it: an essentials tab is in every Space and remembering it would
+   // make every Space reopen on the same tab.
+@@ -1564,10 +1610,28 @@ void SpaceModel::SettleReplacedContents(tabs::TabHandle handle,
+ 
+ void SpaceModel::OnTabStripModelDestroyed(TabStripModel* tab_strip_model) {
+   if (tab_strip_model == tab_strip_model_) {
++    // The strip's tree is still whole while it tells its observers.
++    tab_strip_model_->Root()->RemoveObserver(this);
+     tab_strip_model_ = nullptr;
+   }
+ }
+ 
++void SpaceModel::OnCollectionDataChanged(
++    const tabs::TabCollection::Handle& changed) {
++  const tabs::TabCollection* const collection = changed.Get();
++  if (!collection || collection->type() != tabs::TabCollection::Type::FOLDER) {
++    return;
++  }
++  const auto* const folder =
++      static_cast<const tabs::FolderTabCollection*>(collection);
++  if (folder->collapsed()) {
++    return;
++  }
++  for (const tabs::TabInterface* const tab : folder->GetTabsRecursive()) {
++    left_under_collapsed_folder_.erase(tab->GetHandle());
++  }
++}
++
+ void SpaceModel::SetActiveSpaceByIndex(size_t index) {
+   if (in_focus_) {
+     return;
+@@ -2002,18 +2066,19 @@ void SpaceModel::ClearUnpinnedTabs() {
+     if (!tab_strip_model_->IsTabClosable(tab)) {
+       continue;
+     }
+-    // A folder is the user's filing. Clear closes loose tabs, not a folder.
+-    if (!stedding::FolderPathForTab(tab).empty()) {
++    // A folder is the user's filing. Clear closes loose tabs, not a folder,
++    // nor the Space's page, which is no row (tabs R66).
++    if (!stedding::FolderPathForTab(tab).empty() ||
++        stedding::IsEmptySpaceStandIn(tab)) {
+       continue;
+     }
+     doomed.push_back(tab->GetHandle());
+   }
+-  // Closing every tab closes the window. Leave a New Tab instead.
++  // Closing every tab closes the window. Leave the Space's page instead
++  // (tabs R66), a new one if Clear takes the one on screen.
+   if (!doomed.empty() &&
+-      static_cast<int>(doomed.size()) == tab_strip_model_->count() &&
+-      tab_strip_model_->delegate()) {
+-    tab_strip_model_->delegate()->AddTabAt(
+-        GURL(chrome::kChromeUINewTabURL), /*index=*/-1, /*foreground=*/true);
++      static_cast<int>(doomed.size()) == tab_strip_model_->count()) {
++    stedding::OpenEmptySpace(tab_strip_model_);
+   }
+   for (const tabs::TabHandle& handle : doomed) {
+     tabs::TabInterface* const tab = handle.Get();
+diff --git a/chrome/browser/ui/spaces/space_model.h b/chrome/browser/ui/spaces/space_model.h
+index fcdc2e7fd6d51..8091bf3e30417 100644
+--- a/chrome/browser/ui/spaces/space_model.h
++++ b/chrome/browser/ui/spaces/space_model.h
+@@ -32,6 +32,7 @@
+ #include "components/prefs/pref_change_registrar.h"
+ #include "components/sessions/core/session_id.h"
+ #include "components/tabs/public/folder_tab_collection.h"
++#include "components/tabs/public/tab_collection_observer.h"
+ #include "components/tabs/public/tab_interface.h"
+ #include "content/public/browser/navigation_controller.h"
+ #include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
+@@ -85,7 +86,8 @@ std::string SamePageKey(const GURL& url);
+ // arrives, not when something happens to ask: a tab opened in a Space belongs
+ // to that Space from its first frame (B1), and a tab that leaves is forgotten.
+ class SpaceModel : public TabStripModelObserver,
+-                   public SpaceRegistry::Observer {
++                   public SpaceRegistry::Observer,
++                   public tabs::TabCollectionObserver {
+  public:
+   DECLARE_USER_DATA(SpaceModel);
+ 
+@@ -631,7 +633,20 @@ class SpaceModel : public TabStripModelObserver,
+       const TabStripSelectionChange& selection) override;
+   void OnTabStripModelDestroyed(TabStripModel* tab_strip_model) override;
+ 
++  // tabs::TabCollectionObserver, on the strip's root: folders F3 (GitHub
++  // issue 76) -- a folder that opens forgets the pins it kept listed while
++  // collapsed, so collapsing it again folds them.
++  void OnCollectionDataChanged(
++      const tabs::TabCollection::Handle& changed) override;
++
+  private:
++  // folders F3 (GitHub issues 35, 76): the pins the user left while their
++  // folder was collapsed. The folder keeps such a pin listed while it stays
++  // awake, until the folder opens. A collapse folds every other row but the
++  // one on screen: a pinned folder whose pins were all awake kept them all
++  // listed, and seemed never to collapse.
++  std::set<tabs::TabHandle> left_under_collapsed_folder_;
++
+   // Writes the Spaces into the session, so they come back after a restart.
+   void SaveToSession();
+ 
+diff --git a/chrome/browser/ui/spaces/space_model_window_unittest.cc b/chrome/browser/ui/spaces/space_model_window_unittest.cc
+index 1481d4cdfd05d..43dc3f6c59702 100644
+--- a/chrome/browser/ui/spaces/space_model_window_unittest.cc
++++ b/chrome/browser/ui/spaces/space_model_window_unittest.cc
+@@ -462,17 +462,34 @@ TEST_F(SpaceWindowTest, ComingBackWithNoUseThisRunLandsOnTheTabLastShown) {
+   EXPECT_EQ(newer, tabs().GetActiveTab()) << "not the tab last on screen";
+ }
+ 
+-// B3
+-TEST_F(SpaceWindowTest, SwitchingToAnEmptySpaceOpensANewTabThere) {
++// B3, tabs R66 (the owner, 2026-11-04): an empty Space shows its page, a
++// stand-in the sidebar does not list, not a New Tab row. Its page goes once
++// the user is back in a Space with rows; another empty Space takes it over.
++TEST_F(SpaceWindowTest, SwitchingToAnEmptySpaceShowsItsPage) {
+   tabs::TabInterface* const a = OpenTab();
++  const SpaceId home = model().active_id();
+   Space* const work = model().AddSpace("Work", kBlue);
++  Space* const play = model().AddSpace("Play", kBlue);
+   model().SetActiveSpace(work->id());
+ 
+   ASSERT_EQ(2, tabs().count());
+-  tabs::TabInterface* const active = tabs().GetActiveTab();
+-  EXPECT_NE(a, active);
+-  EXPECT_EQ(work->id(), model().SpaceForTab(active));
+-  EXPECT_TRUE(model().IsTabInActiveSpace(active));
++  tabs::TabInterface* const page = tabs().GetActiveTab();
++  EXPECT_NE(a, page);
++  EXPECT_TRUE(stedding::IsEmptySpaceStandIn(page)) << "a New Tab opened";
++  EXPECT_TRUE(tabs().IsTabHidden(tabs().GetIndexOfTab(page)))
++      << "the sidebar lists the Space's page";
++  EXPECT_EQ(GURL(stedding::kEmptySpaceURL), page->GetContents()->GetVisibleURL());
++  EXPECT_EQ(work->id(), model().SpaceForTab(page));
++
++  model().SetActiveSpace(play->id());
++  EXPECT_EQ(2, tabs().count()) << "one page for two empty Spaces";
++  EXPECT_EQ(page, tabs().GetActiveTab());
++  EXPECT_EQ(play->id(), model().SpaceForTab(page));
++
++  model().SetActiveSpace(home);
++  task_environment()->RunUntilIdle();
++  EXPECT_EQ(a, tabs().GetActiveTab());
++  EXPECT_EQ(1, tabs().count()) << "the page stayed after the Space had a row";
+ }
+ 
+ // B3, folders F3: coming back lands on the tab the user left, also when it
+@@ -506,8 +523,9 @@ TEST_F(SpaceWindowTest, ComingBackLandsOnTheTabLeftInACollapsedFolder) {
+   EXPECT_FALSE(tabs().IsTabHidden(tabs().GetIndexOfTab(in_folder)));
+ }
+ 
+-// B4
+-TEST_F(SpaceWindowTest, ClosingTheLastTabOfASpaceOpensANewTabThere) {
++// B4, tabs R66: closing a Space's last row shows the Space's page, and
++// closing that page shows another.
++TEST_F(SpaceWindowTest, ClosingTheLastTabOfASpaceShowsItsPage) {
+   tabs::TabInterface* const a = OpenTab();
+   Space* const work = model().AddSpace("Work", kBlue);
+   model().SetActiveSpace(work->id());
+@@ -524,6 +542,14 @@ TEST_F(SpaceWindowTest, ClosingTheLastTabOfASpaceOpensANewTabThere) {
+   tabs::TabInterface* const active = tabs().GetActiveTab();
+   EXPECT_NE(a, active) << "the active tab must not be one from another Space";
+   EXPECT_EQ(work->id(), model().SpaceForTab(active));
++  EXPECT_TRUE(stedding::IsEmptySpaceStandIn(active)) << "a New Tab opened";
++
++  tabs().CloseWebContentsAt(tabs().GetIndexOfTab(active),
++                            TabCloseTypes::CLOSE_USER_GESTURE);
++  task_environment()->RunUntilIdle();
++  ASSERT_EQ(2, tabs().count());
++  EXPECT_NE(a, tabs().GetActiveTab()) << "another Space's tab came on screen";
++  EXPECT_TRUE(stedding::IsEmptySpaceStandIn(tabs().GetActiveTab()));
+ }
+ 
+ // tabs R33-R38 (BACKLOG S-112): which tab is shown after the one on screen
+@@ -2897,6 +2923,7 @@ TEST_F(SpaceWindowTest, ACollapsedFolderKeepsAnAwakePinListed) {
+   std::ranges::sort(indices);
+   tabs::FolderTabCollection* const folder = tabs().AddToNewFolder(indices);
+   ASSERT_NE(nullptr, folder);
++  tabs().ActivateTabAt(tabs().GetIndexOfTab(pinned));
+   folder->SetCollapsed(true);
+   tabs::TabInterface* const elsewhere = OpenTab();
+   tabs().ActivateTabAt(tabs().GetIndexOfTab(elsewhere));
+@@ -2913,6 +2940,46 @@ TEST_F(SpaceWindowTest, ACollapsedFolderKeepsAnAwakePinListed) {
+       << "the collapsed folder listed a pin that is asleep";
+ }
+ 
++// folders F3 (GitHub issue 76): collapsing a folder folds its pins that are
++// awake, all but the one on screen. A pinned folder whose pins were all awake
++// kept every one listed and seemed never to collapse. A pin kept listed after
++// the user left it folds at the next collapse.
++TEST_F(SpaceWindowTest, ACollapseFoldsThePinsThatAreAwake) {
++  Space* const work = model().AddSpace("Work", kBlue);
++  model().SetActiveSpace(work->id());
++  tabs::TabInterface* const first = OpenTab();
++  model().SetSpacePinned(first, true);
++  tabs::TabInterface* const second = OpenTab();
++  model().SetSpacePinned(second, true);
++  std::vector<int> indices = {tabs().GetIndexOfTab(first),
++                              tabs().GetIndexOfTab(second)};
++  std::ranges::sort(indices);
++  tabs::FolderTabCollection* const folder = tabs().AddToNewFolder(indices);
++  ASSERT_NE(nullptr, folder);
++  tabs::TabInterface* const loose = OpenTab();
++  tabs().ActivateTabAt(tabs().GetIndexOfTab(loose));
++  ASSERT_FALSE(first->GetContents()->WasDiscarded());
++  ASSERT_FALSE(second->GetContents()->WasDiscarded());
++
++  folder->SetCollapsed(true);
++  EXPECT_TRUE(tabs().IsTabHidden(tabs().GetIndexOfTab(first)))
++      << "the collapse left an awake pin listed";
++  EXPECT_TRUE(tabs().IsTabHidden(tabs().GetIndexOfTab(second)))
++      << "the collapse left an awake pin listed";
++
++  // Opened from the collapsed folder (the command bar, a shortcut) and left:
++  // it stays listed (issue 35).
++  tabs().ActivateTabAt(tabs().GetIndexOfTab(first));
++  tabs().ActivateTabAt(tabs().GetIndexOfTab(loose));
++  EXPECT_FALSE(tabs().IsTabHidden(tabs().GetIndexOfTab(first)));
++  EXPECT_TRUE(tabs().IsTabHidden(tabs().GetIndexOfTab(second)));
++
++  folder->SetCollapsed(false);
++  folder->SetCollapsed(true);
++  EXPECT_TRUE(tabs().IsTabHidden(tabs().GetIndexOfTab(first)))
++      << "the next collapse left the pin kept before listed";
++}
++
+ // folders F19: Close Folder's Tabs closes the folder's tabs in this Space,
+ // collapsed ones included, and leaves a tab moved to another Space open.
+ TEST_F(SpaceWindowTest, CloseFolderTabsLeavesAnotherSpacesTabOpen) {
+diff --git a/chrome/browser/ui/stedding/empty_space.cc b/chrome/browser/ui/stedding/empty_space.cc
+index 7d8fd7839fb00..9077a789bd9f9 100644
+--- a/chrome/browser/ui/stedding/empty_space.cc
++++ b/chrome/browser/ui/stedding/empty_space.cc
+@@ -115,14 +115,20 @@ WEB_CONTENTS_USER_DATA_KEY_IMPL(EmptySpaceStandIn);
+ }  // namespace
+ 
+ void ShowEmptySpace(BrowserWindowInterface* browser) {
+-  if (!browser) {
+-    return;
++  if (browser) {
++    ShowEmptySpace(browser->GetTabStripModel());
+   }
+-  TabStripModel* const tabs = browser->GetTabStripModel();
+-  if (!tabs) {
++}
++
++void ShowEmptySpace(TabStripModel* tabs) {
++  if (!tabs || IsEmptySpaceStandIn(tabs->GetActiveTab())) {
+     return;
+   }
+-  if (IsEmptySpaceStandIn(tabs->GetActiveTab())) {
++  OpenEmptySpace(tabs);
++}
++
++void OpenEmptySpace(TabStripModel* tabs) {
++  if (!tabs || !tabs->delegate()) {
+     return;
+   }
+   // Through the strip's delegate, as the New Tab it replaces was opened:
+@@ -130,7 +136,8 @@ void ShowEmptySpace(BrowserWindowInterface* browser) {
+   tabs->delegate()->AddTabAt(GURL(kEmptySpaceURL), -1, /*foreground=*/true);
+   tabs::TabInterface* const tab = tabs->GetActiveTab();
+   content::WebContents* const contents = tab ? tab->GetContents() : nullptr;
+-  if (!contents || contents->GetVisibleURL() != GURL(kEmptySpaceURL)) {
++  if (!contents || contents->GetVisibleURL() != GURL(kEmptySpaceURL) ||
++      IsEmptySpaceStandIn(contents)) {
+     return;
+   }
+   EmptySpaceStandIn::CreateForWebContents(contents);
+diff --git a/chrome/browser/ui/stedding/empty_space.h b/chrome/browser/ui/stedding/empty_space.h
+index d6ccaf6420d35..dbcf225337d6b 100644
+--- a/chrome/browser/ui/stedding/empty_space.h
++++ b/chrome/browser/ui/stedding/empty_space.h
+@@ -6,6 +6,7 @@
+ #define CHROME_BROWSER_UI_STEDDING_EMPTY_SPACE_H_
+ 
+ class BrowserWindowInterface;
++class TabStripModel;
+ 
+ namespace content {
+ class WebContents;
+@@ -32,6 +33,14 @@ inline constexpr char kEmptySpaceURL[] = "chrome://stedding-space/";
+ // //chrome/browser/ui/spaces.
+ void ShowEmptySpace(BrowserWindowInterface* browser);
+ 
++// The same for `tabs`, the strip of such a window: an empty Space, and the
++// close of a Space's last row, show the Space's page too (spaces B3, B4).
++void ShowEmptySpace(TabStripModel* tabs);
++
++// A new stand-in in front, even over one on screen: for the close of the
++// stand-in on screen, which leaves the Space as empty as it was.
++void OpenEmptySpace(TabStripModel* tabs);
++
+ // R66: whether `tab` (or `contents`) is that stand-in.
+ bool IsEmptySpaceStandIn(const tabs::TabInterface* tab);
+ bool IsEmptySpaceStandIn(const content::WebContents* contents);
+diff --git a/chrome/browser/ui/stedding/tab_numbers_unittest.cc b/chrome/browser/ui/stedding/tab_numbers_unittest.cc
+index 04ceb43a25e33..4d437f9c96e8a 100644
+--- a/chrome/browser/ui/stedding/tab_numbers_unittest.cc
++++ b/chrome/browser/ui/stedding/tab_numbers_unittest.cc
+@@ -34,14 +34,14 @@ TEST_F(TabNumbersTest, NumbersFollowTheVisibleRowsAndStopAtNine) {
+     at_home.push_back(tabs().GetActiveTab());
+   }
+   const spaces::SpaceId work = model().AddSpace("Work", SK_ColorBLUE)->id();
+-  // Entering an empty Space opens its new-tab row (spaces B3), so Work
+-  // holds that tab and the one added here.
++  // Entering an empty Space shows its page, which is no row (spaces B3,
++  // tabs R66), so Work's one row is the tab added here.
+   model().SetActiveSpace(work);
+   AddTab(browser(), GURL("https://example.org/"));
+   tabs::TabInterface* const in_work = tabs().GetActiveTab();
+ 
+   std::vector<tabs::TabInterface*> numbered = NumberedTabs(&tabs());
+-  ASSERT_EQ(2u, numbered.size());
++  ASSERT_EQ(1u, numbered.size());
+   EXPECT_NE(numbered.end(), std::ranges::find(numbered, in_work));
+   for (tabs::TabInterface* tab : at_home) {
+     EXPECT_EQ(numbered.end(), std::ranges::find(numbered, tab));
+diff --git a/chrome/browser/ui/views/tabs/vertical/sidebar_address.cc b/chrome/browser/ui/views/tabs/vertical/sidebar_address.cc
+index e9b95c9612022..120ec0d63aaa0 100644
+--- a/chrome/browser/ui/views/tabs/vertical/sidebar_address.cc
++++ b/chrome/browser/ui/views/tabs/vertical/sidebar_address.cc
+@@ -647,6 +647,39 @@ void SidebarAddressField::Layout(PassKey) {
+   if (shown(buttons_host_)) {
+     place(buttons_host_, host_width);
+   }
++  // A wider field, or a shorter name, is more room: the extensions' row
++  // asks again what it may take (GetAvailableSize).
++  if (const int room_now = RoomForButtons(); room_now != room_for_buttons_) {
++    room_for_buttons_ = room_now;
++    for (views::View* const child : buttons_host_->children()) {
++      child->InvalidateLayout();
++    }
++  }
++}
++
++int SidebarAddressField::RoomForButtons() const {
++  // As Layout reckons it: the field less its insets, the site button, Copy
++  // Link and the words' margin, and the words' minimum.
++  const gfx::Insets* const label_margins =
++      label_->GetProperty(views::kMarginsKey);
++  int fixed = label_margins ? label_margins->left() : 0;
++  for (const views::View* view : {static_cast<const views::View*>(site_button_),
++                                  static_cast<const views::View*>(copy_link_)}) {
++    if (view->GetVisible()) {
++      fixed += view->GetPreferredSize().width();
++    }
++  }
++  const int room = GetContentsBounds().width() - 2 * kFieldButtonInset - fixed;
++  return std::max(
++      0, room - std::min(kFieldTextMinimum, label_->GetPreferredSize().width()));
++}
++
++views::SizeBounds SidebarAddressField::GetAvailableSize(
++    const views::View* child) const {
++  if (child == buttons_host_) {
++    return views::SizeBounds(RoomForButtons(), views::SizeBound());
++  }
++  return views::Button::GetAvailableSize(child);
+ }
+ 
+ void SidebarAddressField::ChildPreferredSizeChanged(views::View* child) {
+diff --git a/chrome/browser/ui/views/tabs/vertical/sidebar_address.h b/chrome/browser/ui/views/tabs/vertical/sidebar_address.h
+index 05e93f550f03c..f751fc5e4dd44 100644
+--- a/chrome/browser/ui/views/tabs/vertical/sidebar_address.h
++++ b/chrome/browser/ui/views/tabs/vertical/sidebar_address.h
+@@ -254,6 +254,11 @@ class SidebarAddressField : public views::Button {
+   // views::Button:
+   void Layout(PassKey) override;
+   void ChildPreferredSizeChanged(views::View* child) override;
++  // sidebar Y51 (GitHub issue 45, a comment on 0.4.0 beta 8): the lent
++  // buttons may take the field's room down to the words' minimum. The
++  // extensions' row sizes itself to what it is offered, and was offered only
++  // the width it had: its pinned icons, once folded, never came back.
++  views::SizeBounds GetAvailableSize(const views::View* child) const override;
+   void StateChanged(ButtonState old_state) override;
+   void OnThemeChanged() override;
+   void AddedToWidget() override;
+@@ -269,6 +274,10 @@ class SidebarAddressField : public views::Button {
+   raw_ptr<views::Label> label_ = nullptr;
+   raw_ptr<SidebarNavButton> copy_link_ = nullptr;
+   raw_ptr<SidebarToolbarButtons> buttons_host_ = nullptr;
++  // The lent buttons' room at the last layout (GetAvailableSize).
++  int room_for_buttons_ = -1;
++  // The field's room less its own buttons and the words' minimum.
++  int RoomForButtons() const;
+   GURL url_;
+   bool page_set_ = false;
+   PrefChangeRegistrar copy_link_pref_;
+diff --git a/chrome/browser/ui/web_applications/pwa_install_page_action.cc b/chrome/browser/ui/web_applications/pwa_install_page_action.cc
+index 920e187eac79b..de24dc707bd42 100644
+--- a/chrome/browser/ui/web_applications/pwa_install_page_action.cc
++++ b/chrome/browser/ui/web_applications/pwa_install_page_action.cc
+@@ -165,11 +165,12 @@ void PwaInstallPageActionController::UpdateVisibility() {
+     return;
+   }
+ 
+-  if (manager_->IsProbablyPromotableWebApp()) {
+-    Show(web_contents, manager_->MaybeConsumeInstallAnimation());
+-  } else {
+-    Hide();
+-  }
++  // Stedding site-controls Si14: Install as an app is a row of the site
++  // panel. The address bar's chip and icon stay away from the toolbar's
++  // field as from the sidebar's (the owner, 2026-11-04), and the prompt
++  // that points at them with them. Chromium shows them while
++  // manager_->IsProbablyPromotableWebApp().
++  Hide();
+ }
+ 
+ void PwaInstallPageActionController::Show(content::WebContents* web_contents,
+diff --git a/chrome/browser/ui/webui/settings/settings_ui.cc b/chrome/browser/ui/webui/settings/settings_ui.cc
+index 333dd408b68a6..b14d58e84d06e 100644
+--- a/chrome/browser/ui/webui/settings/settings_ui.cc
++++ b/chrome/browser/ui/webui/settings/settings_ui.cc
+@@ -826,7 +826,9 @@ SettingsUI::SettingsUI(content::WebUI* web_ui)
+                          "Open links from other apps in a small window");
+   html_source->AddString(
+       "steddingLittleSubLabel",
+-      base::StrCat({key("\u2318O", "Ctrl+O"), " keeps the page as a tab, ",
++      base::StrCat({"A window of its own, whatever the peek settings below "
++                    "say: they are for links from pinned tabs. ",
++                    key("\u2318O", "Ctrl+O"), " keeps the page as a tab, ",
+                     key("\u21E7\u2318O", "Ctrl+Shift+O"),
+                     " in a split. Off, they open as tabs."}));
+   // peek P1, P10.
+@@ -840,8 +842,9 @@ SettingsUI::SettingsUI(content::WebUI* web_ui)
+   html_source->AddString("steddingPeekStyleLabel", "Show a peek");
+   html_source->AddString(
+       "steddingPeekStyleSubLabel",
+-      "Over the page, the pinned tab waits under the peek until you close "
+-      "it. In a small window, the peek is a window of its own.");
++      "For a link from a pinned tab. Over the page, the pinned tab waits "
++      "under the peek until you close it. In a small window, the peek is a "
++      "window of its own.");
+   html_source->AddString("steddingPeekStyleOverPage", "Over the page");
+   html_source->AddString("steddingPeekStyleSmallWindow", "In a small window");
+   // peek P21, settings T47.
+diff --git a/chrome/test/stedding/BUILD.gn b/chrome/test/stedding/BUILD.gn
+index 99857c4929418..c1eaaec787c25 100644
+--- a/chrome/test/stedding/BUILD.gn
++++ b/chrome/test/stedding/BUILD.gn
+@@ -103,6 +103,9 @@ test("stedding_browser_tests") {
+     "//base/test:test_support",
+     "//chrome/app:branded_strings",
+     "//chrome/browser",
++    # new-tab N9: the profile's saved tab groups.
++    "//chrome/browser/tab_group_sync:factories",
++    "//components/saved_tab_groups/public",
+     # S-402: the serial chooser's context, given a fake port manager.
+     "//chrome/browser/serial",
+     # BACKLOG S-236, S-237: the launched defaults, and the certificate checks
+diff --git a/chrome/test/stedding/clear_space_browsertest.cc b/chrome/test/stedding/clear_space_browsertest.cc
+index 6d6bc36d00c63..a5ec22c4f7f58 100644
+--- a/chrome/test/stedding/clear_space_browsertest.cc
++++ b/chrome/test/stedding/clear_space_browsertest.cc
+@@ -32,6 +32,7 @@
+ #include "chrome/browser/ui/spaces/arc_sidebar_importer.h"
+ #include "chrome/browser/ui/spaces/space_model.h"
+ #include "chrome/browser/ui/tabs/tab_enums.h"
++#include "chrome/browser/ui/stedding/empty_space.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "chrome/browser/ui/views/frame/browser_view.h"
+ #include "chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h"
+@@ -184,6 +185,17 @@ class ClearSpaceTest
+         << shown;
+   }
+ 
++  // tabs R66 (the owner, 2026-11-04): in a window with Spaces, a Clear that
++  // leaves nothing shows the Space's own page, which the sidebar does not
++  // list, not a New Tab row.
++  void ExpectTheSpacesPage(BrowserWindowInterface* window) {
++    TabStripModel* const tabs = window->GetTabStripModel();
++    ASSERT_TRUE(base::test::RunUntil([&]() { return tabs->count() == 1; }));
++    EXPECT_TRUE(stedding::IsEmptySpaceStandIn(tabs->GetActiveTab()));
++    EXPECT_EQ(GURL(stedding::kEmptySpaceURL),
++              tabs->GetActiveWebContents()->GetVisibleURL());
++  }
++
+   // One tab, and not a pin, so the next clear is not decided by a pin or a
+   // folder left from the step before.
+   void LeaveOneUnpinnedTab() {
+@@ -275,11 +287,17 @@ class ClearSpaceTest
+ IN_PROC_BROWSER_TEST_F(ClearSpaceTest,
+                        ClearKeepsTheWindowThePinsAndTheFolders) {
+   {
+-    SCOPED_TRACE("command leaves one New Tab");
++    // tabs R66 (the owner, 2026-11-04): the Space's own page, which the
++    // sidebar does not list, not a New Tab row.
++    SCOPED_TRACE("command leaves the Space's page");
+     ASSERT_NO_FATAL_FAILURE(AddBlankTab(browser()));
+-    ASSERT_EQ(2, browser()->GetTabStripModel()->count());
++    TabStripModel* const tabs = browser()->GetTabStripModel();
++    ASSERT_EQ(2, tabs->count());
+     chrome::ExecuteCommand(browser(), IDC_STEDDING_CLEAR_SPACE);
+-    ASSERT_NO_FATAL_FAILURE(ExpectOneNewTab(browser()));
++    ASSERT_NO_FATAL_FAILURE(ExpectTheSpacesPage(browser()));
++    // An address opened on it makes it a row, which the steps below use.
++    ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GURL("about:blank")));
++    EXPECT_FALSE(stedding::IsEmptySpaceStandIn(tabs->GetActiveTab()));
+   }
+   {
+     SCOPED_TRACE("private window stays private");
+@@ -398,7 +416,7 @@ IN_PROC_BROWSER_TEST_F(ClearSpaceTest, TheClearLineShowsWithNoPins) {
+     ASSERT_TRUE(model);
+     ASSERT_FALSE(model->HasSpacePins(model->active_id()));
+     ASSERT_NO_FATAL_FAILURE(PressTheClearLine(browser()));
+-    ASSERT_NO_FATAL_FAILURE(ExpectOneNewTab(browser()));
++    ASSERT_NO_FATAL_FAILURE(ExpectTheSpacesPage(browser()));
+   }
+   {
+     SCOPED_TRACE("a private window");
+diff --git a/chrome/test/stedding/defaults_browsertest.cc b/chrome/test/stedding/defaults_browsertest.cc
+index 37b92623f4cbe..ff7941d40c5a0 100644
+--- a/chrome/test/stedding/defaults_browsertest.cc
++++ b/chrome/test/stedding/defaults_browsertest.cc
+@@ -30,6 +30,9 @@
+ // its own.
+ //
+ // On Windows the network service runs in its own sandbox (windows N15).
++//
++// A tab group the profile saved -- one an extension made, in any Space --
++// brings no chip, and no bookmarks bar, to the New Tab page (new-tab N9).
+ 
+ #include <optional>
+ 
+@@ -42,6 +45,9 @@
+ #include "chrome/browser/browser_process.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/profiles/profile_window.h"
++#include "chrome/browser/tab_group_sync/tab_group_sync_service_factory.h"
++#include "chrome/browser/ui/bookmarks/bookmark_bar.h"
++#include "chrome/browser/ui/bookmarks/bookmark_bar_controller.h"
+ #include "chrome/browser/ui/browser_commands.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/spaces/space.h"
+@@ -56,6 +62,7 @@
+ #include "chrome/browser/ui/views/omnibox/omnibox_view_views.h"
+ #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
+ #include "chrome/common/pref_names.h"
++#include "chrome/common/webui_url_constants.h"
+ #include "chrome/test/base/in_process_browser_test.h"
+ #include "chrome/test/base/ui_test_utils.h"
+ #include "components/javascript_dialogs/app_modal_dialog_controller.h"
+@@ -63,6 +70,8 @@
+ #include "components/omnibox/browser/omnibox_pref_names.h"
+ #include "components/payments/core/features.h"
+ #include "components/prefs/pref_service.h"
++#include "components/bookmarks/common/bookmark_pref_names.h"
++#include "components/saved_tab_groups/public/tab_group_sync_service.h"
+ #include "components/tab_groups/features.h"
+ #include "components/tabs/public/folder_tab_collection.h"
+ #include "components/tabs/public/tab_interface.h"
+@@ -403,6 +412,37 @@ IN_PROC_BROWSER_TEST_F(DefaultsTest, AFreshProfileHoldsAndWorksAfterStay) {
+   ASSERT_NO_FATAL_FAILURE(StayThenTheBookkeepingWorks());
+ }
+ 
++// new-tab N9 (the owner, 2026-11-04): an extension that drives a tab puts it
++// in a tab group, and the profile saves every group. Its chip, with the tab
++// groups button, brought the bookmarks bar out on the New Tab page of every
++// Space, a profile with no bookmarks too. The sidebar lists the groups.
++IN_PROC_BROWSER_TEST_F(DefaultsTest, ASavedTabGroupBringsNoBarToTheNewTab) {
++  EXPECT_FALSE(browser()->GetProfile()->GetPrefs()->GetBoolean(
++      bookmarks::prefs::kShowTabGroupsInBookmarkBar));
++  ASSERT_TRUE(ui_test_utils::NavigateToURL(
++      browser(), embedded_test_server()->GetURL("/title1.html")));
++  ASSERT_TRUE(tabs()->SupportsTabGroups());
++  tabs()->AddToNewGroup({tabs()->active_index()});
++  tab_groups::TabGroupSyncService* const saved =
++      tab_groups::TabGroupSyncServiceFactory::GetForProfile(
++          browser()->GetProfile());
++  ASSERT_TRUE(saved);
++  ASSERT_TRUE(base::test::RunUntil(
++      [&] { return !saved->ReadAllGroups().empty(); }))
++      << "the group was never saved";
++
++  ASSERT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
++      browser(), GURL(chrome::kChromeUINewTabURL),
++      WindowOpenDisposition::NEW_FOREGROUND_TAB,
++      ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
++  BookmarkBarController* const bar = BookmarkBarController::From(browser());
++  ASSERT_TRUE(bar);
++  bar->UpdateBookmarkBarState(
++      BookmarkBarController::StateChangeReason::kTabSwitch);
++  EXPECT_EQ(BookmarkBar::HIDDEN, bar->bookmark_bar_state())
++      << "the saved group brought the bar to the New Tab page";
++}
++
+ #if BUILDFLAG(IS_WIN)
+ // windows N15 (BACKLOG S-234): the network service runs in its own sandbox,
+ // the AppContainer one Chrome's field trials turn on, wherever Windows
+diff --git a/chrome/test/stedding/folder_tabs_browsertest.cc b/chrome/test/stedding/folder_tabs_browsertest.cc
+index 78ee7a318e6b2..25e58a9b0aaa2 100644
+--- a/chrome/test/stedding/folder_tabs_browsertest.cc
++++ b/chrome/test/stedding/folder_tabs_browsertest.cc
+@@ -794,6 +794,9 @@ IN_PROC_BROWSER_TEST_F(FolderTabsTest, AnAwakePinFoldsAwayWhenItSleeps) {
+   tabs::FolderTabCollection* const folder =
+       tab_strip_model()->AddToNewFolder(indices);
+   ASSERT_TRUE(folder);
++  // Left awake under the collapsed folder (GitHub issue 76: a collapse
++  // folds the pins not on screen).
++  tab_strip_model()->ActivateTabAt(IndexOf(pin));
+   folder->SetCollapsed(true);
+   tabs::TabInterface* const elsewhere = OpenLoaded("c.test");
+   ASSERT_EQ(elsewhere, tab_strip_model()->GetActiveTab());
+diff --git a/chrome/test/stedding/isolation_mark_browsertest.cc b/chrome/test/stedding/isolation_mark_browsertest.cc
+index 50f01927f759e..14af4a0b9babd 100644
+--- a/chrome/test/stedding/isolation_mark_browsertest.cc
++++ b/chrome/test/stedding/isolation_mark_browsertest.cc
+@@ -604,6 +604,10 @@ IN_PROC_BROWSER_TEST_F(IsolationMarkTest,
+     ASSERT_TRUE(model()->SetActiveSpace(work_));
+     ExpectTitleMarked(true, Form::kGlyph);
+     ExpectChipMarked(work_, true);
++    // Work, empty, shows its own page, which is no row (tabs R66): a page
++    // opened on it is Work's tab for the command bar below.
++    ASSERT_TRUE(
++        ui_test_utils::NavigateToURL(browser(), GURL("chrome://version/")));
+     ASSERT_TRUE(model()->SetActiveSpace(home_));
+   }
+   {
+diff --git a/chrome/test/stedding/restore_browsertest.cc b/chrome/test/stedding/restore_browsertest.cc
+index 86bf1b8ddbad2..dc1f4462bb505 100644
+--- a/chrome/test/stedding/restore_browsertest.cc
++++ b/chrome/test/stedding/restore_browsertest.cc
+@@ -3463,15 +3463,17 @@ IN_PROC_BROWSER_TEST_F(RestoredVerbsTest,
+   tabs()->SetTabPinned(0, true);
+   stedding::SetTabName(browser(), tabs()->GetTabAtIndex(0), u"Mail");
+ 
+-  // Work, empty, shows the essential or a New Tab of its own (spaces B3). A
+-  // New Tab goes, so the Space holds only what this test puts there.
++  // Work, empty, shows the essential or its own page (spaces B3, tabs R66),
++  // which closes once another tab is shown; anything else goes, so the Space
++  // holds only what this test puts there. A handle: the page closes itself.
+   ASSERT_TRUE(m->SetActiveSpace(work));
+-  tabs::TabInterface* const shown = tabs()->GetActiveTab();
++  const tabs::TabHandle shown = tabs()->GetActiveTab()->GetHandle();
+   // Two Space pins, the second one drifted off its home.
+   tabs::TabInterface* const pin = Open("pin.test");
+   m->SetSpacePinned(pin, true);
+-  if (!shown->IsPinned()) {
+-    tabs()->CloseWebContentsAt(Index(shown), TabCloseTypes::CLOSE_NONE);
++  if (tabs::TabInterface* const still = shown.Get();
++      still && !still->IsPinned()) {
++    tabs()->CloseWebContentsAt(Index(still), TabCloseTypes::CLOSE_NONE);
+   }
+   tabs::TabInterface* const drift = Open("drift.test");
+   m->SetSpacePinned(drift, true);
+diff --git a/chrome/test/stedding/sidebar_address_browsertest.cc b/chrome/test/stedding/sidebar_address_browsertest.cc
+index 5b446df3bb55e..936da33d5fafb 100644
+--- a/chrome/test/stedding/sidebar_address_browsertest.cc
++++ b/chrome/test/stedding/sidebar_address_browsertest.cc
+@@ -52,6 +52,7 @@
+ #include "ui/events/event.h"
+ #include "ui/events/event_constants.h"
+ #include "ui/events/test/event_generator.h"
++#include "ui/gfx/animation/animation_test_api.h"
+ #include "ui/gfx/geometry/point.h"
+ #include "ui/views/controls/button/label_button.h"
+ #include "ui/views/controls/textfield/textfield.h"
+@@ -807,6 +808,83 @@ IN_PROC_BROWSER_TEST_F(SidebarAddressTest,
+   }
+ }
+ 
++// sidebar Y51 (GitHub issue 45, a comment on 0.4.0 beta 8): with room in the
++// field, the pinned extensions' icons show, extensions pinned after the
++// address moved to the sidebar too, and they come back when the sidebar is
++// widened again. The field offered the extensions' row only the width it
++// had, so icons once folded into the menu never came back, with animations
++// on.
++IN_PROC_BROWSER_TEST_F(SidebarAddressTest, PinnedIconsShowWithRoom) {
++  const auto animations = gfx::AnimationTestApi::SetRichAnimationRenderMode(
++      gfx::Animation::RichAnimationRenderMode::FORCE_ENABLED);
++  prefs()->SetBoolean(stedding::prefs::kSidebarAddressInSidebar, true);
++  ASSERT_TRUE(base::test::RunUntil(
++      [&]() { return !browser_view()->IsToolbarVisible(); }));
++  const auto set_width = [&](int width) {
++    controller()->SetUncollapsedWidth(width);
++    ASSERT_TRUE(base::test::RunUntil([&]() {
++      views::test::RunScheduledLayout(browser_view()->GetWidget());
++      return region()->width() <= width + 24 && region()->width() >= width - 24;
++    })) << "the sidebar did not take " << width;
++  };
++  ASSERT_NO_FATAL_FAILURE(set_width(340));
++  ASSERT_TRUE(
++      ui_test_utils::NavigateToURL(browser(), Page("a.test", "/title1.html")));
++
++  ToolbarActionsModel* const actions =
++      ToolbarActionsModel::Get(browser()->GetProfile());
++  std::vector<std::unique_ptr<extensions::TestExtensionDir>> dirs;
++  std::vector<std::string> ids;
++  for (int i = 0; i < 2; ++i) {
++    auto dir = std::make_unique<extensions::TestExtensionDir>();
++    dir->WriteManifest(base::StringPrintf(
++        R"({"manifest_version": 3, "name": "Pinned %d", "version": "1",)"
++        R"( "action": {}})",
++        i));
++    const scoped_refptr<const extensions::Extension> extension =
++        extensions::ChromeTestExtensionLoader(browser()->GetProfile())
++            .LoadExtension(dir->UnpackedPath());
++    ASSERT_TRUE(extension);
++    if (!actions->IsActionPinned(extension->id())) {
++      actions->SetActionVisibility(extension->id(), true);
++    }
++    ids.push_back(extension->id());
++    dirs.push_back(std::move(dir));
++  }
++  ExtensionsToolbarDesktop* const extensions =
++      browser_view()->toolbar()->extensions_container_for_testing();
++  ASSERT_TRUE(extensions);
++
++  const auto icons_shown = [&]() {
++    size_t shown = 0;
++    for (const std::string& id : ids) {
++      views::View* const icon = extensions->GetViewForId(id);
++      if (icon && icon->IsDrawn() && !icon->size().IsEmpty()) {
++        ++shown;
++      }
++    }
++    return shown;
++  };
++  const auto settle = [&]() {
++    return base::test::RunUntil([&]() {
++      views::test::RunScheduledLayout(browser_view()->GetWidget());
++      return !extensions->GetAnimatingLayoutManager()->is_animating() &&
++             icons_shown() == ids.size();
++    });
++  };
++  EXPECT_TRUE(settle()) << icons_shown() << " of " << ids.size()
++                        << " pinned icons shown at 340 DIP on a.test";
++
++  ASSERT_NO_FATAL_FAILURE(set_width(126));
++  ASSERT_TRUE(base::test::RunUntil([&]() {
++    views::test::RunScheduledLayout(browser_view()->GetWidget());
++    return !extensions->GetAnimatingLayoutManager()->is_animating();
++  }));
++  ASSERT_NO_FATAL_FAILURE(set_width(340));
++  EXPECT_TRUE(settle()) << icons_shown() << " of " << ids.size()
++                        << " pinned icons back after the sidebar widened";
++}
++
+ // sidebar Y46: the site, as the field shows it, for each kind of page.
+ IN_PROC_BROWSER_TEST_F(SidebarAddressTest, TheFieldShowsTheSite) {
+   EXPECT_EQ(u"example.com",
+diff --git a/chrome/test/stedding/site_controls_browsertest.cc b/chrome/test/stedding/site_controls_browsertest.cc
+index e2e99a08184f5..79b594944a0ae 100644
+--- a/chrome/test/stedding/site_controls_browsertest.cc
++++ b/chrome/test/stedding/site_controls_browsertest.cc
+@@ -36,6 +36,7 @@
+ #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
+ #include "chrome/browser/extensions/chrome_test_extension_loader.h"
+ #include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/ui/actions/chrome_action_id.h"
+ #include "chrome/browser/ui/browser_commands.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/bubble_anchor_util.h"
+@@ -52,6 +53,8 @@
+ #include "chrome/browser/ui/views/extensions/extensions_toolbar_desktop.h"
+ #include "chrome/browser/ui/views/frame/browser_view.h"
+ #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
++#include "chrome/browser/ui/views/page_action/page_action_view.h"
++#include "chrome/browser/ui/views/page_action/page_action_container_view.h"
+ #include "chrome/browser/ui/views/location_bar/zoom_bubble_coordinator.h"
+ #include "chrome/browser/ui/views/page_info/page_info_bubble_view.h"
+ #include "chrome/browser/ui/views/page_info/page_info_bubble_view_base.h"
+@@ -746,6 +749,18 @@ IN_PROC_BROWSER_TEST_F(SiteControlsInstallTest,
+   ASSERT_TRUE(banner);
+   ASSERT_TRUE(banner->WaitForInstallableCheck())
+       << "the test page cannot be installed";
++  // The owner, 2026-11-04: the toolbar's address field shows no Install
++  // chip or icon either; the panel's row is the way in.
++  {
++    BrowserView* const view = BrowserView::GetBrowserViewForBrowser(browser());
++    base::RunLoop().RunUntilIdle();
++    views::test::RunScheduledLayout(view);
++    page_actions::PageActionView* const install =
++        view->GetLocationBarView()->page_action_container()->GetPageActionView(
++            kActionInstallPwa);
++    EXPECT_TRUE(!install || !install->GetVisible())
++        << "the address bar offered to install the page";
++  }
+   views::BubbleDialogDelegateView* const panel = OpenFromTheChip();
+   SiteControlsRowsView* const rows = Rows(panel);
+   ASSERT_TRUE(rows);
+diff --git a/chrome/test/stedding/space_switch_browsertest.cc b/chrome/test/stedding/space_switch_browsertest.cc
+index ef7f363f86f99..1b9cc3e8eb42b 100644
+--- a/chrome/test/stedding/space_switch_browsertest.cc
++++ b/chrome/test/stedding/space_switch_browsertest.cc
+@@ -46,6 +46,7 @@
+ #include "chrome/browser/ui/spaces/space_colors.h"
+ #include "chrome/browser/ui/spaces/space_id.h"
+ #include "chrome/browser/ui/spaces/space_model.h"
++#include "chrome/browser/ui/stedding/empty_space.h"
+ #include "chrome/browser/ui/stedding/motion.h"
+ #include "chrome/browser/ui/stedding/sleep_tabs.h"
+ #include "chrome/browser/ui/stedding/stedding_prefs.h"
+@@ -304,6 +305,10 @@ class SpaceSwitchTest
+     EXPECT_TRUE(model()->IsTabInActiveSpace(active))
+         << "the active tab is hidden in another Space";
+     EXPECT_EQ(active->GetContents(), browser_view()->GetActiveWebContents());
++    // tabs R66: an empty Space's own page has no row.
++    if (stedding::IsEmptySpaceStandIn(active)) {
++      return;
++    }
+     if (vertical_tab_strip_state_controller()->ShouldDisplayVerticalTabs()) {
+       views::test::RunScheduledLayout(browser_view()->GetWidget());
+       EXPECT_TRUE(
+@@ -1001,8 +1006,9 @@ IN_PROC_BROWSER_TEST_F(SpaceSwitchTest, NoSwitchEverShowsAHiddenTab) {
+ // S-150): a Space's last tab going -- a page with a handler for its leaving,
+ // closed with Cmd-W; Move Tab to New Window, the command bar's row; a drop
+ // into another window, as a drag's -- never puts another Space's tab on
+-// screen, not even for a turn, and wakes none of them: the Space shows a new
+-// tab of its own. A close asks the Space first (SetBeforeCloseTabsCallback);
++// screen, not even for a turn, and wakes none of them: the Space shows its
++// own page after a close (tabs R66), and a new tab of its own after a tab
++// left for another window. A close asks the Space first (SetBeforeCloseTabsCallback);
+ // a tab that left for another window had the posted fix only, after the
+ // strip had picked a hidden tab, which woke and reloaded.
+ IN_PROC_BROWSER_TEST_F(SpaceSwitchTest, ASpaceLeftEmptyWakesNoOtherSpacesTab) {
+@@ -1059,6 +1065,12 @@ IN_PROC_BROWSER_TEST_F(SpaceSwitchTest, ASpaceLeftEmptyWakesNoOtherSpacesTab) {
+       return !closing.Get() && only_tab_of_three();
+     })) << "Three shows no tab of its own";
+     ExpectShowing(ids_[2]);
++    EXPECT_TRUE(stedding::IsEmptySpaceStandIn(only_tab_of_three()))
++        << "the close opened a row, not the Space's page";
++    // An address opened on the page makes it Three's row, for the steps
++    // below.
++    ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GURL("about:blank")));
++    ASSERT_FALSE(stedding::IsEmptySpaceStandIn(only_tab_of_three()));
+   }
+ 
+   {
+diff --git a/components/bookmarks/browser/bookmark_utils.cc b/components/bookmarks/browser/bookmark_utils.cc
+index 0e37a3aff28f2..0742ff106af7b 100644
+--- a/components/bookmarks/browser/bookmark_utils.cc
++++ b/components/bookmarks/browser/bookmark_utils.cc
+@@ -463,8 +463,12 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
+   registry->RegisterBooleanPref(
+       prefs::kShowAppsShortcutInBookmarkBar, false,
+       user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
++  // Stedding new-tab N9: the sidebar lists a window's tab groups in their
++  // Space. Chips for every group the profile saved -- one an extension made
++  // in another Space included -- appeared on each New Tab's bookmarks bar,
++  // and with no bookmarks they alone brought the bar out.
+   registry->RegisterBooleanPref(
+-      prefs::kShowTabGroupsInBookmarkBar, true,
++      prefs::kShowTabGroupsInBookmarkBar, false,
+       user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
+   registry->RegisterBooleanPref(
+       prefs::kShowManagedBookmarksInBookmarkBar, true,

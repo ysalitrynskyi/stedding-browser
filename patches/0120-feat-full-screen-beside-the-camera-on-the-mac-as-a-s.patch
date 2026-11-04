@@ -37,8 +37,8 @@ camera.
  .../views/frame/browser_native_widget_mac.h   |  24 ++
  .../views/frame/browser_native_widget_mac.mm  |  63 ++-
  .../layout/stedding_browser_view_layout.cc    |  86 +++-
- .../ui/views/frame/stedding_camera_row_mac.h  | 114 ++++++
- .../ui/views/frame/stedding_camera_row_mac.mm | 377 ++++++++++++++++++
+ .../ui/views/frame/stedding_camera_row_mac.h  | 114 +++++
+ .../ui/views/frame/stedding_camera_row_mac.mm | 405 ++++++++++++++++++
  .../views/location_bar/location_bar_view.cc   |  17 +
  .../ui/views/location_bar/location_bar_view.h |   5 +
  .../vertical_tab_strip_top_container.cc       |  14 +-
@@ -47,11 +47,11 @@ camera.
  .../browser/ui/views/toolbar/toolbar_view.h   |   9 +
  .../browser/ui/webui/settings/settings_ui.cc  |  11 +
  chrome/test/stedding/BUILD.gn                 |   2 +
- .../test/stedding/camera_row_browsertest.mm   | 357 +++++++++++++++++
+ .../test/stedding/camera_row_browsertest.mm   | 367 ++++++++++++++++
  .../stedding/settings_spaces_browsertest.cc   |  15 +-
  .../app_shim/native_widget_mac_nswindow.h     |   6 +
  .../app_shim/native_widget_mac_nswindow.mm    |  12 +
- 34 files changed, 1331 insertions(+), 17 deletions(-)
+ 34 files changed, 1369 insertions(+), 17 deletions(-)
  create mode 100644 chrome/browser/ui/views/frame/stedding_camera_row_mac.h
  create mode 100644 chrome/browser/ui/views/frame/stedding_camera_row_mac.mm
  create mode 100644 chrome/test/stedding/camera_row_browsertest.mm
@@ -957,10 +957,10 @@ index 0000000000000..7debbe242a941
 +#endif  // CHROME_BROWSER_UI_VIEWS_FRAME_STEDDING_CAMERA_ROW_MAC_H_
 diff --git a/chrome/browser/ui/views/frame/stedding_camera_row_mac.mm b/chrome/browser/ui/views/frame/stedding_camera_row_mac.mm
 new file mode 100644
-index 0000000000000..cffde58f57e43
+index 0000000000000..9fcb52910b0d7
 --- /dev/null
 +++ b/chrome/browser/ui/views/frame/stedding_camera_row_mac.mm
-@@ -0,0 +1,377 @@
+@@ -0,0 +1,405 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -974,6 +974,8 @@ index 0000000000000..cffde58f57e43
 +
 +#include "base/command_line.h"
 +#include "base/functional/bind.h"
++#include "base/task/single_thread_task_runner.h"
++#include "base/time/time.h"
 +#include "chrome/browser/profiles/profile.h"
 +#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 +#include "chrome/browser/ui/stedding/address_row.h"
@@ -1176,10 +1178,14 @@ index 0000000000000..cffde58f57e43
 +  }
 +  window.movable = NO;
 +  window.hasShadow = NO;
-+  [window setFrame:screen.frame display:YES animate:NO];
++  // The menu bar hidden first: while it shows, AppKit keeps even this
++  // window's top under it. Back from a page's full screen the window is not
++  // main yet, and the row came back 50 points down (T58); becoming main
++  // fits it again (OnMainChanged).
 +  if (window.isMainWindow) {
 +    SetHidesMenuBar(true);
 +  }
++  [window setFrame:screen.frame display:YES animate:NO];
 +  if (AddressRow* const row = RowOf(browser_view_)) {
 +    row->SetCameraRow(AddressRow::CameraRow{.height = housing->height,
 +                                            .housing_left = housing->left,
@@ -1234,6 +1240,22 @@ index 0000000000000..cffde58f57e43
 +  // the frame from before the row beside the camera.
 +  active_ = true;
 +  FitScreen();
++  // AppKit may set the frame it restores after this, a titled window's,
++  // kept below the menu bar: the row then sat 50 points too low (T58). Fit
++  // again once it is done.
++  for (const base::TimeDelta delay :
++       {base::TimeDelta(), base::Milliseconds(600)}) {
++    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
++        FROM_HERE,
++        base::BindOnce(
++            [](base::WeakPtr<CameraRowFullscreenMac> self) {
++              if (self) {
++                self->FitScreen();
++              }
++            },
++            weak_factory_.GetWeakPtr()),
++        delay);
++  }
 +}
 +
 +std::optional<gfx::Rect> CameraRowFullscreenMac::RestoredBounds() const {
@@ -1277,8 +1299,14 @@ index 0000000000000..cffde58f57e43
 +}
 +
 +void CameraRowFullscreenMac::OnMainChanged(bool main) {
-+  if (active_) {
-+    SetHidesMenuBar(main);
++  if (!active_) {
++    return;
++  }
++  SetHidesMenuBar(main);
++  NativeWidgetMacNSWindow* const window = window_;
++  if (main && window && window.screen &&
++      !NSEqualRects(window.frame, window.screen.frame)) {
++    FitScreen();
 +  }
 +}
 +
@@ -1397,7 +1425,7 @@ index ceec8b4aba4c4..74ae626d3469e 100644
    // Returns the amount of space required to the left of the omnibox text.
    int GetMinimumLeadingWidth() const;
 diff --git a/chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_top_container.cc b/chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_top_container.cc
-index e330439e1b61e..1218804fb5635 100644
+index 25890695e0a0e..c07d4806fd94e 100644
 --- a/chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_top_container.cc
 +++ b/chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_top_container.cc
 @@ -25,6 +25,7 @@
@@ -1436,10 +1464,10 @@ index e330439e1b61e..1218804fb5635 100644
    // they stay hidden.
    nav_buttons_->SetVisible(address_in_sidebar_);
 diff --git a/chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_top_container.h b/chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_top_container.h
-index 9d0d05fc3f852..0c481ca8377ff 100644
+index b3223484d7e9f..510f6f2114d96 100644
 --- a/chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_top_container.h
 +++ b/chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_top_container.h
-@@ -199,6 +199,7 @@ class VerticalTabStripTopContainer : public views::View,
+@@ -201,6 +201,7 @@ class VerticalTabStripTopContainer : public views::View,
    raw_ptr<stedding::SidebarToolbarButtons> menu_host_ = nullptr;
    bool address_in_sidebar_ = false;
    PrefChangeRegistrar address_registrar_;
@@ -1598,10 +1626,10 @@ index be3c869ad04b2..9a8691ccd1d06 100644
        "little_window_menu_mac_browsertest.mm",
 diff --git a/chrome/test/stedding/camera_row_browsertest.mm b/chrome/test/stedding/camera_row_browsertest.mm
 new file mode 100644
-index 0000000000000..9b91e3ea29250
+index 0000000000000..80a67335c4739
 --- /dev/null
 +++ b/chrome/test/stedding/camera_row_browsertest.mm
-@@ -0,0 +1,357 @@
+@@ -0,0 +1,367 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -1783,7 +1811,8 @@ index 0000000000000..9b91e3ea29250
 +  // that only take its width, are all that may span it.
 +  for (views::View* const child : toolbar->children()) {
 +    if (!child->GetVisible() || child->bounds().IsEmpty() ||
-+        std::string(child->GetClassName()) == "View") {
++        std::string(child->GetClassName()) == "View" ||
++        std::string(child->GetClassName()) == "SteddingRowSpacer") {
 +      continue;
 +    }
 +    const gfx::Rect bounds = InWindow(child);
@@ -1811,9 +1840,12 @@ index 0000000000000..9b91e3ea29250
 +IN_PROC_BROWSER_TEST_F(CameraRowTest, TheAddressLeavesTheSidebarForTheRow) {
 +  browser()->GetProfile()->GetPrefs()->SetBoolean(
 +      stedding::prefs::kSidebarAddressInSidebar, true);
-+  Layout();
-+  ASSERT_FALSE(browser_view()->IsToolbarVisible());
-+  ASSERT_TRUE(browser_view()->toolbar()->stedding_buttons_host());
++  // The buttons move after the layout that asks for it.
++  ASSERT_TRUE(base::test::RunUntil([&] {
++    Layout();
++    return !browser_view()->IsToolbarVisible() &&
++           browser_view()->toolbar()->stedding_buttons_host() != nullptr;
++  })) << "the address and its buttons did not go to the sidebar";
 +
 +  SetSwitch(true);
 +  chrome::ToggleFullscreenMode(browser());
@@ -1851,7 +1883,11 @@ index 0000000000000..9b91e3ea29250
 +  browser_view()->GetWidget()->SetFullscreen(false);
 +  ASSERT_TRUE(base::test::RunUntil([&] { return camera_row().has_value(); }))
 +      << "the row beside the camera did not come back";
-+  EXPECT_TRUE(NSEqualRects(ns_window.frame, ns_window.screen.frame));
++  EXPECT_TRUE(base::test::RunUntil([&] {
++    return NSEqualRects(ns_window.frame, ns_window.screen.frame);
++  })) << "back beside the camera, the window does not cover its screen: "
++      << NSStringFromRect(ns_window.frame).UTF8String << " on "
++      << NSStringFromRect(ns_window.screen.frame).UTF8String;
 +
 +  chrome::ToggleFullscreenMode(browser());
 +  EXPECT_FALSE(camera_row());
@@ -1952,10 +1988,12 @@ index 0000000000000..9b91e3ea29250
 +  ASSERT_TRUE(base::test::RunUntil(
 +      [&] { return browser_view()->GetWidget()->IsFullscreen(); }));
 +  EXPECT_FALSE(camera_row());
-+  base::CommandLine::ForCurrentProcess()->RemoveSwitch(switches::kKioskMode);
-+  chrome::ToggleFullscreenMode(browser());
++  // Out of macOS's full screen the way a kiosk never is, before the switch
++  // goes: a toggle without it would be this mode's to answer.
++  browser_view()->GetWidget()->SetFullscreen(false);
 +  ASSERT_TRUE(base::test::RunUntil(
 +      [&] { return !browser_view()->GetWidget()->IsFullscreen(); }));
++  base::CommandLine::ForCurrentProcess()->RemoveSwitch(switches::kKioskMode);
 +}
 +
 +}  // namespace

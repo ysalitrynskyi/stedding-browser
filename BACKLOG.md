@@ -19,7 +19,7 @@ infrastructure, then features. A request in chat comes before this list. A spec 
 
 The plan of 2026-11-05. GitHub has no open bug. Its five open issues are one more request on a
 fixed bug (78, the folder's − button), three feature requests (77, 69, 60) and the pin bot's
-notice (70). The 127 rows here are mostly not bugs:
+notice (70). The 128 rows here are mostly not bugs:
 
 | What the rows are | Rows |
 |---|---|
@@ -28,17 +28,22 @@ notice (70). The 127 rows here are mostly not bugs:
 | Flaky tests and test tooling | 12 |
 | Product bugs not fixed yet, none reported by a user (S-251, S-314, S-318, S-336) | 4 |
 | Infrastructure and the ports | 20 |
-| Features, and what waits on Google, Apple or the owner ("Next") | 47 |
+| Features, and what waits on Google, Apple or the owner ("Next") | 48 |
 
 The order of work:
 
-1. **The pin moves to M158** (158.0.8127.18 or its newest point release), with Sparkle 2.10.1
-   (S-358). Builds on 157 lose the built-in HTTPS-only list on 2026-12-13, so this one has a
-   date. `tooling/update-pin --apply --to <version>`, the PC first. The Mac has about 30 GB free
-   and a milestone sync wants at least 100 GB (S-58), so its turn waits for room.
-2. **Small fixes that need no decision**, each with its test: the tracking names `srsltid`,
-   `gbraid` and `wbraid` (S-155), a deleted Space's routes (S-162), S-251's https half, and S-314,
-   S-318 and S-336, reproduced first or closed as not reproduced.
+1. **Chromium stays on M157 for this release**, its newest point release, unless the owner says
+   otherwise. 158.0.8127.18 is early stable: 0.5% of users on 2026-11-05, before M158's stable
+   cut (2026-11-10) and stable date (2026-11-17), and ADR 0007 has the pin follow a build only
+   past 1%. The series is already rebased onto it on the PC (`series-157` there holds the M157
+   series), ready for the release after, with Sparkle 2.10.1 (S-358). The built-in HTTPS-only
+   list sets no deadline here: a build on 157.0.8103.39 is dated 2026-11-01 and keeps the list
+   until 2027-01-10. The Mac has about 40 GB free and a milestone sync wants at least 100 GB
+   (S-58), so 158's Mac turn waits for room.
+2. **Small fixes that need no decision**, each with its test: the tracking names (S-155), a
+   deleted Space's routes (S-162), a double click off the sidebar's edge (S-336), S-251's https
+   half, S-314 and S-318, reproduced first or closed as not reproduced. **The notice on sites
+   that need DRM** (S-421, the owner, 2026-11-05).
 3. **A real-build pass on the final build**, the machines being free: S-341, S-338, S-342 and
    S-340 first, where a fault loses data or wedges the browser, then the other review rows,
    S-326, S-323 and S-399. This is what shrinks the list: each row that passes closes.
@@ -75,7 +80,7 @@ is in. The Windows times are not.
 | S-270 | Widevine (Netflix, Disney+, Prime Video, Spotify) | `docs/ARCHITECTURE.md`; `docs/PRIVACY.md`; `docs/FAQ.md` | Nothing protected by Widevine plays. Desktop browsers run L3. The owner has written to Google (the CDM through the component updater, plus a production VMP certificate) and to castLabs. castLabs' free EVS signs its own Electron fork; VMP for a custom Chromium is a paid service. Turning the component on before Google answers is the licensing risk another fork refused. After a grant: VMP-sign each release, `enable_widevine` in `tooling/args/*.gn`, list the network call in `docs/PRIVACY.md`, then a DRM test page and Netflix on both platforms. |
 | S-238 | Google services that cannot work here | `docs/PRIVACY.md`; ADR 0020; S-75 | Each is offered and needs Google's key or service. Remove Enhanced Safe Browsing (an ADR: it can only send page addresses to Google; S-75 is the route to working Safe Browsing). Confirm download verdicts and the password leak check with a network log, then off by default, with an ADR. Website voice input should fail inside the browser. Hide or relabel "Use enhanced spell check" and Settings' "Use Google Translate". `docs/PRIVACY.md` still misses the Windows spelling-dictionary download, the Mac's network-location fallback, and the Windows profile's per-user-only protection. |
 | S-239 | Passkeys on the Mac | `docs/features/`; an ADR | Touch ID and iCloud Keychain passkeys need Apple-granted entitlements in a provisioning profile. The same profile can carry universal links. Only the owner can create it and ask Apple. The team choice is hard to reverse and wants an ADR. |
-| S-241 | What else the comparison found | `docs/ARCHITECTURE.md`; ADR 0023; `docs/HANDOFF.md` trap 134 | Owner decisions still open: the component allowlist before 1.0 (keep the security components, drop the unused), and extensions pinned to the toolbar on install. M157 does that pin, and Stedding follows it until the owner decides (trap 134). Widevine is S-270. A system install is S-169. Releases built on the 156 pin lose the built-in HTTPS-only list on 2026-12-13. |
+| S-241 | What else the comparison found | `docs/ARCHITECTURE.md`; ADR 0023; `docs/HANDOFF.md` trap 134 | Owner decisions still open: the component allowlist before 1.0 (keep the security components, drop the unused), and extensions pinned to the toolbar on install. M157 does that pin, and Stedding follows it until the owner decides (trap 134). Widevine is S-270. A system install is S-169. Releases built on a pin from before 1 November 2026 lose the built-in HTTPS-only list on 2026-12-13; 157.0.8103.39 keeps it until 2027-01-10. |
 
 ### Faults from the review of 2026-10-28
 
@@ -193,6 +198,7 @@ Rows the specs still leave open. M10 is in ROADMAP's order (ADR 0021).
 
 | Id | Item | Feature / spec | Notes |
 |---|---|---|---|
+| S-421 | A notice on sites that need DRM | `docs/features/drm-notice.md` | The owner, 2026-11-05: the page is not blocked; a bar under it says Stedding cannot play protected video yet, with a button that opens the page in Safari on the Mac and Edge on Windows. Widevine itself is S-270. |
 | S-404 | A Windows build for ARM (GitHub issue 69) | `docs/ROADMAP.md` | Asked 2026-11-02, on a Snapdragon machine. Chromium builds for `target_cpu = "arm64"` on Windows and the PC can cross-compile it, but there is no ARM machine to try it on, so a build would ship untried. The owner, 2026-11-03: if it takes little extra time, build it and publish it as a release of its own that installed copies never update to; otherwise later. Put off: it is a second full Chromium build on the PC beside the release's own, an installer for ARM, and an update feed of its own, since an ARM copy reading today's feed would replace itself with the x64 build. A release of its own must also not become GitHub's latest, which the site reads (ADR 0014). |
 | S-320 | Bookmarks pinned in the sidebar (GitHub issue 40) | `docs/features/pins.md`; `docs/features/sidebar.md` | Waits for the owner. Space pins and essentials already keep a page and cost nothing while asleep (H3). Answer that pins serve this and ask what is missing, or plan a bookmarks block. |
 | S-235 | Apps made from pages, the rest | `docs/features/web-apps.md`; ADR 0025 | Built in patch 0072. The Windows install was seen on beta 20; Add to Dock from the command bar was seen on the Mac. Enter in the dialog is `MakeAppTest.EnterInTheDialogAddsTheApp`. Left, planned in the spec: Wa8 (the Windows browser test of the Start menu entry), Wa16 and Wa17 (updates and uninstall with an app installed), Wa19 (a missing Mac launcher), Wa22 (launching an app with Stedding quit). |

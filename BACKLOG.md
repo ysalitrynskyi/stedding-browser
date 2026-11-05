@@ -19,7 +19,7 @@ infrastructure, then features. A request in chat comes before this list. A spec 
 
 The plan of 2026-11-05. GitHub has no open bug. Its five open issues are one more request on a
 fixed bug (78, the folder's − button), three feature requests (77, 69, 60) and the pin bot's
-notice (70). The 132 rows here are mostly not bugs:
+notice (70). The 133 rows here are mostly not bugs:
 
 | What the rows are | Rows |
 |---|---|
@@ -28,7 +28,7 @@ notice (70). The 132 rows here are mostly not bugs:
 | Flaky tests and test tooling | 12 |
 | Product bugs not fixed yet (S-251, S-314, S-318, S-336, and the owner's S-423 and S-424) | 6 |
 | Infrastructure and the ports | 20 |
-| Features, and what waits on Google, Apple or the owner ("Next") | 50 |
+| Features, and what waits on Google, Apple or the owner ("Next") | 51 |
 
 What goes into beta 11, the owner's list of 2026-11-05. It does not rush.
 
@@ -47,10 +47,18 @@ To build, in this order:
    where each thing went.
 4. Spaces that share a named session (S-272), with its ADR.
 5. S-251's https half, S-314 and S-318, reproduced first or closed as not reproduced.
-6. A real-build pass on the final build: S-341, S-338, S-342 and S-340 first, where a fault loses
+6. Whatever else can be done here without anyone else (the owner, 2026-11-05: "implement everything
+   you can"), and it does not rush. What people leaving Arc meet first: S-107, S-103, S-160, S-101,
+   S-375. Then S-376, S-155's rest, S-93, S-157, S-94, S-92, S-102, S-127, S-158, S-125, S-286,
+   S-164, S-159, S-152, S-153, S-165, S-156, S-161, S-96, S-374, S-100, S-151, S-282, S-118, S-98,
+   S-235, S-117, S-57, S-90, S-91. The biggest last: S-61, S-95, S-88. Then the cleanup, S-337,
+   S-178, S-315, S-170, S-171, S-176, S-177, S-167, S-168, S-166, S-306, S-335, the flaky tests,
+   and the checks a machine can do with no person: S-147, S-150, S-172, S-142, S-247, S-258, S-279.
+   What is done when the owner calls the release goes out, and the rest stays in its row.
+7. A real-build pass on the final build: S-341, S-338, S-342 and S-340 first, where a fault loses
    data or wedges the browser, then the other review rows, S-326, S-323, S-399, S-155, S-162 and
    S-336. Each row that passes closes.
-7. The release gate: the suites on the shipping and DCHECK builds on both platforms, ASan on
+8. The release gate: the suites on the shipping and DCHECK builds on both platforms, ASan on
    Windows, acceptance on both, an update from the installed beta 10 on both, with S-420's stall
    on an installed Windows copy, and the owner's look at every changed state.
 
@@ -64,7 +72,7 @@ moves when the owner says so.
 
 Not this release: Widevine (S-270) and passkeys (S-239), waiting on Google and Apple; Safe
 Browsing (S-75, issue 60), skipped on the owner's word; Windows on ARM (S-404, issue 69), no
-hardware; Linux (S-216); the signed Windows installer (S-56); cloud sync (issue 77); a Space that
+hardware; Linux (S-216); the signed Windows installer (S-56); cloud sync (S-426, issue 77); a Space that
 holds tabs from different sessions, which Arc never had.
 
 ### Left from beta 8
@@ -209,6 +217,7 @@ Rows the specs still leave open. M10 is in ROADMAP's order (ADR 0021).
 | Id | Item | Feature / spec | Notes |
 |---|---|---|---|
 | S-422 | Where someone from Arc looks | `docs/features/routing.md`; `docs/features/commandbar.md`; `docs/features/welcome.md` | The owner, 2026-11-05, after a comment on r/Stedding asked for Arc's Air Traffic Control, which Stedding has as routes. The features are there and people do not find them. Proposed: one list of routes in Settings, with "Route sites here…" on the Space menu (S-126); Arc's words as search terms in the command bar and Settings, which name no feature after Arc; and, after an Arc import, a page saying where each thing went and what did not come across. Arc's routes are not imported, and where Arc keeps them is not known yet. The site's `/arc/` page already has the map. Arc's Library, the tools a swipe left of the first Space shows, stays out (the owner). |
+| S-426 | Sync through the user's own Google Drive (GitHub issue 77) | `docs/features/sidebar-file.md`; ADR 0029 | The owner's yes to the idea, 2026-11-05. Sync goes through a folder today, which needs an app such as iCloud Drive or Dropbox to carry it. The reporter wants no extra app: a button connects their own Google Drive and Stedding writes the sync file there itself, with no Stedding server or account and no subscription. Opt-in, off by default. Needs a Google Cloud OAuth client and Google's approval of it, which only the owner can get; Drive's `drive.file` scope reaches only files the app made. Other clouds later. Decision 18 and ADR 0029 change with it. |
 | S-425 | A folder's − button (GitHub issue 78) | `docs/features/folders.md` | The reporter's second ask, and the owner's yes, 2026-11-05: a − on a folder's header closes its open tabs and collapses it, for leaving a folder with nothing open in a press. It shows only while the pointer is on the folder's header. |
 | S-421 | A notice on sites that need DRM | `docs/features/drm-notice.md` | The owner, 2026-11-05: the page is not blocked; a bar under it says Stedding cannot play protected video yet, with a button that opens the page in Safari on the Mac and Edge on Windows. Widevine itself is S-270. Built 2026-11-05 (patch 0131): seen on netflix.com and tv.apple.com on a release build of the Mac. Left: a real press that opens Safari, and all of its Windows code, which has not been compiled. |
 | S-404 | A Windows build for ARM (GitHub issue 69) | `docs/ROADMAP.md` | Asked 2026-11-02, on a Snapdragon machine. Chromium builds for `target_cpu = "arm64"` on Windows and the PC can cross-compile it, but there is no ARM machine to try it on, so a build would ship untried. The owner, 2026-11-03: if it takes little extra time, build it and publish it as a release of its own that installed copies never update to; otherwise later. Put off: it is a second full Chromium build on the PC beside the release's own, an installer for ARM, and an update feed of its own, since an ARM copy reading today's feed would replace itself with the x64 build. A release of its own must also not become GitHub's latest, which the site reads (ADR 0014). |

@@ -1,0 +1,1608 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Thu, 5 Nov 2026 12:00:41 -0500
+Subject: feat: a notice on sites that need DRM
+
+Nothing protected by Widevine plays yet (S-270), so Netflix and the like load
+and then fail. A tab that commits a page on a short built-in list of sites now
+shows a bar that says so, with Open in Safari on the Mac and Open in Edge on
+Windows. The page is not blocked. The bar comes once per tab per site. "Don't
+show again" remembers the site in stedding.drm_notice.dismissed_sites, and
+Settings > Stedding lists those sites, each with a remove button
+(docs/features/drm-notice.md Dn1-Dn12; settings T56).
+
+A private window keeps its answer in its own preferences, in memory. A peek
+over the page has no bar until it becomes a tab. TabFeatures attaches the
+helper and carries its once across a tab going to sleep. A bar's link now sits
+on the bar's line with a gap from the button, on every bar (toolbar T54).
+
+The Windows half of the button has not been built.
+
+Why: the owner's decision of 2026-11-05 (BACKLOG S-421): do not block these
+sites; say why their video fails and offer a browser that plays it.
+
+Removable when: Widevine plays in Stedding (BACKLOG S-270).
+---
+ .../api/settings_private/prefs_util.cc        |   3 +
+ .../stedding_page/stedding_page.html.ts       |  17 +
+ .../settings/stedding_page/stedding_page.ts   |  20 +
+ chrome/browser/ui/stedding/BUILD.gn           |  31 +
+ chrome/browser/ui/stedding/drm_notice.cc      | 286 +++++++++
+ chrome/browser/ui/stedding/drm_notice.h       | 106 ++++
+ .../browser/ui/stedding/drm_notice_browser.h  |  25 +
+ .../ui/stedding/drm_notice_browser_mac.mm     |  39 ++
+ .../ui/stedding/drm_notice_browser_win.cc     |  30 +
+ .../ui/stedding/drm_notice_unittest.cc        | 117 ++++
+ chrome/browser/ui/stedding/stedding_prefs.cc  |   2 +
+ chrome/browser/ui/stedding/stedding_prefs.h   |   4 +
+ .../ui/stedding/stedding_prefs_unittest.cc    |   3 +
+ chrome/browser/ui/tabs/BUILD.gn               |   3 +-
+ chrome/browser/ui/tabs/tab_features.cc        |   6 +
+ .../ui/views/infobars/confirm_infobar.cc      |  12 +-
+ .../browser/ui/views/infobars/infobar_view.cc |   3 +-
+ .../browser/ui/webui/settings/settings_ui.cc  |   3 +
+ chrome/test/stedding/BUILD.gn                 |   3 +
+ .../test/stedding/drm_notice_browsertest.cc   | 583 ++++++++++++++++++
+ components/infobars/core/infobar_delegate.h   |   2 +
+ 21 files changed, 1293 insertions(+), 5 deletions(-)
+ create mode 100644 chrome/browser/ui/stedding/drm_notice.cc
+ create mode 100644 chrome/browser/ui/stedding/drm_notice.h
+ create mode 100644 chrome/browser/ui/stedding/drm_notice_browser.h
+ create mode 100644 chrome/browser/ui/stedding/drm_notice_browser_mac.mm
+ create mode 100644 chrome/browser/ui/stedding/drm_notice_browser_win.cc
+ create mode 100644 chrome/browser/ui/stedding/drm_notice_unittest.cc
+ create mode 100644 chrome/test/stedding/drm_notice_browsertest.cc
+
+diff --git a/chrome/browser/extensions/api/settings_private/prefs_util.cc b/chrome/browser/extensions/api/settings_private/prefs_util.cc
+index fdc0a122f5a72..f6814c794b6b8 100644
+--- a/chrome/browser/extensions/api/settings_private/prefs_util.cc
++++ b/chrome/browser/extensions/api/settings_private/prefs_util.cc
+@@ -461,6 +461,9 @@ const PrefsUtil::TypedPrefMap& PrefsUtil::GetAllowlistedKeys() {
+   // toolbar T55, settings T51 (BACKLOG S-392).
+   (*s_allowlist)[stedding::prefs::kCameraRowFullscreen] =
+       settings_api::PrefType::kBoolean;
++  // drm-notice Dn8, settings T56.
++  (*s_allowlist)[stedding::prefs::kDrmNoticeDismissedSites] =
++      settings_api::PrefType::kList;
+   // tabs R65, sidebar-panels Pn17, settings T52, T53 (BACKLOG S-398).
+   (*s_allowlist)[stedding::prefs::kTabsTidyTitles] =
+       settings_api::PrefType::kBoolean;
+diff --git a/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts b/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
+index d201fd3364b6e..1fd2b839cc0dd 100644
+--- a/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
++++ b/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
+@@ -798,6 +798,23 @@ export function getHtml(this: SettingsSteddingPageElement) {
+       label="$i18n{steddingNewTabShortcutsLabel}"
+       sub-label="$i18n{steddingNewTabShortcutsSubLabel}">
+   </settings-toggle-button>
++  <div class="settings-box route-row" id="drmNoticeSites">
++    <div class="flex route-list">
++      <span class="secondary">$i18n{steddingDrmNoticeSites}</span>
++      ${this.drmNoticeSites_().length === 0 ? html`
++        <span class="secondary" id="drmNoticeSitesEmpty">
++          $i18n{steddingCleanLinksKeptEmpty}
++        </span>` : ''}
++      ${this.drmNoticeSites_().map(site => html`
++        <span class="route-chip drm-notice-site">${site}
++          <cr-icon-button class="icon-clear" data-site="${site}"
++              title="$i18n{steddingCleanLinksRemove}"
++              aria-label="${this.removeCleanLinksSiteLabel_(site)}"
++              @click="${this.onRemoveDrmNoticeSiteClick_}">
++          </cr-icon-button>
++        </span>`)}
++    </div>
++  </div>
+ </settings-section>
+ <settings-section id="privacySection" class="cr-centered-card-container"
+     page-title="$i18n{steddingPrivacyTitle}">
+diff --git a/chrome/browser/resources/settings/stedding_page/stedding_page.ts b/chrome/browser/resources/settings/stedding_page/stedding_page.ts
+index 5349c9bae1f47..fff1c81607589 100644
+--- a/chrome/browser/resources/settings/stedding_page/stedding_page.ts
++++ b/chrome/browser/resources/settings/stedding_page/stedding_page.ts
+@@ -156,6 +156,7 @@ export class SettingsSteddingPageElement extends
+       windowColourPref_: {type: Object},
+       customLightPref_: {type: Object},
+       customDarkPref_: {type: Object},
++      drmNoticeSitesPref_: {type: Object},
+     };
+   }
+ 
+@@ -167,6 +168,9 @@ export class SettingsSteddingPageElement extends
+       chrome.settingsPrivate.PrefObject<number>|undefined;
+   protected accessor customDarkPref_:
+       chrome.settingsPrivate.PrefObject<number>|undefined;
++  // drm-notice Dn8: the sites whose DRM notice is dismissed.
++  protected accessor drmNoticeSitesPref_:
++      chrome.settingsPrivate.PrefObject<string[]>|undefined;
+ 
+   // settings T41: whether the colour wells show.
+   protected isCustomColour_(): boolean {
+@@ -251,6 +255,7 @@ export class SettingsSteddingPageElement extends
+       'stedding.appearance.window_colour': 'windowColourPref_',
+       'stedding.appearance.custom_light': 'customLightPref_',
+       'stedding.appearance.custom_dark': 'customDarkPref_',
++      'stedding.drm_notice.dismissed_sites': 'drmNoticeSitesPref_',
+     });
+     this.addWebUiListener(
+         'stedding-spaces-changed',
+@@ -381,6 +386,21 @@ export class SettingsSteddingPageElement extends
+     }
+   }
+ 
++  protected drmNoticeSites_(): string[] {
++    return this.drmNoticeSitesPref_?.value ?? [];
++  }
++
++  // drm-notice Dn8: taking a site off the list is how "Don't show again" is
++  // undone.
++  protected onRemoveDrmNoticeSiteClick_(e: Event) {
++    const site = (e.currentTarget as HTMLElement).dataset['site'];
++    if (site) {
++      PrefService.getInstance().setPrefValue(
++          'stedding.drm_notice.dismissed_sites',
++          this.drmNoticeSites_().filter(entry => entry !== site));
++    }
++  }
++
+   // blocker Bk2, Bk9: what a list blocks, where it comes from and under what
+   // licence, and when it was last fetched.
+   protected blockerListLine_(id: string): string {
+diff --git a/chrome/browser/ui/stedding/BUILD.gn b/chrome/browser/ui/stedding/BUILD.gn
+index d6f3581292599..3f037fed407ba 100644
+--- a/chrome/browser/ui/stedding/BUILD.gn
++++ b/chrome/browser/ui/stedding/BUILD.gn
+@@ -529,6 +529,35 @@ source_set("important_update_bar") {
+   ]
+ }
+ 
++# docs/features/drm-notice.md: the bar on a site Stedding cannot play.
++source_set("drm_notice") {
++  public = [ "drm_notice.h" ]
++  sources = [
++    "drm_notice.cc",
++    "drm_notice_browser.h",
++  ]
++  public_deps = [
++    "//base",
++    "//components/prefs",
++    "//content/public/browser",
++  ]
++  deps = [
++    ":prefs",
++    "//chrome/browser/infobars",
++    "//chrome/browser/profiles:profile",
++    "//components/infobars/content",
++    "//components/infobars/core",
++    "//url",
++  ]
++  if (is_mac) {
++    sources += [ "drm_notice_browser_mac.mm" ]
++    frameworks = [ "AppKit.framework" ]
++  } else if (is_win) {
++    sources += [ "drm_notice_browser_win.cc" ]
++    deps += [ "//chrome/browser:primitives" ]
++  }
++}
++
+ # docs/features/little.md: links from other apps open small.
+ source_set("little_window") {
+   public = [
+@@ -987,6 +1016,7 @@ source_set("unit_tests") {
+     "clean_links_throttle_unittest.cc",
+     "copy_link_unittest.cc",
+     "dark_pages_unittest.cc",
++    "drm_notice_unittest.cc",
+     "little_window_unittest.cc",
+     "local_pages_unittest.cc",
+     "make_app_unittest.cc",
+@@ -1033,6 +1063,7 @@ source_set("unit_tests") {
+     ":clean_links",
+     ":copy_link",
+     ":dark_pages",
++    ":drm_notice",
+     ":little_window",
+     ":local_pages",
+     ":make_app_rules",
+diff --git a/chrome/browser/ui/stedding/drm_notice.cc b/chrome/browser/ui/stedding/drm_notice.cc
+new file mode 100644
+index 0000000000000..8f7a66e093b55
+--- /dev/null
++++ b/chrome/browser/ui/stedding/drm_notice.cc
+@@ -0,0 +1,286 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/stedding/drm_notice.h"
++
++#include <memory>
++#include <optional>
++#include <string>
++#include <utility>
++
++#include "base/functional/bind.h"
++#include "base/no_destructor.h"
++#include "build/build_config.h"
++#include "chrome/browser/infobars/confirm_infobar_creator.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/ui/stedding/drm_notice_browser.h"
++#include "chrome/browser/ui/stedding/stedding_prefs.h"
++#include "components/infobars/content/content_infobar_manager.h"
++#include "components/infobars/core/confirm_infobar_delegate.h"
++#include "components/infobars/core/infobar.h"
++#include "components/prefs/pref_service.h"
++#include "components/prefs/scoped_user_pref_update.h"
++#include "content/public/browser/navigation_handle.h"
++#include "content/public/browser/render_frame_host.h"
++#include "content/public/browser/web_contents.h"
++#include "url/gurl.h"
++
++namespace stedding {
++
++#if !BUILDFLAG(IS_MAC) && !BUILDFLAG(IS_WIN)
++bool OtherBrowserFound() {
++  return false;
++}
++
++void OpenInOtherBrowser(const GURL& url) {}
++#endif
++
++namespace {
++
++// Stedding's own strings are not localised yet.
++constexpr char16_t kMessage[] =
++    u"This site uses DRM to protect its video, which Stedding can't play yet.";
++constexpr char16_t kDontShowAgain[] = u"Don't show again";
++#if BUILDFLAG(IS_MAC)
++constexpr char16_t kOpenElsewhere[] = u"Open in Safari";
++#elif BUILDFLAG(IS_WIN)
++constexpr char16_t kOpenElsewhere[] = u"Open in Edge";
++#else
++constexpr char16_t kOpenElsewhere[] = u"";
++#endif
++
++enum class Match {
++  // The host and its subdomains, on a dot boundary.
++  kDomain,
++  kExactHost,
++};
++
++struct DrmSite {
++  std::string_view host;
++  Match match;
++};
++
++// drm-notice Dn2. A table, not detection of Encrypted Media Extensions: ad and
++// fingerprinting scripts ask for a key system on ordinary pages.
++constexpr DrmSite kDrmSites[] = {
++    {"netflix.com", Match::kDomain},
++    {"disneyplus.com", Match::kDomain},
++    {"primevideo.com", Match::kDomain},
++    {"hulu.com", Match::kDomain},
++    {"max.com", Match::kDomain},
++    {"hbomax.com", Match::kDomain},
++    {"peacocktv.com", Match::kDomain},
++    {"paramountplus.com", Match::kDomain},
++    {"tv.apple.com", Match::kDomain},
++    {"crunchyroll.com", Match::kDomain},
++    {"open.spotify.com", Match::kExactHost},
++};
++
++std::optional<DrmNoticeOpener>& OpenerForTesting() {
++  static base::NoDestructor<std::optional<DrmNoticeOpener>> opener;
++  return *opener;
++}
++
++// drm-notice Dn4.
++bool CanOpenElsewhere() {
++  const std::optional<DrmNoticeOpener>& opener = OpenerForTesting();
++  return opener ? !opener->is_null() : OtherBrowserFound();
++}
++
++void OpenElsewhere(const GURL& url) {
++  const std::optional<DrmNoticeOpener>& opener = OpenerForTesting();
++  if (opener) {
++    opener->Run(url);
++    return;
++  }
++  OpenInOtherBrowser(url);
++}
++
++class DrmNoticeDelegate : public ConfirmInfoBarDelegate {
++ public:
++  DrmNoticeDelegate() : can_open_elsewhere_(CanOpenElsewhere()) {}
++  DrmNoticeDelegate(const DrmNoticeDelegate&) = delete;
++  DrmNoticeDelegate& operator=(const DrmNoticeDelegate&) = delete;
++  ~DrmNoticeDelegate() override = default;
++
++  // ConfirmInfoBarDelegate:
++  InfoBarIdentifier GetIdentifier() const override {
++    return STEDDING_DRM_NOTICE_INFOBAR_DELEGATE;
++  }
++  std::u16string GetMessageText() const override { return kMessage; }
++  int GetButtons() const override {
++    return can_open_elsewhere_ ? BUTTON_OK : BUTTON_NONE;
++  }
++  std::u16string GetButtonLabel(InfoBarButton button) const override {
++    return kOpenElsewhere;
++  }
++  // drm-notice Dn3: the page the tab shows now, and the tab stays on it.
++  bool Accept() override {
++    const GURL& url = Page()->GetLastCommittedURL();
++    if (url.SchemeIsHTTPOrHTTPS()) {
++      OpenElsewhere(url);
++    }
++    return true;
++  }
++  std::u16string GetLinkText() const override { return kDontShowAgain; }
++  bool LinkClicked(WindowOpenDisposition disposition) override {
++    DrmNoticeTabHelper::FromWebContents(Page())->OnDontShowAgain();
++    return true;
++  }
++  // drm-notice Dn7: the helper takes the bar down when the tab leaves the
++  // site. Left to itself the bar would go at the site's next page, and Dn7
++  // would never show it again.
++  bool ShouldExpire(const NavigationDetails& details) const override {
++    return false;
++  }
++
++ private:
++  content::WebContents* Page() {
++    return infobars::ContentInfoBarManager::WebContentsFromInfoBar(infobar());
++  }
++
++  const bool can_open_elsewhere_;
++};
++
++}  // namespace
++
++std::string_view DrmSiteOf(const GURL& url) {
++  if (!url.SchemeIsHTTPOrHTTPS()) {
++    return {};
++  }
++  std::string_view host = url.host();
++  if (host.ends_with('.')) {
++    host.remove_suffix(1);
++  }
++  for (const DrmSite& site : kDrmSites) {
++    if (site.match == Match::kExactHost ? host == site.host
++                                        : url.DomainIs(site.host)) {
++      return site.host;
++    }
++  }
++  return {};
++}
++
++bool IsDrmSiteDismissed(const PrefService& prefs, std::string_view site) {
++  return prefs.GetList(prefs::kDrmNoticeDismissedSites).contains(site);
++}
++
++void DismissDrmSite(PrefService& prefs, std::string_view site) {
++  if (!IsDrmSiteDismissed(prefs, site)) {
++    ScopedListPrefUpdate(&prefs, prefs::kDrmNoticeDismissedSites)->Append(site);
++  }
++}
++
++DrmNoticeTabHelper::DrmNoticeTabHelper(content::WebContents* page)
++    : content::WebContentsObserver(page),
++      content::WebContentsUserData<DrmNoticeTabHelper>(*page) {
++  registrar_.Init(&prefs());
++  registrar_.Add(
++      prefs::kDrmNoticeDismissedSites,
++      base::BindRepeating(&DrmNoticeTabHelper::OnDismissedSitesChanged,
++                          base::Unretained(this)));
++  // drm-notice Dn12: a peek over the page is made a tab after it has loaded,
++  // and commits nothing more.
++  content::RenderFrameHost* const frame = page->GetPrimaryMainFrame();
++  if (frame->IsRenderFrameLive()) {
++    OnPageChanged(frame->GetLastCommittedURL(), !frame->IsErrorDocument());
++  }
++}
++
++DrmNoticeTabHelper::~DrmNoticeTabHelper() = default;
++
++// static
++void DrmNoticeTabHelper::CreateForReplacement(content::WebContents* from,
++                                              content::WebContents* to) {
++  CreateForWebContents(to);
++  if (const DrmNoticeTabHelper* const old = FromWebContents(from)) {
++    FromWebContents(to)->shown_ = old->shown_;
++  }
++}
++
++void DrmNoticeTabHelper::OnDontShowAgain() {
++  // The press closes this tab's bar. Taking it down here too, from the watch
++  // on the list, would delete the bar under the press.
++  const std::string_view site = bar_site_;
++  bar_site_ = {};
++  DismissDrmSite(prefs(), site);
++}
++
++void DrmNoticeTabHelper::DidFinishNavigation(
++    content::NavigationHandle* navigation) {
++  if (navigation->IsInPrimaryMainFrame() && navigation->HasCommitted() &&
++      !navigation->IsSameDocument()) {
++    OnPageChanged(navigation->GetURL(), !navigation->IsErrorPage());
++  }
++}
++
++void DrmNoticeTabHelper::OnPageChanged(const GURL& url, bool can_show) {
++  const std::string_view site = DrmSiteOf(url);
++  if (site != bar_site_) {
++    RemoveBar();
++  }
++  if (site.empty() || !can_show || shown_.contains(site) || IsDismissed(site)) {
++    return;
++  }
++  infobars::ContentInfoBarManager* const manager =
++      infobars::ContentInfoBarManager::FromWebContents(web_contents());
++  if (!manager) {
++    return;
++  }
++  shown_.insert(site);
++  bar_site_ = site;
++  manager->AddInfoBar(
++      CreateConfirmInfoBar(std::make_unique<DrmNoticeDelegate>()));
++}
++
++void DrmNoticeTabHelper::OnDismissedSitesChanged() {
++  if (!bar_site_.empty() && IsDismissed(bar_site_)) {
++    RemoveBar();
++  }
++}
++
++void DrmNoticeTabHelper::RemoveBar() {
++  bar_site_ = {};
++  infobars::ContentInfoBarManager* const manager =
++      infobars::ContentInfoBarManager::FromWebContents(web_contents());
++  if (!manager) {
++    return;
++  }
++  for (infobars::InfoBar* const bar : manager->infobars()) {
++    if (bar->delegate()->GetIdentifier() ==
++        infobars::InfoBarDelegate::STEDDING_DRM_NOTICE_INFOBAR_DELEGATE) {
++      manager->RemoveInfoBar(bar);
++      return;
++    }
++  }
++}
++
++bool DrmNoticeTabHelper::IsDismissed(std::string_view site) const {
++  // drm-notice Dn10: once a private window has written the list, its copy in
++  // memory hides what the profile's list gains later.
++  return IsDrmSiteDismissed(prefs(), site) ||
++         IsDrmSiteDismissed(
++             *Profile::FromBrowserContext(web_contents()->GetBrowserContext())
++                  ->GetOriginalProfile()
++                  ->GetPrefs(),
++             site);
++}
++
++PrefService& DrmNoticeTabHelper::prefs() const {
++  return *Profile::FromBrowserContext(web_contents()->GetBrowserContext())
++              ->GetPrefs();
++}
++
++ScopedDrmNoticeOpenerForTesting::ScopedDrmNoticeOpenerForTesting(
++    DrmNoticeOpener opener) {
++  OpenerForTesting() = std::move(opener);
++}
++
++ScopedDrmNoticeOpenerForTesting::~ScopedDrmNoticeOpenerForTesting() {
++  OpenerForTesting().reset();
++}
++
++WEB_CONTENTS_USER_DATA_KEY_IMPL(DrmNoticeTabHelper);
++
++}  // namespace stedding
+diff --git a/chrome/browser/ui/stedding/drm_notice.h b/chrome/browser/ui/stedding/drm_notice.h
+new file mode 100644
+index 0000000000000..46388c9aded05
+--- /dev/null
++++ b/chrome/browser/ui/stedding/drm_notice.h
+@@ -0,0 +1,106 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_STEDDING_DRM_NOTICE_H_
++#define CHROME_BROWSER_UI_STEDDING_DRM_NOTICE_H_
++
++#include <string_view>
++
++#include "base/containers/flat_set.h"
++#include "base/functional/callback.h"
++#include "components/prefs/pref_change_registrar.h"
++#include "content/public/browser/web_contents_observer.h"
++#include "content/public/browser/web_contents_user_data.h"
++
++class GURL;
++class PrefService;
++
++namespace content {
++class NavigationHandle;
++class WebContents;
++}  // namespace content
++
++namespace stedding {
++
++// docs/features/drm-notice.md: nothing protected by Widevine plays yet
++// (BACKLOG S-270), so a tab that opens a site known to need it shows a bar
++// that says so and offers the page in another browser. The page is not
++// blocked.
++
++// drm-notice Dn2: the listed site `url` is on, as the table writes it
++// ("netflix.com" for https://www.netflix.com/title/1), or empty. The view is
++// of the table, which lives as long as the process.
++std::string_view DrmSiteOf(const GURL& url);
++
++// drm-notice Dn6: whether `site`, as DrmSiteOf gives it, is on the list "Don't
++// show again" writes.
++bool IsDrmSiteDismissed(const PrefService& prefs, std::string_view site);
++
++// drm-notice Dn6: adds `site` unless it is listed.
++void DismissDrmSite(PrefService& prefs, std::string_view site);
++
++// drm-notice Dn1, Dn7: a tab's bar. It watches what the tab commits, shows the
++// bar once per listed site, and takes the bar down when the tab leaves that
++// site.
++class DrmNoticeTabHelper
++    : public content::WebContentsObserver,
++      public content::WebContentsUserData<DrmNoticeTabHelper> {
++ public:
++  DrmNoticeTabHelper(const DrmNoticeTabHelper&) = delete;
++  DrmNoticeTabHelper& operator=(const DrmNoticeTabHelper&) = delete;
++  ~DrmNoticeTabHelper() override;
++
++  // A tab put to sleep gets a new `to`, and it stays the same tab: `to`'s
++  // helper keeps what `from`'s has shown (Dn7).
++  static void CreateForReplacement(content::WebContents* from,
++                                   content::WebContents* to);
++
++  // Dn6: the bar's link. Its press closes this tab's bar.
++  void OnDontShowAgain();
++
++  // content::WebContentsObserver:
++  void DidFinishNavigation(content::NavigationHandle* navigation) override;
++
++ private:
++  friend class content::WebContentsUserData<DrmNoticeTabHelper>;
++
++  explicit DrmNoticeTabHelper(content::WebContents* page);
++
++  // The tab now shows `url`. `can_show` is false for an error page (Dn1).
++  void OnPageChanged(const GURL& url, bool can_show);
++  // Dn6: another tab's "Don't show again" takes this tab's bar down too.
++  void OnDismissedSitesChanged();
++  void RemoveBar();
++  bool IsDismissed(std::string_view site) const;
++
++  // The profile's: a private window's is its own (Dn10).
++  PrefService& prefs() const;
++
++  // The sites this tab has shown its bar for. Views of the table.
++  base::flat_set<std::string_view> shown_;
++  // The site of the bar this tab may be showing, or empty.
++  std::string_view bar_site_;
++  PrefChangeRegistrar registrar_;
++
++  WEB_CONTENTS_USER_DATA_KEY_DECL();
++};
++
++// What the button hands an address to.
++using DrmNoticeOpener = base::RepeatingCallback<void(const GURL&)>;
++
++// Tests: stands in for the other browser while it lives. A null `opener`
++// says the browser cannot be found (Dn4).
++class ScopedDrmNoticeOpenerForTesting {
++ public:
++  explicit ScopedDrmNoticeOpenerForTesting(DrmNoticeOpener opener);
++  ScopedDrmNoticeOpenerForTesting(const ScopedDrmNoticeOpenerForTesting&) =
++      delete;
++  ScopedDrmNoticeOpenerForTesting& operator=(
++      const ScopedDrmNoticeOpenerForTesting&) = delete;
++  ~ScopedDrmNoticeOpenerForTesting();
++};
++
++}  // namespace stedding
++
++#endif  // CHROME_BROWSER_UI_STEDDING_DRM_NOTICE_H_
+diff --git a/chrome/browser/ui/stedding/drm_notice_browser.h b/chrome/browser/ui/stedding/drm_notice_browser.h
+new file mode 100644
+index 0000000000000..4e4e0a9864931
+--- /dev/null
++++ b/chrome/browser/ui/stedding/drm_notice_browser.h
+@@ -0,0 +1,25 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_STEDDING_DRM_NOTICE_BROWSER_H_
++#define CHROME_BROWSER_UI_STEDDING_DRM_NOTICE_BROWSER_H_
++
++class GURL;
++
++namespace stedding {
++
++// drm-notice Dn3, Dn4: the browser this platform's bar offers, Safari on the
++// Mac and Edge on Windows.
++
++// Whether that browser can be found on this computer. False on a platform
++// that offers none.
++bool OtherBrowserFound();
++
++// Opens `url`, an http or https address, in that browser, in front of this
++// one. The tab it came from stays.
++void OpenInOtherBrowser(const GURL& url);
++
++}  // namespace stedding
++
++#endif  // CHROME_BROWSER_UI_STEDDING_DRM_NOTICE_BROWSER_H_
+diff --git a/chrome/browser/ui/stedding/drm_notice_browser_mac.mm b/chrome/browser/ui/stedding/drm_notice_browser_mac.mm
+new file mode 100644
+index 0000000000000..c3ef9750807a7
+--- /dev/null
++++ b/chrome/browser/ui/stedding/drm_notice_browser_mac.mm
+@@ -0,0 +1,39 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/stedding/drm_notice_browser.h"
++
++#import <AppKit/AppKit.h>
++
++#include "base/apple/foundation_util.h"
++#include "base/functional/callback_helpers.h"
++#include "base/mac/launch_application.h"
++#include "url/gurl.h"
++
++namespace stedding {
++namespace {
++
++// By bundle id, not by path: current macOS keeps Safari on a cryptex volume.
++NSURL* SafariAddress() {
++  return [NSWorkspace.sharedWorkspace
++      URLForApplicationWithBundleIdentifier:@"com.apple.Safari"];
++}
++
++}  // namespace
++
++bool OtherBrowserFound() {
++  return SafariAddress() != nil;
++}
++
++void OpenInOtherBrowser(const GURL& url) {
++  NSURL* const safari = SafariAddress();
++  if (!safari) {
++    return;
++  }
++  base::mac::LaunchApplication(base::apple::NSURLToFilePath(safari),
++                               /*command_line_args=*/{}, {url.spec()},
++                               /*options=*/{}, base::DoNothing());
++}
++
++}  // namespace stedding
+diff --git a/chrome/browser/ui/stedding/drm_notice_browser_win.cc b/chrome/browser/ui/stedding/drm_notice_browser_win.cc
+new file mode 100644
+index 0000000000000..afdae7c96efb4
+--- /dev/null
++++ b/chrome/browser/ui/stedding/drm_notice_browser_win.cc
+@@ -0,0 +1,30 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/stedding/drm_notice_browser.h"
++
++#include <windows.h>
++
++#include "base/strings/strcat.h"
++#include "base/win/registry.h"
++#include "chrome/browser/platform_util.h"
++#include "url/gurl.h"
++
++namespace stedding {
++
++bool OtherBrowserFound() {
++  // Edge registers this protocol wherever it is installed.
++  base::win::RegKey protocol(HKEY_CLASSES_ROOT, L"microsoft-edge",
++                             KEY_QUERY_VALUE);
++  return protocol.Valid() && protocol.HasValue(L"URL Protocol");
++}
++
++void OpenInOtherBrowser(const GURL& url) {
++  const GURL address(base::StrCat({"microsoft-edge:", url.spec()}));
++  if (address.is_valid()) {
++    platform_util::OpenExternal(address);
++  }
++}
++
++}  // namespace stedding
+diff --git a/chrome/browser/ui/stedding/drm_notice_unittest.cc b/chrome/browser/ui/stedding/drm_notice_unittest.cc
+new file mode 100644
+index 0000000000000..57be9d84fd13d
+--- /dev/null
++++ b/chrome/browser/ui/stedding/drm_notice_unittest.cc
+@@ -0,0 +1,117 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/stedding/drm_notice.h"
++
++#include <string_view>
++
++#include "chrome/browser/ui/stedding/stedding_prefs.h"
++#include "components/prefs/pref_registry_simple.h"
++#include "components/prefs/testing_pref_service.h"
++#include "testing/gtest/include/gtest/gtest.h"
++#include "url/gurl.h"
++
++namespace stedding {
++namespace {
++
++// drm-notice Dn2: every row of the table, under the name a user reaches it
++// by.
++TEST(DrmSitesTest, TheListedSitesMatch) {
++  constexpr struct {
++    const char* address;
++    std::string_view site;
++  } kListed[] = {
++      {"https://www.netflix.com/title/1", "netflix.com"},
++      {"https://netflix.com/", "netflix.com"},
++      {"https://help.netflix.com/", "netflix.com"},
++      {"http://www.netflix.com/", "netflix.com"},
++      {"https://WWW.Netflix.COM/", "netflix.com"},
++      {"https://www.netflix.com./", "netflix.com"},
++      {"https://www.netflix.com:8443/", "netflix.com"},
++      {"https://www.disneyplus.com/", "disneyplus.com"},
++      {"https://www.primevideo.com/", "primevideo.com"},
++      {"https://www.hulu.com/", "hulu.com"},
++      {"https://max.com/", "max.com"},
++      {"https://play.max.com/", "max.com"},
++      {"https://www.hbomax.com/", "hbomax.com"},
++      {"https://www.peacocktv.com/", "peacocktv.com"},
++      {"https://www.paramountplus.com/", "paramountplus.com"},
++      {"https://tv.apple.com/us/show/1", "tv.apple.com"},
++      {"https://www.crunchyroll.com/", "crunchyroll.com"},
++      {"https://open.spotify.com/track/1", "open.spotify.com"},
++      {"https://open.spotify.com./", "open.spotify.com"},
++  };
++  for (const auto& listed : kListed) {
++    EXPECT_EQ(listed.site, DrmSiteOf(GURL(listed.address))) << listed.address;
++  }
++}
++
++// drm-notice Dn2: the match is on a dot boundary, from the right.
++TEST(DrmSitesTest, ANameThatOnlyLooksListedDoesNot) {
++  for (const char* address : {
++           "https://notnetflix.com/",
++           "https://netflix.com.example/",
++           "https://netflix.co/",
++           "https://example.com/www.netflix.com",
++           "https://example.com/?site=netflix.com",
++           "https://netflix.com@example.com/",
++           "https://minimax.com/",
++           "https://nothulu.com/",
++       }) {
++    EXPECT_TRUE(DrmSiteOf(GURL(address)).empty()) << address;
++  }
++}
++
++// drm-notice Dn2: a site with one protected corner is listed by that corner,
++// and the rest of it shows no bar.
++TEST(DrmSitesTest, TheBroadSitesAreNotListed) {
++  for (const char* address : {
++           "https://amazon.com/",
++           "https://www.amazon.com/gp/video",
++           "https://spotify.com/",
++           "https://www.spotify.com/",
++           "https://accounts.spotify.com/",
++           "https://deep.open.spotify.com/",
++           "https://youtube.com/",
++           "https://www.youtube.com/watch?v=1",
++           "https://apple.com/",
++           "https://www.apple.com/tv",
++           "https://music.apple.com/",
++       }) {
++    EXPECT_TRUE(DrmSiteOf(GURL(address)).empty()) << address;
++  }
++}
++
++// drm-notice Dn2: only a web page's address.
++TEST(DrmSitesTest, OnlyWebAddressesMatch) {
++  for (const char* address : {
++           "ftp://netflix.com/",
++           "file:///netflix.com",
++           "chrome://netflix.com/",
++           "data:text/html,netflix.com",
++           "about:blank",
++           "",
++       }) {
++    EXPECT_TRUE(DrmSiteOf(GURL(address)).empty()) << address;
++  }
++}
++
++// drm-notice Dn6: the list holds a site once, whatever it is told.
++TEST(DrmDismissedSitesTest, ASiteIsListedOnce) {
++  TestingPrefServiceSimple prefs;
++  prefs.registry()->RegisterListPref(prefs::kDrmNoticeDismissedSites);
++
++  EXPECT_FALSE(IsDrmSiteDismissed(prefs, "netflix.com"));
++  DismissDrmSite(prefs, "netflix.com");
++  DismissDrmSite(prefs, "netflix.com");
++  DismissDrmSite(prefs, "hulu.com");
++
++  EXPECT_TRUE(IsDrmSiteDismissed(prefs, "netflix.com"));
++  EXPECT_TRUE(IsDrmSiteDismissed(prefs, "hulu.com"));
++  EXPECT_FALSE(IsDrmSiteDismissed(prefs, "max.com"));
++  EXPECT_EQ(2u, prefs.GetList(prefs::kDrmNoticeDismissedSites).size());
++}
++
++}  // namespace
++}  // namespace stedding
+diff --git a/chrome/browser/ui/stedding/stedding_prefs.cc b/chrome/browser/ui/stedding/stedding_prefs.cc
+index 1f8060cf63af7..d1ceaa089a221 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs.cc
++++ b/chrome/browser/ui/stedding/stedding_prefs.cc
+@@ -52,6 +52,8 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
+   // until the user adds one.
+   registry->RegisterBooleanPref(kCleanLinks, false);
+   registry->RegisterListPref(kCleanLinksKeptSites);
++  // drm-notice Dn6.
++  registry->RegisterListPref(kDrmNoticeDismissedSites);
+   registry->RegisterBooleanPref(kCopyLinkButton, true);
+   registry->RegisterBooleanPref(kUiAnimate, true);
+   registry->RegisterBooleanPref(kShowLinkAddress, true);
+diff --git a/chrome/browser/ui/stedding/stedding_prefs.h b/chrome/browser/ui/stedding/stedding_prefs.h
+index a229f5cf2b161..bc6fd5f877885 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs.h
++++ b/chrome/browser/ui/stedding/stedding_prefs.h
+@@ -121,6 +121,10 @@ inline constexpr char kCopyStripTracking[] = "stedding.copy.strip_tracking";
+ inline constexpr char kCleanLinks[] = "stedding.privacy.clean_links";
+ inline constexpr char kCleanLinksKeptSites[] =
+     "stedding.privacy.clean_links_kept_sites";
++// drm-notice Dn6: the sites whose bar "Don't show again" has hidden, as the
++// table writes them. Dn8: Settings lists them, and takes them off.
++inline constexpr char kDrmNoticeDismissedSites[] =
++    "stedding.drm_notice.dismissed_sites";
+ // The Copy Link button shows at the address field's right end on a page with
+ // a web address (docs/features/copy-link.md L7; settings T28). On by default
+ // (GitHub issue 11; the owner, 2026-10-22).
+diff --git a/chrome/browser/ui/stedding/stedding_prefs_unittest.cc b/chrome/browser/ui/stedding/stedding_prefs_unittest.cc
+index 588888bd4168c..1af0778172f38 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs_unittest.cc
++++ b/chrome/browser/ui/stedding/stedding_prefs_unittest.cc
+@@ -58,6 +58,9 @@ TEST(SteddingPrefsTest, EveryPreferenceRegistersWithItsDefault) {
+   // adds one.
+   ASSERT_TRUE(service.FindPreference(kCleanLinksKeptSites));
+   EXPECT_TRUE(service.GetList(kCleanLinksKeptSites).empty());
++  // drm-notice Dn6: no site is dismissed until the user says so.
++  ASSERT_TRUE(service.FindPreference(kDrmNoticeDismissedSites));
++  EXPECT_TRUE(service.GetList(kDrmNoticeDismissedSites).empty());
+   EXPECT_EQ(0, service.GetInteger(kSpaceSleepMinutes));
+   // spaces B45 (GitHub issue 66): the neighbours go round by default.
+   EXPECT_TRUE(service.GetBoolean(kSpacesLoop));
+diff --git a/chrome/browser/ui/tabs/BUILD.gn b/chrome/browser/ui/tabs/BUILD.gn
+index bdde31ef467a6..067e7b0276e27 100644
+--- a/chrome/browser/ui/tabs/BUILD.gn
++++ b/chrome/browser/ui/tabs/BUILD.gn
+@@ -540,9 +540,10 @@ if (!is_android) {
+ 
+     deps = [
+       # Stedding: the tab helpers TabFeatures attaches (dark pages Dk14, peek
+-      # P18).
++      # P18, drm-notice Dn1).
+       "//chrome/browser/ui:stedding_ui_metrics",
+       "//chrome/browser/ui/stedding:dark_pages",
++      "//chrome/browser/ui/stedding:drm_notice",
+       "//chrome/browser/ui/views/peek",
+       "//chrome/browser/ui/archive:closed_folder",
+       ":tab_group",
+diff --git a/chrome/browser/ui/tabs/tab_features.cc b/chrome/browser/ui/tabs/tab_features.cc
+index daf0ac357a483..000e77b466309 100644
+--- a/chrome/browser/ui/tabs/tab_features.cc
++++ b/chrome/browser/ui/tabs/tab_features.cc
+@@ -155,6 +155,7 @@
+ #include "chrome/browser/ui/search_engines/search_engine_tab_helper.h"
+ #include "chrome/browser/ui/side_panel/side_panel_registry.h"
+ #include "chrome/browser/ui/stedding/dark_pages.h"
++#include "chrome/browser/ui/stedding/drm_notice.h"
+ #include "chrome/browser/ui/stedding_ui_metrics.h"
+ #include "chrome/browser/ui/sync/browser_synced_tab_delegate.h"
+ #include "chrome/browser/ui/tab_contents/core_tab_helper.h"
+@@ -1430,6 +1431,8 @@ void TabFeatures::Init(TabInterface& tab, Profile* profile) {
+   // the switch itself.
+   if (base::FeatureList::IsEnabled(stedding::kArcStyleWindow)) {
+     stedding::DarkPagesTabHelper::CreateForWebContents(tab.GetContents());
++    // drm-notice Dn1: the bar on a site Stedding cannot play.
++    stedding::DrmNoticeTabHelper::CreateForWebContents(tab.GetContents());
+     // peek P18: the press a link from a pinned tab is followed with.
+     stedding::PeekPress::CreateForWebContents(tab.GetContents());
+   }
+@@ -2129,6 +2132,9 @@ void TabFeatures::WillDiscardContents(tabs::TabInterface* tab,
+   // the switch itself.
+   if (base::FeatureList::IsEnabled(stedding::kArcStyleWindow)) {
+     stedding::DarkPagesTabHelper::CreateForWebContents(new_contents);
++    // drm-notice Dn7: still the same tab.
++    stedding::DrmNoticeTabHelper::CreateForReplacement(old_contents,
++                                                       new_contents);
+     // peek P18: the press a link from a pinned tab is followed with.
+     stedding::PeekPress::CreateForWebContents(new_contents);
+   }
+diff --git a/chrome/browser/ui/views/infobars/confirm_infobar.cc b/chrome/browser/ui/views/infobars/confirm_infobar.cc
+index 3c24d81d7cd04..f48ab8a921b95 100644
+--- a/chrome/browser/ui/views/infobars/confirm_infobar.cc
++++ b/chrome/browser/ui/views/infobars/confirm_infobar.cc
+@@ -189,9 +189,15 @@ ConfirmInfoBar::ConfirmInfoBar(std::unique_ptr<ConfirmInfoBarDelegate> delegate)
+       AddViewBeforeCloseButton(std::move(link_unique_ptr));
+     }
+     link_->SetProperty(views::kFlexBehaviorKey, kRigidFlex);
+-    // Add margins for spacing for flex layout.
+-    link_->SetProperty(views::kMarginsKey, std::make_unique<gfx::Insets>(
+-                                               gfx::Insets::TLBR(0, 0, 0, 0)));
++    // Add margins for spacing for flex layout. Stedding (toolbar T54): a link
++    // after the button does not touch it.
++    const int link_gap = GetDelegate()->ShouldShowLinkBeforeButton()
++                             ? 0
++                             : ChromeLayoutProvider::Get()->GetDistanceMetric(
++                                   views::DISTANCE_RELATED_BUTTON_HORIZONTAL);
++    link_->SetProperty(views::kMarginsKey,
++                       std::make_unique<gfx::Insets>(
++                           gfx::Insets::TLBR(0, link_gap, 0, 0)));
+   }
+ }
+ 
+diff --git a/chrome/browser/ui/views/infobars/infobar_view.cc b/chrome/browser/ui/views/infobars/infobar_view.cc
+index 4857e0c08f669..8fa84f338237f 100644
+--- a/chrome/browser/ui/views/infobars/infobar_view.cc
++++ b/chrome/browser/ui/views/infobars/infobar_view.cc
+@@ -230,8 +230,9 @@ InfoBarView::InfoBarView(std::unique_ptr<infobars::InfoBarDelegate> delegate)
+   right_side_container_ = AddChildView(std::make_unique<views::View>());
+   auto* right_layout = right_side_container_->SetLayoutManager(
+       std::make_unique<views::FlexLayout>());
++  // Stedding (toolbar T54): on the bar's line, kEnd left a link under it.
+   right_layout->SetOrientation(views::LayoutOrientation::kHorizontal)
+-      .SetCrossAxisAlignment(views::LayoutAlignment::kEnd);
++      .SetCrossAxisAlignment(views::LayoutAlignment::kCenter);
+   right_side_container_->SetProperty(views::kFlexBehaviorKey, kRigidFlex);
+ 
+   if (this->delegate()->IsCloseable()) {
+diff --git a/chrome/browser/ui/webui/settings/settings_ui.cc b/chrome/browser/ui/webui/settings/settings_ui.cc
+index ebbb484f1d80d..eacb360f3e94c 100644
+--- a/chrome/browser/ui/webui/settings/settings_ui.cc
++++ b/chrome/browser/ui/webui/settings/settings_ui.cc
+@@ -1091,6 +1091,9 @@ SettingsUI::SettingsUI(content::WebUI* web_ui)
+   // Cl9: a remove button's name to a screen reader is the action and the
+   // site, not the site alone.
+   html_source->AddString("steddingCleanLinksRemoveSite", "Remove $1");
++  // drm-notice Dn8: its empty line and remove buttons are the kept sites'.
++  html_source->AddString("steddingDrmNoticeSites",
++                         "Sites that don't show the DRM notice:");
+   // blocker Bk1, Bk2, Bk6, Bk9.
+   html_source->AddString("steddingBlockerLabel", "Block ads and trackers");
+   html_source->AddString(
+diff --git a/chrome/test/stedding/BUILD.gn b/chrome/test/stedding/BUILD.gn
+index c1eaaec787c25..ea95ada32cf34 100644
+--- a/chrome/test/stedding/BUILD.gn
++++ b/chrome/test/stedding/BUILD.gn
+@@ -35,6 +35,8 @@ test("stedding_browser_tests") {
+     # BACKLOG S-402 (GitHub issue 73): a site's device picker.
+     "device_picker_browsertest.cc",
+     "downloads_browsertest.cc",
++    # BACKLOG S-421: the bar on a site Stedding cannot play.
++    "drm_notice_browsertest.cc",
+     "edit_space_browsertest.cc",
+     "external_extensions_browsertest.cc",
+     "folder_tabs_browsertest.cc",
+@@ -151,6 +153,7 @@ test("stedding_browser_tests") {
+     "//chrome/browser/extensions:test_support",
+     "//chrome/browser/infobars",
+     # updates Up24: the important update's bar.
++    "//chrome/browser/ui/stedding:drm_notice",
+     "//chrome/browser/ui/stedding:important_update_bar",
+     "//chrome/browser/notifications:test_support",
+     "//chrome/browser/gcm",
+diff --git a/chrome/test/stedding/drm_notice_browsertest.cc b/chrome/test/stedding/drm_notice_browsertest.cc
+new file mode 100644
+index 0000000000000..f9641a86eaf1b
+--- /dev/null
++++ b/chrome/test/stedding/drm_notice_browsertest.cc
+@@ -0,0 +1,583 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++// The DRM notice in a real window (docs/features/drm-notice.md): which pages
++// show the bar, what its button, its link and its close box do, how often it
++// comes, Settings' list, and the windows that have one and the page that has
++// none. Hosts on the table are mapped to the test server, which answers https
++// because a listed site is reached over https.
++
++#include "chrome/browser/ui/stedding/drm_notice.h"
++
++#include <string>
++#include <string_view>
++#include <tuple>
++#include <vector>
++
++#include "base/functional/callback_helpers.h"
++#include "base/strings/strcat.h"
++#include "base/synchronization/lock.h"
++#include "base/test/bind.h"
++#include "base/test/run_until.h"
++#include "build/build_config.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/stedding/little_window.h"
++#include "chrome/browser/ui/stedding/peek.h"
++#include "chrome/browser/ui/stedding/sleep_tabs.h"
++#include "chrome/browser/ui/stedding/stedding_prefs.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "chrome/browser/ui/views/infobars/confirm_infobar.h"
++#include "chrome/browser/ui/views/peek/peek_overlay.h"
++#include "chrome/test/base/in_process_browser_test.h"
++#include "chrome/test/base/ui_test_utils.h"
++#include "components/infobars/content/content_infobar_manager.h"
++#include "components/infobars/core/confirm_infobar_delegate.h"
++#include "components/infobars/core/infobar.h"
++#include "components/prefs/pref_service.h"
++#include "components/tabs/public/tab_interface.h"
++#include "content/public/browser/render_frame_host.h"
++#include "content/public/browser/web_contents.h"
++#include "content/public/test/browser_test.h"
++#include "content/public/test/browser_test_utils.h"
++#include "content/public/test/content_mock_cert_verifier.h"
++#include "content/public/test/url_loader_interceptor.h"
++#include "net/base/net_errors.h"
++#include "net/dns/mock_host_resolver.h"
++#include "net/test/embedded_test_server/default_handlers.h"
++#include "net/test/embedded_test_server/embedded_test_server.h"
++#include "ui/base/window_open_disposition.h"
++#include "ui/events/event.h"
++#include "ui/events/event_constants.h"
++#include "ui/views/controls/button/md_text_button.h"
++#include "ui/views/test/button_test_api.h"
++#include "ui/views/view.h"
++#include "url/gurl.h"
++
++namespace {
++
++constexpr char16_t kMessage[] =
++    u"This site uses DRM to protect its video, which Stedding can't play yet.";
++
++// The page's DRM bars: one at most, whatever the test did.
++std::vector<infobars::InfoBar*> BarsOn(content::WebContents* page) {
++  std::vector<infobars::InfoBar*> bars;
++  const infobars::ContentInfoBarManager* const manager =
++      infobars::ContentInfoBarManager::FromWebContents(page);
++  if (manager) {
++    for (infobars::InfoBar* const bar : manager->infobars()) {
++      if (bar->delegate()->GetIdentifier() ==
++          infobars::InfoBarDelegate::STEDDING_DRM_NOTICE_INFOBAR_DELEGATE) {
++        bars.push_back(bar);
++      }
++    }
++  }
++  return bars;
++}
++
++infobars::InfoBar* BarOn(content::WebContents* page) {
++  const std::vector<infobars::InfoBar*> bars = BarsOn(page);
++  EXPECT_LE(bars.size(), 1u);
++  return bars.empty() ? nullptr : bars.front();
++}
++
++ConfirmInfoBarDelegate* DelegateOf(infobars::InfoBar* bar) {
++  return bar->delegate()->AsConfirmInfoBarDelegate();
++}
++
++ConfirmInfoBar* ViewOf(infobars::InfoBar* bar) {
++  return static_cast<ConfirmInfoBar*>(bar);
++}
++
++// The user's press on the bar's button, through the button on screen.
++void PressTheButton(infobars::InfoBar* bar) {
++  views::Button* const button = ViewOf(bar)->ok_button_for_testing();
++  ASSERT_TRUE(button);
++  const gfx::Point centre = button->GetLocalBounds().CenterPoint();
++  views::test::ButtonTestApi(button).NotifyClick(ui::MouseEvent(
++      ui::EventType::kMousePressed, centre, centre, base::TimeTicks::Now(),
++      ui::EF_LEFT_MOUSE_BUTTON, ui::EF_LEFT_MOUSE_BUTTON));
++}
++
++// What InfoBarView does with a press on the link.
++void PressDontShowAgain(infobars::InfoBar* bar) {
++  EXPECT_EQ(u"Don't show again", DelegateOf(bar)->GetLinkText());
++  if (DelegateOf(bar)->LinkClicked(WindowOpenDisposition::CURRENT_TAB)) {
++    bar->RemoveSelf();
++  }
++}
++
++// What InfoBarView does with a press on the close box.
++void PressClose(infobars::InfoBar* bar) {
++  bar->delegate()->InfoBarDismissed();
++  bar->RemoveSelf();
++}
++
++// `body`, run on the settings page with `pick(selector)`: the first element
++// that matches anywhere on the page, through every shadow root, or null.
++std::string OnThePage(std::string_view body) {
++  return base::StrCat({R"(
++    (() => {
++      const find = (root, selector) => {
++        const found = root.querySelector(selector);
++        if (found) {
++          return found;
++        }
++        for (const element of root.querySelectorAll('*')) {
++          if (element.shadowRoot) {
++            const inner = find(element.shadowRoot, selector);
++            if (inner) {
++              return inner;
++            }
++          }
++        }
++        return null;
++      };
++      const pick = selector => find(document, selector);
++    )",
++                       body, R"(
++    })()
++  )"});
++}
++
++class DrmNoticeTest : public InProcessBrowserTest {
++ protected:
++  void SetUpCommandLine(base::CommandLine* command_line) override {
++    InProcessBrowserTest::SetUpCommandLine(command_line);
++    mock_cert_verifier_.SetUpCommandLine(command_line);
++  }
++
++  void SetUpInProcessBrowserTestFixture() override {
++    InProcessBrowserTest::SetUpInProcessBrowserTestFixture();
++    mock_cert_verifier_.SetUpInProcessBrowserTestFixture();
++  }
++
++  void TearDownInProcessBrowserTestFixture() override {
++    mock_cert_verifier_.TearDownInProcessBrowserTestFixture();
++    InProcessBrowserTest::TearDownInProcessBrowserTestFixture();
++  }
++
++  void SetUpOnMainThread() override {
++    InProcessBrowserTest::SetUpOnMainThread();
++    mock_cert_verifier_.mock_cert_verifier()->set_default_result(net::OK);
++    host_resolver()->AddRule("*", "127.0.0.1");
++    https_.ServeFilesFromSourceDirectory(GetChromeTestDataDir());
++    net::test_server::RegisterDefaultHandlers(&https_);
++    ASSERT_TRUE(https_.Start());
++  }
++
++  GURL Url(std::string_view host, std::string_view path = "/title2.html") {
++    return https_.GetURL(host, path);
++  }
++
++  TabStripModel& tabs() { return *browser()->GetTabStripModel(); }
++  content::WebContents* contents() { return tabs().GetActiveWebContents(); }
++  PrefService& prefs() { return *browser()->GetProfile()->GetPrefs(); }
++
++  void Open(const GURL& url) {
++    ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
++  }
++
++  void OpenInNewTab(const GURL& url) {
++    ASSERT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
++        browser(), url, WindowOpenDisposition::NEW_FOREGROUND_TAB,
++        ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
++  }
++
++  // A pinned page at a.test with one link, to `to`, clicked with the user's
++  // activation (peek P1).
++  void ClickALinkOutOfAPin(const GURL& to) {
++    ASSERT_NO_FATAL_FAILURE(OpenInNewTab(Url("a.test")));
++    ASSERT_TRUE(content::ExecJs(contents(),
++                                content::JsReplace(R"(
++          const link = document.createElement('a');
++          link.id = 'link';
++          link.href = $1;
++          link.textContent = 'the link';
++          document.body.prepend(link);)",
++                                                   to),
++                                content::EXECUTE_SCRIPT_NO_USER_GESTURE));
++    tabs().SetTabPinned(tabs().active_index(), true);
++    prefs().SetBoolean(stedding::prefs::kPeekEnabled, true);
++    ASSERT_TRUE(content::ExecJs(contents(),
++                                "document.getElementById('link').click();"));
++  }
++
++  net::EmbeddedTestServer https_{net::EmbeddedTestServer::TYPE_HTTPS};
++  content::ContentMockCertVerifier mock_cert_verifier_;
++};
++
++// Dn1: the bar comes up on a listed site, says why, and shows; the page is
++// there and answers.
++IN_PROC_BROWSER_TEST_F(DrmNoticeTest, AListedSiteShowsTheBarAndThePageLoads) {
++  const GURL url = Url("www.netflix.com");
++  ASSERT_NO_FATAL_FAILURE(Open(url));
++
++  infobars::InfoBar* const bar = BarOn(contents());
++  ASSERT_TRUE(bar) << "no bar on " << url;
++  EXPECT_EQ(kMessage, DelegateOf(bar)->GetMessageText());
++  views::View* const view = ViewOf(bar);
++  EXPECT_TRUE(base::test::RunUntil([&]() {
++    return view->IsDrawn() && view->height() > 0;
++  })) << "the window did not draw the bar";
++
++  EXPECT_EQ(url, contents()->GetLastCommittedURL());
++  EXPECT_EQ(u"Title Of Awesomeness", contents()->GetTitle());
++  EXPECT_EQ(2, content::EvalJs(contents(), "1 + 1"));
++}
++
++// Dn1: a listed site that did not answer has shown no video to fail.
++IN_PROC_BROWSER_TEST_F(DrmNoticeTest, AnErrorPageShowsNoBar) {
++  // Whether an error page counts as the navigation working is not the point.
++  std::ignore = ui_test_utils::NavigateToURL(
++      browser(), Url("www.netflix.com", "/close-socket"));
++  ASSERT_TRUE(contents()->GetPrimaryMainFrame()->IsErrorDocument());
++  EXPECT_FALSE(BarOn(contents()));
++
++  // And the error page did not use up the tab's once.
++  ASSERT_NO_FATAL_FAILURE(Open(Url("www.netflix.com")));
++  EXPECT_TRUE(BarOn(contents()));
++}
++
++// Dn2: the table, on the path a page takes.
++IN_PROC_BROWSER_TEST_F(DrmNoticeTest, AnOrdinarySiteShowsNoBar) {
++  for (const char* host : {"a.test", "www.notnetflix.com", "www.amazon.com",
++                           "www.spotify.com", "www.youtube.com"}) {
++    SCOPED_TRACE(host);
++    ASSERT_NO_FATAL_FAILURE(Open(Url(host)));
++    EXPECT_FALSE(BarOn(contents()));
++  }
++  // And the walk above did not stop one from showing.
++  ASSERT_NO_FATAL_FAILURE(Open(Url("open.spotify.com")));
++  EXPECT_TRUE(BarOn(contents()));
++}
++
++// Dn3: the press sends the page the tab shows now, the bar goes, and the tab
++// stays where it is, on that page, in front.
++IN_PROC_BROWSER_TEST_F(DrmNoticeTest,
++                       TheButtonOpensTheCurrentAddressAndTheTabStays) {
++  std::vector<GURL> opened;
++  stedding::ScopedDrmNoticeOpenerForTesting opener(base::BindLambdaForTesting(
++      [&](const GURL& url) { opened.push_back(url); }));
++  ASSERT_NO_FATAL_FAILURE(Open(Url("www.netflix.com", "/title1.html")));
++  const GURL now = Url("www.netflix.com", "/title2.html");
++  ASSERT_NO_FATAL_FAILURE(Open(now));
++  tabs::TabInterface* const tab = tabs().GetActiveTab();
++  const int count = tabs().count();
++
++  infobars::InfoBar* const bar = BarOn(contents());
++  ASSERT_TRUE(bar);
++  ASSERT_NO_FATAL_FAILURE(PressTheButton(bar));
++
++  EXPECT_EQ(std::vector<GURL>{now}, opened);
++  EXPECT_FALSE(BarOn(contents()));
++  EXPECT_EQ(count, tabs().count());
++  EXPECT_EQ(tab, tabs().GetActiveTab());
++  EXPECT_EQ(now, contents()->GetLastCommittedURL());
++}
++
++// Dn3: Safari on the Mac, Edge on Windows. The Mac's is found for real.
++IN_PROC_BROWSER_TEST_F(DrmNoticeTest, TheButtonNamesThisComputersBrowser) {
++#if BUILDFLAG(IS_MAC)
++  const std::u16string label = u"Open in Safari";
++  ASSERT_NO_FATAL_FAILURE(Open(Url("www.netflix.com")));
++  ASSERT_TRUE(BarOn(contents()));
++  EXPECT_EQ(ConfirmInfoBarDelegate::BUTTON_OK,
++            DelegateOf(BarOn(contents()))->GetButtons())
++      << "this Mac has no Safari";
++#elif BUILDFLAG(IS_WIN)
++  const std::u16string label = u"Open in Edge";
++#else
++  const std::u16string label;
++#endif
++  stedding::ScopedDrmNoticeOpenerForTesting opener(base::DoNothing());
++  ASSERT_NO_FATAL_FAILURE(OpenInNewTab(Url("www.hulu.com")));
++  infobars::InfoBar* const bar = BarOn(contents());
++  ASSERT_TRUE(bar);
++  ASSERT_EQ(ConfirmInfoBarDelegate::BUTTON_OK, DelegateOf(bar)->GetButtons());
++  EXPECT_EQ(label,
++            DelegateOf(bar)->GetButtonLabel(ConfirmInfoBarDelegate::BUTTON_OK));
++  EXPECT_EQ(label, ViewOf(bar)->ok_button_for_testing()->GetText());
++}
++
++// Dn4: no browser to offer, no button; the rest of the bar stays.
++IN_PROC_BROWSER_TEST_F(DrmNoticeTest, WithNoOtherBrowserTheBarHasNoButton) {
++  stedding::ScopedDrmNoticeOpenerForTesting opener{stedding::DrmNoticeOpener()};
++  ASSERT_NO_FATAL_FAILURE(Open(Url("www.netflix.com")));
++
++  infobars::InfoBar* const bar = BarOn(contents());
++  ASSERT_TRUE(bar);
++  EXPECT_EQ(ConfirmInfoBarDelegate::BUTTON_NONE, DelegateOf(bar)->GetButtons());
++  EXPECT_FALSE(ViewOf(bar)->ok_button_for_testing());
++  EXPECT_EQ(kMessage, DelegateOf(bar)->GetMessageText());
++  EXPECT_EQ(u"Don't show again", DelegateOf(bar)->GetLinkText());
++  EXPECT_TRUE(bar->delegate()->IsCloseable());
++}
++
++// Dn5: the close box hides the bar, and remembers nothing past Dn7.
++IN_PROC_BROWSER_TEST_F(DrmNoticeTest, CloseHidesTheBarForThisPage) {
++  ASSERT_NO_FATAL_FAILURE(Open(Url("www.netflix.com")));
++  ASSERT_TRUE(BarOn(contents()));
++  PressClose(BarOn(contents()));
++
++  EXPECT_FALSE(BarOn(contents()));
++  EXPECT_TRUE(
++      prefs().GetList(stedding::prefs::kDrmNoticeDismissedSites).empty())
++      << "the close box is not Don't show again";
++  ASSERT_TRUE(content::ExecJs(contents(), "location.reload();"));
++  EXPECT_TRUE(content::WaitForLoadStop(contents()));
++  EXPECT_FALSE(BarOn(contents()));
++}
++
++// Dn6: the site goes on the list, as the table writes it. Every tab's bar for
++// it goes, and no tab shows one; another site still does.
++IN_PROC_BROWSER_TEST_F(DrmNoticeTest, DontShowAgainRemembersTheSite) {
++  ASSERT_NO_FATAL_FAILURE(Open(Url("www.netflix.com")));
++  content::WebContents* const first = contents();
++  ASSERT_TRUE(BarOn(first));
++  ASSERT_NO_FATAL_FAILURE(OpenInNewTab(Url("help.netflix.com")));
++  ASSERT_TRUE(BarOn(contents()));
++
++  PressDontShowAgain(BarOn(contents()));
++
++  EXPECT_FALSE(BarOn(contents()));
++  EXPECT_FALSE(BarOn(first)) << "the first tab's bar stayed";
++  const base::ListValue& sites =
++      prefs().GetList(stedding::prefs::kDrmNoticeDismissedSites);
++  ASSERT_EQ(1u, sites.size());
++  EXPECT_EQ("netflix.com", sites[0].GetString());
++
++  ASSERT_NO_FATAL_FAILURE(OpenInNewTab(Url("www.netflix.com")));
++  EXPECT_FALSE(BarOn(contents()));
++  ASSERT_NO_FATAL_FAILURE(OpenInNewTab(Url("www.hulu.com")));
++  EXPECT_TRUE(BarOn(contents()));
++}
++
++// Dn7: the one bar stays while the tab moves around the site, goes when the
++// tab leaves, and does not come back.
++IN_PROC_BROWSER_TEST_F(DrmNoticeTest, OncePerTabPerSite) {
++  ASSERT_NO_FATAL_FAILURE(Open(Url("www.netflix.com", "/title1.html")));
++  infobars::InfoBar* const bar = BarOn(contents());
++  ASSERT_TRUE(bar);
++
++  ASSERT_NO_FATAL_FAILURE(Open(Url("www.netflix.com", "/title2.html")));
++  EXPECT_EQ(bar, BarOn(contents())) << "a page of the same site";
++  ASSERT_TRUE(content::ExecJs(contents(), "history.pushState({}, '', '/x');"));
++  EXPECT_EQ(bar, BarOn(contents())) << "a page's own address change";
++  ASSERT_NO_FATAL_FAILURE(Open(Url("help.netflix.com")));
++  EXPECT_EQ(bar, BarOn(contents())) << "a subdomain is the same site";
++
++  ASSERT_NO_FATAL_FAILURE(Open(Url("a.test")));
++  EXPECT_FALSE(BarOn(contents())) << "the tab left the site";
++
++  ASSERT_NO_FATAL_FAILURE(Open(Url("www.netflix.com")));
++  EXPECT_FALSE(BarOn(contents())) << "it came back";
++  ASSERT_TRUE(content::ExecJs(contents(), "location.reload();"));
++  EXPECT_TRUE(content::WaitForLoadStop(contents()));
++  EXPECT_FALSE(BarOn(contents())) << "it came back on a reload";
++}
++
++// Dn7: the once is the tab's and the site's: a tab that goes straight on to
++// another listed site shows that site's bar, and another tab shows its own.
++IN_PROC_BROWSER_TEST_F(DrmNoticeTest, AnotherTabOrSiteShowsItsOwnBar) {
++  ASSERT_NO_FATAL_FAILURE(Open(Url("www.netflix.com")));
++  infobars::InfoBar* const netflix = BarOn(contents());
++  ASSERT_TRUE(netflix);
++  ASSERT_NO_FATAL_FAILURE(Open(Url("www.hulu.com")));
++  ASSERT_TRUE(BarOn(contents())) << "the other site showed no bar";
++  EXPECT_NE(netflix, BarOn(contents())) << "the first site's bar stayed";
++
++  ASSERT_NO_FATAL_FAILURE(OpenInNewTab(Url("www.netflix.com")));
++  EXPECT_TRUE(BarOn(contents())) << "another tab showed no bar";
++}
++
++// Dn7: a tab put to sleep is still the tab that showed the bar. Awake, it
++// loads the site without one, and its next listed site shows as usual.
++IN_PROC_BROWSER_TEST_F(DrmNoticeTest, ASleepingTabKeepsItsOnce) {
++  ASSERT_NO_FATAL_FAILURE(Open(Url("www.netflix.com")));
++  ASSERT_TRUE(BarOn(contents()));
++  tabs::TabInterface* const tab = tabs().GetActiveTab();
++  const int index = tabs().active_index();
++  ASSERT_NO_FATAL_FAILURE(OpenInNewTab(Url("a.test")));
++
++  stedding::SleepTabList({tab});
++  ASSERT_TRUE(base::test::RunUntil(
++      [&]() { return tab->GetContents()->WasDiscarded(); }));
++
++  tabs().ActivateTabAt(index);
++  ASSERT_TRUE(content::WaitForLoadStop(tab->GetContents()));
++  ASSERT_EQ(Url("www.netflix.com"), tab->GetContents()->GetLastCommittedURL());
++  EXPECT_FALSE(BarOn(tab->GetContents()));
++
++  ASSERT_NO_FATAL_FAILURE(Open(Url("www.hulu.com")));
++  EXPECT_TRUE(BarOn(tab->GetContents()));
++}
++
++// Dn8: Settings lists what was dismissed and takes it off, and the next tab
++// on that site shows the bar. With none it says so.
++IN_PROC_BROWSER_TEST_F(DrmNoticeTest, SettingsListsAndRestoresADismissedSite) {
++  stedding::DismissDrmSite(prefs(), "netflix.com");
++  ASSERT_NO_FATAL_FAILURE(Open(GURL("chrome://settings/stedding")));
++  content::WebContents* const page = contents();
++  const auto chips = [&]() {
++    return content::EvalJs(page, OnThePage(R"(
++      const box = pick('#drmNoticeSites');
++      return box ? [...box.querySelectorAll('.drm-notice-site')]
++                       .map(chip => chip.textContent.trim()).join(',')
++                 : '?';)"))
++        .ExtractString();
++  };
++  EXPECT_TRUE(base::test::RunUntil([&]() { return chips() == "netflix.com"; }))
++      << chips();
++
++  EXPECT_EQ("", content::EvalJs(page, OnThePage(R"(
++      pick('#drmNoticeSites cr-icon-button[data-site="netflix.com"]').click();
++      return '';)")));
++  EXPECT_TRUE(base::test::RunUntil([&]() {
++    return prefs().GetList(stedding::prefs::kDrmNoticeDismissedSites).empty();
++  }));
++  EXPECT_TRUE(base::test::RunUntil([&]() { return chips().empty(); }))
++      << chips();
++  EXPECT_EQ("No sites", content::EvalJs(page, OnThePage(R"(
++      return pick('#drmNoticeSitesEmpty').textContent.trim();)")));
++
++  ASSERT_NO_FATAL_FAILURE(OpenInNewTab(Url("www.netflix.com")));
++  EXPECT_TRUE(BarOn(contents()));
++}
++
++// Dn9: every http and https request from the page's load to after the press
++// is one the page itself makes. The interceptor sees them all, whatever their
++// host.
++IN_PROC_BROWSER_TEST_F(DrmNoticeTest, TheBarAsksTheNetworkForNothing) {
++  base::Lock lock;
++  std::vector<GURL> asked;
++  content::URLLoaderInterceptor watch(base::BindLambdaForTesting(
++      [&](content::URLLoaderInterceptor::RequestParams* params) {
++        base::AutoLock hold(lock);
++        asked.push_back(params->url_request.url);
++        return false;
++      }));
++  bool pressed = false;
++  stedding::ScopedDrmNoticeOpenerForTesting opener(
++      base::BindLambdaForTesting([&](const GURL&) { pressed = true; }));
++
++  const GURL url = Url("www.netflix.com");
++  ASSERT_NO_FATAL_FAILURE(Open(url));
++  ASSERT_TRUE(BarOn(contents()));
++  ASSERT_NO_FATAL_FAILURE(PressTheButton(BarOn(contents())));
++  ASSERT_TRUE(pressed);
++  // A round trip to the page, so that anything the press sent has been seen.
++  ASSERT_TRUE(content::ExecJs(contents(), "fetch('/title1.html')"));
++
++  const GURL favicon = Url("www.netflix.com", "/favicon.ico");
++  const GURL round_trip = Url("www.netflix.com", "/title1.html");
++  base::AutoLock hold(lock);
++  for (const GURL& request : asked) {
++    if (request.SchemeIsHTTPOrHTTPS()) {
++      EXPECT_TRUE(request == url || request == favicon || request == round_trip)
++          << request;
++    }
++  }
++}
++
++// Dn10: a private window shows the bar and the button works. "Don't show
++// again" there stays in that window's profile, and off the profile's file. A
++// site dismissed in a normal window shows none there.
++IN_PROC_BROWSER_TEST_F(DrmNoticeTest,
++                       APrivateWindowShowsTheBarAndForgetsItsAnswer) {
++  std::vector<GURL> opened;
++  stedding::ScopedDrmNoticeOpenerForTesting opener(base::BindLambdaForTesting(
++      [&](const GURL& url) { opened.push_back(url); }));
++  BrowserWindowInterface* const incognito = CreateIncognitoBrowser();
++  const auto page = [&]() {
++    return incognito->GetTabStripModel()->GetActiveWebContents();
++  };
++  const auto open_tab = [&](const GURL& url) {
++    return ui_test_utils::NavigateToURLWithDisposition(
++        incognito, url, WindowOpenDisposition::NEW_FOREGROUND_TAB,
++        ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
++  };
++
++  const GURL netflix = Url("www.netflix.com");
++  ASSERT_TRUE(ui_test_utils::NavigateToURL(incognito, netflix));
++  ASSERT_TRUE(BarOn(page()));
++  ASSERT_NO_FATAL_FAILURE(PressTheButton(BarOn(page())));
++  EXPECT_EQ(std::vector<GURL>{netflix}, opened);
++
++  ASSERT_TRUE(open_tab(Url("www.hulu.com")));
++  ASSERT_TRUE(BarOn(page()));
++  PressDontShowAgain(BarOn(page()));
++  EXPECT_TRUE(
++      prefs().GetList(stedding::prefs::kDrmNoticeDismissedSites).empty())
++      << "a private window's answer reached the profile";
++  ASSERT_TRUE(open_tab(Url("www.hulu.com")));
++  EXPECT_FALSE(BarOn(page())) << "the private window forgot its answer";
++  ASSERT_NO_FATAL_FAILURE(Open(Url("www.hulu.com")));
++  EXPECT_TRUE(BarOn(contents())) << "the normal window took the answer";
++
++  stedding::DismissDrmSite(prefs(), "disneyplus.com");
++  ASSERT_TRUE(open_tab(Url("www.disneyplus.com")));
++  EXPECT_FALSE(BarOn(page()));
++}
++
++// Dn11: a link from another app opens a little window, which has a bar.
++IN_PROC_BROWSER_TEST_F(DrmNoticeTest, ALittleWindowShowsTheBar) {
++  stedding::ScopedDrmNoticeOpenerForTesting opener(base::DoNothing());
++  BrowserWindowInterface* const little = stedding::OpenLittleWindow(
++      browser()->GetProfile(), Url("www.netflix.com"), browser(),
++      /*untrusted_launch=*/false);
++  ASSERT_TRUE(little);
++  EXPECT_TRUE(stedding::IsLittleWindow(little));
++  content::WebContents* const page =
++      little->GetTabStripModel()->GetActiveWebContents();
++  ASSERT_TRUE(content::WaitForLoadStop(page));
++  infobars::InfoBar* const bar = BarOn(page);
++  ASSERT_TRUE(bar);
++  views::View* const view = ViewOf(bar);
++  EXPECT_TRUE(base::test::RunUntil(
++      [&]() { return view->IsDrawn() && view->height() > 0; }));
++}
++
++// Dn11: a peek in a small window is a little window with one tab.
++IN_PROC_BROWSER_TEST_F(DrmNoticeTest, APeekInASmallWindowShowsTheBar) {
++  prefs().SetInteger(stedding::prefs::kPeekStyle,
++                     stedding::prefs::kPeekStyleSmallWindow);
++  ASSERT_NO_FATAL_FAILURE(ClickALinkOutOfAPin(Url("www.netflix.com")));
++  ASSERT_TRUE(base::test::RunUntil(
++      [&]() { return stedding::PeekOver(browser()) != nullptr; }));
++  content::WebContents* const page =
++      stedding::PeekOver(browser())->GetTabStripModel()->GetActiveWebContents();
++  ASSERT_TRUE(content::WaitForLoadStop(page));
++  EXPECT_TRUE(BarOn(page));
++}
++
++// Dn12: a peek over the page is no tab, and nothing could draw a bar for it.
++// Kept as a tab, the page shows the bar with no new load.
++IN_PROC_BROWSER_TEST_F(DrmNoticeTest, APeekOverThePageHasNoBarUntilItIsATab) {
++  ASSERT_EQ(stedding::prefs::kPeekStyleOverPage,
++            prefs().GetInteger(stedding::prefs::kPeekStyle));
++  ASSERT_NO_FATAL_FAILURE(ClickALinkOutOfAPin(Url("www.netflix.com")));
++  tabs::TabInterface* const pin = tabs().GetActiveTab();
++  ASSERT_TRUE(base::test::RunUntil(
++      [&]() { return stedding::PeekOverlay::ForSource(pin) != nullptr; }));
++  stedding::PeekOverlay* const peek = stedding::PeekOverlay::ForSource(pin);
++  content::WebContents* const page = peek->page();
++  ASSERT_TRUE(content::WaitForLoadStop(page));
++  EXPECT_FALSE(BarOn(page));
++  ASSERT_TRUE(content::ExecJs(page, "window.kept = 1;"));
++
++  views::Button* const open_as_tab = peek->view()->open_as_tab_button();
++  const gfx::Point centre = open_as_tab->GetLocalBounds().CenterPoint();
++  views::test::ButtonTestApi(open_as_tab)
++      .NotifyClick(ui::MouseEvent(
++          ui::EventType::kMousePressed, centre, centre, base::TimeTicks::Now(),
++          ui::EF_LEFT_MOUSE_BUTTON, ui::EF_LEFT_MOUSE_BUTTON));
++  ASSERT_TRUE(base::test::RunUntil(
++      [&]() { return !stedding::PeekOverlay::ForSource(pin); }));
++  ASSERT_EQ(page, contents());
++  EXPECT_TRUE(BarOn(page));
++  EXPECT_EQ(1, content::EvalJs(page, "window.kept")) << "it loaded again";
++}
++
++}  // namespace
+diff --git a/components/infobars/core/infobar_delegate.h b/components/infobars/core/infobar_delegate.h
+index 3620714962c50..3a5766a8bb175 100644
+--- a/components/infobars/core/infobar_delegate.h
++++ b/components/infobars/core/infobar_delegate.h
+@@ -217,6 +217,8 @@ class InfoBarDelegate {
+     STEDDING_PEEK_NOTICE_INFOBAR_DELEGATE = 141,
+     // Stedding (docs/features/updates.md Up24): an important update waits.
+     STEDDING_IMPORTANT_UPDATE_INFOBAR_DELEGATE = 142,
++    // Stedding (docs/features/drm-notice.md Dn1): a site Stedding cannot play.
++    STEDDING_DRM_NOTICE_INFOBAR_DELEGATE = 143,
+   };
+   // LINT.ThenChange(//tools/metrics/histograms/metadata/browser/enums.xml:InfoBarIdentifier)
+ 

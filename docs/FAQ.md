@@ -252,6 +252,9 @@ EasyPrivacy name.
 **Does Netflix play?**
 Not yet. Netflix, Disney+, Prime Video and Spotify’s web player need Widevine.
 Stedding does not have that licence yet (`S-270` in [BACKLOG.md](../BACKLOG.md)).
+On these sites a bar says so and offers the page in Safari on the Mac or Edge on
+Windows. "Don't show again" hides it for that site, and Settings › Stedding ›
+Pages and menus brings it back.
 Video that is not DRM-protected, such as YouTube, plays.
 
 **Can I switch Spaces with the mouse?**

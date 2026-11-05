@@ -1,0 +1,1178 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Thu, 5 Nov 2026 18:47:15 -0500
+Subject: fix: harden the Arc importer
+
+The sidebar parser dropped in silence whatever it could not read: a note, an
+Easel, a kind it did not know and everything in it, a page that could not be
+opened, a name with no item behind it, an entry with no id, and all that lay
+sixteen lists down. Each is now counted, with what it holds, and the summary, the
+result line and the page after an import say how many. A list among the favorites
+is counted too, and so are the favorites past the twelve, which were dropped at
+the first one over.
+
+Each item now comes across once in the whole file, not once a container, so a
+file cannot make a tree of Spaces times items. Cycles of lists already ended, and
+still do, with a test now. What lies past the depth is counted without recursion:
+a chain of lists can be as long as the file.
+
+Arc's history and passwords no longer depend on the sidebar. With no sidebar file,
+or one that does not parse, they still come, the summary and the result line say
+the sidebar could not be read, and the settings row and the command bar offer the
+import. A section's word is read as public exporters meet it too, as a dict's only
+key, the list as newContainerIDs, and a second container of a section adds to the
+first instead of replacing it.
+
+With Spaces unticked the pins and tabs now come, into the Space on screen. They
+were dropped with the Spaces, whatever their own boxes said. The settings row says
+when Arc is running, as the welcome block does. PBKDF2 is upstream's, through a
+pass key of its own, in place of a loop written here; the RFC's vectors hold.
+
+Parsing was already off the UI thread at all three ways in, Import sidebar
+already merged by durable ids, and Export Space already kept its name and
+isolation and wrote a file of its own: the row was out of date there. The Mac's
+keychain query stays as it was: it cannot be built here.
+
+Why: what cannot be read should be said, and a broken sidebar should not cost a
+person their history (BACKLOG S-160, import I1, I4, I6, I9, I11, I21).
+
+Removable when: Arc's files are gone from people's computers.
+---
+ .../resources/stedding_welcome/from_arc.ts    |  10 +-
+ chrome/browser/ui/spaces/arc_data_importer.cc |  37 +-
+ .../browser/ui/spaces/arc_sidebar_importer.cc | 349 +++++++++++++-----
+ .../browser/ui/spaces/arc_sidebar_importer.h  |  22 ++
+ .../spaces/arc_sidebar_importer_unittest.cc   | 221 +++++++++++
+ .../webui/settings/stedding_spaces_handler.cc |   2 +-
+ .../stedding_welcome_handler.cc               |   1 +
+ .../stedding_welcome_handler.h                |   6 +-
+ chrome/test/stedding/from_arc_browsertest.cc  |  23 ++
+ chrome/test/stedding/import_browsertest.cc    |  39 ++
+ crypto/subtle_passkey.h                       |   9 +
+ 11 files changed, 589 insertions(+), 130 deletions(-)
+
+diff --git a/chrome/browser/resources/stedding_welcome/from_arc.ts b/chrome/browser/resources/stedding_welcome/from_arc.ts
+index 39a5a7a463ba8..f57aa5f39df91 100644
+--- a/chrome/browser/resources/stedding_welcome/from_arc.ts
++++ b/chrome/browser/resources/stedding_welcome/from_arc.ts
+@@ -15,6 +15,7 @@ interface FromArc {
+   routes: number;
+   routesLeftOut: number;
+   archived: number;
++  entriesLeftOut: number;
+ }
+ 
+ interface Place {
+@@ -113,9 +114,14 @@ function places(routes: number, archived: number): Place[] {
+ }
+ 
+ // What did not come across, each with where to go instead.
+-function leftOut(routesLeftOut: number):
++function leftOut(routesLeftOut: number, entriesLeftOut: number):
+     Array<{text: string, card?: string, name?: string}> {
+   return [
++    ...(entriesLeftOut === 0 ? [] : [{
++          text: `${count(entriesLeftOut, 'sidebar item')}. A note, an Easel, ` +
++              'a page with no address that opens here, or an entry Arc\u2019s ' +
++              'file named and did not hold.',
++        }]),
+     ...(routesLeftOut === 0 ? [] : [{
+           text: `${count(routesLeftOut, 'route')}. A route to a little ` +
+               'window, or to the Space you used last, has no match here, ' +
+@@ -194,7 +200,7 @@ function render(answer: FromArc) {
+   page.append(el('h2', '', 'What did not come across'));
+   const missing = el('ul', 'places');
+   missing.setAttribute('aria-label', 'What did not come across');
+-  for (const item of leftOut(answer.routesLeftOut)) {
++  for (const item of leftOut(answer.routesLeftOut, answer.entriesLeftOut)) {
+     const row = el('li', 'place left-out');
+     row.append(el('span', '', item.text));
+     if (item.card) {
+diff --git a/chrome/browser/ui/spaces/arc_data_importer.cc b/chrome/browser/ui/spaces/arc_data_importer.cc
+index ed7cc1182eda1..03b2afe727a02 100644
+--- a/chrome/browser/ui/spaces/arc_data_importer.cc
++++ b/chrome/browser/ui/spaces/arc_data_importer.cc
+@@ -40,8 +40,8 @@
+ #include "components/prefs/pref_service.h"
+ #include "crypto/aead.h"
+ #include "crypto/aes_cbc.h"
+-#include "crypto/hash.h"
+-#include "crypto/hmac.h"
++#include "crypto/kdf.h"
++#include "crypto/subtle_passkey.h"
+ #include "sql/database.h"
+ #include "sql/statement.h"
+ #include "url/gurl.h"
+@@ -249,33 +249,20 @@ bool ArcDataPresent(const ArcDataPaths& paths) {
+          (!paths.logins.empty() && base::PathExists(paths.logins));
+ }
+ 
++crypto::SubtlePassKey MakeCryptoPassKeyForOtherBrowsersLogins() {
++  return crypto::SubtlePassKey();
++}
++
+ std::vector<uint8_t> Pbkdf2HmacSha1(std::string_view password,
+                                     std::string_view salt,
+                                     int rounds,
+                                     size_t length) {
+-  // RFC 8018 section 5.2: T_i = U_1 xor ... xor U_c, U_1 = PRF(P, S || i),
+-  // U_j = PRF(P, U_{j-1}); the key is T_1 || T_2 || ... cut to length.
+-  const base::span<const uint8_t> key = base::as_byte_span(password);
+-  std::vector<uint8_t> out;
+-  for (uint32_t block = 1; out.size() < length; ++block) {
+-    std::vector<uint8_t> seed(salt.begin(), salt.end());
+-    seed.push_back(static_cast<uint8_t>(block >> 24));
+-    seed.push_back(static_cast<uint8_t>(block >> 16));
+-    seed.push_back(static_cast<uint8_t>(block >> 8));
+-    seed.push_back(static_cast<uint8_t>(block));
+-    std::array<uint8_t, crypto::hash::kSha1Size> u =
+-        crypto::hmac::SignSha1(key, seed);
+-    std::array<uint8_t, crypto::hash::kSha1Size> t = u;
+-    for (int round = 1; round < rounds; ++round) {
+-      u = crypto::hmac::SignSha1(key, u);
+-      for (size_t i = 0; i < t.size(); ++i) {
+-        t[i] ^= u[i];
+-      }
+-    }
+-    out.insert(out.end(), t.begin(), t.end());
+-  }
+-  out.resize(length);
+-  return out;
++  std::vector<uint8_t> key(length);
++  crypto::kdf::Pbkdf2HmacSha1(
++      {.iterations = static_cast<uint32_t>(rounds)},
++      base::as_byte_span(password), base::as_byte_span(salt), key,
++      MakeCryptoPassKeyForOtherBrowsersLogins());
++  return key;
+ }
+ 
+ std::vector<uint8_t> DeriveArcKey(std::string_view keychain_password) {
+diff --git a/chrome/browser/ui/spaces/arc_sidebar_importer.cc b/chrome/browser/ui/spaces/arc_sidebar_importer.cc
+index 97f94f4b7243b..4adbbd184ed8c 100644
+--- a/chrome/browser/ui/spaces/arc_sidebar_importer.cc
++++ b/chrome/browser/ui/spaces/arc_sidebar_importer.cc
+@@ -22,6 +22,7 @@
+ #include "base/files/scoped_temp_dir.h"
+ #include "base/functional/bind.h"
+ #include "base/json/json_reader.h"
++#include "base/memory/raw_ref.h"
+ #include "base/memory/weak_ptr.h"
+ #include "base/path_service.h"
+ #include "base/process/process_iterator.h"
+@@ -154,7 +155,8 @@ void CountPanes(const std::vector<Node>& nodes,
+ 
+ // Arc's item, before the tree is built.
+ struct ArcItem {
+-  enum class Kind { kTab, kList, kContainer, kSplit };
++  // kOther: a kind Stedding has no row for, a note or an easel among them.
++  enum class Kind { kTab, kList, kContainer, kSplit, kOther };
+   Kind kind = Kind::kTab;
+   std::string id;
+   std::string parent;
+@@ -240,9 +242,12 @@ std::optional<ArcItem> ParseItem(const base::DictValue& dict) {
+     }
+   }
+   item.title = base::UTF8ToUTF16(StringAt(dict, "title"));
++  // I1: an item that cannot be read keeps its place, so that whatever names it
++  // counts it, and what it holds with it.
++  item.kind = ArcItem::Kind::kOther;
+   const base::DictValue* data = dict.FindDict("data");
+   if (!data) {
+-    return std::nullopt;
++    return item;
+   }
+   if (const base::DictValue* tab = data->FindDict("tab")) {
+     item.kind = ArcItem::Kind::kTab;
+@@ -281,24 +286,60 @@ std::optional<ArcItem> ParseItem(const base::DictValue& dict) {
+     }
+     return item;
+   }
+-  return std::nullopt;
++  return item;
++}
++
++// I1: how deep lists are followed. Folders stop at five (F39), so a real file
++// stops long before this; a chain of lists in a file can be as long as the file.
++constexpr int kMaxListDepth = 16;
++
++// One walk of a file's items.
++struct ItemWalk {
++  explicit ItemWalk(const std::map<std::string, ArcItem>& items)
++      : items(items) {}
++
++  const raw_ref<const std::map<std::string, ArcItem>> items;
++  // I1: each item of the file comes across once, whatever names it: a list that
++  // names itself, a cycle of lists, or an item named twice would otherwise
++  // build a tree that grows with every level or every container. Arc's file is
++  // a tree, so a well-formed one loses nothing.
++  std::set<std::string> expanded;
++  // I1 (BACKLOG S-160): what was named and cannot come across.
++  size_t left_out = 0;
++};
++
++// I1: `item` stays out, counted, with everything under it. Not recursive: a
++// chain of lists can be as long as the file.
++void LeaveOut(const ArcItem& item, ItemWalk& walk) {
++  std::vector<const ArcItem*> left = {&item};
++  while (!left.empty()) {
++    const ArcItem* const each = left.back();
++    left.pop_back();
++    ++walk.left_out;
++    for (const std::string& id : each->children) {
++      const auto it = walk.items->find(id);
++      if (it == walk.items->end()) {
++        ++walk.left_out;
++      } else if (walk.expanded.insert(id).second) {
++        left.push_back(&it->second);
++      }
++    }
++  }
+ }
+ 
+-// The nodes under `parent`, in Arc's order; lists nest. Each item comes
+-// across once: a list that names itself, or an item named twice, would
+-// otherwise build a tree that grows with every level (Arc's file is a tree,
+-// so a well-formed one loses nothing).
++// The nodes under `parent`, in Arc's order; lists nest. What is named and
++// cannot come across is counted, not dropped (I1).
+ std::vector<Node> BuildChildren(const ArcItem& parent,
+-                                const std::map<std::string, ArcItem>& items,
+-                                int depth,
+-                                std::set<std::string>& expanded) {
++                                ItemWalk& walk,
++                                int depth) {
+   std::vector<Node> out;
+-  if (depth > 16) {
+-    return out;
+-  }
+   for (const std::string& child_id : parent.children) {
+-    const auto it = items.find(child_id);
+-    if (it == items.end() || !expanded.insert(child_id).second) {
++    const auto it = walk.items->find(child_id);
++    if (it == walk.items->end()) {
++      ++walk.left_out;
++      continue;
++    }
++    if (!walk.expanded.insert(child_id).second) {
+       continue;
+     }
+     const ArcItem& child = it->second;
+@@ -307,34 +348,58 @@ std::vector<Node> BuildChildren(const ArcItem& parent,
+     node.title = child.title;
+     if (child.kind == ArcItem::Kind::kTab) {
+       if (!IsImportablePage(child.url)) {
++        ++walk.left_out;
+         continue;
+       }
+       node.kind = Node::Kind::kTab;
+       node.url = child.url;
+       node.name = child.name;
+       out.push_back(std::move(node));
+-    } else if (child.kind == ArcItem::Kind::kList) {
++    } else if (child.kind == ArcItem::Kind::kList && depth < kMaxListDepth) {
+       node.kind = Node::Kind::kFolder;
+       node.icon = child.icon;
+-      node.children = BuildChildren(child, items, depth + 1, expanded);
++      node.children = BuildChildren(child, walk, depth + 1);
+       out.push_back(std::move(node));
+-    } else if (child.kind == ArcItem::Kind::kSplit) {
++    } else if (child.kind == ArcItem::Kind::kSplit && depth < kMaxListDepth) {
+       // I7: the panes, in the split's place, each knowing its split.
+-      for (Node& pane : BuildChildren(child, items, depth + 1, expanded)) {
++      for (Node& pane : BuildChildren(child, walk, depth + 1)) {
+         if (pane.kind == Node::Kind::kTab) {
+           pane.split = child.id;
+           out.push_back(std::move(pane));
++        } else {
++          size_t tabs = 0;
++          size_t folders = 0;
++          CountNodes({pane}, &tabs, &folders);
++          walk.left_out += tabs + folders;
+         }
+       }
++    } else {
++      LeaveOut(child, walk);
+     }
+   }
+   return out;
+ }
+ 
+-std::vector<Node> BuildChildren(const ArcItem& parent,
+-                                const std::map<std::string, ArcItem>& items) {
+-  std::set<std::string> expanded = {parent.id};
+-  return BuildChildren(parent, items, 0, expanded);
++std::vector<Node> BuildChildren(const ArcItem& parent, ItemWalk& walk) {
++  walk.expanded.insert(parent.id);
++  return BuildChildren(parent, walk, 0);
++}
++
++// The tabs of `nodes` go on the end of `tabs`: an essential is a tab. What else
++// they hold is counted (I1).
++void TakeTabs(std::vector<Node> nodes,
++              std::vector<Node>& tabs,
++              ItemWalk& walk) {
++  for (Node& node : nodes) {
++    if (node.kind == Node::Kind::kTab) {
++      tabs.push_back(std::move(node));
++    } else {
++      size_t left_tabs = 0;
++      size_t left_folders = 0;
++      CountNodes({node}, &left_tabs, &left_folders);
++      walk.left_out += left_tabs + left_folders;
++    }
++  }
+ }
+ 
+ // The Space's theme colour: Arc's snapped to the nearest swatch (I10); one
+@@ -672,6 +737,7 @@ std::vector<tabs::TabInterface*> InsertDirectTabs(ApplyContext& ctx,
+     tabs::TabInterface* const tab =
+         InsertUnloaded(ctx, child);
+     if (!tab) {
++      ++ctx.result->entries_left_out;
+       continue;
+     }
+     ctx.model->SetSpaceForTab(tab, space);
+@@ -851,6 +917,7 @@ std::vector<tabs::TabInterface*> InsertNodes(
+       tabs::TabInterface* const tab =
+           InsertUnloaded(ctx, node);
+       if (!tab) {
++        ++ctx.result->entries_left_out;
+         continue;
+       }
+       ctx.model->SetSpaceForTab(tab, space);
+@@ -954,12 +1021,15 @@ void InsertEssentials(ApplyContext& ctx,
+     if (!IsImportablePage(node.url)) {
+       continue;
+     }
++    // I11: the rest stay out, and the result line says how many.
+     if (in_row >= kMaxEssentials) {
+-      break;
++      ++ctx.result->essentials_left_out;
++      continue;
+     }
+     tabs::TabInterface* const tab =
+         InsertUnloaded(ctx, node);
+     if (!tab) {
++      ++ctx.result->entries_left_out;
+       continue;
+     }
+     // A tab pinned in a Space with its own session is that Space's own
+@@ -981,6 +1051,45 @@ void InsertEssentials(ApplyContext& ctx,
+   }
+ }
+ 
++// I21: what the Arc Space `arc_space` holds, in the Space `id`, as far as the
++// boxes ask for it.
++void InsertSpaceRows(ApplyContext& ctx,
++                     const ArcImportPlan::Space& arc_space,
++                     const SpaceId& id,
++                     const ArcImportOptions& options) {
++  if (options.pinned) {
++    // spaces B6: the Space's own essentials, in its jar.
++    InsertEssentials(ctx, arc_space.essentials, id);
++    // The pinned run in its order, one row at a time: a pin joins the
++    // end of the run (pins H14), and so does a folder pinned (folders
++    // F38).
++    for (const Node& node : arc_space.pinned) {
++      for (tabs::TabInterface* const tab :
++           InsertNodes(ctx, {node}, id, nullptr)) {
++        ctx.model->SetSpacePinned(tab, true);
++      }
++      // I3, folders F38 (BACKLOG S-107): a list of Arc's pinned section,
++      // or a folder of the pinned run of a file Stedding wrote (Sf2),
++      // comes in as a folder of the run, its tabs pins. Arc's lists had
++      // come in under the Clear line. A folder that was here already
++      // keeps its place.
++      if (node.kind == Node::Kind::kFolder &&
++          ctx.made_folders.contains(node.arc_id)) {
++        tabs::FolderTabCollection* const folder =
++            KnownFolder(ctx, node.arc_id);
++        if (folder && ctx.model->CanPinFolder(folder) &&
++            !ctx.model->IsFolderSpacePinned(folder)) {
++          ctx.model->SetFolderSpacePinned(folder, true);
++        }
++      }
++    }
++  }
++  if (options.unpinned) {
++    InsertNodes(ctx, arc_space.unpinned, id, nullptr);
++  }
++  MakeSplits(ctx);
++}
++
+ }  // namespace
+ 
+ size_t ArcImportPlan::pinned_tab_count() const {
+@@ -1055,14 +1164,18 @@ std::optional<ArcImportPlan> ParseArcSidebar(std::string_view json) {
+     return std::nullopt;
+   }
+ 
++  ArcImportPlan plan;
+   std::map<std::string, ArcItem> items;
+   for (const base::DictValue* dict : DictsOf(sidebar->FindList("items"))) {
+-    if (std::optional<ArcItem> item = ParseItem(*dict)) {
+-      items.emplace(item->id, std::move(*item));
++    std::optional<ArcItem> item = ParseItem(*dict);
++    // I1: nothing can name an item with no id, and a second item of an id is
++    // not the one its name finds.
++    if (!item || !items.emplace(item->id, std::move(*item)).second) {
++      ++plan.entries_left_out;
+     }
+   }
++  ItemWalk walk(items);
+ 
+-  ArcImportPlan plan;
+   // Sf2: a file Stedding wrote (Export Space..., Export all Spaces...) is
+   // merged by its durable ids and keeps its exact colours.
+   plan.written_by_stedding = StringAt(root->GetDict(), "writer") == "Stedding";
+@@ -1071,6 +1184,7 @@ std::optional<ArcImportPlan> ParseArcSidebar(std::string_view json) {
+     space.arc_id = StringAt(*dict, "id");
+     space.title = StringAt(*dict, "title");
+     if (space.arc_id.empty()) {
++      ++plan.entries_left_out;
+       continue;
+     }
+     if (const base::DictValue* icon =
+@@ -1094,11 +1208,7 @@ std::optional<ArcImportPlan> ParseArcSidebar(std::string_view json) {
+       space.isolated = own->FindBool("isolated").value_or(false);
+       if (const auto it = items.find(StringAt(*own, "essentials"));
+           it != items.end()) {
+-        for (Node& node : BuildChildren(it->second, items)) {
+-          if (node.kind == Node::Kind::kTab) {
+-            space.essentials.push_back(std::move(node));
+-          }
+-        }
++        TakeTabs(BuildChildren(it->second, walk), space.essentials, walk);
+       }
+     }
+     if (const base::Value* profile = dict->Find("profile")) {
+@@ -1108,10 +1218,24 @@ std::optional<ArcImportPlan> ParseArcSidebar(std::string_view json) {
+         space.profile = name.empty() ? std::string("custom") : name;
+       }
+     }
+-    // The pinned and unpinned containers: a word, then the id it names.
+-    if (const base::ListValue* container_ids = dict->FindList("containerIDs")) {
++    // The pinned and unpinned containers: a word, then the id it names. Public
++    // exporters also meet the word as a dict's only key, and the list as
++    // `newContainerIDs`. A word may come twice, and each container comes.
++    const base::ListValue* container_ids = dict->FindList("containerIDs");
++    if (!container_ids) {
++      container_ids = dict->FindList("newContainerIDs");
++    }
++    if (container_ids) {
+       std::string which;
+       for (const base::Value& entry : *container_ids) {
++        if (const base::DictValue* const word = entry.GetIfDict()) {
++          if (word->contains("pinned")) {
++            which = "pinned";
++          } else if (word->contains("unpinned")) {
++            which = "unpinned";
++          }
++          continue;
++        }
+         if (!entry.is_string()) {
+           continue;
+         }
+@@ -1120,16 +1244,20 @@ std::optional<ArcImportPlan> ParseArcSidebar(std::string_view json) {
+           which = text;
+           continue;
+         }
+-        const auto it = items.find(text);
+-        if (it == items.end() || which.empty()) {
++        if (which.empty()) {
+           continue;
+         }
+-        std::vector<Node> nodes = BuildChildren(it->second, items);
+-        if (which == "pinned") {
+-          space.pinned = std::move(nodes);
+-        } else {
+-          space.unpinned = std::move(nodes);
++        const auto it = items.find(text);
++        if (it == items.end()) {
++          ++plan.entries_left_out;
++          which.clear();
++          continue;
+         }
++        std::vector<Node> nodes = BuildChildren(it->second, walk);
++        std::vector<Node>& section =
++            which == "pinned" ? space.pinned : space.unpinned;
++        section.insert(section.end(), std::make_move_iterator(nodes.begin()),
++                       std::make_move_iterator(nodes.end()));
+         which.clear();
+       }
+     }
+@@ -1151,13 +1279,10 @@ std::optional<ArcImportPlan> ParseArcSidebar(std::string_view json) {
+       if (it == items.end() || !top_seen.insert(id).second) {
+         continue;
+       }
+-      for (Node& node : BuildChildren(it->second, items)) {
+-        if (node.kind == Node::Kind::kTab) {
+-          plan.essentials.push_back(std::move(node));
+-        }
+-      }
++      TakeTabs(BuildChildren(it->second, walk), plan.essentials, walk);
+     }
+   }
++  plan.entries_left_out += walk.left_out;
+   return plan;
+ }
+ 
+@@ -1283,11 +1408,24 @@ void ParseArcArchive(std::string_view json, ArcImportPlan& plan) {
+   }
+ }
+ 
++std::u16string ArcSummaryForSettings(const ArcSidebarInfo& info) {
++  if (!info.found) {
++    return std::u16string();
++  }
++  return info.arc_running
++             ? base::StrCat({info.summary, u" \u00B7 ", kArcIsRunningNote})
++             : info.summary;
++}
++
+ std::u16string SummariseArcImport(const ArcImportPlan& plan) {
+   const auto count = [](size_t n, std::u16string_view one,
+                         std::u16string_view many) {
+     return base::StrCat({base::NumberToString16(n), u" ", n == 1 ? one : many});
+   };
++  // I6: all there is then is Arc's history and passwords, which the caller adds.
++  if (plan.sidebar_unreadable) {
++    return u"Arc's sidebar could not be read";
++  }
+   std::u16string text = base::StrCat(
+       {count(plan.spaces.size(), u"Space", u"Spaces"), u", ",
+        count(plan.pinned_tab_count(), u"pinned tab", u"pinned tabs"), u", ",
+@@ -1302,6 +1440,13 @@ std::u16string SummariseArcImport(const ArcImportPlan& plan) {
+                         u" become essentials)"});
+     }
+   }
++  // I1.
++  if (plan.entries_left_out) {
++    text += base::StrCat({u" \u00B7 ",
++                          count(plan.entries_left_out, u"sidebar item",
++                                u"sidebar items"),
++                          u" that cannot be read"});
++  }
+   // I7.
+   if (const size_t splits = plan.split_count()) {
+     text += base::StrCat({u" \u00B7 ", count(splits, u"split", u"splits")});
+@@ -1569,6 +1714,8 @@ ArcImportResult ApplyArcImport(BrowserWindowInterface* browser,
+   if (!model || !tabs || !profile) {
+     return result;
+   }
++  result.entries_left_out = plan.entries_left_out;
++  result.sidebar_unreadable = plan.sidebar_unreadable;
+   ImportedIds ids(profile->GetPrefs());
+   ApplyContext ctx{browser, model, tabs, profile, &ids, &result};
+   ctx.durable = plan.written_by_stedding;
+@@ -1647,38 +1794,20 @@ ArcImportResult ApplyArcImport(BrowserWindowInterface* browser,
+       } else {
+         ++result.skipped;
+       }
+-      const SpaceId id = space->id();
+-      if (options.pinned) {
+-        // spaces B6: the Space's own essentials, in its jar.
+-        InsertEssentials(ctx, arc_space.essentials, id);
+-        // The pinned run in its order, one row at a time: a pin joins the
+-        // end of the run (pins H14), and so does a folder pinned (folders
+-        // F38).
+-        for (const Node& node : arc_space.pinned) {
+-          for (tabs::TabInterface* const tab :
+-               InsertNodes(ctx, {node}, id, nullptr)) {
+-            model->SetSpacePinned(tab, true);
+-          }
+-          // I3, folders F38 (BACKLOG S-107): a list of Arc's pinned section,
+-          // or a folder of the pinned run of a file Stedding wrote (Sf2),
+-          // comes in as a folder of the run, its tabs pins. Arc's lists had
+-          // come in under the Clear line. A folder that was here already
+-          // keeps its place.
+-          if (node.kind == Node::Kind::kFolder &&
+-              ctx.made_folders.contains(node.arc_id)) {
+-            tabs::FolderTabCollection* const folder =
+-                KnownFolder(ctx, node.arc_id);
+-            if (folder && model->CanPinFolder(folder) &&
+-                !model->IsFolderSpacePinned(folder)) {
+-              model->SetFolderSpacePinned(folder, true);
+-            }
+-          }
+-        }
+-      }
+-      if (options.unpinned) {
+-        InsertNodes(ctx, arc_space.unpinned, id, nullptr);
++      InsertSpaceRows(ctx, arc_space, space->id(), options);
++    }
++  } else {
++    // I21 (docs/history/plan-2026-09-26.md WEB-F53): with Spaces unticked what
++    // the other boxes ask for still comes, into the Space it became if an
++    // earlier import made one, else the one on screen. A Space the person
++    // deleted stays deleted, and so do its tabs (I12).
++    for (const ArcImportPlan::Space& arc_space : plan.spaces) {
++      const std::optional<SpaceId> known = ids.SpaceFor(arc_space.arc_id);
++      if (known && !model->GetSpace(*known)) {
++        continue;
+       }
+-      MakeSplits(ctx);
++      InsertSpaceRows(ctx, arc_space, known.value_or(model->active_id()),
++                      options);
+     }
+   }
+   ApplyArcRoutes(plan, options.spaces, *model, ids, profile->GetPrefs(), result);
+@@ -1777,17 +1906,29 @@ class ClosedListWaiter : public sessions::TabRestoreServiceObserver {
+       observation_{this};
+ };
+ 
+-ArcSidebarInfo LoadInfoOnPool() {
+-  ArcSidebarInfo info;
++// I6 (BACKLOG S-160): the plan of what Arc has. With no sidebar to read, or none
++// that parses, Arc's history and passwords still come: an empty plan that says
++// so. Nothing at all when there is neither.
++std::optional<ArcImportPlan> ReadPlanOnPool() {
+   const std::optional<std::string> json = ReadArcSidebar(ArcSidebarPath());
+-  if (!json) {
+-    return info;
++  std::optional<ArcImportPlan> plan =
++      json ? ParseArcSidebar(*json) : std::nullopt;
++  if (!plan && ArcDataPresent(DefaultArcDataPaths())) {
++    plan.emplace();
++    plan->sidebar_unreadable = true;
+   }
+-  info.plan = ParseArcSidebar(*json);
++  if (plan) {
++    ReadArcRoutesAndArchive(*plan);
++  }
++  return plan;
++}
++
++ArcSidebarInfo LoadInfoOnPool() {
++  ArcSidebarInfo info;
++  info.plan = ReadPlanOnPool();
+   if (!info.plan) {
+     return info;
+   }
+-  ReadArcRoutesAndArchive(*info.plan);
+   info.found = true;
+   info.arc_running = IsArcRunning();
+   info.summary = SummariseArcImport(*info.plan);
+@@ -1798,18 +1939,6 @@ ArcSidebarInfo LoadInfoOnPool() {
+   return info;
+ }
+ 
+-// The file is read and parsed on the pool: a large sidebar parses for long
+-// enough to stall the window.
+-std::optional<ArcImportPlan> ReadAndParseOnPool() {
+-  const std::optional<std::string> json = ReadArcSidebar(ArcSidebarPath());
+-  std::optional<ArcImportPlan> plan =
+-      json ? ParseArcSidebar(*json) : std::nullopt;
+-  if (plan) {
+-    ReadArcRoutesAndArchive(*plan);
+-  }
+-  return plan;
+-}
+-
+ void ApplyWhenTheListIsRead(base::WeakPtr<BrowserWindowInterface> browser,
+                             ArcImportOptions options,
+                             ArcImportDoneCallback done,
+@@ -1863,6 +1992,7 @@ void FinishImport(base::WeakPtr<BrowserWindowInterface> browser,
+     last.Set("routes", static_cast<int>(result->routes));
+     last.Set("routes_left_out", static_cast<int>(result->routes_left_out));
+     last.Set("archived", static_cast<int>(result->archived));
++    last.Set("entries_left_out", static_cast<int>(result->entries_left_out));
+     browser->GetProfile()->GetPrefs()->SetDict(
+         stedding::prefs::kArcLastImport, std::move(last));
+     ShowFromArcPage(browser.get());
+@@ -1906,7 +2036,10 @@ void PrimeArcSidebarPresence() {
+   asked = true;
+   base::ThreadPool::PostTaskAndReplyWithResult(
+       FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
+-      base::BindOnce([] { return base::PathExists(ArcSidebarPath()); }),
++      base::BindOnce([] {
++        return base::PathExists(ArcSidebarPath()) ||
++               ArcDataPresent(DefaultArcDataPaths());
++      }),
+       base::BindOnce([](bool exists) { ArcSidebarPresence() = exists; }));
+ }
+ 
+@@ -1929,9 +2062,11 @@ void ImportFromArcAsync(BrowserWindowInterface* browser,
+   }
+   base::ThreadPool::PostTaskAndReplyWithResult(
+       FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
+-      // I27: where Arc is is found on the pool too: on Windows that lists
+-      // the Store's packages, which the UI thread may not wait for.
+-      base::BindOnce(&ReadAndParseOnPool),
++      // The file is read and parsed on the pool: a large sidebar parses for
++      // long enough to stall the window. I27: where Arc is is found there too:
++      // on Windows that lists the Store's packages, which the UI thread may
++      // not wait for.
++      base::BindOnce(&ReadPlanOnPool),
+       base::BindOnce(&ApplyRead, browser->GetWeakPtr(), options,
+                      base::BindOnce(&FinishImport, browser->GetWeakPtr(),
+                                     std::move(done))));
+@@ -1979,6 +2114,22 @@ std::u16string DescribeArcImportResult(const ArcImportResult& result) {
+                           count(result.routes_left_out, u"route", u"routes"),
+                           u" left out"});
+   }
++  // I1, I6, I11.
++  if (result.sidebar_unreadable) {
++    text += u" \u00B7 Arc's sidebar could not be read";
++  }
++  if (result.entries_left_out) {
++    text += base::StrCat({u" \u00B7 ",
++                          count(result.entries_left_out, u"sidebar item",
++                                u"sidebar items"),
++                          u" left out"});
++  }
++  if (result.essentials_left_out) {
++    text += base::StrCat({u" \u00B7 ",
++                          count(result.essentials_left_out, u"essential",
++                                u"essentials"),
++                          u" past the limit of 12 left out"});
++  }
+   // I7.
+   if (result.archived_left_out) {
+     text += base::StrCat({u" \u00B7 ",
+diff --git a/chrome/browser/ui/spaces/arc_sidebar_importer.h b/chrome/browser/ui/spaces/arc_sidebar_importer.h
+index d0238502d6195..a086a4a32b026 100644
+--- a/chrome/browser/ui/spaces/arc_sidebar_importer.h
++++ b/chrome/browser/ui/spaces/arc_sidebar_importer.h
+@@ -126,6 +126,14 @@ struct ArcImportPlan {
+   // how many of them no row can hold.
+   std::vector<ArchivedItem> archived;
+   size_t archived_left_out = 0;
++  // I1 (BACKLOG S-160): the sidebar's entries that were named and cannot come
++  // across: a kind Stedding has no row for, a page that cannot be opened, an
++  // item nothing can find, what is too deep to follow, or what an essential
++  // cannot be.
++  size_t entries_left_out = 0;
++  // I6: there is no sidebar to read, or none that parses. The plan is empty, and
++  // Arc's history and passwords still come.
++  bool sidebar_unreadable = false;
+   // sidebar-file Sf2: the file says Stedding wrote it. Its ids are durable
+   // (a Space's token, "tab:<tab token>", "folder:<FolderId>"): an import
+   // skips what is open now under those ids and remembers none of them, so a
+@@ -182,6 +190,10 @@ std::optional<std::string> ReadArcSidebar(const base::FilePath& path,
+ // mid-write. Blocking: call from the thread pool.
+ bool IsArcRunning();
+ 
++// I9: the words the welcome block and the settings row show for that.
++inline constexpr char16_t kArcIsRunningNote[] =
++    u"Arc is running: quit it first for a complete copy";
++
+ // The nearest Stedding swatch to an Arc theme colour (I10).
+ SkColor NearestSpaceColor(SkColor arc_color);
+ 
+@@ -216,6 +228,12 @@ struct ArcImportResult {
+   size_t splits = 0;
+   size_t archived = 0;
+   size_t archived_left_out = 0;
++  // I1: as the plan says, with any tab that could not be made. I6: as the plan
++  // says.
++  size_t entries_left_out = 0;
++  bool sidebar_unreadable = false;
++  // I11: Arc's favorites past the twelve.
++  size_t essentials_left_out = 0;
+ };
+ 
+ // Applies `plan` to `browser`'s window (I3): Spaces, essentials (capped at
+@@ -257,6 +275,10 @@ using ArcSidebarInfoCallback = base::OnceCallback<void(ArcSidebarInfo)>;
+ // sequence.
+ void LoadArcSidebarInfo(ArcSidebarInfoCallback callback);
+ 
++// I2, I9: the line the settings row shows, with Arc's running said, which the
++// welcome block says on a line of its own. Empty when there is nothing to import.
++std::u16string ArcSummaryForSettings(const ArcSidebarInfo& info);
++
+ using ArcImportDoneCallback =
+     base::OnceCallback<void(std::optional<ArcImportResult>)>;
+ 
+diff --git a/chrome/browser/ui/spaces/arc_sidebar_importer_unittest.cc b/chrome/browser/ui/spaces/arc_sidebar_importer_unittest.cc
+index ea54d359be681..06566c5a98041 100644
+--- a/chrome/browser/ui/spaces/arc_sidebar_importer_unittest.cc
++++ b/chrome/browser/ui/spaces/arc_sidebar_importer_unittest.cc
+@@ -155,6 +155,205 @@ TEST(ArcSidebarImporterTest, AnItemNamedTwiceComesAcrossOnce) {
+   EXPECT_EQ(3u, plan->pinned_tab_count());
+ }
+ 
++// A made-up sidebar for what cannot be read (import I1): `$1` is what the pinned
++// container holds, and `$2` further items.
++constexpr char kBareSidebar[] = R"json({
++  "version": 1,
++  "sidebar": {"containers": [
++    {"global": {}},
++    {
++      "spaces": ["space-work", {"id": "space-work", "title": "Work",
++        "containerIDs": ["pinned", "work-pinned"]}$3],
++      "items": [
++        "work-pinned", {"id": "work-pinned", "parentID": null,
++          "childrenIds": [$1], "title": "",
++          "data": {"itemContainer": {"containerType": {"spaceItems": {}}}}},
++        "tab-a", {"id": "tab-a", "parentID": "work-pinned", "childrenIds": [],
++          "title": null, "data": {"tab": {"savedURL": "https://a.example/", "savedTitle": "A"}}},
++        "list-a", {"id": "list-a", "parentID": "work-pinned",
++          "childrenIds": ["list-b", "tab-a"], "title": "One", "data": {"list": {}}},
++        "list-b", {"id": "list-b", "parentID": "list-a",
++          "childrenIds": ["list-a", "tab-b"], "title": "Two", "data": {"list": {}}},
++        "tab-b", {"id": "tab-b", "parentID": "list-b", "childrenIds": [],
++          "title": null, "data": {"tab": {"savedURL": "https://b.example/", "savedTitle": "B"}}}$2
++      ],
++      "topAppsContainerIDs": []
++    }
++  ]}
++})json";
++
++std::string BareSidebar(std::string_view pinned,
++                        std::string_view items = "",
++                        std::string_view spaces = "") {
++  return base::ReplaceStringPlaceholders(
++      kBareSidebar,
++      {std::string(pinned), std::string(items), std::string(spaces)}, nullptr);
++}
++
++// I1 (BACKLOG S-160): a cycle of lists ends. Each list and tab comes once, and
++// what the cycle names again is no entry left out.
++TEST(ArcSidebarImporterTest, ACycleOfListsEnds) {
++  const std::optional<ArcImportPlan> plan =
++      ParseArcSidebar(BareSidebar(R"("list-a")"));
++  ASSERT_TRUE(plan.has_value());
++  ASSERT_EQ(1u, plan->spaces.size());
++  const ArcImportPlan::Space& work = plan->spaces[0];
++  ASSERT_EQ(1u, work.pinned.size());
++  EXPECT_EQ(u"One", work.pinned[0].title);
++  ASSERT_EQ(2u, work.pinned[0].children.size());
++  EXPECT_EQ(u"Two", work.pinned[0].children[0].title);
++  EXPECT_EQ(2u, plan->folder_count());
++  EXPECT_EQ(2u, plan->pinned_tab_count());
++  EXPECT_EQ(0u, plan->entries_left_out);
++}
++
++// I1: a chain of lists as long as a file can make it neither hangs nor runs out
++// of stack. What lies past the depth followed is counted, and the tab at its
++// end among it.
++TEST(ArcSidebarImporterTest, AChainOfListsPastTheDepthIsCounted) {
++  constexpr int kLists = 20000;
++  std::string pinned = R"("chain-0")";
++  std::string items;
++  for (int i = 0; i < kLists; ++i) {
++    const std::string next =
++        i + 1 < kLists ? "chain-" + base::NumberToString(i + 1) : "tab-a";
++    const std::string id = "chain-" + base::NumberToString(i);
++    items += ", \"" + id + "\", {\"id\": \"" + id +
++             "\", \"childrenIds\": [\"" + next +
++             "\"], \"title\": \"L\", \"data\": {\"list\": {}}}";
++  }
++  const std::optional<ArcImportPlan> plan =
++      ParseArcSidebar(BareSidebar(pinned, items));
++  ASSERT_TRUE(plan.has_value());
++  EXPECT_EQ(16u, plan->folder_count());
++  EXPECT_EQ(0u, plan->pinned_tab_count());
++  EXPECT_EQ(size_t{kLists} - 16 + 1, plan->entries_left_out);
++}
++
++// I1: an item comes across once, however many Spaces name its container, so a
++// file cannot make a tree of Spaces times items.
++TEST(ArcSidebarImporterTest, ManySpacesNamingOneContainerMakeOneTree) {
++  std::string spaces;
++  for (int i = 0; i < 20000; ++i) {
++    const std::string id = "space-" + base::NumberToString(i);
++    spaces += ", \"" + id + "\", {\"id\": \"" + id +
++              "\", \"containerIDs\": [\"pinned\", \"work-pinned\"]}";
++  }
++  const std::optional<ArcImportPlan> plan =
++      ParseArcSidebar(BareSidebar(R"("tab-a", "tab-b")", "", spaces));
++  ASSERT_TRUE(plan.has_value());
++  EXPECT_EQ(20001u, plan->spaces.size());
++  EXPECT_EQ(2u, plan->pinned_tab_count());
++}
++
++// I1: what is named and cannot come across is counted. A note, an easel and a
++// kind nobody knows, with what they hold; a page that cannot be opened; a name
++// with nothing behind it; an entry with no id, and a second of one id; a Space
++// with no id. Essentials take tabs, so a list among them is counted too.
++TEST(ArcSidebarImporterTest, WhatCannotBeReadIsCounted) {
++  constexpr char kItems[] = R"json(,
++    "note", {"id": "note", "childrenIds": [], "title": "A note",
++      "data": {"arcDocument": {"arcDocumentID": "x"}}},
++    "easel", {"id": "easel", "childrenIds": [], "title": "An easel",
++      "data": {"easel": {"easelID": "x"}}},
++    "group", {"id": "group", "childrenIds": ["tab-held", "tab-missing"],
++      "title": "A kind nobody knows", "data": {"somethingNew": {}}},
++    "tab-held", {"id": "tab-held", "childrenIds": [], "title": null,
++      "data": {"tab": {"savedURL": "https://held.example/"}}},
++    "bare", {"id": "bare", "childrenIds": [], "title": "No data"},
++    "script", {"id": "script", "childrenIds": [], "title": null,
++      "data": {"tab": {"savedURL": "javascript:void(0)"}}},
++    "no-address", {"id": "no-address", "childrenIds": [], "title": null,
++      "data": {"tab": {}}},
++    "nameless", {"childrenIds": [], "title": "No id", "data": {"list": {}}},
++    "tab-a", {"id": "tab-a", "childrenIds": [], "title": null,
++      "data": {"tab": {"savedURL": "https://second.example/"}}},
++    "top", {"id": "top", "childrenIds": ["list-top"], "title": "",
++      "data": {"itemContainer": {"containerType": {"topApps": {}}}}},
++    "list-top", {"id": "list-top", "childrenIds": ["tab-top"], "title": "List",
++      "data": {"list": {}}},
++    "tab-top", {"id": "tab-top", "childrenIds": [], "title": null,
++      "data": {"tab": {"savedURL": "https://top.example/"}}})json";
++  std::string sidebar =
++      BareSidebar(R"("tab-a", "note", "easel", "group", "bare", "script",
++                     "no-address", "gone")",
++                  kItems, R"(, "no-id", {"title": "No id"})");
++  constexpr std::string_view kTop = R"("topAppsContainerIDs": [])";
++  const size_t at = sidebar.find(kTop);
++  ASSERT_NE(std::string::npos, at);
++  sidebar.replace(at, kTop.size(), R"("topAppsContainerIDs": ["top"])");
++  const std::optional<ArcImportPlan> plan = ParseArcSidebar(sidebar);
++  ASSERT_TRUE(plan.has_value());
++  EXPECT_EQ(1u, plan->pinned_tab_count());
++  // note, easel, group and its two, bare, script, no-address, gone: 9. The
++  // nameless entry, the second tab-a and the Space: 3. The list and its tab in
++  // the favorites: 2.
++  EXPECT_EQ(14u, plan->entries_left_out);
++  EXPECT_NE(std::u16string::npos,
++            SummariseArcImport(*plan).find(u"14 sidebar items that cannot be read"));
++}
++
++// I1: public exporters meet a section's word as a dict's only key, and the list
++// as newContainerIDs, and a section may have more than one container.
++TEST(ArcSidebarImporterTest, ReadsContainersInEitherForm) {
++  constexpr char kMore[] = R"json(,
++    "more-one", {"id": "more-one", "childrenIds": ["tab-b"], "title": "",
++      "data": {"itemContainer": {"containerType": {"spaceItems": {}}}}},
++    "more-two", {"id": "more-two", "childrenIds": ["tab-c"], "title": "",
++      "data": {"itemContainer": {"containerType": {"spaceItems": {}}}}},
++    "tab-c", {"id": "tab-c", "childrenIds": [], "title": null,
++      "data": {"tab": {"savedURL": "https://c.example/", "savedTitle": "C"}}})json";
++  std::string sidebar = BareSidebar(R"("tab-a")", kMore);
++  constexpr std::string_view kWords =
++      R"("containerIDs": ["pinned", "work-pinned"])";
++  const size_t at = sidebar.find(kWords);
++  ASSERT_NE(std::string::npos, at);
++  sidebar.replace(
++      at, kWords.size(),
++      R"("newContainerIDs": [{"pinned": {}}, "work-pinned",
++                             {"unpinned": {"_0": {"shared": {}}}}, "more-one",
++                             "unpinned", "more-two"])");
++  const std::optional<ArcImportPlan> plan = ParseArcSidebar(sidebar);
++  ASSERT_TRUE(plan.has_value());
++  ASSERT_EQ(1u, plan->spaces.size());
++  const ArcImportPlan::Space& work = plan->spaces[0];
++  ASSERT_EQ(1u, work.pinned.size());
++  EXPECT_EQ(u"A", work.pinned[0].title);
++  ASSERT_EQ(2u, work.unpinned.size());
++  EXPECT_EQ(u"B", work.unpinned[0].title);
++  EXPECT_EQ(u"C", work.unpinned[1].title);
++}
++
++// I1, I6, I11: the result line says what stayed out.
++TEST(ArcSidebarImporterTest, DescribeCountsWhatStayedOut) {
++  ArcImportResult result;
++  const std::u16string none = DescribeArcImportResult(result);
++  EXPECT_EQ(std::u16string::npos, none.find(u"left out"));
++  EXPECT_EQ(std::u16string::npos, none.find(u"sidebar"));
++  result.entries_left_out = 3;
++  result.essentials_left_out = 2;
++  result.sidebar_unreadable = true;
++  const std::u16string line = DescribeArcImportResult(result);
++  EXPECT_NE(std::u16string::npos, line.find(u"3 sidebar items left out")) << line;
++  EXPECT_NE(std::u16string::npos,
++            line.find(u"2 essentials past the limit of 12 left out"))
++      << line;
++  EXPECT_NE(std::u16string::npos, line.find(u"Arc's sidebar could not be read"))
++      << line;
++}
++
++// I9: the settings row says Arc is running too. Only the welcome block did.
++TEST(ArcSidebarImporterTest, TheSettingsRowSaysArcIsRunning) {
++  ArcSidebarInfo info;
++  info.summary = u"2 Spaces";
++  EXPECT_EQ(u"", ArcSummaryForSettings(info)) << "nothing to import";
++  info.found = true;
++  EXPECT_EQ(u"2 Spaces", ArcSummaryForSettings(info));
++  info.arc_running = true;
++  EXPECT_EQ(u"2 Spaces \u00B7 Arc is running: quit it first for a complete copy",
++            ArcSummaryForSettings(info));
++}
++
+ // I2, I8: the summary before anything is applied.
+ TEST(ArcSidebarImporterTest, SummaryCountsThePlan) {
+   const std::optional<ArcImportPlan> plan = ParseArcSidebar(kSidebar);
+@@ -1141,6 +1340,28 @@ TEST_F(ArcSidebarImportWindowTest, FavoritesCapAtTwelve) {
+       ApplyArcImport(browser(), plan, ArcImportOptions());
+   EXPECT_EQ(12u, result.essentials);
+   EXPECT_EQ(12, tabs().IndexOfFirstNonPinnedTab());
++  EXPECT_EQ(2u, result.essentials_left_out) << "the result line says so";
++}
++
++// I21 (docs/history/plan-2026-09-26.md WEB-F53): with Spaces unticked the pins
++// and tabs still come, into the Space on screen. They were dropped with the
++// Spaces.
++TEST_F(ArcSidebarImportWindowTest, WithSpacesUntickedTheTabsStillCome) {
++  const std::optional<ArcImportPlan> plan = ParseArcSidebar(kSidebar);
++  ASSERT_TRUE(plan.has_value());
++  ArcImportOptions options;
++  options.spaces = false;
++  const SpaceId on_screen = model().active_id();
++  const ArcImportResult result = ApplyArcImport(browser(), *plan, options);
++  EXPECT_EQ(0u, result.spaces);
++  EXPECT_EQ(5u, result.tabs);
++  EXPECT_EQ(1u, result.folders);
++  EXPECT_EQ(1u, result.essentials);
++  EXPECT_EQ(1u, model().size());
++  const std::vector<tabs::TabInterface*> in_space = TabsIn(on_screen);
++  ASSERT_EQ(5u, in_space.size());
++  EXPECT_EQ(u"A", in_space[0]->GetContents()->GetTitle());
++  EXPECT_TRUE(model().IsSpacePinned(in_space[0]));
+ }
+ 
+ }  // namespace
+diff --git a/chrome/browser/ui/webui/settings/stedding_spaces_handler.cc b/chrome/browser/ui/webui/settings/stedding_spaces_handler.cc
+index e64dcffaa4cc0..8b3a1e050d7af 100644
+--- a/chrome/browser/ui/webui/settings/stedding_spaces_handler.cc
++++ b/chrome/browser/ui/webui/settings/stedding_spaces_handler.cc
+@@ -849,7 +849,7 @@ void SteddingSpacesHandler::OnArcSidebarInfo(const std::string& callback_id,
+   }
+   ResolveJavascriptCallback(
+       base::Value(callback_id),
+-      base::Value(info.found ? info.summary : std::u16string()));
++      base::Value(spaces::ArcSummaryForSettings(info)));
+ }
+ 
+ void SteddingSpacesHandler::HandleOpenImportStep(const base::ListValue& args) {
+diff --git a/chrome/browser/ui/webui/stedding_welcome/stedding_welcome_handler.cc b/chrome/browser/ui/webui/stedding_welcome/stedding_welcome_handler.cc
+index f9e058a60da38..49710708cd522 100644
+--- a/chrome/browser/ui/webui/stedding_welcome/stedding_welcome_handler.cc
++++ b/chrome/browser/ui/webui/stedding_welcome/stedding_welcome_handler.cc
+@@ -334,6 +334,7 @@ void WelcomeHandler::HandleGetFromArc(const base::ListValue& args) {
+   answer.Set("routes", last.FindInt("routes").value_or(0));
+   answer.Set("routesLeftOut", last.FindInt("routes_left_out").value_or(0));
+   answer.Set("archived", last.FindInt("archived").value_or(0));
++  answer.Set("entriesLeftOut", last.FindInt("entries_left_out").value_or(0));
+   ResolveJavascriptCallback(args[0], answer);
+ }
+ 
+diff --git a/chrome/browser/ui/webui/stedding_welcome/stedding_welcome_handler.h b/chrome/browser/ui/webui/stedding_welcome/stedding_welcome_handler.h
+index 8349131300695..3ac6dcbeb4b31 100644
+--- a/chrome/browser/ui/webui/stedding_welcome/stedding_welcome_handler.h
++++ b/chrome/browser/ui/webui/stedding_welcome/stedding_welcome_handler.h
+@@ -85,9 +85,9 @@ class WelcomeHandler : public content::WebUIMessageHandler,
+   // importFromArc(callback, spaces, pinned, unpinned, history, passwords)
+   // -> the result line (import I21).
+   void HandleImportFromArc(const base::ListValue& args);
+-  // import I47: getFromArc(callback) -> {routes, routesLeftOut, archived} of
+-  // the last import; openFromArcPlace(card) opens that card of Settings, one
+-  // the handler lists.
++  // import I47: getFromArc(callback) -> {routes, routesLeftOut, archived,
++  // entriesLeftOut} of the last import; openFromArcPlace(card) opens that card
++  // of Settings, one the handler lists.
+   void HandleGetFromArc(const base::ListValue& args);
+   void HandleOpenFromArcPlace(const base::ListValue& args);
+   void OnArcImportDone(const std::string& callback_id,
+diff --git a/chrome/test/stedding/from_arc_browsertest.cc b/chrome/test/stedding/from_arc_browsertest.cc
+index c2249b3f0723d..fde524c5c487a 100644
+--- a/chrome/test/stedding/from_arc_browsertest.cc
++++ b/chrome/test/stedding/from_arc_browsertest.cc
+@@ -241,6 +241,29 @@ IN_PROC_BROWSER_TEST_F(FromArcPageTest, ThePageCountsTheRoutes) {
+   EXPECT_NE(std::string::npos, text.find("1 route.")) << text;
+ }
+ 
++// import I1, I49: the page says how many entries of the sidebar could not be
++// read.
++IN_PROC_BROWSER_TEST_F(FromArcPageTest, ThePageCountsWhatCouldNotBeRead) {
++  {
++    base::ScopedAllowBlockingForTesting allow_blocking;
++    std::string sidebar(kSidebar);
++    constexpr std::string_view kChildren = R"("childrenIds": [],)";
++    const size_t at = sidebar.find(kChildren);
++    ASSERT_NE(std::string::npos, at);
++    sidebar.replace(at, kChildren.size(),
++                    R"("childrenIds": ["no-such-item", "nor-this"],)");
++    ASSERT_TRUE(base::WriteFile(
++        arc_.Append(FILE_PATH_LITERAL("StorableSidebar.json")), sidebar));
++  }
++  const std::optional<spaces::ArcImportResult> result = Import();
++  ASSERT_TRUE(result);
++  EXPECT_EQ(2u, result->entries_left_out);
++  content::WebContents* const page = WaitForThePage();
++  const std::string text =
++      content::EvalJs(page, "document.body.innerText").ExtractString();
++  EXPECT_NE(std::string::npos, text.find("2 sidebar items")) << text;
++}
++
+ // import I47: a second import opens no second page, and the page reads again.
+ IN_PROC_BROWSER_TEST_F(FromArcPageTest, ANewImportReadsThePageAgain) {
+   WriteSidebar();
+diff --git a/chrome/test/stedding/import_browsertest.cc b/chrome/test/stedding/import_browsertest.cc
+index 0e3110c90fe83..a98bb3350b542 100644
+--- a/chrome/test/stedding/import_browsertest.cc
++++ b/chrome/test/stedding/import_browsertest.cc
+@@ -982,6 +982,45 @@ IN_PROC_BROWSER_TEST_F(ArcImportTest, ANameGivenInArcOutlivesThePage) {
+   }
+ }
+ 
++// import I6 (BACKLOG S-160): Arc's history comes whether or not its sidebar can
++// be read: with no file, and with one that is no sidebar. The summary and the
++// result line say the sidebar could not be read. Nothing was offered, and
++// nothing came.
++IN_PROC_BROWSER_TEST_F(ArcImportTest, HistoryComesWithoutASidebar) {
++  ASSERT_NO_FATAL_FAILURE(WriteHistory());
++  content::WebContents* const page = OpenSettings();
++  ASSERT_TRUE(page);
++  const GURL read("https://read.example/");
++  const auto import_once = [&]() {
++    const std::string summary =
++        content::EvalJs(page, kArcSummary).ExtractString();
++    EXPECT_NE(std::string::npos, summary.find("sidebar could not be read"))
++        << summary;
++    EXPECT_NE(std::string::npos, summary.find("history and passwords"))
++        << summary;
++    return ImportFromSettings(page);
++  };
++  {
++    SCOPED_TRACE("no sidebar file");
++    const std::string line = import_once();
++    EXPECT_NE(std::string::npos, line.find("2 history entries")) << line;
++    EXPECT_NE(std::string::npos, line.find("sidebar could not be read")) << line;
++    EXPECT_EQ(1u, VisitsTo(read));
++    EXPECT_EQ(1u, spaces::SpaceModel::From(browser())->size());
++  }
++  {
++    SCOPED_TRACE("a sidebar file that does not parse");
++    base::ScopedAllowBlockingForTesting allow_blocking;
++    ASSERT_TRUE(base::WriteFile(
++        arc_.Append(FILE_PATH_LITERAL("StorableSidebar.json")), "{ not json"));
++  }
++  {
++    const std::string line = import_once();
++    EXPECT_NE(std::string::npos, line.find("sidebar could not be read")) << line;
++    EXPECT_EQ(1u, VisitsTo(read)) << "nothing twice (I22)";
++  }
++}
++
+ // import I7: importing from Settings. Arc's split is one row of two panes, in
+ // the run or among the tabs, each with its page, and both panes load when the
+ // row is opened. Arc's archived items are rows of the archive, with Arc's date,
+diff --git a/crypto/subtle_passkey.h b/crypto/subtle_passkey.h
+index 50d882eb62827..61beb04c527ee 100644
+--- a/crypto/subtle_passkey.h
++++ b/crypto/subtle_passkey.h
+@@ -24,6 +24,12 @@ namespace chromeos {
+ crypto::SubtlePassKey MakeCryptoPassKeyForSharedSessionHandler();
+ }
+ 
++namespace spaces {
++// Stedding (docs/features/import.md I23, I31): another browser's logins, sealed
++// under the PBKDF2 parameters that browser chose.
++crypto::SubtlePassKey MakeCryptoPassKeyForOtherBrowsersLogins();
++}
++
+ namespace chromeos::onc {
+ crypto::SubtlePassKey MakeCryptoPassKey();
+ }
+@@ -78,6 +84,9 @@ class CRYPTO_EXPORT SubtlePassKey final {
+   // arbitrary (possibly attacker-supplied) PBKDF2 parameters.
+   friend SubtlePassKey chromeos::onc::MakeCryptoPassKey();
+ 
++  // Stedding: these keep the parameters of the browser that sealed them.
++  friend SubtlePassKey spaces::MakeCryptoPassKeyForOtherBrowsersLogins();
++
+   // These classes use custom PBKDF2 parameters and have to keep doing so for
+   // compatibility with existing persisted data.
+   friend class os_crypt_async::FreedesktopSecretKeyProvider;

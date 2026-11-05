@@ -22,7 +22,7 @@ every release.
 | M3 — Workspaces | Done as Spaces (ADR 0015, ADR 0016). A Space can have cookies of its own (ADR 0019). | — |
 | M4 — Command bar | Partly done (`docs/features/commandbar.md`). ⌘L opens the bar with the page's address in it. | A click on the address does not open the bar, and Move Tab acts on the active tab only (K12, S-127). Turn Bookmarks into Pinned Tabs stays listed with nothing to convert (K16, S-158). |
 | M5 — Split view | Partly done: Chromium's split view, the sidebar's verbs on both panes, and a split made by dragging a tab onto the page (J10–J15). | ⌘W on a split (J3), a Space pin that joins a split (J5), and ⌘1–9 counting a split once (J2): S-102 |
-| M6 — Settings, import, polish | Done except the open rows. | Arc's splits and archived items, and a 400-tab import inside the budgets (S-103, I5, I7). The rows still short of one test or one look, including a screen reader on the rail's New Tab and Archived rows (S-129, sidebar Y15). |
+| M6 — Settings, import, polish | Done except the open rows. | A 400-tab import inside the budgets (S-103, I5). The rows still short of one test or one look, including a screen reader on the rail's New Tab and Archived rows (S-129, sidebar Y15). |
 | M7 — Signed, notarized, auto-updating; site live | The Mac image is signed and notarized (S-17) and updates itself from 0.2.0 beta 16 (ADR 0022). Windows updates itself from 0.2.0 beta 19 (ADR 0023, ADR 0026, S-215). The site is https://stedding.dev. | The rollback path tried for real. Updates on Linux are M9 (S-216). |
 
 ## M8 — Windows port

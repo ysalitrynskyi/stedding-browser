@@ -96,8 +96,8 @@ a `+` (`features/sidebar.md` Y44). The Library is not this foot (§9).
   nest; rename, move and delete from the header's menu; drag a tab in. A collection
   type in the tab tree, not a tab group (ADR 0013; `features/folders.md`). A folder can
   join the pinned run, dragged over the Clear line or by Pin Folder, and its tabs then
-  behave as pins (F38). The Arc importer still makes a pinned folder an ordinary one
-  (import I3, `S-107`). Essentials take no folder.
+  behave as pins (F38). An Arc import brings a pinned folder in pinned (import I3).
+  Essentials take no folder.
 - **Separators** **[1.0]** — a Space pin or a tab, not an essential, a folder row or a
   split pane, can have a thin line above it, from the row's menu (Add Separator Above,
   or Remove Separator). It moves with the row and survives a restart

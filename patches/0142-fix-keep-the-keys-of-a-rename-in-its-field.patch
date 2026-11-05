@@ -1,0 +1,188 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Thu, 5 Nov 2026 17:20:27 -0500
+Subject: fix: keep the keys of a rename in its field
+
+Renaming a pin that was not the open tab ended at the first space. The field
+leaves Space to whoever is above it, as it leaves every key it does not use, so
+Space's release reached the row, and a row that is not selected opens on it. The
+tab opened, the focus went with it, and the rename ended. The open tab's rename
+took a space only because that row was selected already.
+
+While a row is being renamed it now answers no key. A folder's header had the
+same fault in another form: Space typed in its rename toggled the folder.
+
+Enter still commits and Escape still cancels, for a pin, an essential and a loose
+tab, in and out of a folder.
+
+Why: a name with a space could not be typed for any row but the open one (BACKLOG
+S-430, GitHub issue 81, tabs R14).
+
+Removable when: never; the row's keys are Chromium's, the field in it is ours.
+---
+ .../ui/views/tabs/common/folder_view.cc       |   7 +-
+ .../browser/ui/views/tabs/common/tab_view.cc  |  12 +++
+ .../stedding/sidebar_click_browsertest.cc     | 102 ++++++++++++++++++
+ 3 files changed, 119 insertions(+), 2 deletions(-)
+
+diff --git a/chrome/browser/ui/views/tabs/common/folder_view.cc b/chrome/browser/ui/views/tabs/common/folder_view.cc
+index 3b8e001e35bac..5769348de9c2c 100644
+--- a/chrome/browser/ui/views/tabs/common/folder_view.cc
++++ b/chrome/browser/ui/views/tabs/common/folder_view.cc
+@@ -373,8 +373,11 @@ class FolderView::HeaderView : public views::View {
+   }
+ 
+   bool OnKeyPressed(const ui::KeyEvent& event) override {
+-    if (event.key_code() != ui::VKEY_RETURN &&
+-        event.key_code() != ui::VKEY_SPACE) {
++    // tabs R14: Space typed in the rename comes up to here, and toggled the
++    // folder.
++    if (owner_->rename_field_->GetVisible() ||
++        (event.key_code() != ui::VKEY_RETURN &&
++         event.key_code() != ui::VKEY_SPACE)) {
+       return views::View::OnKeyPressed(event);
+     }
+     owner_->ToggleCollapsed();
+diff --git a/chrome/browser/ui/views/tabs/common/tab_view.cc b/chrome/browser/ui/views/tabs/common/tab_view.cc
+index ade7f9b2127f9..6a7a15c0d98b0 100644
+--- a/chrome/browser/ui/views/tabs/common/tab_view.cc
++++ b/chrome/browser/ui/views/tabs/common/tab_view.cc
+@@ -714,6 +714,12 @@ void TabView::Layout(PassKey) {
+ bool TabView::OnKeyPressed(const ui::KeyEvent& event) {
+   CHECK(collection_node_);
+ 
++  // Stedding (tabs R14): the keys of a rename stay in its field. What the field
++  // does not take itself comes up to the row.
++  if (IsRenaming()) {
++    return false;
++  }
++
+   const views::LayoutOrientation layout_orientation =
+       orientation_ == TabStripOrientation::kVertical
+           ? views::LayoutOrientation::kVertical
+@@ -785,6 +791,12 @@ bool TabView::OnKeyPressed(const ui::KeyEvent& event) {
+ bool TabView::OnKeyReleased(const ui::KeyEvent& event) {
+   CHECK(collection_node_);
+ 
++  // Stedding (tabs R14, GitHub issue 81): Space typed in the rename of a row
++  // that was not selected opened the row here, which ended the rename.
++  if (IsRenaming()) {
++    return false;
++  }
++
+   if (event.key_code() == ui::VKEY_SPACE && !selected_) {
+     collection_node_->GetController()->SelectTab(GetTabInterface(),
+                                                  GetGestureDetail(event));
+diff --git a/chrome/test/stedding/sidebar_click_browsertest.cc b/chrome/test/stedding/sidebar_click_browsertest.cc
+index 62839771acfba..1e013f5106657 100644
+--- a/chrome/test/stedding/sidebar_click_browsertest.cc
++++ b/chrome/test/stedding/sidebar_click_browsertest.cc
+@@ -1226,6 +1226,108 @@ IN_PROC_BROWSER_TEST_F(SidebarClickTest,
+ 
+ // The Space menu renames a Space where the person asked, and deleting a
+ // Space from it always asks first.
++// tabs R14 (BACKLOG S-430, GitHub issue 81): the keys of a rename stay in its
++// field. The field leaves Space to whoever is above it, and a row that was not
++// selected opened on Space's release, which ended the rename at the first
++// space: a pin's, an essential's or any other row's that was not on screen,
++// in a folder or not. The events take the window's own path to the focused
++// view, and up from it. A real keyboard is not used.
++IN_PROC_BROWSER_TEST_F(SidebarClickTest, TheKeysOfARenameStayInItsField) {
++  spaces::SpaceModel* const model = spaces::SpaceModel::From(browser());
++  ASSERT_TRUE(model);
++  for (int i = 0; i < 6; ++i) {
++    AppendTab();
++  }
++  TabStripModel* const strip = tab_strip_model();
++  tabs::TabInterface* const pin = strip->GetTabAtIndex(1);
++  tabs::TabInterface* const essential = strip->GetTabAtIndex(2);
++  tabs::TabInterface* const loose = strip->GetTabAtIndex(3);
++  tabs::TabInterface* const in_folder = strip->GetTabAtIndex(4);
++  tabs::TabInterface* const in_pinned_folder = strip->GetTabAtIndex(5);
++  tabs::FolderTabCollection* const folder =
++      strip->AddToNewFolder({strip->GetIndexOfTab(in_folder)});
++  tabs::FolderTabCollection* const pinned_folder =
++      strip->AddToNewFolder({strip->GetIndexOfTab(in_pinned_folder)});
++  ASSERT_TRUE(folder);
++  ASSERT_TRUE(pinned_folder);
++  model->SetFolderSpacePinned(pinned_folder, true);
++  model->SetSpacePinned(pin, true);
++  strip->SetTabPinned(strip->GetIndexOfTab(essential), true);
++  ASSERT_TRUE(model->IsSpacePinned(pin));
++  ASSERT_TRUE(model->IsSpacePinned(in_pinned_folder));
++  ASSERT_TRUE(essential->IsPinned());
++  // The tab on screen is none of them.
++  strip->ActivateTabAt(strip->GetIndexOfTab(strip->GetTabAtIndex(6)));
++  tabs::TabInterface* const on_screen = strip->GetActiveTab();
++  ASSERT_NO_FATAL_FAILURE(WaitForRowsToSettle());
++  views::test::RunScheduledLayout(browser_view()->GetWidget());
++
++  const auto key = [&](ui::EventType type, ui::KeyboardCode code) {
++    ui::KeyEvent event(type, code, ui::EF_NONE);
++    browser_view()->GetWidget()->OnKeyEvent(&event);
++  };
++  const auto press_and_release = [&](ui::KeyboardCode code) {
++    key(ui::EventType::kKeyPressed, code);
++    key(ui::EventType::kKeyReleased, code);
++  };
++
++  for (const auto& [name, tab] :
++       std::vector<std::pair<const char*, tabs::TabInterface*>>{
++           {"a pin", pin},
++           {"an essential", essential},
++           {"a loose tab", loose},
++           {"a tab in a folder", in_folder},
++           {"a pin in a pinned folder", in_pinned_folder}}) {
++    SCOPED_TRACE(name);
++    TabView* const row = RowFor(strip->GetIndexOfTab(tab));
++    ASSERT_TRUE(row);
++    content::WebContents* const contents = tab->GetContents();
++
++    row->BeginRename();
++    ASSERT_TRUE(row->IsRenaming());
++    views::Textfield* const field = row->rename_field_for_testing();
++    ASSERT_TRUE(field->HasFocus());
++    field->SetText(u"Two");
++    press_and_release(ui::VKEY_SPACE);
++    EXPECT_TRUE(row->IsRenaming()) << "Space ended the rename";
++    EXPECT_EQ(on_screen, strip->GetActiveTab()) << "Space opened the row";
++    EXPECT_TRUE(field->HasFocus());
++    field->SetText(u"Two words");
++    press_and_release(ui::VKEY_RETURN);
++    EXPECT_FALSE(row->IsRenaming()) << "Enter commits";
++    EXPECT_EQ(u"Two words", stedding::TabName(contents));
++    EXPECT_EQ(on_screen, strip->GetActiveTab());
++
++    row->BeginRename();
++    ASSERT_TRUE(row->IsRenaming());
++    row->rename_field_for_testing()->SetText(u"Other");
++    press_and_release(ui::VKEY_ESCAPE);
++    EXPECT_FALSE(row->IsRenaming()) << "Escape cancels";
++    EXPECT_EQ(u"Two words", stedding::TabName(contents));
++    EXPECT_EQ(on_screen, strip->GetActiveTab());
++  }
++
++  {
++    // folders F4: the header took Space as a toggle of the folder.
++    SCOPED_TRACE("a folder's header");
++    FolderView* const view = stedding::test::FindDrawnFolder(
++        browser_view()->GetWidget()->GetRootView(), folder);
++    ASSERT_TRUE(view);
++    const bool was_collapsed = folder->collapsed();
++    view->ExecuteCommand(FolderView::kRenameCommand, /*event_flags=*/0);
++    views::Textfield* const field = view->rename_field_for_testing();
++    ASSERT_TRUE(field);
++    ASSERT_TRUE(field->HasFocus());
++    field->SetText(u"Two");
++    press_and_release(ui::VKEY_SPACE);
++    EXPECT_EQ(was_collapsed, folder->collapsed()) << "Space toggled the folder";
++    EXPECT_TRUE(field->HasFocus()) << "Space ended the rename";
++    field->SetText(u"Two words");
++    press_and_release(ui::VKEY_RETURN);
++    EXPECT_EQ("Two words", folder->title());
++  }
++}
++
+ IN_PROC_BROWSER_TEST_F(SidebarClickTest,
+                        TheSpaceMenuRenamesInPlaceAndAsksBeforeDeleting) {
+   spaces::SpaceModel* const model = spaces::SpaceModel::From(browser());

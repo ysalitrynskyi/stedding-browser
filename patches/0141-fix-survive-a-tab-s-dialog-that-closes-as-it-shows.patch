@@ -1,0 +1,314 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Thu, 5 Nov 2026 17:13:16 -0500
+Subject: fix: survive a tab's dialog that closes as it shows
+
+On the Mac the browser died as a tab came back: TabDidEnterForeground showed the
+tab's dialog, and NativeWidgetMac::Show went on through its WeakPtr to the widget,
+which had gone while AppKit brought the window forward. Past that check stood
+another: Widget::Show checks that the widget outlived the native show, which is
+the same crash on Windows, and TabDialogManager::UpdateDialogVisibility then read
+widget_, which is null by then.
+
+A widget may go during a native show: NativeWidgetAura::Show says so, and
+Widget::Hide already allows for it. NativeWidgetMac::Show now ends there as the
+Aura one does, Widget::Show and ShowInactive end there as Hide does, and the
+dialog manager reads no widget it no longer has.
+
+A peek over the page goes with its widget at once, so the same close took the
+peek and its page from under PeekOverlay::Show and OpenPeek. Both now stop.
+
+The trigger in the report is not known. It is not an observer of the widget's
+visibility, since ~Widget refuses that with a check of its own, so it ran from
+something else AppKit does as the window comes forward.
+
+Why: a dialog closing at the wrong moment must not kill the browser (BACKLOG
+S-429, GitHub issue 82, tabs R67).
+
+Removable when: upstream's NativeWidgetMac::Show and Widget::Show allow for a
+widget that goes during the show.
+---
+ chrome/browser/ui/stedding/peek.cc            |  6 +-
+ chrome/browser/ui/tabs/tab_dialog_manager.cc  |  4 +-
+ chrome/browser/ui/views/peek/peek_overlay.cc  |  6 ++
+ .../stedding/peek_over_page_browsertest.cc    | 90 +++++++++++++++++++
+ ui/views/widget/native_widget_mac.mm          |  7 ++
+ ui/views/widget/native_widget_mac_unittest.mm | 26 ++++++
+ ui/views/widget/widget.cc                     | 16 +++-
+ 7 files changed, 149 insertions(+), 6 deletions(-)
+
+diff --git a/chrome/browser/ui/stedding/peek.cc b/chrome/browser/ui/stedding/peek.cc
+index 10d21f1c6f139..717a2c8c4b627 100644
+--- a/chrome/browser/ui/stedding/peek.cc
++++ b/chrome/browser/ui/stedding/peek.cc
+@@ -364,10 +364,12 @@ BrowserWindowInterface* OpenPeek(tabs::TabInterface* source,
+       content::WebContents::Create(create);
+   content::WebContents* const page = contents.get();
+   if (over_page) {
+-    // P20: over the page, which shows the peek's own buttons; no note.
++    // P20: over the page, which shows the peek's own buttons; no note. tabs
++    // R67: closed as it showed, it took its page with it.
++    const base::WeakPtr<content::WebContents> shown = contents->GetWeakPtr();
+     BrowserWindowInterface* const window =
+         ShowPeekOverPage(source, std::move(contents));
+-    if (window) {
++    if (window && shown) {
+       LoadPeekLink(page, link);
+     }
+     return window;
+diff --git a/chrome/browser/ui/tabs/tab_dialog_manager.cc b/chrome/browser/ui/tabs/tab_dialog_manager.cc
+index 4e82fbd0e6d34..12ffd23283040 100644
+--- a/chrome/browser/ui/tabs/tab_dialog_manager.cc
++++ b/chrome/browser/ui/tabs/tab_dialog_manager.cc
+@@ -505,7 +505,9 @@ bool TabDialogManager::UpdateDialogVisibility(
+   if (widget_) {
+     widget_->SetVisible(GetDialogWidgetVisibility() &&
+                         requested_visibility.value_or(true));
+-    return widget_->IsVisible();
++    // Stedding (docs/features/tabs.md R67, GitHub issue 82): the show may close
++    // the dialog, which clears `widget_` (WidgetDestroyed).
++    return widget_ && widget_->IsVisible();
+   }
+   return false;
+ }
+diff --git a/chrome/browser/ui/views/peek/peek_overlay.cc b/chrome/browser/ui/views/peek/peek_overlay.cc
+index 81ab0bcf0e10f..987f1a0772e77 100644
+--- a/chrome/browser/ui/views/peek/peek_overlay.cc
++++ b/chrome/browser/ui/views/peek/peek_overlay.cc
+@@ -505,7 +505,13 @@ bool PeekOverlay::Show() {
+   dialog->close_on_navigate = true;
+   dialog->get_dialog_bounds = base::BindRepeating(
+       &PeekOverlay::PageBoundsInScreen, base::Unretained(this));
++  // tabs R67 (GitHub issue 82): a close while the widget shows is synchronous,
++  // and takes this with it (OnWidgetClosed). Such a peek did open.
++  const base::WeakPtr<PeekOverlay> alive = weak_factory_.GetWeakPtr();
+   manager->ShowDialog(widget_.get(), std::move(dialog));
++  if (!alive) {
++    return true;
++  }
+   view_->UpdateSplit(CanSplit());
+   page_->Focus();
+   return true;
+diff --git a/chrome/test/stedding/peek_over_page_browsertest.cc b/chrome/test/stedding/peek_over_page_browsertest.cc
+index dd19ead421593..b24377f0669fb 100644
+--- a/chrome/test/stedding/peek_over_page_browsertest.cc
++++ b/chrome/test/stedding/peek_over_page_browsertest.cc
+@@ -11,8 +11,11 @@
+ #include <memory>
+ #include <string>
+ 
++#include "base/memory/raw_ptr.h"
++#include "base/scoped_observation.h"
+ #include "base/strings/stringprintf.h"
+ #include "base/run_loop.h"
++#include "base/test/bind.h"
+ #include "base/test/run_until.h"
+ #include "chrome/app/chrome_command_ids.h"
+ #include "chrome/browser/profiles/profile.h"
+@@ -61,9 +64,15 @@
+ #include "ui/views/controls/label.h"
+ #include "ui/views/controls/webview/webview.h"
+ #include "ui/views/test/button_test_api.h"
++#include "ui/views/widget/any_widget_observer.h"
+ #include "ui/views/widget/widget.h"
+ #include "url/gurl.h"
+ 
++#if defined(USE_AURA)
++#include "ui/aura/window.h"
++#include "ui/aura/window_observer.h"
++#endif
++
+ namespace {
+ 
+ // How many browser windows are open: a peek over the page makes none.
+@@ -77,6 +86,37 @@ int WindowCount() {
+   return windows;
+ }
+ 
++#if defined(USE_AURA)
++// Closes `widget` as its window shows: what runs as a dialog's window comes
++// forward may do that (docs/features/tabs.md R67). Its window's observers may,
++// as NativeWidgetAura::Show says. An observer of the widget may not: ~Widget
++// checks that no such notification is on the stack.
++class CloseAsItShows : public aura::WindowObserver {
++ public:
++  explicit CloseAsItShows(views::Widget* widget) : widget_(widget) {
++    observation_.Observe(widget->GetNativeWindow());
++  }
++  bool closed() const { return closed_; }
++
++ private:
++  // aura::WindowObserver:
++  void OnWindowVisibilityChanged(aura::Window* window, bool visible) override {
++    if (!visible || !observation_.IsObservingSource(window)) {
++      return;
++    }
++    observation_.Reset();
++    closed_ = true;
++    widget_.ExtractAsDangling()->Close();
++  }
++  void OnWindowDestroying(aura::Window*) override { observation_.Reset(); }
++
++  raw_ptr<views::Widget> widget_;
++  bool closed_ = false;
++  base::ScopedObservation<aura::Window, aura::WindowObserver> observation_{
++      this};
++};
++#endif  // defined(USE_AURA)
++
+ class PeekOverPageTest : public InProcessBrowserTest {
+  protected:
+   void SetUpOnMainThread() override {
+@@ -155,6 +195,56 @@ class PeekOverPageTest : public InProcessBrowserTest {
+   }
+ };
+ 
++#if defined(USE_AURA)
++// tabs R67 (BACKLOG S-429, GitHub issue 82): a peek goes with its widget at
++// once. One closed as its tab comes back, so as its window shows, leaves the
++// pinned tab on screen and taking input. On the Mac the browser died at the
++// same step: TabDidEnterForeground, Widget::Show, the widget gone by the end
++// of the native show. The Mac's own step is
++// NativeWidgetMacTest.ShowOutlivesTheWidget.
++IN_PROC_BROWSER_TEST_F(PeekOverPageTest,
++                       APeekClosedAsItComesBackLeavesThePinAlone) {
++  ASSERT_NO_FATAL_FAILURE(OpenPin(Url("b.test", "/title3.html")));
++  tabs::TabInterface* const pin = tab();
++  ClickLink();
++  stedding::PeekOverlay* const peek = WaitForPeek(pin);
++  ASSERT_TRUE(peek);
++  views::Widget* const widget = peek->widget();
++  ASSERT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
++      browser(), Url("c.test", "/title1.html"),
++      WindowOpenDisposition::NEW_FOREGROUND_TAB,
++      ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
++  ASSERT_FALSE(widget->IsVisible()) << "it goes with its tab (P20)";
++
++  CloseAsItShows closer(widget);
++  tabs().ActivateTabAt(tabs().GetIndexOfTab(pin));
++  EXPECT_TRUE(closer.closed());
++  EXPECT_TRUE(WaitForNoPeek(pin));
++  EXPECT_EQ(pin, tab());
++}
++
++// tabs R67: the same on the peek's first show: it ended on a widget that had
++// gone, and a peek that had.
++IN_PROC_BROWSER_TEST_F(PeekOverPageTest,
++                       APeekClosedAsItFirstShowsLeavesThePinAlone) {
++  ASSERT_NO_FATAL_FAILURE(OpenPin(Url("b.test", "/title3.html")));
++  tabs::TabInterface* const pin = tab();
++  std::unique_ptr<CloseAsItShows> closer;
++  views::AnyWidgetObserver widgets(views::test::AnyWidgetTestPasskey{});
++  widgets.set_initialized_callback(
++      base::BindLambdaForTesting([&](views::Widget* widget) {
++        if (widget->GetName() == "SteddingPeek") {
++          closer = std::make_unique<CloseAsItShows>(widget);
++        }
++      }));
++  ClickLink();
++  ASSERT_TRUE(base::test::RunUntil(
++      [&]() { return closer && closer->closed(); }));
++  EXPECT_TRUE(WaitForNoPeek(pin));
++  EXPECT_EQ(pin, tab());
++}
++#endif  // defined(USE_AURA)
++
+ // P20, P11, P12, P17: the link opens over the pinned tab's page, inside its
+ // window -- no window of its own -- loaded as the page's link. The pinned
+ // page stays where it was, dimmed by the window's scrim, and takes no
+diff --git a/ui/views/widget/native_widget_mac.mm b/ui/views/widget/native_widget_mac.mm
+index 02db68344e6dc..00cf666237ea6 100644
+--- a/ui/views/widget/native_widget_mac.mm
++++ b/ui/views/widget/native_widget_mac.mm
+@@ -797,7 +797,14 @@ void NativeWidgetMac::Show(ui::mojom::WindowShowState show_state,
+                        ? window_state
+                        : WindowVisibilityState::kShowInactive;
+   }
++  // Stedding (docs/features/tabs.md R67, GitHub issue 82): AppKit runs observers
++  // as the window comes forward, and they may destroy the widget and this with
++  // it, as NativeWidgetAura::Show allows for.
++  const base::WeakPtr<internal::NativeWidgetPrivate> weak_this = GetWeakPtr();
+   GetNSWindowHost()->SetVisibilityState(window_state);
++  if (!weak_this || !delegate_) {
++    return;
++  }
+ 
+   // Ignore the SetInitialFocus() result. BridgedContentView should get
+   // firstResponder status regardless.
+diff --git a/ui/views/widget/native_widget_mac_unittest.mm b/ui/views/widget/native_widget_mac_unittest.mm
+index a7cf16e54b9d1..2157be8eab2de 100644
+--- a/ui/views/widget/native_widget_mac_unittest.mm
++++ b/ui/views/widget/native_widget_mac_unittest.mm
+@@ -1181,6 +1181,32 @@ TEST_F(NativeWidgetMacTest, CloseWhileMinimized) {
+   widget->CloseNow();
+ }
+ 
++// Stedding (docs/features/tabs.md R67, GitHub issue 82): what AppKit runs as the
++// window comes forward may destroy the widget. Show() then ends there: it went
++// on to the widget's initial focus, through a WeakPtr that had gone, and a tab's
++// dialog killed the browser as its tab came back.
++TEST_F(NativeWidgetMacTest, ShowOutlivesTheWidget) {
++  auto widget = std::make_unique<Widget>();
++  Widget::InitParams params = CreateParams(
++      Widget::InitParams::CLIENT_OWNS_WIDGET, Widget::InitParams::TYPE_WINDOW);
++  params.bounds = gfx::Rect(100, 100, 300, 200);
++  widget->Init(std::move(params));
++  Widget* const shown = widget.get();
++  NSWindow* const window = shown->GetNativeWindow().GetNativeNSWindow();
++
++  std::unique_ptr<Widget>* const owner = &widget;
++  id observer = [NSNotificationCenter.defaultCenter
++      addObserverForName:NSWindowDidBecomeKeyNotification
++                  object:window
++                   queue:nil
++              usingBlock:^(NSNotification*) {
++                owner->reset();
++              }];
++  shown->Show();
++  [NSNotificationCenter.defaultCenter removeObserver:observer];
++  EXPECT_FALSE(widget) << "the window never became key";
++}
++
+ // Tests that switching to an inactive space hides the compositor, and
+ // that the window becoming visible via occlusion notifications (e.g. during a
+ // swipe gesture before the active space finishes changing) wakes up the
+diff --git a/ui/views/widget/widget.cc b/ui/views/widget/widget.cc
+index dd051b97e2c34..696ff39c12b7f 100644
+--- a/ui/views/widget/widget.cc
++++ b/ui/views/widget/widget.cc
+@@ -1132,14 +1132,21 @@ void Widget::Show() {
+     } else {
+       native_widget_->Show(saved_show_state_, gfx::Rect());
+     }
+-    CHECK(weak_this);
++    // Stedding (docs/features/tabs.md R67, GitHub issue 82): what runs as the
++    // window comes forward may destroy this widget, as during Hide() below: a
++    // tab's dialog, closed as its tab comes back, killed the browser here.
++    if (!weak_this) {
++      return;
++    }
+     // |saved_show_state_| only applies the first time the window is shown.
+     // If we don't reset the value the window may be shown maximized every time
+     // it is subsequently shown after being hidden.
+     saved_show_state_ = preferred_show_state;
+   } else {
+     native_widget_->Show(preferred_show_state, gfx::Rect());
+-    CHECK(weak_this);
++    if (!weak_this) {
++      return;
++    }
+   }
+ 
+   HandleShowRequested();
+@@ -1176,7 +1183,10 @@ void Widget::ShowInactive() {
+     saved_show_state_ = ui::mojom::WindowShowState::kNormal;
+   }
+   native_widget_->Show(ui::mojom::WindowShowState::kInactive, gfx::Rect());
+-  CHECK(weak_this);
++  // Stedding (docs/features/tabs.md R67): as in Show().
++  if (!weak_this) {
++    return;
++  }
+ 
+   HandleShowRequested();
+ }

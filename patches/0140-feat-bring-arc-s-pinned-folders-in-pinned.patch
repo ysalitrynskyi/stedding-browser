@@ -1,0 +1,306 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Thu, 5 Nov 2026 17:00:10 -0500
+Subject: feat: bring Arc's pinned folders in pinned
+
+A top-level folder can join a Space's pinned run (folders F38), and a sidebar
+file Stedding wrote already brought one back there. Arc's own lists did not
+follow: a list of Arc's pinned section came in under the Clear line with plain
+tabs, so a pin after it was drawn before it.
+
+A list of the pinned section is now a folder of the run, as a file's is. Every
+tab under it, its nested lists' included, is a Space pin with its home, Arc's
+nested lists stay folders inside it, and the folder keeps Arc's order among the
+pins. The Space need not be the one on screen. A tab Arc adds to such a list
+later joins it as a pin, as before. A folder an earlier import left under the
+line keeps its place: an import does not move what is already here.
+
+Why: today's Arc data has this shape, and people leaving Arc meet the import
+first (BACKLOG S-107, import I3).
+
+Removable when: Arc's files are gone from people's computers.
+---
+ .../browser/ui/spaces/arc_sidebar_importer.cc |  19 +-
+ .../spaces/arc_sidebar_importer_unittest.cc   | 183 +++++++++++++++++-
+ chrome/test/stedding/import_browsertest.cc    |   9 +-
+ 3 files changed, 200 insertions(+), 11 deletions(-)
+
+diff --git a/chrome/browser/ui/spaces/arc_sidebar_importer.cc b/chrome/browser/ui/spaces/arc_sidebar_importer.cc
+index 10825d209f807..ff75efea618ba 100644
+--- a/chrome/browser/ui/spaces/arc_sidebar_importer.cc
++++ b/chrome/browser/ui/spaces/arc_sidebar_importer.cc
+@@ -437,7 +437,8 @@ struct ApplyContext {
+   // token>", "folder:<FolderId>"), and those this import has made since. A
+   // file Stedding wrote is never inserted twice beside what it names.
+   std::set<std::string> open;
+-  // Sf2: the folder made for each of the file's folders.
++  // The folder this import made for each list or folder of the plan: Sf2
++  // finds a file's folders by it, and the pinned run knows what it made (F38).
+   std::map<std::string, tabs::FolderId> made_folders;
+ };
+ 
+@@ -620,9 +621,8 @@ tabs::FolderTabCollection* MakeFolder(
+       folder->SetIcon(node.icon);
+     }
+     Remember(ctx, node.arc_id);
+-    if (ctx.durable) {
+-      ctx.made_folders.insert_or_assign(node.arc_id, folder->id());
+-    } else {
++    ctx.made_folders.insert_or_assign(node.arc_id, folder->id());
++    if (!ctx.durable) {
+       ctx.ids->RememberFolder(node.arc_id, folder->id());
+     }
+     ++ctx.result->folders;
+@@ -1395,11 +1395,12 @@ ArcImportResult ApplyArcImport(BrowserWindowInterface* browser,
+                InsertNodes(ctx, {node}, id, nullptr)) {
+             model->SetSpacePinned(tab, true);
+           }
+-          // Sf2: a folder of a file Stedding wrote's pinned run comes back
+-          // in the run. Arc's lists there come in under the Clear line, as
+-          // they always have; a folder that was here already keeps its
+-          // place.
+-          if (ctx.durable && node.kind == Node::Kind::kFolder &&
++          // I3, folders F38 (BACKLOG S-107): a list of Arc's pinned section,
++          // or a folder of the pinned run of a file Stedding wrote (Sf2),
++          // comes in as a folder of the run, its tabs pins. Arc's lists had
++          // come in under the Clear line. A folder that was here already
++          // keeps its place.
++          if (node.kind == Node::Kind::kFolder &&
+               ctx.made_folders.contains(node.arc_id)) {
+             tabs::FolderTabCollection* const folder =
+                 KnownFolder(ctx, node.arc_id);
+diff --git a/chrome/browser/ui/spaces/arc_sidebar_importer_unittest.cc b/chrome/browser/ui/spaces/arc_sidebar_importer_unittest.cc
+index 117ccb31dbd4d..63c109189fb4d 100644
+--- a/chrome/browser/ui/spaces/arc_sidebar_importer_unittest.cc
++++ b/chrome/browser/ui/spaces/arc_sidebar_importer_unittest.cc
+@@ -11,6 +11,7 @@
+ #include "base/files/file_util.h"
+ #include "base/files/scoped_temp_dir.h"
+ #include "base/strings/string_number_conversions.h"
++#include "base/strings/string_util.h"
+ #include "base/strings/utf_string_conversions.h"
+ #include "base/token.h"
+ #include "chrome/browser/ui/browser.h"
+@@ -353,7 +354,10 @@ TEST_F(ArcSidebarImportWindowTest, AppliesSpacesPinsAndFolders) {
+   EXPECT_EQ(u"A", in_work[0]->GetContents()->GetTitle());
+   EXPECT_TRUE(model().IsSpacePinned(in_work[0]));
+   EXPECT_TRUE(model().HomeUrl(in_work[0]).has_value());
+-  EXPECT_FALSE(model().IsSpacePinned(in_work[1]));
++  // folders F38 (BACKLOG S-107): the list of the pinned section is a folder of
++  // the pinned run.
++  EXPECT_TRUE(model().IsSpacePinned(in_work[1]));
++  EXPECT_TRUE(model().HomeUrl(in_work[1]).has_value());
+   const tabs::TabCollection* const folder = in_work[1]->GetParentCollection();
+   ASSERT_TRUE(folder);
+   EXPECT_EQ(tabs::TabCollection::Type::FOLDER, folder->type());
+@@ -538,6 +542,183 @@ TEST_F(ArcSidebarImportWindowTest, ADeepFolderOfFoldersKeepsEveryFolder) {
+   EXPECT_EQ(0u, again.folders);
+ }
+ 
++// A made-up Arc sidebar of pinned folders (import I3, folders F38): Work's
++// pinned run is a pin, a folder with a folder inside it and a folder of folders
++// only, then a pin after them; Play, which is not the Space on screen, pins one
++// folder. $1 is what Docs holds.
++constexpr char kPinnedLists[] = R"json({
++  "version": 1,
++  "sidebar": {"containers": [
++    {"global": {}},
++    {
++      "spaces": [
++        "space-work", {"id": "space-work", "title": "Work",
++          "containerIDs": ["pinned", "work-pinned", "unpinned", "work-unpinned"]},
++        "space-play", {"id": "space-play", "title": "Play",
++          "containerIDs": ["pinned", "play-pinned", "unpinned", "play-unpinned"]}
++      ],
++      "items": [
++        "work-pinned", {"id": "work-pinned", "parentID": null,
++          "childrenIds": ["tab-a", "list-docs", "list-outer", "tab-z"],
++          "title": "",
++          "data": {"itemContainer": {"containerType": {"spaceItems": {}}}}},
++        "work-unpinned", {"id": "work-unpinned", "parentID": null,
++          "childrenIds": ["tab-d"], "title": "",
++          "data": {"itemContainer": {"containerType": {"spaceItems": {}}}}},
++        "play-pinned", {"id": "play-pinned", "parentID": null,
++          "childrenIds": ["list-play"], "title": "",
++          "data": {"itemContainer": {"containerType": {"spaceItems": {}}}}},
++        "play-unpinned", {"id": "play-unpinned", "parentID": null,
++          "childrenIds": [], "title": "",
++          "data": {"itemContainer": {"containerType": {"spaceItems": {}}}}},
++        "tab-a", {"id": "tab-a", "parentID": "work-pinned", "childrenIds": [],
++          "title": "", "data": {"tab": {"savedURL": "https://a.example/", "savedTitle": "A"}}},
++        "list-docs", {"id": "list-docs", "parentID": "work-pinned",
++          "childrenIds": [$1], "title": "Docs", "data": {"list": {}}},
++        "tab-b", {"id": "tab-b", "parentID": "list-docs", "childrenIds": [],
++          "title": "", "data": {"tab": {"savedURL": "https://b.example/", "savedTitle": "B"}}},
++        "tab-b2", {"id": "tab-b2", "parentID": "list-docs", "childrenIds": [],
++          "title": "", "data": {"tab": {"savedURL": "https://b2.example/", "savedTitle": "B2"}}},
++        "list-inner", {"id": "list-inner", "parentID": "list-docs",
++          "childrenIds": ["tab-c"], "title": "Inner", "data": {"list": {}}},
++        "tab-c", {"id": "tab-c", "parentID": "list-inner", "childrenIds": [],
++          "title": "", "data": {"tab": {"savedURL": "https://c.example/", "savedTitle": "C"}}},
++        "list-outer", {"id": "list-outer", "parentID": "work-pinned",
++          "childrenIds": ["list-x"], "title": "Outer", "data": {"list": {}}},
++        "list-x", {"id": "list-x", "parentID": "list-outer",
++          "childrenIds": ["tab-x"], "title": "X", "data": {"list": {}}},
++        "tab-x", {"id": "tab-x", "parentID": "list-x", "childrenIds": [],
++          "title": "", "data": {"tab": {"savedURL": "https://x.example/", "savedTitle": "X1"}}},
++        "tab-z", {"id": "tab-z", "parentID": "work-pinned", "childrenIds": [],
++          "title": "", "data": {"tab": {"savedURL": "https://z.example/", "savedTitle": "Z"}}},
++        "tab-d", {"id": "tab-d", "parentID": "work-unpinned", "childrenIds": [],
++          "title": "", "data": {"tab": {"savedURL": "https://d.example/", "savedTitle": "D"}}},
++        "list-play", {"id": "list-play", "parentID": "play-pinned",
++          "childrenIds": ["tab-p"], "title": "Games", "data": {"list": {}}},
++        "tab-p", {"id": "tab-p", "parentID": "list-play", "childrenIds": [],
++          "title": "", "data": {"tab": {"savedURL": "https://p.example/", "savedTitle": "P"}}}
++      ],
++      "topAppsContainerIDs": []
++    }
++  ]}
++})json";
++
++// import I3, folders F38 (BACKLOG S-107): a list of Arc's pinned section is a
++// folder of the pinned run, in Arc's order among the pins, with every tab
++// under it a pin with its home. It came in under the Clear line with plain
++// tabs, so a pin after it was drawn before it. A second import adds nothing,
++// and a tab Arc added to the list joins it as a pin.
++TEST_F(ArcSidebarImportWindowTest, ListsOfThePinnedSectionArePinnedFolders) {
++  const auto sidebar = [](std::string_view docs) {
++    return ParseArcSidebar(base::ReplaceStringPlaceholders(
++        kPinnedLists, {std::string(docs)}, nullptr));
++  };
++  const std::optional<ArcImportPlan> plan =
++      sidebar(R"("tab-b", "list-inner")");
++  ASSERT_TRUE(plan.has_value());
++  const ArcImportResult result =
++      ApplyArcImport(browser(), *plan, ArcImportOptions());
++  EXPECT_EQ(7u, result.tabs);
++  EXPECT_EQ(5u, result.folders);
++  EXPECT_EQ(0u, result.skipped);
++
++  const Space* const work = SpaceNamed("Work");
++  const Space* const play = SpaceNamed("Play");
++  ASSERT_TRUE(work);
++  ASSERT_TRUE(play);
++  const auto tab_titled = [&](std::u16string_view title) -> tabs::TabInterface* {
++    for (int i = 0; i < tabs().count(); ++i) {
++      if (tabs().GetTabAtIndex(i)->GetContents()->GetTitle() == title) {
++        return tabs().GetTabAtIndex(i);
++      }
++    }
++    return nullptr;
++  };
++  const auto folder_of =
++      [](const tabs::TabCollection* collection) -> tabs::FolderTabCollection* {
++    return collection && collection->type() == tabs::TabCollection::Type::FOLDER
++               ? const_cast<tabs::FolderTabCollection*>(
++                     static_cast<const tabs::FolderTabCollection*>(collection))
++               : nullptr;
++  };
++  // Every tab of the section is a pin of its Space, with its home, and D,
++  // under the line in Arc, is not.
++  for (const std::u16string_view title : {u"A", u"B", u"C", u"X1", u"Z", u"P"}) {
++    tabs::TabInterface* const tab = tab_titled(title);
++    ASSERT_TRUE(tab) << title;
++    EXPECT_TRUE(model().IsSpacePinned(tab)) << title;
++    EXPECT_TRUE(model().HomeUrl(tab).has_value()) << title;
++    EXPECT_TRUE(tab->GetContents()->WasDiscarded()) << title;
++    EXPECT_FALSE(tab->IsPinned()) << title << " is no essential";
++  }
++  tabs::TabInterface* const loose = tab_titled(u"D");
++  ASSERT_TRUE(loose);
++  EXPECT_FALSE(model().IsSpacePinned(loose));
++
++  // Docs is in the run, and Inner stays a folder inside it.
++  tabs::TabInterface* const b = tab_titled(u"B");
++  tabs::TabInterface* const c = tab_titled(u"C");
++  ASSERT_TRUE(b);
++  ASSERT_TRUE(c);
++  tabs::FolderTabCollection* const docs = folder_of(b->GetParentCollection());
++  ASSERT_TRUE(docs);
++  EXPECT_EQ("Docs", docs->title());
++  EXPECT_TRUE(model().IsFolderSpacePinned(docs));
++  const tabs::FolderTabCollection* const inner =
++      folder_of(c->GetParentCollection());
++  ASSERT_TRUE(inner);
++  EXPECT_EQ("Inner", inner->title());
++  EXPECT_EQ(docs, folder_of(inner->GetParentCollection()));
++
++  // A list of lists only is pinned whole as well.
++  tabs::TabInterface* const x = tab_titled(u"X1");
++  ASSERT_TRUE(x);
++  const tabs::FolderTabCollection* const x_list =
++      folder_of(x->GetParentCollection());
++  ASSERT_TRUE(x_list);
++  EXPECT_EQ("X", x_list->title());
++  tabs::FolderTabCollection* const outer =
++      folder_of(x_list->GetParentCollection());
++  ASSERT_TRUE(outer);
++  EXPECT_EQ("Outer", outer->title());
++  EXPECT_TRUE(model().IsFolderSpacePinned(outer));
++
++  // A Space that is not on screen pins its folder too.
++  tabs::TabInterface* const p = tab_titled(u"P");
++  ASSERT_TRUE(p);
++  EXPECT_EQ(play->id(), model().SpaceForTab(p));
++  tabs::FolderTabCollection* const games = folder_of(p->GetParentCollection());
++  ASSERT_TRUE(games);
++  EXPECT_TRUE(model().IsFolderSpacePinned(games));
++
++  // Arc's order: A, Docs, Outer, Z, and D under the line.
++  const auto index_of = [&](std::u16string_view title) {
++    return tabs().GetIndexOfTab(tab_titled(title));
++  };
++  EXPECT_LT(index_of(u"A"), index_of(u"B"));
++  EXPECT_LT(index_of(u"B"), index_of(u"C"));
++  EXPECT_LT(index_of(u"C"), index_of(u"X1"));
++  EXPECT_LT(index_of(u"X1"), index_of(u"Z")) << "the pin after the folders";
++  EXPECT_LT(index_of(u"Z"), index_of(u"D"));
++
++  // I12: nothing twice, and what Arc added since is a pin of the folder.
++  const ArcImportResult again =
++      ApplyArcImport(browser(), *plan, ArcImportOptions());
++  EXPECT_EQ(0u, again.tabs);
++  EXPECT_EQ(0u, again.folders);
++  const std::optional<ArcImportPlan> grown =
++      sidebar(R"("tab-b", "tab-b2", "list-inner")");
++  ASSERT_TRUE(grown.has_value());
++  const ArcImportResult added =
++      ApplyArcImport(browser(), *grown, ArcImportOptions());
++  EXPECT_EQ(1u, added.tabs);
++  tabs::TabInterface* const joined = tab_titled(u"B2");
++  ASSERT_TRUE(joined);
++  EXPECT_EQ(docs, folder_of(joined->GetParentCollection()));
++  EXPECT_TRUE(model().IsSpacePinned(joined));
++  EXPECT_TRUE(model().IsFolderSpacePinned(docs));
++}
++
+ // I3: a file that names one Arc Space twice makes one Space; its second
+ // entry's tabs join the first. Both became Spaces, and a later import filled
+ // only the one it remembered (BACKLOG S-183).
+diff --git a/chrome/test/stedding/import_browsertest.cc b/chrome/test/stedding/import_browsertest.cc
+index 56f0eb0abc33f..10a910dcbfb10 100644
+--- a/chrome/test/stedding/import_browsertest.cc
++++ b/chrome/test/stedding/import_browsertest.cc
+@@ -718,7 +718,13 @@ IN_PROC_BROWSER_TEST_F(ArcImportTest, ImportingAgainBringsOnlyWhatArcGained) {
+     const tabs::TabInterface* const doc = TabTitled(u"Doc A");
+     ASSERT_TRUE(doc);
+     EXPECT_EQ("Docs", FolderOf(doc));
+-    EXPECT_FALSE(model->IsSpacePinned(doc)) << "I3: a folder's tabs are plain";
++    EXPECT_TRUE(model->IsSpacePinned(doc)) << "I3: a pinned list's tab is a pin";
++    EXPECT_EQ(std::optional<GURL>(GURL("https://docs.example/a")),
++              model->HomeUrl(doc));
++    EXPECT_TRUE(model->IsFolderSpacePinned(
++        static_cast<const tabs::FolderTabCollection*>(
++            doc->GetParentCollection())))
++        << "I3, folders F38: the list is a folder of the pinned run";
+     EXPECT_TRUE(doc->GetContents()->WasDiscarded()) << "I3: inserted unloaded";
+     EXPECT_EQ(1u, VisitsTo(read));
+     EXPECT_EQ(1u, VisitsTo(watch));
+@@ -754,6 +760,7 @@ IN_PROC_BROWSER_TEST_F(ArcImportTest, ImportingAgainBringsOnlyWhatArcGained) {
+     EXPECT_EQ(doc->GetParentCollection(), added->GetParentCollection())
+         << "the same folder, not a second Docs";
+     EXPECT_EQ(model->SpaceForTab(doc), model->SpaceForTab(added));
++    EXPECT_TRUE(model->IsSpacePinned(added)) << "folders F38: it joins as a pin";
+   }();
+ 
+   [&] {

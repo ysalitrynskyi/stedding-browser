@@ -376,7 +376,7 @@ as far as WebKit supports them. No Windows build.
 | Closed tabs reopened from a stack kept across launches | A closed tab can be reopened (S-97), and Recently Closed lists it. |
 | History and Downloads in the sidebar | Built (S-98). |
 | Import from Dia, and from Safari's export file | Dia's bookmarks, history and passwords, and Safari's export, are built (import I28–I32, I34–I42). Dia's sidebar is not (I33). Settings and command-bar rows for those imports are not built. |
-| Folders in the pinned list | Built (folders F38). The Arc importer still turns a pinned folder into an ordinary one (import I3, S-107). |
+| Folders in the pinned list | Built (folders F38). An Arc import brings a pinned folder in pinned (import I3). |
 | A launch that loads only the selected tab | Built (tabs R45–R48). |
 | Tabs that sleep on a timer | Built (tabs R39–R44). |
 | One panel of site controls | Built into the page-info panel (site controls Si1–Si11). |

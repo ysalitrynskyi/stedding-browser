@@ -1,0 +1,376 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Thu, 5 Nov 2026 17:28:51 -0500
+Subject: fix: keep the names people gave their tabs in Arc
+
+A tab renamed in Arc came in with that name as the title of a page not yet
+loaded, or lost it to Arc's saved title, so the page's own title replaced it at
+the first load, and for good. Arc keeps such a name in the item's title, which it
+leaves null otherwise.
+
+That name is now the tab's name, as a rename here makes one: written to the
+session, and shown over the page's title. It holds for a pin, an essential, a tab
+of a folder and a loose tab, through the first load and through a pin closing
+back to its home. A sidebar file Stedding wrote leaves that field empty, so it
+behaves as before.
+
+No real Arc file was read: the field is as public exporters read it. A name Arc
+kept only in savedTitle could not be told from a page's title.
+
+Why: a person's own names are the first thing they see after an import, and they
+went at the first click (BACKLOG S-431, GitHub issue 80, import I3).
+
+Removable when: Arc's files are gone from people's computers.
+---
+ .../browser/ui/spaces/arc_sidebar_importer.cc |  39 +++++--
+ .../browser/ui/spaces/arc_sidebar_importer.h  |   3 +
+ .../spaces/arc_sidebar_importer_unittest.cc   |  72 +++++++++++++
+ chrome/test/stedding/import_browsertest.cc    | 100 ++++++++++++++++++
+ 4 files changed, 203 insertions(+), 11 deletions(-)
+
+diff --git a/chrome/browser/ui/spaces/arc_sidebar_importer.cc b/chrome/browser/ui/spaces/arc_sidebar_importer.cc
+index ff75efea618ba..94704ddcf11d7 100644
+--- a/chrome/browser/ui/spaces/arc_sidebar_importer.cc
++++ b/chrome/browser/ui/spaces/arc_sidebar_importer.cc
+@@ -43,7 +43,9 @@
+ #include "chrome/browser/ui/spaces/space_model.h"
+ #include "chrome/browser/ui/spaces/unloaded_tab.h"
+ #include "chrome/browser/ui/stedding/stedding_prefs.h"
++#include "chrome/browser/ui/stedding/tab_names.h"
+ #include "chrome/browser/ui/stedding/tab_parents.h"
++#include "chrome/browser/ui/tab_ui_helper.h"
+ #include "chrome/browser/ui/tabs/tab_model.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "components/prefs/pref_service.h"
+@@ -126,6 +128,8 @@ struct ArcItem {
+   std::string parent;
+   std::vector<std::string> children;
+   std::u16string title;
++  // tabs R14: the name the person gave the tab in Arc.
++  std::u16string name;
+   GURL url;
+   std::string container_type;
+   // folders F42: a list's icon, in the "stedding" dict a file Stedding wrote
+@@ -211,6 +215,10 @@ std::optional<ArcItem> ParseItem(const base::DictValue& dict) {
+   if (const base::DictValue* tab = data->FindDict("tab")) {
+     item.kind = ArcItem::Kind::kTab;
+     item.url = GURL(StringAt(*tab, "savedURL"));
++    // I3 (BACKLOG S-431, GitHub issue 80): `title` is the name the person gave
++    // the tab, null for one they did not rename; `savedTitle` is the page's. A
++    // file Stedding wrote leaves `title` empty.
++    item.name = item.title;
+     const std::string saved_title = StringAt(*tab, "savedTitle");
+     if (!saved_title.empty()) {
+       item.title = base::UTF8ToUTF16(saved_title);
+@@ -265,6 +273,7 @@ std::vector<Node> BuildChildren(const ArcItem& parent,
+       }
+       node.kind = Node::Kind::kTab;
+       node.url = child.url;
++      node.name = child.name;
+       out.push_back(std::move(node));
+     } else if (child.kind == ArcItem::Kind::kList) {
+       node.kind = Node::Kind::kFolder;
+@@ -415,14 +424,6 @@ class ImportedIds {
+   std::map<std::string, std::string> folders_;
+ };
+ 
+-// I3: a tab that shows its title and loads on its first activation, the way
+-// session restore creates the tabs it does not load (unloaded_tab.h).
+-tabs::TabInterface* InsertUnloaded(TabStripModel* tabs,
+-                                   Profile* profile,
+-                                   const Node& node) {
+-  return InsertUnloadedTab(tabs, profile, node.url, node.title);
+-}
+-
+ struct ApplyContext {
+   raw_ptr<BrowserWindowInterface> browser;
+   raw_ptr<SpaceModel> model;
+@@ -442,6 +443,22 @@ struct ApplyContext {
+   std::map<std::string, tabs::FolderId> made_folders;
+ };
+ 
++// I3: a tab that shows its title and loads on its first activation, the way
++// session restore creates the tabs it does not load (unloaded_tab.h). A name
++// the person gave it in Arc is its name, as a rename here makes one, so it
++// outlives the page's title (tabs R14-R17).
++tabs::TabInterface* InsertUnloaded(ApplyContext& ctx, const Node& node) {
++  tabs::TabInterface* const tab =
++      InsertUnloadedTab(ctx.tabs, ctx.profile, node.url, node.title);
++  if (tab && !node.name.empty()) {
++    stedding::SetTabName(ctx.browser, tab, node.name);
++    if (TabUIHelper* const helper = TabUIHelper::From(tab)) {
++      helper->TabNameChanged();
++    }
++  }
++  return tab;
++}
++
+ void AddOpenIds(const TabStripModel& strip, std::set<std::string>* ids) {
+   for (int i = 0; i < strip.count(); ++i) {
+     if (const std::string token =
+@@ -576,7 +593,7 @@ std::vector<tabs::TabInterface*> InsertDirectTabs(ApplyContext& ctx,
+       continue;
+     }
+     tabs::TabInterface* const tab =
+-        InsertUnloaded(ctx.tabs, ctx.profile, child);
++        InsertUnloaded(ctx, child);
+     if (!tab) {
+       continue;
+     }
+@@ -754,7 +771,7 @@ std::vector<tabs::TabInterface*> InsertNodes(
+         continue;
+       }
+       tabs::TabInterface* const tab =
+-          InsertUnloaded(ctx.tabs, ctx.profile, node);
++          InsertUnloaded(ctx, node);
+       if (!tab) {
+         continue;
+       }
+@@ -862,7 +879,7 @@ void InsertEssentials(ApplyContext& ctx,
+       break;
+     }
+     tabs::TabInterface* const tab =
+-        InsertUnloaded(ctx.tabs, ctx.profile, node);
++        InsertUnloaded(ctx, node);
+     if (!tab) {
+       continue;
+     }
+diff --git a/chrome/browser/ui/spaces/arc_sidebar_importer.h b/chrome/browser/ui/spaces/arc_sidebar_importer.h
+index 87949e2cd5e6e..5abdcc22e5fe8 100644
+--- a/chrome/browser/ui/spaces/arc_sidebar_importer.h
++++ b/chrome/browser/ui/spaces/arc_sidebar_importer.h
+@@ -37,6 +37,9 @@ struct ArcImportPlan {
+     Kind kind = Kind::kTab;
+     std::string arc_id;
+     std::u16string title;
++    // tabs R14: the name the person gave the tab in Arc, kept as a tab's name
++    // is. Empty for a tab that follows its page, which `title` then is.
++    std::u16string name;
+     GURL url;
+     // folders F42 (BACKLOG S-393): a folder's icon, one character, from a
+     // file or a sync Stedding wrote; none for the folder glyph.
+diff --git a/chrome/browser/ui/spaces/arc_sidebar_importer_unittest.cc b/chrome/browser/ui/spaces/arc_sidebar_importer_unittest.cc
+index 63c109189fb4d..fa35761053e15 100644
+--- a/chrome/browser/ui/spaces/arc_sidebar_importer_unittest.cc
++++ b/chrome/browser/ui/spaces/arc_sidebar_importer_unittest.cc
+@@ -19,6 +19,7 @@
+ #include "chrome/browser/ui/spaces/space_colors.h"
+ #include "chrome/browser/ui/spaces/space_model.h"
+ #include "chrome/browser/ui/spaces/space_router.h"
++#include "chrome/browser/ui/stedding/tab_names.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "chrome/test/base/browser_with_test_window_test.h"
+ #include "components/prefs/pref_service.h"
+@@ -719,6 +720,77 @@ TEST_F(ArcSidebarImportWindowTest, ListsOfThePinnedSectionArePinnedFolders) {
+   EXPECT_TRUE(model().IsFolderSpacePinned(docs));
+ }
+ 
++// tabs R14, import I3 (BACKLOG S-431, GitHub issue 80): `title` is the name the
++// person gave a tab in Arc, as a rename here gives one, whichever part of the
++// sidebar holds it. It came in as the title of a page not yet loaded, so the
++// page's own replaced it at the first load. A tab they did not rename has no
++// name, and follows its page.
++TEST_F(ArcSidebarImportWindowTest, ANameGivenInArcIsAName) {
++  constexpr char kNamed[] = R"json({
++  "version": 1,
++  "sidebar": {"containers": [
++    {"global": {}},
++    {
++      "spaces": ["space-work", {"id": "space-work", "title": "Work",
++        "containerIDs": ["pinned", "work-pinned", "unpinned", "work-unpinned"]}],
++      "items": [
++        "work-pinned", {"id": "work-pinned", "parentID": null,
++          "childrenIds": ["tab-pin", "list-docs"], "title": "",
++          "data": {"itemContainer": {"containerType": {"spaceItems": {}}}}},
++        "work-unpinned", {"id": "work-unpinned", "parentID": null,
++          "childrenIds": ["tab-loose", "tab-plain"], "title": "",
++          "data": {"itemContainer": {"containerType": {"spaceItems": {}}}}},
++        "top", {"id": "top", "parentID": null,
++          "childrenIds": ["tab-top"], "title": "",
++          "data": {"itemContainer": {"containerType": {"topApps": {}}}}},
++        "tab-pin", {"id": "tab-pin", "parentID": "work-pinned",
++          "childrenIds": [], "title": "My mail",
++          "data": {"tab": {"savedURL": "https://mail.example/",
++                           "savedTitle": "Inbox (3)"}}},
++        "list-docs", {"id": "list-docs", "parentID": "work-pinned",
++          "childrenIds": ["tab-doc"], "title": "Docs", "data": {"list": {}}},
++        "tab-doc", {"id": "tab-doc", "parentID": "list-docs",
++          "childrenIds": [], "title": "The plan",
++          "data": {"tab": {"savedURL": "https://docs.example/",
++                           "savedTitle": "Untitled document"}}},
++        "tab-loose", {"id": "tab-loose", "parentID": "work-unpinned",
++          "childrenIds": [], "title": "Reading",
++          "data": {"tab": {"savedURL": "https://read.example/",
++                           "savedTitle": null}}},
++        "tab-plain", {"id": "tab-plain", "parentID": "work-unpinned",
++          "childrenIds": [], "title": null,
++          "data": {"tab": {"savedURL": "https://plain.example/",
++                           "savedTitle": "A page"}}},
++        "tab-top", {"id": "tab-top", "parentID": "top",
++          "childrenIds": [], "title": "Calendar",
++          "data": {"tab": {"savedURL": "https://top.example/",
++                           "savedTitle": "Monday"}}}
++      ],
++      "topAppsContainerIDs": [{"default": true}, "top"]
++    }
++  ]}
++})json";
++  const std::optional<ArcImportPlan> plan = ParseArcSidebar(kNamed);
++  ASSERT_TRUE(plan.has_value());
++  ApplyArcImport(browser(), *plan, ArcImportOptions());
++  const auto name_of = [&](std::string_view url) {
++    for (int i = 0; i < tabs().count(); ++i) {
++      content::WebContents* const contents = tabs().GetWebContentsAt(i);
++      if (contents->GetVisibleURL() == GURL(url)) {
++        return stedding::TabName(contents);
++      }
++    }
++    ADD_FAILURE() << url;
++    return std::u16string();
++  };
++  EXPECT_EQ(u"My mail", name_of("https://mail.example/")) << "a pin";
++  EXPECT_EQ(u"The plan", name_of("https://docs.example/"))
++      << "a pin in a pinned folder";
++  EXPECT_EQ(u"Reading", name_of("https://read.example/")) << "a loose tab";
++  EXPECT_EQ(u"Calendar", name_of("https://top.example/")) << "an essential";
++  EXPECT_EQ(u"", name_of("https://plain.example/")) << "no name in Arc";
++}
++
+ // I3: a file that names one Arc Space twice makes one Space; its second
+ // entry's tabs join the first. Both became Spaces, and a later import filled
+ // only the one it remembered (BACKLOG S-183).
+diff --git a/chrome/test/stedding/import_browsertest.cc b/chrome/test/stedding/import_browsertest.cc
+index 10a910dcbfb10..bd5388b4bfe34 100644
+--- a/chrome/test/stedding/import_browsertest.cc
++++ b/chrome/test/stedding/import_browsertest.cc
+@@ -36,9 +36,11 @@
+ #include "base/test/test_future.h"
+ #include "base/threading/thread_restrictions.h"
+ #include "base/time/time.h"
++#include "chrome/app/chrome_command_ids.h"
+ #include "chrome/browser/bookmarks/bookmark_model_factory.h"
+ #include "chrome/browser/history/history_service_factory.h"
+ #include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/ui/browser_commands.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/spaces/arc_sidebar_importer.h"
+ #include "chrome/browser/ui/spaces/sidebar_backup.h"
+@@ -48,6 +50,8 @@
+ #include "chrome/browser/ui/stedding/pin_home.h"
+ #include "chrome/browser/ui/stedding/pin_lifecycle.h"
+ #include "chrome/browser/ui/stedding/stedding_prefs.h"
++#include "chrome/browser/ui/stedding/tab_names.h"
++#include "chrome/browser/ui/tab_ui_helper.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "chrome/browser/ui/views/stedding_welcome/welcome_dialog_view.h"
+ #include "chrome/test/base/in_process_browser_test.h"
+@@ -507,6 +511,45 @@ constexpr char kArcSidebar[] = R"json({
+   ]}
+ })json";
+ 
++// A pin, a pin in a folder and an essential the person renamed in Arc, on the
++// test's server: $1, $2 and $3. Each page has a title of its own.
++constexpr char kArcNamedTabs[] = R"json({
++  "sidebar": {"containers": [
++    {"global": {}},
++    {
++      "spaces": [
++        "space-work", {
++          "id": "space-work", "title": "Work",
++          "containerIDs": ["pinned", "work-pinned", "unpinned", "work-unpinned"]
++        }
++      ],
++      "items": [
++        "work-pinned", {"id": "work-pinned", "parentID": null,
++          "childrenIds": ["tab-pin", "list-docs"], "title": "",
++          "data": {"itemContainer": {"containerType": {"spaceItems": {}}}}},
++        "work-unpinned", {"id": "work-unpinned", "parentID": null,
++          "childrenIds": [], "title": "",
++          "data": {"itemContainer": {"containerType": {"spaceItems": {}}}}},
++        "top", {"id": "top", "parentID": null,
++          "childrenIds": ["tab-top"], "title": "",
++          "data": {"itemContainer": {"containerType": {"topApps": {}}}}},
++        "tab-pin", {"id": "tab-pin", "parentID": "work-pinned",
++          "childrenIds": [], "title": "My pin", "data": {"tab": {
++            "savedURL": "$1", "savedTitle": "A saved title"}}},
++        "list-docs", {"id": "list-docs", "parentID": "work-pinned",
++          "childrenIds": ["tab-doc"], "title": "Docs", "data": {"list": {}}},
++        "tab-doc", {"id": "tab-doc", "parentID": "list-docs",
++          "childrenIds": [], "title": "My doc", "data": {"tab": {
++            "savedURL": "$2", "savedTitle": null}}},
++        "tab-top", {"id": "tab-top", "parentID": "top",
++          "childrenIds": [], "title": "My essential", "data": {"tab": {
++            "savedURL": "$3", "savedTitle": "Another saved title"}}}
++      ],
++      "topAppsContainerIDs": [{"default": true}, "top"]
++    }
++  ]}
++})json";
++
+ // The page's own request for the line its "Import from Arc..." row shows
+ // before anything is imported (I2).
+ constexpr char kArcSummary[] = R"(
+@@ -781,6 +824,63 @@ IN_PROC_BROWSER_TEST_F(ArcImportTest, ImportingAgainBringsOnlyWhatArcGained) {
+   }();
+ }
+ 
++// tabs R14, import I3 (BACKLOG S-431, GitHub issue 80): a name given in Arc is
++// the tab's name. It stays when the page loads, and when the tab closes back to
++// its pin, for a pin, a pin in a folder and an essential. It was the title of a
++// page not yet loaded: the page's own replaced it for good.
++IN_PROC_BROWSER_TEST_F(ArcImportTest, ANameGivenInArcOutlivesThePage) {
++  ASSERT_TRUE(embedded_test_server()->Start());
++  {
++    base::ScopedAllowBlockingForTesting allow_blocking;
++    ASSERT_TRUE(base::WriteFile(
++        arc_.Append(FILE_PATH_LITERAL("StorableSidebar.json")),
++        base::ReplaceStringPlaceholders(
++            kArcNamedTabs,
++            {embedded_test_server()->GetURL("/title1.html").spec(),
++             embedded_test_server()->GetURL("/title2.html").spec(),
++             embedded_test_server()->GetURL("/title3.html").spec()},
++            nullptr)));
++  }
++  content::WebContents* const page = OpenSettings();
++  ASSERT_TRUE(page);
++  ImportFromSettings(page);
++  TabStripModel* const strip = browser()->GetTabStripModel();
++  const auto tab_at = [&](std::string_view path) -> tabs::TabInterface* {
++    const GURL url = embedded_test_server()->GetURL(path);
++    for (int i = 0; i < strip->count(); ++i) {
++      if (strip->GetWebContentsAt(i)->GetVisibleURL() == url) {
++        return strip->GetTabAtIndex(i);
++      }
++    }
++    return nullptr;
++  };
++  for (const auto& [path, name] :
++       std::vector<std::pair<std::string_view, std::u16string_view>>{
++           {"/title1.html", u"My pin"},
++           {"/title2.html", u"My doc"},
++           {"/title3.html", u"My essential"}}) {
++    SCOPED_TRACE(path);
++    tabs::TabInterface* const tab = tab_at(path);
++    ASSERT_TRUE(tab);
++    EXPECT_EQ(name, stedding::TabName(tab->GetContents()))
++        << "unloaded, before it is opened";
++    content::TestNavigationObserver loaded(tab->GetContents());
++    strip->ActivateTabAt(strip->GetIndexOfTab(tab));
++    loaded.Wait();
++    EXPECT_NE(name, tab->GetContents()->GetTitle()) << "the page has its own";
++    EXPECT_EQ(name, stedding::TabName(tab->GetContents())) << "the page's load";
++    EXPECT_EQ(name, TabUIHelper::From(tab)->GetTitle()) << "what the row shows";
++
++    chrome::ExecuteCommand(browser(), IDC_CLOSE_TAB);
++    ASSERT_TRUE(base::test::RunUntil([&]() {
++      return strip->GetIndexOfTab(tab) != TabStripModel::kNoTab &&
++             strip->GetActiveTab() != tab;
++    })) << "it closes back to its pin";
++    EXPECT_EQ(name, stedding::TabName(tab->GetContents())) << "back at its pin";
++    EXPECT_EQ(name, TabUIHelper::From(tab)->GetTitle());
++  }
++}
++
+ // import I48: importing from Settings brings Arc's route to the Space it names,
+ // and a link there follows it. A second import adds no route.
+ IN_PROC_BROWSER_TEST_F(ArcImportTest, ArcsRoutesComeAcrossOnce) {

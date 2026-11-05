@@ -1,0 +1,208 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Thu, 5 Nov 2026 17:48:42 -0500
+Subject: fix: open what a page opens in a Space with its own session
+
+The browser's own pages live in the profile's jar, and a tab opened from one in
+a Space with an Independent session starts there too. A moment after it arrived
+the Space moved it to its own jar. Its contents were replaced before the page it
+was opened for had started, so the page never came: an extension's Website
+settings, a window.open from chrome://extensions, stayed an empty tab.
+
+A tab a page opened now keeps its contents while it has no page. A settings page
+stays in the profile's jar, and a web page moves to the Space's jar as its
+navigation starts, with its address, as SpaceJarNavigationThrottle does for
+every other tab.
+
+This reproduces one half of the report, and only in a Space with its own
+session. Manage extension did not fail here through chrome::ShowExtensions, from
+such a Space or any other, so the rest stays open for the Mac.
+
+Why: an extension's settings could not be reached from such a Space (BACKLOG
+S-432, GitHub issue 79, sessions S37).
+
+Removable when: a Space's tabs are not moved between jars after they are made.
+---
+ chrome/browser/ui/spaces/space_model.cc       |  11 ++
+ chrome/test/stedding/BUILD.gn                 |   1 +
+ .../stedding/extension_pages_browsertest.cc   | 137 ++++++++++++++++++
+ 3 files changed, 149 insertions(+)
+ create mode 100644 chrome/test/stedding/extension_pages_browsertest.cc
+
+diff --git a/chrome/browser/ui/spaces/space_model.cc b/chrome/browser/ui/spaces/space_model.cc
+index fd7582adcced7..83d2e2d8a3f38 100644
+--- a/chrome/browser/ui/spaces/space_model.cc
++++ b/chrome/browser/ui/spaces/space_model.cc
+@@ -3484,6 +3484,17 @@ void SpaceModel::MaybeRebindTabJar(tabs::TabInterface* tab) {
+                        }
+                        content::WebContents* const contents =
+                            tab->GetContents();
++                       // sessions S20 (BACKLOG S-432, GitHub issue 79): a tab a
++                       // page opened waits for that page, and new contents
++                       // would never get it: the browser's own pages live in
++                       // the profile's jar, so what chrome://extensions opened
++                       // in a Space with its own session stayed an empty tab.
++                       // SpaceJarNavigationThrottle moves it, with its
++                       // address, if the page belongs elsewhere.
++                       if (contents && contents->HasOpener() &&
++                           HasNoPageOfItsOwnYet(contents)) {
++                         return;
++                       }
+                        const SpaceId id = model->SpaceForTab(tab);
+                        if (!NeedsOtherJar(contents,
+                                           contents ? contents->GetVisibleURL()
+diff --git a/chrome/test/stedding/BUILD.gn b/chrome/test/stedding/BUILD.gn
+index 5ee8b3db8a580..b7678db6d1d75 100644
+--- a/chrome/test/stedding/BUILD.gn
++++ b/chrome/test/stedding/BUILD.gn
+@@ -38,6 +38,7 @@ test("stedding_browser_tests") {
+     # BACKLOG S-421: the bar on a site Stedding cannot play.
+     "drm_notice_browsertest.cc",
+     "edit_space_browsertest.cc",
++    "extension_pages_browsertest.cc",
+     "external_extensions_browsertest.cc",
+     "folder_tabs_browsertest.cc",
+     "find_words_browsertest.cc",
+diff --git a/chrome/test/stedding/extension_pages_browsertest.cc b/chrome/test/stedding/extension_pages_browsertest.cc
+new file mode 100644
+index 0000000000000..0fc595efa846d
+--- /dev/null
++++ b/chrome/test/stedding/extension_pages_browsertest.cc
+@@ -0,0 +1,137 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++// BACKLOG S-432 (GitHub issue 79): the pages of an extension's settings open.
++
++#include <string>
++
++#include "base/strings/strcat.h"
++#include "base/strings/utf_string_conversions.h"
++#include "base/test/run_until.h"
++#include "chrome/browser/ui/browser_commands.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/chrome_pages.h"
++#include "chrome/browser/ui/navigator/browser_navigator.h"
++#include "chrome/browser/ui/navigator/browser_navigator_params.h"
++#include "chrome/browser/ui/spaces/space.h"
++#include "chrome/browser/ui/spaces/space_model.h"
++#include "chrome/browser/ui/spaces/space_storage_partition.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "chrome/test/base/in_process_browser_test.h"
++#include "chrome/test/base/ui_test_utils.h"
++#include "content/public/browser/storage_partition_config.h"
++#include "content/public/browser/web_contents.h"
++#include "content/public/test/browser_test.h"
++#include "content/public/test/browser_test_utils.h"
++#include "net/test/embedded_test_server/embedded_test_server.h"
++#include "third_party/skia/include/core/SkColor.h"
++#include "ui/base/page_transition_types.h"
++#include "ui/base/window_open_disposition.h"
++#include "url/gurl.h"
++
++namespace {
++
++constexpr char kId[] = "abcdefghijklmnopabcdefghijklmnop";
++
++class ExtensionPagesTest : public InProcessBrowserTest {
++ protected:
++  TabStripModel& tabs() { return *browser()->tab_strip_model(); }
++};
++
++// The extensions page opens a site's settings with window.open. What opened it
++// differs: a plain tab, a pin, an essential; a Space that shares the profile's
++// session, or one with its own, where a tab's contents may be replaced.
++IN_PROC_BROWSER_TEST_F(ExtensionPagesTest, SiteSettingsOpenFromTheExtensionsPage) {
++  spaces::SpaceModel* const model = spaces::SpaceModel::From(browser());
++  ASSERT_TRUE(model);
++  const GURL to(base::StrCat(
++      {"chrome://settings/content/siteDetails?site=chrome-extension://", kId}));
++  const auto from_the_page = [&](const std::string& name) {
++    SCOPED_TRACE(name);
++    ASSERT_TRUE(base::test::RunUntil([&]() {
++      return tabs().GetActiveWebContents()->GetLastCommittedURL().host() ==
++             "extensions";
++    }));
++    ASSERT_TRUE(content::WaitForLoadStop(tabs().GetActiveWebContents()));
++    const int before = tabs().count();
++    ASSERT_TRUE(content::ExecJs(tabs().GetActiveWebContents(),
++                                "window.open('" + to.spec() + "');"));
++    EXPECT_TRUE(base::test::RunUntil([&]() {
++      return tabs().count() == before + 1 &&
++             tabs().GetActiveWebContents()->GetLastCommittedURL() == to;
++    })) << name << ": " << tabs().count() - before << " new, the active at "
++        << tabs().GetActiveWebContents()->GetLastCommittedURL() << ", showing "
++        << tabs().GetActiveWebContents()->GetVisibleURL();
++  };
++  const auto new_extensions_page = [&]() {
++    NavigateParams params(browser(), GURL("chrome://extensions"),
++                          ui::PAGE_TRANSITION_TYPED);
++    params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
++    Navigate(&params);
++  };
++  new_extensions_page();
++  from_the_page("a plain tab");
++
++  new_extensions_page();
++  ASSERT_TRUE(content::WaitForLoadStop(tabs().GetActiveWebContents()));
++  model->SetSpacePinned(tabs().GetActiveTab(), true);
++  from_the_page("a pin");
++
++  new_extensions_page();
++  ASSERT_TRUE(content::WaitForLoadStop(tabs().GetActiveWebContents()));
++  tabs().SetTabPinned(tabs().active_index(), true);
++  from_the_page("an essential");
++
++  const spaces::Space* const own = model->AddSpace("Own", SK_ColorBLUE);
++  ASSERT_TRUE(own);
++  model->SetSpaceIsolated(own->id(), true);
++  model->SetActiveSpace(own->id());
++  ASSERT_TRUE(model->SpaceIsIsolated(model->active_id()));
++  new_extensions_page();
++  from_the_page("a Space with its own session");
++
++  // A web page the extensions page opens there is in the Space's jar.
++  ASSERT_TRUE(embedded_test_server()->Start());
++  const GURL web = embedded_test_server()->GetURL("/title1.html");
++  new_extensions_page();
++  ASSERT_TRUE(base::test::RunUntil([&]() {
++    return tabs().GetActiveWebContents()->GetLastCommittedURL().host() ==
++           "extensions";
++  }));
++  ASSERT_TRUE(content::WaitForLoadStop(tabs().GetActiveWebContents()));
++  ASSERT_TRUE(content::ExecJs(tabs().GetActiveWebContents(),
++                              "window.open('" + web.spec() + "');"));
++  EXPECT_TRUE(base::test::RunUntil([&]() {
++    return tabs().GetActiveWebContents()->GetLastCommittedURL() == web;
++  })) << tabs().GetActiveWebContents()->GetVisibleURL();
++  EXPECT_TRUE(spaces::IsSpaceStoragePartition(
++      spaces::StoragePartitionConfigForWebContents(
++          tabs().GetActiveWebContents())));
++}
++
++// Manage extension in the toolbar's menu: an ordinary tab, then a Space with its
++// own session, with the extensions page open nowhere and then in another Space.
++IN_PROC_BROWSER_TEST_F(ExtensionPagesTest, ManageExtensionShowsTheExtensionsPage) {
++  spaces::SpaceModel* const model = spaces::SpaceModel::From(browser());
++  ASSERT_TRUE(model);
++  const auto manage = [&](const std::string& name) {
++    SCOPED_TRACE(name);
++    chrome::ShowExtensions(browser(), kId);
++    EXPECT_TRUE(base::test::RunUntil([&]() {
++      return tabs().GetActiveWebContents()->GetLastCommittedURL().host() ==
++             "extensions";
++    })) << name << ": the active tab at "
++        << tabs().GetActiveWebContents()->GetLastCommittedURL() << ", showing "
++        << tabs().GetActiveWebContents()->GetVisibleURL();
++  };
++  const spaces::Space* const own = model->AddSpace("Own", SK_ColorBLUE);
++  ASSERT_TRUE(own);
++  model->SetSpaceIsolated(own->id(), true);
++  model->SetActiveSpace(own->id());
++  manage("a Space with its own session, the page open nowhere");
++  EXPECT_EQ(own->id(), model->active_id());
++  EXPECT_EQ(own->id(), model->SpaceForTab(tabs().GetActiveTab()));
++}
++
++}  // namespace

@@ -1,0 +1,1590 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Thu, 5 Nov 2026 18:07:45 -0500
+Subject: feat: bring Arc's splits and archived tabs across
+
+A split view of Arc's came in as nothing: the importer did not know the kind, so
+its tabs went with it. Its archive stayed in Arc.
+
+A split's panes are now tabs in its place, each knowing its split, so whatever
+takes tabs takes them: the pinned run, the tabs under the line, a folder. Once
+they are where they belong the first two make one split, side by side, half and
+half. Chromium's split holds two, so of three or four panes the others are tabs
+after it, and a split with one pane left is that tab. Favorites take no split.
+Both panes load when the row is opened.
+
+Arc's archive, StorableArchiveItems.json beside the sidebar, is read from a copy
+on the pool. Its items, closed by Arc's timer or by the person, become rows of
+the archive with a reason of "import", shown as "archived in Arc", under Arc's
+date, in the Space their Arc Space became. They come with the Other tabs box, a
+page once a Space. The row is a record the list of closed tabs holds, so it
+restores, searches and survives a restart as any close does. They go behind what
+the list holds and only as far as it has room, through a new
+TabRestoreService::AddClosedTabs, so a close of the person's own is never pushed
+out; the import waits for the list to load first. What has no room is counted, and
+comes at a later import. A row an import brought does not come again.
+
+The archive keeps such a row from the import, not from Arc's date: by Arc's date
+most of an old archive would come in out of sight.
+
+The folder an archived tab was in is not read, and neither is a split's layout:
+no public description says how they are written. Both shapes are as public
+exporters read them; no real file has been seen. The tests use made-up files.
+The page after an import no longer says these do not come across, and names what
+does not: a split of more than two.
+
+FromArcPageTest.ANewImportReadsThePageAgain raced the reload it waits for, and no
+longer fails when the page has no frame to answer with.
+
+Why: people leaving Arc keep what they kept there (BACKLOG S-103, import I7,
+archive A8, A11).
+
+Removable when: Arc's files are gone from people's computers. AddClosedTabs goes
+with them.
+---
+ .../browser/resources/stedding_archive/app.ts |   2 +
+ .../resources/stedding_welcome/from_arc.ts    |  16 +-
+ chrome/browser/ui/archive/archive_mark.cc     |   5 +
+ chrome/browser/ui/archive/archive_mark.h      |  14 +-
+ chrome/browser/ui/archive/archived_tabs.cc    |  11 +-
+ chrome/browser/ui/archive/archived_tabs.h     |   9 +-
+ .../ui/archive/archived_tabs_unittest.cc      |  21 +
+ chrome/browser/ui/spaces/BUILD.gn             |   2 +
+ .../browser/ui/spaces/arc_sidebar_importer.cc | 360 +++++++++++++++++-
+ .../browser/ui/spaces/arc_sidebar_importer.h  |  38 ++
+ .../spaces/arc_sidebar_importer_unittest.cc   | 253 ++++++++++++
+ .../stedding_welcome_handler.cc               |   1 +
+ .../stedding_welcome_handler.h                |   6 +-
+ chrome/test/stedding/from_arc_browsertest.cc  |   5 +-
+ chrome/test/stedding/import_browsertest.cc    | 220 +++++++++++
+ .../sessions/core/tab_restore_service.h       |   8 +
+ .../sessions/core/tab_restore_service_impl.cc |  22 ++
+ .../sessions/core/tab_restore_service_impl.h  |   2 +
+ 18 files changed, 962 insertions(+), 33 deletions(-)
+
+diff --git a/chrome/browser/resources/stedding_archive/app.ts b/chrome/browser/resources/stedding_archive/app.ts
+index e43c277442f96..43182eccc9f3d 100644
+--- a/chrome/browser/resources/stedding_archive/app.ts
++++ b/chrome/browser/resources/stedding_archive/app.ts
+@@ -115,6 +115,8 @@ function reasonOf(tab: ArchivedTab): string {
+       return 'archived';
+     case 'clear':
+       return 'cleared';
++    case 'import':
++      return 'archived in Arc';
+     default:
+       return 'closed';
+   }
+diff --git a/chrome/browser/resources/stedding_welcome/from_arc.ts b/chrome/browser/resources/stedding_welcome/from_arc.ts
+index 01b1363acb678..39a5a7a463ba8 100644
+--- a/chrome/browser/resources/stedding_welcome/from_arc.ts
++++ b/chrome/browser/resources/stedding_welcome/from_arc.ts
+@@ -14,6 +14,7 @@ import {sendWithPromise} from 'chrome://resources/js/cr.js';
+ interface FromArc {
+   routes: number;
+   routesLeftOut: number;
++  archived: number;
+ }
+ 
+ interface Place {
+@@ -29,7 +30,7 @@ interface Place {
+ const isMac = /Mac/.test(navigator.userAgent);
+ const key = (mac: string, other: string) => isMac ? mac : other;
+ 
+-function places(routes: number): Place[] {
++function places(routes: number, archived: number): Place[] {
+   return [
+     {
+       was: 'URL bar',
+@@ -64,7 +65,8 @@ function places(routes: number): Place[] {
+     {
+       was: 'Split view',
+       now: 'Split view',
+-      text: 'Drag a tab onto the page.',
++      text: 'Your splits came across as one row each. Drag a tab onto the ' +
++          'page for a new one.',
+     },
+     {
+       was: 'Peek',
+@@ -90,7 +92,9 @@ function places(routes: number): Place[] {
+     {
+       was: 'Auto-archive',
+       now: 'The archive',
+-      text: 'Idle tabs go to the archive, once you turn it on.',
++      text: 'Idle tabs go to the archive, once you turn it on.' +
++          (archived === 0 ? '' :
++                            ` ${count(archived, 'archived tab')} came across.`),
+       card: 'tabs',
+     },
+     {
+@@ -128,7 +132,9 @@ function leftOut(routesLeftOut: number):
+       name: 'Independent session',
+     },
+     {
+-      text: 'Split views and archived tabs. A split’s tabs come in as tabs.',
++      text: 'A split of more than two. A split holds two pages here: the ' +
++          'first two stay together, and the others come in as tabs beside ' +
++          'them.',
+     },
+     {
+       text: 'Boosts, Easels, the Library and Live Folders. Stedding has ' +
+@@ -173,7 +179,7 @@ function render(answer: FromArc) {
+ 
+   const list = el('ul', 'places');
+   list.setAttribute('aria-label', 'From Arc to Stedding');
+-  for (const place of places(answer.routes)) {
++  for (const place of places(answer.routes, answer.archived)) {
+     const row = el('li', 'place');
+     const now = el('div', 'now');
+     now.append(el('span', 'name', place.now), el('span', 'hint', place.text));
+diff --git a/chrome/browser/ui/archive/archive_mark.cc b/chrome/browser/ui/archive/archive_mark.cc
+index a7035043fd752..e56fd89e0cce5 100644
+--- a/chrome/browser/ui/archive/archive_mark.cc
++++ b/chrome/browser/ui/archive/archive_mark.cc
+@@ -97,6 +97,8 @@ const char* ArchiveReasonName(ArchiveReason reason) {
+       return "auto";
+     case ArchiveReason::kClear:
+       return "clear";
++    case ArchiveReason::kImport:
++      return "import";
+   }
+   return "auto";
+ }
+@@ -108,6 +110,9 @@ std::optional<ArchiveReason> ArchiveReasonFromName(std::string_view name) {
+   if (name == "clear") {
+     return ArchiveReason::kClear;
+   }
++  if (name == "import") {
++    return ArchiveReason::kImport;
++  }
+   return std::nullopt;
+ }
+ 
+diff --git a/chrome/browser/ui/archive/archive_mark.h b/chrome/browser/ui/archive/archive_mark.h
+index 1bc186e0f3cec..d818eecd56162 100644
+--- a/chrome/browser/ui/archive/archive_mark.h
++++ b/chrome/browser/ui/archive/archive_mark.h
+@@ -21,9 +21,21 @@ namespace stedding {
+ // docs/features/archive.md A8: why a tab left the sidebar. Set on the
+ // WebContents just before the close, read while Chromium records the closed
+ // tab, so the archive knows a sweep from a Clear from a plain ⌘W.
+-enum class ArchiveReason { kAuto, kClear };
++// kImport (import I7): a row Arc's archive brought, which no close of a tab
++// wrote.
++enum class ArchiveReason { kAuto, kClear, kImport };
+ 
+ inline constexpr char kArchiveReasonKey[] = "stedding.archive.reason";
++// docs/features/archive.md A8: the Space's name as the sidebar showed it
++// ("Space 2" for an unnamed one), for the archive's rows.
++inline constexpr char kArchiveSpaceNameKey[] = "stedding.spacename";
++// The Space's own name, empty for an unnamed Space: what brings a deleted
++// Space back (A9). Never the positional "Space N", which a reorder changes
++// (PLAN.md WEB-7).
++inline constexpr char kArchiveSpaceRawNameKey[] = "stedding.spacename.own";
++// import I7, A11: when an import brought the row, in microseconds since 1601.
++// The record keeps Arc's date, and the archive keeps the row from this one.
++inline constexpr char kArchiveImportedAtKey[] = "stedding.archive.imported_at";
+ 
+ const char* ArchiveReasonName(ArchiveReason reason);
+ std::optional<ArchiveReason> ArchiveReasonFromName(std::string_view name);
+diff --git a/chrome/browser/ui/archive/archived_tabs.cc b/chrome/browser/ui/archive/archived_tabs.cc
+index afa5a2bd7f71b..e1635f3857d0b 100644
+--- a/chrome/browser/ui/archive/archived_tabs.cc
++++ b/chrome/browser/ui/archive/archived_tabs.cc
+@@ -714,7 +714,16 @@ std::vector<ArchivedTab> ListArchivedTabs(
+         !tab.extra_data.contains(kArchiveLeftClosedKey)) {
+       return;
+     }
+-    if (!when.is_null() && now - when > keep) {
++    // A11, import I7: a row an import brought is kept from the import, not
++    // from Arc's date, or an older archive would come in out of sight.
++    int64_t imported_at = 0;
++    const base::Time aged_from =
++        base::StringToInt64(Lookup(tab.extra_data, kArchiveImportedAtKey),
++                            &imported_at)
++            ? base::Time::FromDeltaSinceWindowsEpoch(
++                  base::Microseconds(imported_at))
++            : when;
++    if (!aged_from.is_null() && now - aged_from > keep) {
+       return;
+     }
+     const sessions::SerializedNavigationEntry& current =
+diff --git a/chrome/browser/ui/archive/archived_tabs.h b/chrome/browser/ui/archive/archived_tabs.h
+index b88e8ac48af37..0c9d583dd6cd6 100644
+--- a/chrome/browser/ui/archive/archived_tabs.h
++++ b/chrome/browser/ui/archive/archived_tabs.h
+@@ -38,13 +38,6 @@ class TabInterface;
+ 
+ namespace stedding {
+ 
+-// docs/features/archive.md A8: the Space's name as the sidebar showed it
+-// ("Space 2" for an unnamed one), for the archive's rows.
+-inline constexpr char kArchiveSpaceNameKey[] = "stedding.spacename";
+-// The Space's own name, empty for an unnamed Space: what brings a deleted
+-// Space back (A9). Never the positional "Space N", which a reorder changes
+-// (PLAN.md WEB-7).
+-inline constexpr char kArchiveSpaceRawNameKey[] = "stedding.spacename.own";
+ // The tab's folders, outermost first, in the session's encoding
+ // (FolderPathForTab). A key of its own: under the session's key a ⇧⌘T would
+ // park the path on the tab and the next session restore would build a second
+@@ -151,7 +144,7 @@ struct ArchivedTab {
+   std::string space_own_name;
+   // The folders' titles, outermost first, joined by " / ".
+   std::string folder_path;
+-  // "auto", "clear", or empty for a plain close.
++  // "auto", "clear", "import", or empty for a plain close.
+   std::string reason;
+   // A tab closed with others: "window", "split" or "group", and how many tabs
+   // that close holds; empty and 0 for a tab closed on its own. Restore brings
+diff --git a/chrome/browser/ui/archive/archived_tabs_unittest.cc b/chrome/browser/ui/archive/archived_tabs_unittest.cc
+index ffdc167d76940..f63d8c867d85c 100644
+--- a/chrome/browser/ui/archive/archived_tabs_unittest.cc
++++ b/chrome/browser/ui/archive/archived_tabs_unittest.cc
+@@ -98,6 +98,27 @@ std::unique_ptr<sessions::tab_restore::Window> ClosedWindow(int id,
+ 
+ // A11: what is older than the retention is not shown; the rest carries its
+ // Space, reason and address.
++// import I7: a row an Arc import brought keeps Arc's date, and the archive keeps
++// it from the import, or an older archive would come in out of sight.
++TEST(ArchivePageTest, AnImportedRowAgesFromItsImport) {
++  const base::Time now = base::Time::Now();
++  const auto imported = [&](int id, base::Time when, base::Time at) {
++    std::unique_ptr<sessions::tab_restore::Tab> tab =
++        ClosedTab(id, "https://arc.example/", u"Arc", when, "import");
++    tab->extra_data[kArchiveImportedAtKey] = base::NumberToString(
++        at.ToDeltaSinceWindowsEpoch().InMicroseconds());
++    return tab;
++  };
++  sessions::TabRestoreService::Entries entries;
++  entries.push_back(imported(1, now - base::Days(200), now - base::Days(1)));
++  entries.push_back(imported(2, now - base::Days(200), now - base::Days(40)));
++  const std::vector<ArchivedTab> shown =
++      ListArchivedTabs(entries, now, base::Days(30));
++  ASSERT_EQ(1u, shown.size());
++  EXPECT_EQ(now - base::Days(200), shown[0].time) << "Arc's date";
++  EXPECT_EQ("import", shown[0].reason);
++}
++
+ TEST(ArchivePageTest, RetentionFiltersOldEntries) {
+   const base::Time now = base::Time::Now();
+   sessions::TabRestoreService::Entries entries;
+diff --git a/chrome/browser/ui/spaces/BUILD.gn b/chrome/browser/ui/spaces/BUILD.gn
+index bca0fe61ddf1a..4854828487aad 100644
+--- a/chrome/browser/ui/spaces/BUILD.gn
++++ b/chrome/browser/ui/spaces/BUILD.gn
+@@ -140,6 +140,8 @@ source_set("spaces") {
+     # web apps Wa11: the jar each app made from a page keeps (app_jar.cc).
+     "//chrome/common/stedding:web_apps",
+     "//components/sessions",
++    # import I7: Arc's splits become splits.
++    "//components/split_tabs",
+     "//content/public/browser",
+     "//chrome/browser/ui/browser_window",
+     # sessions S20: extension pages keep the profile's jar
+diff --git a/chrome/browser/ui/spaces/arc_sidebar_importer.cc b/chrome/browser/ui/spaces/arc_sidebar_importer.cc
+index 94704ddcf11d7..97f94f4b7243b 100644
+--- a/chrome/browser/ui/spaces/arc_sidebar_importer.cc
++++ b/chrome/browser/ui/spaces/arc_sidebar_importer.cc
+@@ -6,6 +6,7 @@
+ 
+ #include <algorithm>
+ #include <cmath>
++#include <functional>
+ #include <limits>
+ #include <map>
+ #include <memory>
+@@ -24,6 +25,7 @@
+ #include "base/memory/weak_ptr.h"
+ #include "base/path_service.h"
+ #include "base/process/process_iterator.h"
++#include "base/scoped_observation.h"
+ #include "base/strings/strcat.h"
+ #include "base/strings/string_number_conversions.h"
+ #include "base/strings/string_util.h"
+@@ -34,6 +36,8 @@
+ #include "base/values.h"
+ #include "build/build_config.h"
+ #include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/sessions/tab_restore_service_factory.h"
++#include "chrome/browser/ui/archive/archive_mark.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+ #include "chrome/browser/ui/spaces/arc_data_importer.h"
+@@ -41,15 +45,23 @@
+ #include "chrome/browser/ui/spaces/space.h"
+ #include "chrome/browser/ui/spaces/space_colors.h"
+ #include "chrome/browser/ui/spaces/space_model.h"
++#include "chrome/browser/ui/spaces/tab_space_restore_data.h"
+ #include "chrome/browser/ui/spaces/unloaded_tab.h"
+ #include "chrome/browser/ui/stedding/stedding_prefs.h"
+ #include "chrome/browser/ui/stedding/tab_names.h"
+ #include "chrome/browser/ui/stedding/tab_parents.h"
+ #include "chrome/browser/ui/tab_ui_helper.h"
++#include "chrome/browser/ui/tabs/split_tab_metrics.h"
+ #include "chrome/browser/ui/tabs/tab_model.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "components/prefs/pref_service.h"
+ #include "components/prefs/scoped_user_pref_update.h"
++#include "components/sessions/content/content_serialized_navigation_builder.h"
++#include "components/sessions/core/tab_restore_service.h"
++#include "components/sessions/core/tab_restore_service_helper.h"
++#include "components/sessions/core/tab_restore_service_observer.h"
++#include "components/sessions/core/tab_restore_types.h"
++#include "components/split_tabs/split_tab_visual_data.h"
+ #include "components/tabs/public/folder_tab_collection.h"
+ #include "components/tabs/public/tab_collection.h"
+ #include "components/tabs/public/tab_collection_types.h"
+@@ -84,6 +96,15 @@ ArcImportPlan::Space& ArcImportPlan::Space::operator=(const Space& other) =
+ ArcImportPlan::Space& ArcImportPlan::Space::operator=(Space&& other) = default;
+ ArcImportPlan::Space::~Space() = default;
+ 
++ArcImportPlan::ArchivedItem::ArchivedItem() = default;
++ArcImportPlan::ArchivedItem::ArchivedItem(const ArchivedItem& other) = default;
++ArcImportPlan::ArchivedItem::ArchivedItem(ArchivedItem&& other) = default;
++ArcImportPlan::ArchivedItem& ArcImportPlan::ArchivedItem::operator=(
++    const ArchivedItem& other) = default;
++ArcImportPlan::ArchivedItem& ArcImportPlan::ArchivedItem::operator=(
++    ArchivedItem&& other) = default;
++ArcImportPlan::ArchivedItem::~ArchivedItem() = default;
++
+ ArcImportPlan::ArcImportPlan() = default;
+ ArcImportPlan::ArcImportPlan(const ArcImportPlan& other) = default;
+ ArcImportPlan::ArcImportPlan(ArcImportPlan&& other) = default;
+@@ -120,9 +141,20 @@ void CountNodes(const std::vector<Node>& nodes, size_t* tabs, size_t* folders) {
+   }
+ }
+ 
++// I7: how many panes of each of Arc's splits `nodes` hold.
++void CountPanes(const std::vector<Node>& nodes,
++                std::map<std::string, size_t>* panes) {
++  for (const Node& node : nodes) {
++    if (!node.split.empty()) {
++      ++(*panes)[node.split];
++    }
++    CountPanes(node.children, panes);
++  }
++}
++
+ // Arc's item, before the tree is built.
+ struct ArcItem {
+-  enum class Kind { kTab, kList, kContainer };
++  enum class Kind { kTab, kList, kContainer, kSplit };
+   Kind kind = Kind::kTab;
+   std::string id;
+   std::string parent;
+@@ -232,6 +264,12 @@ std::optional<ArcItem> ParseItem(const base::DictValue& dict) {
+     }
+     return item;
+   }
++  // I7: a split's panes are its children, tabs like any other. What else
++  // `splitView` holds, its layout among it, is not described anywhere public.
++  if (data->contains("splitView")) {
++    item.kind = ArcItem::Kind::kSplit;
++    return item;
++  }
+   if (const base::DictValue* container = data->FindDict("itemContainer")) {
+     item.kind = ArcItem::Kind::kContainer;
+     if (const base::DictValue* type = container->FindDict("containerType")) {
+@@ -280,6 +318,14 @@ std::vector<Node> BuildChildren(const ArcItem& parent,
+       node.icon = child.icon;
+       node.children = BuildChildren(child, items, depth + 1, expanded);
+       out.push_back(std::move(node));
++    } else if (child.kind == ArcItem::Kind::kSplit) {
++      // I7: the panes, in the split's place, each knowing its split.
++      for (Node& pane : BuildChildren(child, items, depth + 1, expanded)) {
++        if (pane.kind == Node::Kind::kTab) {
++          pane.split = child.id;
++          out.push_back(std::move(pane));
++        }
++      }
+     }
+   }
+   return out;
+@@ -441,6 +487,8 @@ struct ApplyContext {
+   // The folder this import made for each list or folder of the plan: Sf2
+   // finds a file's folders by it, and the pinned run knows what it made (F38).
+   std::map<std::string, tabs::FolderId> made_folders;
++  // I7: the panes this import made of each of Arc's splits, in Arc's order.
++  std::map<std::string, std::vector<raw_ptr<tabs::TabInterface>>> panes;
+ };
+ 
+ // I3: a tab that shows its title and loads on its first activation, the way
+@@ -575,6 +623,35 @@ SpaceId SpaceOfFolder(ApplyContext& ctx,
+   return fallback;
+ }
+ 
++// I7: `tab`, just made from `node`, is a pane of the split `node` names.
++void NotePane(ApplyContext& ctx, tabs::TabInterface* tab, const Node& node) {
++  if (!node.split.empty()) {
++    ctx.panes[node.split].emplace_back(tab);
++  }
++}
++
++// I7, splits J1: makes each of Arc's splits whose panes this import brought a
++// split here, once the panes are where they belong: in their folder (J8), and
++// pinned, each in its place in the run (J4). Chromium's split holds two, so
++// the first two panes of a split of three or four make it, and the others stay
++// tabs beside it. A split with one pane is that tab.
++void MakeSplits(ApplyContext& ctx) {
++  for (const auto& [arc_id, panes] : ctx.panes) {
++    if (panes.size() < 2) {
++      continue;
++    }
++    const int first = ctx.tabs->GetIndexOfTab(panes[0]);
++    const int second = ctx.tabs->GetIndexOfTab(panes[1]);
++    if (first == TabStripModel::kNoTab || second == TabStripModel::kNoTab) {
++      continue;
++    }
++    ctx.tabs->AddToNewSplit({first, second}, split_tabs::SplitTabVisualData(),
++                            split_tabs::SplitTabCreatedSource::kToolbarButton);
++    ++ctx.result->splits;
++  }
++  ctx.panes.clear();
++}
++
+ // Inserts the tabs directly in Arc's list `node` into `space`, unloaded,
+ // skipping what an earlier import brought and what cannot be opened.
+ std::vector<tabs::TabInterface*> InsertDirectTabs(ApplyContext& ctx,
+@@ -600,6 +677,7 @@ std::vector<tabs::TabInterface*> InsertDirectTabs(ApplyContext& ctx,
+     ctx.model->SetSpaceForTab(tab, space);
+     AdoptToken(ctx, tab, child.arc_id);
+     Remember(ctx, child.arc_id);
++    NotePane(ctx, tab, child);
+     ++ctx.result->tabs;
+     inserted.push_back(tab);
+   }
+@@ -778,6 +856,7 @@ std::vector<tabs::TabInterface*> InsertNodes(
+       ctx.model->SetSpaceForTab(tab, space);
+       AdoptToken(ctx, tab, node.arc_id);
+       Remember(ctx, node.arc_id);
++      NotePane(ctx, tab, node);
+       ++ctx.result->tabs;
+       if (parent_folder) {
+         const int index = ctx.tabs->GetIndexOfTab(tab);
+@@ -922,6 +1001,16 @@ size_t ArcImportPlan::unpinned_tab_count() const {
+   return tabs;
+ }
+ 
++size_t ArcImportPlan::split_count() const {
++  std::map<std::string, size_t> panes;
++  for (const Space& space : spaces) {
++    CountPanes(space.pinned, &panes);
++    CountPanes(space.unpinned, &panes);
++  }
++  return std::ranges::count_if(
++      panes, [](const auto& split) { return split.second >= 2; });
++}
++
+ size_t ArcImportPlan::folder_count() const {
+   size_t tabs = 0;
+   size_t folders = 0;
+@@ -1129,6 +1218,71 @@ void ParseArcRoutes(std::string_view json, ArcImportPlan& plan) {
+   }
+ }
+ 
++void ParseArcArchive(std::string_view json, ArcImportPlan& plan) {
++  const std::optional<base::Value> parsed =
++      base::JSONReader::Read(json, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
++  const base::DictValue* const root = parsed ? parsed->GetIfDict() : nullptr;
++  const base::ListValue* const items = root ? root->FindList("items") : nullptr;
++  if (!items) {
++    return;
++  }
++  // As in the sidebar, an id, then its item. The id is what a later import
++  // knows the item by (I12).
++  std::string next_id;
++  std::vector<ArcImportPlan::ArchivedItem> read;
++  for (const base::Value& entry : *items) {
++    if (entry.is_string()) {
++      next_id = entry.GetString();
++      continue;
++    }
++    const base::DictValue* const item = entry.GetIfDict();
++    if (!item) {
++      continue;
++    }
++    const std::string id = std::exchange(next_id, std::string());
++    const base::DictValue* const tab =
++        item->FindDictByDottedPath("sidebarItem.data.tab");
++    const std::string* const address =
++        tab ? tab->FindString("savedURL") : nullptr;
++    const GURL url(address ? *address : std::string());
++    if (id.empty() || !IsImportablePage(url)) {
++      ++plan.archived_left_out;
++      continue;
++    }
++    ArcImportPlan::ArchivedItem archived;
++    archived.arc_id = id;
++    archived.url = url;
++    archived.title = base::UTF8ToUTF16(StringAt(*tab, "savedTitle"));
++    if (const std::string* const space =
++            item->FindStringByDottedPath("source.space._0")) {
++      archived.arc_space = *space;
++    }
++    // Arc's dates are seconds since the first of January 2001.
++    constexpr double kSecondsFrom1970To2001 = 978307200;
++    if (const std::optional<double> when = item->FindDouble("archivedAt")) {
++      archived.archived_at = base::Time::FromSecondsSinceUnixEpoch(
++          *when + kSecondsFrom1970To2001);
++    }
++    read.push_back(std::move(archived));
++  }
++  // The newest first: the list of closed tabs holds so many (A11), and Arc
++  // archives one page again and again.
++  std::ranges::stable_sort(read, std::greater<>(),
++                           &ArcImportPlan::ArchivedItem::archived_at);
++  std::set<std::pair<std::string, GURL>> seen;
++  for (ArcImportPlan::ArchivedItem& item : read) {
++    if (!seen.emplace(item.arc_space, item.url).second) {
++      continue;
++    }
++    if (plan.archived.size() >=
++        sessions::TabRestoreServiceHelper::kMaxEntries) {
++      ++plan.archived_left_out;
++      continue;
++    }
++    plan.archived.push_back(std::move(item));
++  }
++}
++
+ std::u16string SummariseArcImport(const ArcImportPlan& plan) {
+   const auto count = [](size_t n, std::u16string_view one,
+                         std::u16string_view many) {
+@@ -1148,6 +1302,15 @@ std::u16string SummariseArcImport(const ArcImportPlan& plan) {
+                         u" become essentials)"});
+     }
+   }
++  // I7.
++  if (const size_t splits = plan.split_count()) {
++    text += base::StrCat({u" \u00B7 ", count(splits, u"split", u"splits")});
++  }
++  if (!plan.archived.empty()) {
++    text += base::StrCat(
++        {u" \u00B7 ",
++         count(plan.archived.size(), u"archived tab", u"archived tabs")});
++  }
+   // I49: the routes that can come across.
+   if (!plan.routes.empty()) {
+     text += base::StrCat(
+@@ -1310,6 +1473,90 @@ void ApplyArcRoutes(const ArcImportPlan& plan,
+   }
+ }
+ 
++// I7: the row of the archive Arc's archived item `item` becomes, in `space`,
++// the Space its Arc Space became, or in none when that did not come across. A
++// record like the one a close leaves (archive A8), with Arc's date, and with
++// the import's so that it stays as long as the archive keeps a close (A11).
++std::unique_ptr<sessions::tab_restore::Tab> ArchiveRow(
++    const ArcImportPlan::ArchivedItem& item,
++    const std::optional<SpaceId>& space,
++    SpaceModel& model,
++    Profile* profile,
++    base::Time now) {
++  const base::Time when = item.archived_at.is_null()
++                              ? now
++                              : std::min(item.archived_at, now);
++  std::unique_ptr<content::NavigationEntry> page =
++      content::NavigationController::CreateNavigationEntry(
++          item.url, content::Referrer(), std::nullopt, std::nullopt,
++          ui::PAGE_TRANSITION_TYPED, false, std::string(), profile, nullptr);
++  page->SetTitle(item.title);
++  page->SetTimestamp(when);
++  auto row = std::make_unique<sessions::tab_restore::Tab>();
++  row->navigations.push_back(
++      sessions::ContentSerializedNavigationBuilder::FromNavigationEntry(
++          0, page.get()));
++  row->current_navigation_index = 0;
++  row->timestamp = when;
++  row->extra_data[stedding::kArchiveReasonKey] =
++      stedding::ArchiveReasonName(stedding::ArchiveReason::kImport);
++  row->extra_data[stedding::kArchiveImportedAtKey] =
++      base::NumberToString(now.ToDeltaSinceWindowsEpoch().InMicroseconds());
++  if (space) {
++    row->extra_data[kSessionTabSpaceKey] = space->ToString();
++    row->extra_data[stedding::kArchiveSpaceNameKey] =
++        base::UTF16ToUTF8(model.DisplayName(*space));
++    if (const Space* const own = model.GetSpace(*space);
++        own && !own->name().empty()) {
++      row->extra_data[stedding::kArchiveSpaceRawNameKey] = own->name();
++    }
++  }
++  return row;
++}
++
++// I7: `plan`'s archived items, as rows of the archive, behind what the list of
++// closed tabs holds, so a close of the person's own is never pushed out by
++// them, and only as many as it has room for. What has no room is counted, and
++// comes at a later import. One an earlier import brought stays as the person
++// left it, restored or forgotten (I12). They come with the other tabs.
++void ApplyArcArchive(const ArcImportPlan& plan,
++                     SpaceModel& model,
++                     ImportedIds& ids,
++                     Profile* profile,
++                     ArcImportResult& result) {
++  result.archived_left_out = plan.archived_left_out;
++  if (plan.archived.empty()) {
++    return;
++  }
++  sessions::TabRestoreService* const closed =
++      TabRestoreServiceFactory::GetForProfile(profile);
++  const base::Time now = base::Time::Now();
++  std::vector<std::unique_ptr<sessions::tab_restore::Tab>> rows;
++  std::map<SessionID, std::string> arc_ids;
++  for (const ArcImportPlan::ArchivedItem& item : plan.archived) {
++    const std::string id = "archive:" + item.arc_id;
++    if (ids.Contains(id)) {
++      continue;
++    }
++    std::optional<SpaceId> space = ids.SpaceFor(item.arc_space);
++    if (space && !model.GetSpace(*space)) {
++      space.reset();
++    }
++    rows.push_back(ArchiveRow(item, space, model, profile, now));
++    arc_ids.emplace(rows.back()->id, id);
++  }
++  const size_t wanted = rows.size();
++  std::vector<SessionID> added;
++  if (closed && closed->IsLoaded()) {
++    closed->AddClosedTabs(std::move(rows), &added);
++  }
++  for (const SessionID row : added) {
++    ids.Add(arc_ids[row]);
++  }
++  result.archived = added.size();
++  result.archived_left_out += wanted - added.size();
++}
++
+ }  // namespace
+ 
+ ArcImportResult ApplyArcImport(BrowserWindowInterface* browser,
+@@ -1431,9 +1678,13 @@ ArcImportResult ApplyArcImport(BrowserWindowInterface* browser,
+       if (options.unpinned) {
+         InsertNodes(ctx, arc_space.unpinned, id, nullptr);
+       }
++      MakeSplits(ctx);
+     }
+   }
+   ApplyArcRoutes(plan, options.spaces, *model, ids, profile->GetPrefs(), result);
++  if (options.unpinned) {
++    ApplyArcArchive(plan, *model, ids, profile, result);
++  }
+   ids.Save();
+   return result;
+ }
+@@ -1462,19 +1713,70 @@ ArcImportResult ImportNodesAsPins(
+ 
+ namespace {
+ 
+-// I48: Arc's routes, read from a copy as the sidebar is, beside it.
+-void ReadArcRoutes(ArcImportPlan& plan) {
++// I7, I48: Arc's routes and its archive, each read from a copy as the sidebar
++// is, beside it.
++void ReadArcRoutesAndArchive(ArcImportPlan& plan) {
+   const base::FilePath arc = ArcFolder();
+   if (arc.empty()) {
+     return;
+   }
+-  const std::optional<std::string> json = ReadArcSidebar(
+-      arc.Append(FILE_PATH_LITERAL("StorableLinkRouting.json")));
+-  if (json) {
++  if (const std::optional<std::string> json = ReadArcSidebar(
++          arc.Append(FILE_PATH_LITERAL("StorableLinkRouting.json")))) {
+     ParseArcRoutes(*json, plan);
+   }
++  if (const std::optional<std::string> json = ReadArcSidebar(
++          arc.Append(FILE_PATH_LITERAL("StorableArchiveItems.json")))) {
++    ParseArcArchive(*json, plan);
++  }
+ }
+ 
++// I7: runs `then` once the list of closed tabs has read its file: what an
++// import adds goes behind what the list holds, and a list still reading would
++// lose its own entries to the import's. Ends with the list too.
++class ClosedListWaiter : public sessions::TabRestoreServiceObserver {
++ public:
++  static void Start(Profile* profile, base::OnceClosure then) {
++    sessions::TabRestoreService* const closed =
++        TabRestoreServiceFactory::GetForProfile(profile);
++    if (!closed || closed->IsLoaded()) {
++      std::move(then).Run();
++      return;
++    }
++    new ClosedListWaiter(closed, std::move(then));
++  }
++
++  ClosedListWaiter(const ClosedListWaiter&) = delete;
++  ClosedListWaiter& operator=(const ClosedListWaiter&) = delete;
++  ~ClosedListWaiter() override = default;
++
++ private:
++  ClosedListWaiter(sessions::TabRestoreService* closed, base::OnceClosure then)
++      : then_(std::move(then)) {
++    observation_.Observe(closed);
++    closed->LoadTabsFromLastSession();
++  }
++
++  void Finish() {
++    observation_.Reset();
++    base::OnceClosure then = std::move(then_);
++    delete this;
++    std::move(then).Run();
++  }
++
++  // sessions::TabRestoreServiceObserver:
++  void TabRestoreServiceLoaded(sessions::TabRestoreService*) override {
++    Finish();
++  }
++  void TabRestoreServiceDestroyed(sessions::TabRestoreService*) override {
++    Finish();
++  }
++
++  base::OnceClosure then_;
++  base::ScopedObservation<sessions::TabRestoreService,
++                          sessions::TabRestoreServiceObserver>
++      observation_{this};
++};
++
+ ArcSidebarInfo LoadInfoOnPool() {
+   ArcSidebarInfo info;
+   const std::optional<std::string> json = ReadArcSidebar(ArcSidebarPath());
+@@ -1485,7 +1787,7 @@ ArcSidebarInfo LoadInfoOnPool() {
+   if (!info.plan) {
+     return info;
+   }
+-  ReadArcRoutes(*info.plan);
++  ReadArcRoutesAndArchive(*info.plan);
+   info.found = true;
+   info.arc_running = IsArcRunning();
+   info.summary = SummariseArcImport(*info.plan);
+@@ -1503,20 +1805,20 @@ std::optional<ArcImportPlan> ReadAndParseOnPool() {
+   std::optional<ArcImportPlan> plan =
+       json ? ParseArcSidebar(*json) : std::nullopt;
+   if (plan) {
+-    ReadArcRoutes(*plan);
++    ReadArcRoutesAndArchive(*plan);
+   }
+   return plan;
+ }
+ 
+-void ApplyRead(base::WeakPtr<BrowserWindowInterface> browser,
+-               ArcImportOptions options,
+-               ArcImportDoneCallback done,
+-               std::optional<ArcImportPlan> plan) {
+-  if (!browser || !plan) {
++void ApplyWhenTheListIsRead(base::WeakPtr<BrowserWindowInterface> browser,
++                            ArcImportOptions options,
++                            ArcImportDoneCallback done,
++                            ArcImportPlan plan) {
++  if (!browser) {
+     std::move(done).Run(std::nullopt);
+     return;
+   }
+-  ArcImportResult result = ApplyArcImport(browser.get(), *plan, options);
++  ArcImportResult result = ApplyArcImport(browser.get(), plan, options);
+   if (!options.history && !options.passwords) {
+     std::move(done).Run(result);
+     return;
+@@ -1537,6 +1839,20 @@ void ApplyRead(base::WeakPtr<BrowserWindowInterface> browser,
+                          result, std::move(done)));
+ }
+ 
++void ApplyRead(base::WeakPtr<BrowserWindowInterface> browser,
++               ArcImportOptions options,
++               ArcImportDoneCallback done,
++               std::optional<ArcImportPlan> plan) {
++  if (!browser || !plan) {
++    std::move(done).Run(std::nullopt);
++    return;
++  }
++  Profile* const profile = browser->GetProfile();
++  ClosedListWaiter::Start(
++      profile, base::BindOnce(&ApplyWhenTheListIsRead, std::move(browser),
++                              options, std::move(done), std::move(*plan)));
++}
++
+ // import I47: every way into an import ends here, once, so each opens the
+ // page once: what the page will say is written first.
+ void FinishImport(base::WeakPtr<BrowserWindowInterface> browser,
+@@ -1546,6 +1862,7 @@ void FinishImport(base::WeakPtr<BrowserWindowInterface> browser,
+     base::DictValue last;
+     last.Set("routes", static_cast<int>(result->routes));
+     last.Set("routes_left_out", static_cast<int>(result->routes_left_out));
++    last.Set("archived", static_cast<int>(result->archived));
+     browser->GetProfile()->GetPrefs()->SetDict(
+         stedding::prefs::kArcLastImport, std::move(last));
+     ShowFromArcPage(browser.get());
+@@ -1644,6 +1961,14 @@ std::u16string DescribeArcImportResult(const ArcImportResult& result) {
+   if (result.routes) {
+     text += base::StrCat({u", ", count(result.routes, u"route", u"routes")});
+   }
++  // I7.
++  if (result.splits) {
++    text += base::StrCat({u", ", count(result.splits, u"split", u"splits")});
++  }
++  if (result.archived) {
++    text += base::StrCat(
++        {u", ", count(result.archived, u"archived tab", u"archived tabs")});
++  }
+   if (result.skipped) {
+     text += base::StrCat({u" \u00B7 ", base::NumberToString16(result.skipped),
+                           u" already here"});
+@@ -1654,6 +1979,13 @@ std::u16string DescribeArcImportResult(const ArcImportResult& result) {
+                           count(result.routes_left_out, u"route", u"routes"),
+                           u" left out"});
+   }
++  // I7.
++  if (result.archived_left_out) {
++    text += base::StrCat({u" \u00B7 ",
++                          count(result.archived_left_out, u"archived tab",
++                                u"archived tabs"),
++                          u" left out"});
++  }
+   // I23 (BACKLOG S-346): the least recently used, past the 10,000 read.
+   if (result.passwords_past_the_cap) {
+     text += base::StrCat({u" \u00B7 ",
+diff --git a/chrome/browser/ui/spaces/arc_sidebar_importer.h b/chrome/browser/ui/spaces/arc_sidebar_importer.h
+index 5abdcc22e5fe8..d0238502d6195 100644
+--- a/chrome/browser/ui/spaces/arc_sidebar_importer.h
++++ b/chrome/browser/ui/spaces/arc_sidebar_importer.h
+@@ -12,6 +12,7 @@
+ 
+ #include "base/files/file_path.h"
+ #include "base/functional/callback.h"
++#include "base/time/time.h"
+ #include "chrome/browser/ui/spaces/space_router.h"
+ #include "third_party/skia/include/core/SkColor.h"
+ #include "url/gurl.h"
+@@ -44,6 +45,10 @@ struct ArcImportPlan {
+     // folders F42 (BACKLOG S-393): a folder's icon, one character, from a
+     // file or a sync Stedding wrote; none for the folder glyph.
+     std::string icon;
++    // import I7: the Arc split this tab is a pane of. Arc's split is no node
++    // of its own: its panes are tabs in its place, so whatever takes tabs
++    // takes them, and the import makes the split once they are in.
++    std::string split;
+     std::vector<Node> children;
+   };
+ 
+@@ -86,6 +91,24 @@ struct ArcImportPlan {
+     std::string arc_space;
+   };
+ 
++  // import I7: an item of Arc's archive, as a row of the archive here: the
++  // Space is still Arc's, and the import finds the one it became.
++  struct ArchivedItem {
++    ArchivedItem();
++    ArchivedItem(const ArchivedItem& other);
++    ArchivedItem(ArchivedItem&& other);
++    ArchivedItem& operator=(const ArchivedItem& other);
++    ArchivedItem& operator=(ArchivedItem&& other);
++    ~ArchivedItem();
++
++    std::string arc_id;
++    std::string arc_space;
++    GURL url;
++    std::u16string title;
++    // Null when the file gives no date: the row then takes the import's.
++    base::Time archived_at;
++  };
++
+   ArcImportPlan();
+   ArcImportPlan(const ArcImportPlan& other);
+   ArcImportPlan(ArcImportPlan&& other);
+@@ -99,6 +122,10 @@ struct ArcImportPlan {
+   // I48, I49: Arc's routes, and how many of its rules no route can say.
+   std::vector<ArcRoute> routes;
+   size_t routes_left_out = 0;
++  // I7: Arc's archived items, the newest first and each page once a Space, and
++  // how many of them no row can hold.
++  std::vector<ArchivedItem> archived;
++  size_t archived_left_out = 0;
+   // sidebar-file Sf2: the file says Stedding wrote it. Its ids are durable
+   // (a Space's token, "tab:<tab token>", "folder:<FolderId>"): an import
+   // skips what is open now under those ids and remembers none of them, so a
+@@ -110,6 +137,8 @@ struct ArcImportPlan {
+   size_t pinned_tab_count() const;
+   size_t unpinned_tab_count() const;
+   size_t folder_count() const;
++  // I7: the splits with two panes that can come across.
++  size_t split_count() const;
+   std::vector<std::string> dropped_profiles() const;
+ };
+ 
+@@ -123,6 +152,10 @@ std::optional<ArcImportPlan> ParseArcSidebar(std::string_view json);
+ // that is no such file leaves them empty.
+ void ParseArcRoutes(std::string_view json, ArcImportPlan& plan);
+ 
++// I7: fills `plan`'s archived items from Arc's StorableArchiveItems.json. Text
++// that is no such file leaves them empty.
++void ParseArcArchive(std::string_view json, ArcImportPlan& plan);
++
+ // The one line the welcome flow and the settings row show before anything
+ // is applied (I2), with the dropped profiles (I8) and the essentials beyond
+ // twelve (I11) named.
+@@ -178,6 +211,11 @@ struct ArcImportResult {
+   // I48, I49: Arc's routes that became routes, and those that could not.
+   size_t routes = 0;
+   size_t routes_left_out = 0;
++  // I7: Arc's splits that became splits, its archived items that became rows
++  // of the archive, and those no row could hold.
++  size_t splits = 0;
++  size_t archived = 0;
++  size_t archived_left_out = 0;
+ };
+ 
+ // Applies `plan` to `browser`'s window (I3): Spaces, essentials (capped at
+diff --git a/chrome/browser/ui/spaces/arc_sidebar_importer_unittest.cc b/chrome/browser/ui/spaces/arc_sidebar_importer_unittest.cc
+index fa35761053e15..ea54d359be681 100644
+--- a/chrome/browser/ui/spaces/arc_sidebar_importer_unittest.cc
++++ b/chrome/browser/ui/spaces/arc_sidebar_importer_unittest.cc
+@@ -20,6 +20,7 @@
+ #include "chrome/browser/ui/spaces/space_model.h"
+ #include "chrome/browser/ui/spaces/space_router.h"
+ #include "chrome/browser/ui/stedding/tab_names.h"
++#include "chrome/browser/ui/tabs/split_tab_metrics.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "chrome/test/base/browser_with_test_window_test.h"
+ #include "components/prefs/pref_service.h"
+@@ -260,6 +261,180 @@ TEST(ArcSidebarImporterTest, DescribeCountsTheRoutes) {
+   EXPECT_NE(std::u16string::npos, line.find(u"1 route left out")) << line;
+ }
+ 
++// A made-up sidebar with Arc's split views (import I7), in the shape public
++// exporters read: an item whose data holds `splitView`, its panes in
++// `childrenIds`. One split is in the pinned run, one among the other tabs, one
++// in a list; one has four panes, and one has a single pane that can be read.
++constexpr char kSplits[] = R"json({
++  "version": 1,
++  "sidebar": {"containers": [
++    {"global": {}},
++    {
++      "spaces": ["space-work", {"id": "space-work", "title": "Work",
++        "containerIDs": ["pinned", "work-pinned", "unpinned", "work-unpinned"]}],
++      "items": [
++        "work-pinned", {"id": "work-pinned", "parentID": null,
++          "childrenIds": ["tab-pin", "split-pinned"], "title": "",
++          "data": {"itemContainer": {"containerType": {"spaceItems": {}}}}},
++        "work-unpinned", {"id": "work-unpinned", "parentID": null,
++          "childrenIds": ["tab-first", "split-two", "list-docs", "split-four",
++                          "split-one"],
++          "title": "",
++          "data": {"itemContainer": {"containerType": {"spaceItems": {}}}}},
++        "tab-pin", {"id": "tab-pin", "parentID": "work-pinned", "childrenIds": [],
++          "title": null, "data": {"tab": {"savedURL": "https://pin.example/", "savedTitle": "Pin"}}},
++        "split-pinned", {"id": "split-pinned", "parentID": "work-pinned",
++          "childrenIds": ["tab-pl", "tab-pr"], "title": null,
++          "data": {"splitView": {}}},
++        "tab-pl", {"id": "tab-pl", "parentID": "split-pinned", "childrenIds": [],
++          "title": null, "data": {"tab": {"savedURL": "https://pl.example/", "savedTitle": "PL"}}},
++        "tab-pr", {"id": "tab-pr", "parentID": "split-pinned", "childrenIds": [],
++          "title": null, "data": {"tab": {"savedURL": "https://pr.example/", "savedTitle": "PR"}}},
++        "tab-first", {"id": "tab-first", "parentID": "work-unpinned", "childrenIds": [],
++          "title": null, "data": {"tab": {"savedURL": "https://first.example/", "savedTitle": "First"}}},
++        "split-two", {"id": "split-two", "parentID": "work-unpinned",
++          "childrenIds": ["tab-l", "tab-r"], "title": null, "data": {"splitView": {}}},
++        "tab-l", {"id": "tab-l", "parentID": "split-two", "childrenIds": [],
++          "title": null, "data": {"tab": {"savedURL": "https://l.example/", "savedTitle": "L"}}},
++        "tab-r", {"id": "tab-r", "parentID": "split-two", "childrenIds": [],
++          "title": null, "data": {"tab": {"savedURL": "https://r.example/", "savedTitle": "R"}}},
++        "list-docs", {"id": "list-docs", "parentID": "work-unpinned",
++          "childrenIds": ["split-in-list"], "title": "Docs", "data": {"list": {}}},
++        "split-in-list", {"id": "split-in-list", "parentID": "list-docs",
++          "childrenIds": ["tab-fl", "tab-fr"], "title": null, "data": {"splitView": {}}},
++        "tab-fl", {"id": "tab-fl", "parentID": "split-in-list", "childrenIds": [],
++          "title": null, "data": {"tab": {"savedURL": "https://fl.example/", "savedTitle": "FL"}}},
++        "tab-fr", {"id": "tab-fr", "parentID": "split-in-list", "childrenIds": [],
++          "title": null, "data": {"tab": {"savedURL": "https://fr.example/", "savedTitle": "FR"}}},
++        "split-four", {"id": "split-four", "parentID": "work-unpinned",
++          "childrenIds": ["tab-1", "tab-2", "tab-3", "tab-4"], "title": null,
++          "data": {"splitView": {}}},
++        "tab-1", {"id": "tab-1", "parentID": "split-four", "childrenIds": [],
++          "title": null, "data": {"tab": {"savedURL": "https://one.example/", "savedTitle": "P1"}}},
++        "tab-2", {"id": "tab-2", "parentID": "split-four", "childrenIds": [],
++          "title": null, "data": {"tab": {"savedURL": "https://two.example/", "savedTitle": "P2"}}},
++        "tab-3", {"id": "tab-3", "parentID": "split-four", "childrenIds": [],
++          "title": null, "data": {"tab": {"savedURL": "https://three.example/", "savedTitle": "P3"}}},
++        "tab-4", {"id": "tab-4", "parentID": "split-four", "childrenIds": [],
++          "title": null, "data": {"tab": {"savedURL": "https://four.example/", "savedTitle": "P4"}}},
++        "split-one", {"id": "split-one", "parentID": "work-unpinned",
++          "childrenIds": ["tab-solo", "tab-js"], "title": null, "data": {"splitView": {}}},
++        "tab-solo", {"id": "tab-solo", "parentID": "split-one", "childrenIds": [],
++          "title": null, "data": {"tab": {"savedURL": "https://solo.example/", "savedTitle": "Solo"}}},
++        "tab-js", {"id": "tab-js", "parentID": "split-one", "childrenIds": [],
++          "title": null, "data": {"tab": {"savedURL": "javascript:void(0)", "savedTitle": "JS"}}}
++      ],
++      "topAppsContainerIDs": []
++    }
++  ]}
++})json";
++
++// A made-up StorableArchiveItems.json (import I7), in the shape public exporters
++// read: an id, then its item. Arc's dates are seconds since 2001.
++constexpr char kArchive[] = R"json({
++  "version": 1,
++  "items": [
++    "one", {"reason": "auto", "archivedAt": 800000000.5,
++      "source": {"space": {"_0": "space-work"}},
++      "sidebarItem": {"title": null, "data": {"tab": {
++        "savedURL": "https://older.example/", "savedTitle": "Older"}}}},
++    "two", {"reason": "manual", "archivedAt": 800000100,
++      "source": {"space": {"_0": "space-work"}},
++      "sidebarItem": {"title": null, "data": {"tab": {
++        "savedURL": "https://newer.example/", "savedTitle": "Newer"}}}},
++    "three", {"reason": "auto", "archivedAt": 799999000,
++      "source": {"space": {"_0": "space-work"}},
++      "sidebarItem": {"data": {"tab": {
++        "savedURL": "https://older.example/", "savedTitle": "Older again"}}}},
++    "four", {"reason": "auto", "archivedAt": 799999000,
++      "source": {"space": {"_0": "space-gone"}},
++      "sidebarItem": {"data": {"tab": {
++        "savedURL": "https://older.example/", "savedTitle": "Elsewhere"}}}},
++    "five", {"reason": "auto", "archivedAt": 1,
++      "sidebarItem": {"data": {"list": {}}}},
++    "six", {"reason": "auto", "archivedAt": 1,
++      "sidebarItem": {"data": {"tab": {
++        "savedURL": "javascript:void(0)", "savedTitle": "A bookmarklet"}}}},
++    "seven", {"reason": "auto",
++      "sidebarItem": {"data": {"tab": {
++        "savedURL": "https://undated.example/", "savedTitle": "Undated"}}}}
++  ]
++})json";
++
++// import I7: a split's panes are tabs in its place, each knowing its split. One
++// that cannot be opened stays out, as any tab does, and a split with one pane
++// left is no split.
++TEST(ArcSidebarImporterTest, ReadsArcsSplits) {
++  const std::optional<ArcImportPlan> plan = ParseArcSidebar(kSplits);
++  ASSERT_TRUE(plan.has_value());
++  ASSERT_EQ(1u, plan->spaces.size());
++  const ArcImportPlan::Space& work = plan->spaces[0];
++  ASSERT_EQ(3u, work.pinned.size());
++  EXPECT_TRUE(work.pinned[0].split.empty());
++  EXPECT_EQ("split-pinned", work.pinned[1].split);
++  EXPECT_EQ("split-pinned", work.pinned[2].split);
++  ASSERT_EQ(9u, work.unpinned.size());
++  EXPECT_EQ(u"L", work.unpinned[1].title);
++  EXPECT_EQ("split-two", work.unpinned[1].split);
++  EXPECT_EQ(ArcImportPlan::Node::Kind::kFolder, work.unpinned[3].kind);
++  ASSERT_EQ(2u, work.unpinned[3].children.size());
++  EXPECT_EQ("split-in-list", work.unpinned[3].children[1].split);
++  EXPECT_EQ(u"P4", work.unpinned[7].title);
++  EXPECT_EQ("split-one", work.unpinned[8].split);
++  EXPECT_EQ(3u, plan->pinned_tab_count());
++  EXPECT_EQ(4u, plan->split_count()) << "the one with a single pane is no split";
++  EXPECT_NE(std::u16string::npos, SummariseArcImport(*plan).find(u"4 splits"));
++}
++
++// import I7: Arc's archive, the newest first. A page Arc archived again and
++// again comes once a Space, as its newest. What no row can hold is counted.
++TEST(ArcSidebarImporterTest, ReadsArcsArchive) {
++  ArcImportPlan plan;
++  ParseArcArchive(kArchive, plan);
++  ASSERT_EQ(4u, plan.archived.size());
++  EXPECT_EQ(u"Newer", plan.archived[0].title);
++  EXPECT_EQ("two", plan.archived[0].arc_id);
++  EXPECT_EQ("space-work", plan.archived[0].arc_space);
++  EXPECT_EQ(GURL("https://newer.example/"), plan.archived[0].url);
++  EXPECT_EQ(base::Time::FromSecondsSinceUnixEpoch(1778307300),
++            plan.archived[0].archived_at)
++      << "seconds since 2001";
++  EXPECT_EQ(u"Older", plan.archived[1].title);
++  EXPECT_EQ(u"Elsewhere", plan.archived[2].title) << "the page in another Space";
++  EXPECT_EQ("space-gone", plan.archived[2].arc_space);
++  EXPECT_EQ(u"Undated", plan.archived[3].title);
++  EXPECT_TRUE(plan.archived[3].archived_at.is_null());
++  EXPECT_EQ(2u, plan.archived_left_out) << "a list, and a bookmarklet";
++  EXPECT_NE(std::u16string::npos,
++            SummariseArcImport(plan).find(u"4 archived tabs"));
++}
++
++// import I7: what is no such file is no archive, and no error.
++TEST(ArcSidebarImporterTest, AFileOfNoArchiveIsNone) {
++  for (std::string_view json :
++       {"", "{", "[]", "{}", R"({"items": 7})", R"({"items": [7]})"}) {
++    ArcImportPlan plan;
++    ParseArcArchive(json, plan);
++    EXPECT_TRUE(plan.archived.empty()) << json;
++    EXPECT_EQ(0u, plan.archived_left_out) << json;
++  }
++}
++
++// import I7: the result line counts the splits and the archive.
++TEST(ArcSidebarImporterTest, DescribeCountsSplitsAndTheArchive) {
++  ArcImportResult result;
++  const std::u16string none = DescribeArcImportResult(result);
++  EXPECT_EQ(std::u16string::npos, none.find(u"split"));
++  EXPECT_EQ(std::u16string::npos, none.find(u"archived"));
++  result.splits = 2;
++  result.archived = 12;
++  result.archived_left_out = 1;
++  const std::u16string line = DescribeArcImportResult(result);
++  EXPECT_NE(std::u16string::npos, line.find(u", 2 splits")) << line;
++  EXPECT_NE(std::u16string::npos, line.find(u", 12 archived tabs")) << line;
++  EXPECT_NE(std::u16string::npos, line.find(u"1 archived tab left out")) << line;
++}
++
+ // I10: every theme lands on one of the swatches (spaces B40), the nearest
+ // by hue, and a grey on Slate.
+ TEST(ArcSidebarImporterTest, ThemeMapsToTheNearestSwatch) {
+@@ -720,6 +895,84 @@ TEST_F(ArcSidebarImportWindowTest, ListsOfThePinnedSectionArePinnedFolders) {
+   EXPECT_TRUE(model().IsFolderSpacePinned(docs));
+ }
+ 
++// import I7, splits J1, J4, J8: each of Arc's splits with two panes is one split
++// here, unloaded, where Arc had it: in the pinned run, pinned together; among
++// the tabs; in a folder. Of four panes the first two are the split and the
++// others tabs after it; a split with one pane is that tab. A second import
++// adds nothing.
++TEST_F(ArcSidebarImportWindowTest, SplitsBecomeSplitRows) {
++  const std::optional<ArcImportPlan> plan = ParseArcSidebar(kSplits);
++  ASSERT_TRUE(plan.has_value());
++  const ArcImportResult result =
++      ApplyArcImport(browser(), *plan, ArcImportOptions());
++  EXPECT_EQ(4u, result.splits);
++  EXPECT_EQ(13u, result.tabs);
++  const auto tab_titled = [&](std::u16string_view title) -> tabs::TabInterface* {
++    for (int i = 0; i < tabs().count(); ++i) {
++      if (tabs().GetTabAtIndex(i)->GetContents()->GetTitle() == title) {
++        return tabs().GetTabAtIndex(i);
++      }
++    }
++    ADD_FAILURE() << title;
++    return nullptr;
++  };
++  const auto expect_split = [&](std::u16string_view left,
++                                std::u16string_view right) {
++    SCOPED_TRACE(left);
++    tabs::TabInterface* const a = tab_titled(left);
++    tabs::TabInterface* const b = tab_titled(right);
++    ASSERT_TRUE(a);
++    ASSERT_TRUE(b);
++    ASSERT_TRUE(a->IsSplit());
++    ASSERT_TRUE(b->IsSplit());
++    EXPECT_EQ(a->GetSplit(), b->GetSplit());
++    EXPECT_TRUE(a->GetContents()->WasDiscarded());
++    EXPECT_TRUE(b->GetContents()->WasDiscarded());
++    EXPECT_EQ(tabs().GetIndexOfTab(a) + 1, tabs().GetIndexOfTab(b))
++        << "left, then right";
++  };
++  expect_split(u"PL", u"PR");
++  expect_split(u"L", u"R");
++  expect_split(u"FL", u"FR");
++  expect_split(u"P1", u"P2");
++
++  // Pinned together, after the pin before them (J4).
++  tabs::TabInterface* const pane = tab_titled(u"PL");
++  ASSERT_TRUE(pane);
++  EXPECT_TRUE(model().IsSpacePinned(pane));
++  EXPECT_TRUE(model().IsSpacePinned(tab_titled(u"PR")));
++  EXPECT_TRUE(model().HomeUrl(pane).has_value());
++  EXPECT_LT(tabs().GetIndexOfTab(tab_titled(u"Pin")),
++            tabs().GetIndexOfTab(pane));
++  EXPECT_LT(tabs().GetIndexOfTab(pane),
++            tabs().GetIndexOfTab(tab_titled(u"First")));
++
++  // In its folder (J8).
++  tabs::TabInterface* const in_folder = tab_titled(u"FL");
++  ASSERT_TRUE(in_folder);
++  const tabs::TabCollection* const split = in_folder->GetParentCollection();
++  ASSERT_TRUE(split);
++  EXPECT_EQ(tabs::TabCollection::Type::SPLIT, split->type());
++  const tabs::TabCollection* const folder = split->GetParentCollection();
++  ASSERT_TRUE(folder);
++  ASSERT_EQ(tabs::TabCollection::Type::FOLDER, folder->type());
++  EXPECT_EQ("Docs",
++            static_cast<const tabs::FolderTabCollection*>(folder)->title());
++
++  // Chromium's split holds two.
++  EXPECT_FALSE(tab_titled(u"P3")->IsSplit());
++  EXPECT_FALSE(tab_titled(u"P4")->IsSplit());
++  EXPECT_EQ(tabs().GetIndexOfTab(tab_titled(u"P2")) + 1,
++            tabs().GetIndexOfTab(tab_titled(u"P3")));
++  EXPECT_FALSE(tab_titled(u"Solo")->IsSplit());
++
++  // I12.
++  const ArcImportResult again =
++      ApplyArcImport(browser(), *plan, ArcImportOptions());
++  EXPECT_EQ(0u, again.tabs);
++  EXPECT_EQ(0u, again.splits);
++}
++
+ // tabs R14, import I3 (BACKLOG S-431, GitHub issue 80): `title` is the name the
+ // person gave a tab in Arc, as a rename here gives one, whichever part of the
+ // sidebar holds it. It came in as the title of a page not yet loaded, so the
+diff --git a/chrome/browser/ui/webui/stedding_welcome/stedding_welcome_handler.cc b/chrome/browser/ui/webui/stedding_welcome/stedding_welcome_handler.cc
+index 761768b95c6de..f9e058a60da38 100644
+--- a/chrome/browser/ui/webui/stedding_welcome/stedding_welcome_handler.cc
++++ b/chrome/browser/ui/webui/stedding_welcome/stedding_welcome_handler.cc
+@@ -333,6 +333,7 @@ void WelcomeHandler::HandleGetFromArc(const base::ListValue& args) {
+   base::DictValue answer;
+   answer.Set("routes", last.FindInt("routes").value_or(0));
+   answer.Set("routesLeftOut", last.FindInt("routes_left_out").value_or(0));
++  answer.Set("archived", last.FindInt("archived").value_or(0));
+   ResolveJavascriptCallback(args[0], answer);
+ }
+ 
+diff --git a/chrome/browser/ui/webui/stedding_welcome/stedding_welcome_handler.h b/chrome/browser/ui/webui/stedding_welcome/stedding_welcome_handler.h
+index fa13dd6dbde61..8349131300695 100644
+--- a/chrome/browser/ui/webui/stedding_welcome/stedding_welcome_handler.h
++++ b/chrome/browser/ui/webui/stedding_welcome/stedding_welcome_handler.h
+@@ -85,9 +85,9 @@ class WelcomeHandler : public content::WebUIMessageHandler,
+   // importFromArc(callback, spaces, pinned, unpinned, history, passwords)
+   // -> the result line (import I21).
+   void HandleImportFromArc(const base::ListValue& args);
+-  // import I47: getFromArc(callback) -> {routes, routesLeftOut} of the last
+-  // import; openFromArcPlace(card) opens that card of Settings, one the
+-  // handler lists.
++  // import I47: getFromArc(callback) -> {routes, routesLeftOut, archived} of
++  // the last import; openFromArcPlace(card) opens that card of Settings, one
++  // the handler lists.
+   void HandleGetFromArc(const base::ListValue& args);
+   void HandleOpenFromArcPlace(const base::ListValue& args);
+   void OnArcImportDone(const std::string& callback_id,
+diff --git a/chrome/test/stedding/from_arc_browsertest.cc b/chrome/test/stedding/from_arc_browsertest.cc
+index 16b636b2edb53..c2249b3f0723d 100644
+--- a/chrome/test/stedding/from_arc_browsertest.cc
++++ b/chrome/test/stedding/from_arc_browsertest.cc
+@@ -251,8 +251,11 @@ IN_PROC_BROWSER_TEST_F(FromArcPageTest, ANewImportReadsThePageAgain) {
+   ASSERT_TRUE(Import());
+   EXPECT_EQ(1, PagesOpen());
+   EXPECT_EQ(page, tabs().GetActiveWebContents()) << "not brought forward";
++  // The page reloads under this script, which then has no frame to answer.
+   EXPECT_TRUE(base::test::RunUntil([&]() {
+-    return content::EvalJs(page, "!window.fromTheFirstImport").ExtractBool();
++    const content::EvalJsResult fresh =
++        content::EvalJs(page, "!window.fromTheFirstImport");
++    return fresh.is_ok() && fresh.ExtractBool();
+   })) << "the page was not read again";
+ }
+ 
+diff --git a/chrome/test/stedding/import_browsertest.cc b/chrome/test/stedding/import_browsertest.cc
+index bd5388b4bfe34..0e3110c90fe83 100644
+--- a/chrome/test/stedding/import_browsertest.cc
++++ b/chrome/test/stedding/import_browsertest.cc
+@@ -30,6 +30,7 @@
+ #include "base/strings/strcat.h"
+ #include "base/strings/string_number_conversions.h"
+ #include "base/strings/string_util.h"
++#include "base/strings/utf_string_conversions.h"
+ #include "base/task/cancelable_task_tracker.h"
+ #include "base/test/run_until.h"
+ #include "base/test/scoped_path_override.h"
+@@ -40,6 +41,8 @@
+ #include "chrome/browser/bookmarks/bookmark_model_factory.h"
+ #include "chrome/browser/history/history_service_factory.h"
+ #include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/sessions/tab_restore_service_factory.h"
++#include "chrome/browser/ui/archive/archived_tabs.h"
+ #include "chrome/browser/ui/browser_commands.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/spaces/arc_sidebar_importer.h"
+@@ -63,6 +66,7 @@
+ #include "components/history/core/test/history_service_test_util.h"
+ #include "components/keyed_service/core/service_access_type.h"
+ #include "components/prefs/pref_service.h"
++#include "components/sessions/core/tab_restore_service.h"
+ #include "components/tabs/public/folder_tab_collection.h"
+ #include "components/tabs/public/tab_collection.h"
+ #include "components/tabs/public/tab_interface.h"
+@@ -550,6 +554,61 @@ constexpr char kArcNamedTabs[] = R"json({
+   ]}
+ })json";
+ 
++// A made-up sidebar with two Spaces and a split in each section of the first,
++// $1 and $2 the panes of the split under the line.
++constexpr char kArcSplits[] = R"json({
++  "sidebar": {"containers": [
++    {"global": {}},
++    {
++      "spaces": [
++        "space-work", {
++          "id": "space-work", "title": "Work",
++          "containerIDs": ["pinned", "work-pinned", "unpinned", "work-unpinned"]
++        },
++        "space-play", {
++          "id": "space-play", "title": "Play",
++          "containerIDs": ["pinned", "play-pinned", "unpinned", "play-unpinned"]
++        }
++      ],
++      "items": [
++        "work-pinned", {"id": "work-pinned", "parentID": null,
++          "childrenIds": ["split-pinned"], "title": "",
++          "data": {"itemContainer": {"containerType": {"spaceItems": {}}}}},
++        "work-unpinned", {"id": "work-unpinned", "parentID": null,
++          "childrenIds": ["split-tabs"], "title": "",
++          "data": {"itemContainer": {"containerType": {"spaceItems": {}}}}},
++        "play-pinned", {"id": "play-pinned", "parentID": null,
++          "childrenIds": [], "title": "",
++          "data": {"itemContainer": {"containerType": {"spaceItems": {}}}}},
++        "play-unpinned", {"id": "play-unpinned", "parentID": null,
++          "childrenIds": ["tab-game"], "title": "",
++          "data": {"itemContainer": {"containerType": {"spaceItems": {}}}}},
++        "split-pinned", {"id": "split-pinned", "parentID": "work-pinned",
++          "childrenIds": ["tab-pl", "tab-pr"], "title": null,
++          "data": {"splitView": {}}},
++        "tab-pl", {"id": "tab-pl", "parentID": "split-pinned",
++          "childrenIds": [], "title": null, "data": {"tab": {
++            "savedURL": "https://pl.example/", "savedTitle": "Pinned left"}}},
++        "tab-pr", {"id": "tab-pr", "parentID": "split-pinned",
++          "childrenIds": [], "title": null, "data": {"tab": {
++            "savedURL": "https://pr.example/", "savedTitle": "Pinned right"}}},
++        "split-tabs", {"id": "split-tabs", "parentID": "work-unpinned",
++          "childrenIds": ["tab-left", "tab-right"], "title": null,
++          "data": {"splitView": {}}},
++        "tab-left", {"id": "tab-left", "parentID": "split-tabs",
++          "childrenIds": [], "title": null, "data": {"tab": {
++            "savedURL": "$1", "savedTitle": "Left"}}},
++        "tab-right", {"id": "tab-right", "parentID": "split-tabs",
++          "childrenIds": [], "title": null, "data": {"tab": {
++            "savedURL": "$2", "savedTitle": "Right"}}},
++        "tab-game", {"id": "tab-game", "parentID": "play-unpinned",
++          "childrenIds": [], "title": null, "data": {"tab": {
++            "savedURL": "https://game.example/", "savedTitle": "Game"}}}
++      ]
++    }
++  ]}
++})json";
++
+ // The page's own request for the line its "Import from Arc..." row shows
+ // before anything is imported (I2).
+ constexpr char kArcSummary[] = R"(
+@@ -630,6 +689,48 @@ class ArcImportTest : public InProcessBrowserTest {
+         })json"));
+   }
+ 
++  // Arc's StorableArchiveItems.json, made up: `recent`, archived yesterday in
++  // Play, and an older page in Space Work, past the 30 days the archive keeps a
++  // close by default, and one in a Space that did not come across.
++  void WriteArchive(const GURL& recent) {
++    base::ScopedAllowBlockingForTesting allow_blocking;
++    const auto seconds_ago = [](base::TimeDelta ago) {
++      constexpr double kSecondsFrom1970To2001 = 978307200;
++      return base::NumberToString((base::Time::Now() - ago)
++                                      .InSecondsFSinceUnixEpoch() -
++                                  kSecondsFrom1970To2001);
++    };
++    ASSERT_TRUE(base::WriteFile(
++        arc_.Append(FILE_PATH_LITERAL("StorableArchiveItems.json")),
++        base::ReplaceStringPlaceholders(
++            R"json({"version": 1, "items": [
++              "archive-recent", {"reason": "manual", "archivedAt": $1,
++                "source": {"space": {"_0": "space-play"}},
++                "sidebarItem": {"data": {"tab": {
++                  "savedURL": "$3", "savedTitle": "Recent page"}}}},
++              "archive-old", {"reason": "auto", "archivedAt": $2,
++                "source": {"space": {"_0": "space-work"}},
++                "sidebarItem": {"data": {"tab": {
++                  "savedURL": "https://old.example/", "savedTitle": "Old"}}}},
++              "archive-gone", {"reason": "auto", "archivedAt": $2,
++                "source": {"space": {"_0": "space-gone"}},
++                "sidebarItem": {"data": {"tab": {
++                  "savedURL": "https://gone.example/", "savedTitle": "Gone"}}}}
++            ]})json",
++            {seconds_ago(base::Days(1)), seconds_ago(base::Days(40)),
++             recent.spec()},
++            nullptr)));
++  }
++
++  // The archive's rows, as its page lists them.
++  std::vector<stedding::ArchivedTab> ArchiveRows() {
++    sessions::TabRestoreService* const closed =
++        TabRestoreServiceFactory::GetForProfile(browser()->GetProfile());
++    return stedding::ListArchivedTabs(
++        closed->entries(), base::Time::Now(),
++        stedding::ArchiveRetention(browser()->GetProfile()->GetPrefs()));
++  }
++
+   // Arc's History: two pages, last visited an hour ago, as Chromium keeps
+   // them (microseconds since 1601).
+   void WriteHistory() {
+@@ -881,6 +982,125 @@ IN_PROC_BROWSER_TEST_F(ArcImportTest, ANameGivenInArcOutlivesThePage) {
+   }
+ }
+ 
++// import I7: importing from Settings. Arc's split is one row of two panes, in
++// the run or among the tabs, each with its page, and both panes load when the
++// row is opened. Arc's archived items are rows of the archive, with Arc's date,
++// as old as it may be, and each restores to the Space its Arc Space became. A
++// second import brings neither twice.
++IN_PROC_BROWSER_TEST_F(ArcImportTest,
++                       SplitsBecomeSplitRowsAndArchivedItemsGoToTheArchive) {
++  ASSERT_TRUE(embedded_test_server()->Start());
++  const GURL left = embedded_test_server()->GetURL("/title1.html");
++  const GURL right = embedded_test_server()->GetURL("/title2.html");
++  const GURL recent = embedded_test_server()->GetURL("/title3.html");
++  {
++    base::ScopedAllowBlockingForTesting allow_blocking;
++    ASSERT_TRUE(base::WriteFile(
++        arc_.Append(FILE_PATH_LITERAL("StorableSidebar.json")),
++        base::ReplaceStringPlaceholders(
++            kArcSplits, {left.spec(), right.spec()}, nullptr)));
++  }
++  ASSERT_NO_FATAL_FAILURE(WriteArchive(recent));
++  content::WebContents* const settings = OpenSettings();
++  ASSERT_TRUE(settings);
++  spaces::SpaceModel* const model = spaces::SpaceModel::From(browser());
++  TabStripModel* const strip = browser()->GetTabStripModel();
++
++  const std::string summary =
++      content::EvalJs(settings, kArcSummary).ExtractString();
++  EXPECT_NE(std::string::npos, summary.find("2 splits")) << summary;
++  EXPECT_NE(std::string::npos, summary.find("3 archived tabs")) << summary;
++
++  const std::string line = ImportFromSettings(settings);
++  EXPECT_NE(std::string::npos, line.find("2 splits")) << line;
++  EXPECT_NE(std::string::npos, line.find("3 archived tabs")) << line;
++
++  tabs::TabInterface* const pane = TabTitled(u"Left");
++  tabs::TabInterface* const other = TabTitled(u"Right");
++  ASSERT_TRUE(pane);
++  ASSERT_TRUE(other);
++  ASSERT_TRUE(pane->IsSplit());
++  EXPECT_EQ(pane->GetSplit(), other->GetSplit());
++  tabs::TabInterface* const pinned = TabTitled(u"Pinned left");
++  ASSERT_TRUE(pinned);
++  EXPECT_TRUE(pinned->IsSplit());
++  EXPECT_TRUE(model->IsSpacePinned(pinned));
++  EXPECT_TRUE(model->IsSpacePinned(TabTitled(u"Pinned right")));
++
++  // As a click on the row: both pages load.
++  strip->ActivateTabAt(strip->GetIndexOfTab(pane));
++  EXPECT_TRUE(base::test::RunUntil([&]() {
++    return pane->GetContents()->GetLastCommittedURL() == left &&
++           other->GetContents()->GetLastCommittedURL() == right;
++  })) << "left at " << pane->GetContents()->GetLastCommittedURL()
++      << ", right at " << other->GetContents()->GetLastCommittedURL();
++
++  const std::vector<stedding::ArchivedTab> rows = ArchiveRows();
++  ASSERT_EQ(3u, rows.size());
++  EXPECT_EQ(recent, rows[0].url);
++  EXPECT_EQ("import", rows[0].reason);
++  const spaces::Space* const play = SpaceNamed("Play");
++  ASSERT_TRUE(play);
++  EXPECT_EQ(play->id().ToString(), rows[0].space_id);
++  EXPECT_EQ("Play", rows[0].space_name);
++  EXPECT_LT(base::Time::Now() - rows[0].time, base::Days(2));
++  EXPECT_GT(base::Time::Now() - rows[0].time, base::Hours(20));
++  EXPECT_EQ(u"Old", rows[1].title) << "past the keep time, by Arc's date";
++  EXPECT_GT(base::Time::Now() - rows[1].time, base::Days(39));
++  EXPECT_TRUE(rows[2].space_id.empty()) << "a Space that did not come across";
++
++  const std::string again = ImportFromSettings(settings);
++  EXPECT_EQ(std::string::npos, again.find("archived")) << again;
++  EXPECT_EQ(std::string::npos, again.find("split")) << again;
++  EXPECT_EQ(3u, ArchiveRows().size());
++
++  // The archive's own page shows the row, and its Restore brings it back to
++  // the Space its Arc Space became.
++  ASSERT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
++      browser(), GURL("chrome://stedding-archive"),
++      WindowOpenDisposition::NEW_FOREGROUND_TAB,
++      ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
++  content::WebContents* const archive = strip->GetActiveWebContents();
++  const std::string row =
++      "[...document.querySelectorAll('.row')].find(row =>"
++      "  row.querySelector('.title').textContent === 'Recent page')";
++  ASSERT_TRUE(base::test::RunUntil(
++      [&]() { return content::EvalJs(archive, "!!" + row).ExtractBool(); }));
++  EXPECT_NE(std::string::npos,
++            content::EvalJs(archive, row + ".textContent")
++                .ExtractString()
++                .find("archived in Arc"));
++  ASSERT_TRUE(content::ExecJs(archive, row + ".querySelector('button').click()"));
++  ASSERT_TRUE(base::test::RunUntil([&]() {
++    return strip->GetActiveWebContents()->GetVisibleURL() == recent;
++  })) << "the row did not come back";
++  EXPECT_EQ(play->id(), model->SpaceForTab(strip->GetActiveTab()));
++  EXPECT_EQ(play->id(), model->active_id());
++}
++
++// import I7: the rows an import made are in the list's file, as a close's are.
++IN_PROC_BROWSER_TEST_F(ArcImportTest, PRE_ArchivedRowsOutliveARestart) {
++  ASSERT_NO_FATAL_FAILURE(WriteSidebar(R"("tab-doc-a")"));
++  ASSERT_NO_FATAL_FAILURE(WriteArchive(GURL("https://recent.example/")));
++  content::WebContents* const page = OpenSettings();
++  ASSERT_TRUE(page);
++  ImportFromSettings(page);
++  EXPECT_EQ(3u, ArchiveRows().size());
++}
++
++IN_PROC_BROWSER_TEST_F(ArcImportTest, ArchivedRowsOutliveARestart) {
++  sessions::TabRestoreService* const closed =
++      TabRestoreServiceFactory::GetForProfile(browser()->GetProfile());
++  ASSERT_TRUE(closed);
++  closed->LoadTabsFromLastSession();
++  ASSERT_TRUE(base::test::RunUntil([&]() { return closed->IsLoaded(); }));
++  const std::vector<stedding::ArchivedTab> rows = ArchiveRows();
++  ASSERT_EQ(3u, rows.size());
++  EXPECT_EQ(GURL("https://recent.example/"), rows[0].url);
++  EXPECT_EQ("import", rows[0].reason);
++  EXPECT_EQ("Recent page", base::UTF16ToUTF8(rows[0].title));
++}
++
+ // import I48: importing from Settings brings Arc's route to the Space it names,
+ // and a link there follows it. A second import adds no route.
+ IN_PROC_BROWSER_TEST_F(ArcImportTest, ArcsRoutesComeAcrossOnce) {
+diff --git a/components/sessions/core/tab_restore_service.h b/components/sessions/core/tab_restore_service.h
+index cad107305dc31..0610883895a9c 100644
+--- a/components/sessions/core/tab_restore_service.h
++++ b/components/sessions/core/tab_restore_service.h
+@@ -147,6 +147,14 @@ class SESSIONS_EXPORT TabRestoreService : public KeyedService {
+       LiveTab* live_tab,
+       const std::optional<tab_groups::TabGroupId>& group) {}
+ 
++  // Stedding (docs/features/import.md I7): adds `tabs`, tabs closed elsewhere,
++  // in their order behind what the list holds, as far as it has room, and writes
++  // the list out again. A close of the person's own is never pushed out by one.
++  // `added` receives the ids of those it took. The list must have loaded.
++  virtual void AddClosedTabs(
++      std::vector<std::unique_ptr<tab_restore::Tab>> tabs,
++      std::vector<SessionID>* added) {}
++
+   // Returns the entries, ordered with most recently closed entries at the
+   // front.
+   virtual const Entries& entries() const = 0;
+diff --git a/components/sessions/core/tab_restore_service_impl.cc b/components/sessions/core/tab_restore_service_impl.cc
+index 7924eda89c4ca..1c4c4e11a5d95 100644
+--- a/components/sessions/core/tab_restore_service_impl.cc
++++ b/components/sessions/core/tab_restore_service_impl.cc
+@@ -1939,6 +1939,28 @@ void TabRestoreServiceImpl::SetWindowTabsExtraData(
+   helper_.NotifyEntriesChanged();
+ }
+ 
++void TabRestoreServiceImpl::AddClosedTabs(
++    std::vector<std::unique_ptr<tab_restore::Tab>> tabs,
++    std::vector<SessionID>* added) {
++  bool changed = false;
++  for (std::unique_ptr<tab_restore::Tab>& tab : tabs) {
++    const SessionID id = tab->id;
++    if (helper_.AddEntry(std::move(tab), /*notify=*/false,
++                         /*to_front=*/false)) {
++      added->push_back(id);
++      changed = true;
++    }
++  }
++  if (!changed) {
++    return;
++  }
++  // The file is written from the list's front, and these went to its back.
++  if (persistence_delegate_) {
++    persistence_delegate_->RewriteAllEntries();
++  }
++  helper_.NotifyEntriesChanged();
++}
++
+ void TabRestoreServiceImpl::TabCloseStopped(
+     LiveTab* live_tab,
+     const std::optional<tab_groups::TabGroupId>& group) {
+diff --git a/components/sessions/core/tab_restore_service_impl.h b/components/sessions/core/tab_restore_service_impl.h
+index c8d272e5050a2..be00e8366f8af 100644
+--- a/components/sessions/core/tab_restore_service_impl.h
++++ b/components/sessions/core/tab_restore_service_impl.h
+@@ -65,6 +65,8 @@ class SESSIONS_EXPORT TabRestoreServiceImpl : public TabRestoreService {
+   void TabCloseStopped(
+       LiveTab* live_tab,
+       const std::optional<tab_groups::TabGroupId>& group) override;
++  void AddClosedTabs(std::vector<std::unique_ptr<tab_restore::Tab>> tabs,
++                     std::vector<SessionID>* added) override;
+   const Entries& entries() const override;
+   std::vector<LiveTab*> RestoreMostRecentEntry(
+       LiveTabContext* context) override;

@@ -1,0 +1,178 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Thu, 5 Nov 2026 09:22:17 -0500
+Subject: fix: a deleted Space's routes go with it; five more ad-click ids
+
+A deleted Space's rules stayed, and the first rule that matches an address
+decides, so one naming no Space hid a later one naming a live Space, and the
+link opened where the user was. Its place as the Space for links from other
+apps stayed too (routing D5; BACKLOG S-162).
+
+The tracking table gains gbraid, wbraid, srsltid, ttclid and li_fat_id
+(copy-link L2; BACKLOG S-155).
+
+Why: both were open items that needed no decision.
+
+Removable when: never as behaviour.
+---
+ chrome/browser/ui/spaces/space_model.cc       |  9 +++++
+ .../ui/spaces/space_model_window_unittest.cc  | 39 +++++++++++++++++++
+ chrome/browser/ui/spaces/space_router.cc      | 15 +++++++
+ chrome/browser/ui/spaces/space_router.h       |  6 +++
+ chrome/browser/ui/stedding/clean_link.cc      |  7 ++--
+ .../ui/stedding/clean_link_unittest.cc        |  4 ++
+ 6 files changed, 77 insertions(+), 3 deletions(-)
+
+diff --git a/chrome/browser/ui/spaces/space_model.cc b/chrome/browser/ui/spaces/space_model.cc
+index 208620d22b6d3..a62e9ef8149a6 100644
+--- a/chrome/browser/ui/spaces/space_model.cc
++++ b/chrome/browser/ui/spaces/space_model.cc
+@@ -910,6 +910,9 @@ bool SpaceModel::RemoveSpace(const SpaceId& space_id,
+     observers_.Notify(&Observer::OnSpaceRemoved, id);
+     SaveToSession();
+   }
++  if (profile_) {
++    RemoveRoutesToSpace(profile_->GetPrefs(), id.ToString());
++  }
+   // sessions S17, PLAN.md SPC-24: the jar is wiped once, here, after every
+   // tab has left it. The rebinds that move the tabs to their new jar are
+   // posted, so the wipe is posted behind them.
+@@ -2879,6 +2882,12 @@ std::optional<SpaceId> SpaceModel::RouteTargetFor(const GURL& url,
+     return id && GetSpace(*id) ? id : std::nullopt;
+   };
+   std::vector<Route> routes = ReadRoutes(prefs);
++  // routing D5 (BACKLOG S-162): the first rule that matches decides, so one
++  // naming no Space here, left by a build that kept a deleted Space's rules,
++  // must not hide a later one naming a live Space.
++  std::erase_if(routes, [&](const Route& route) {
++    return !known(route.space).has_value();
++  });
+   if (search) {
+     // A search address holds the words searched for; a "contains" rule
+     // would route a search about a site as if it were that site (PLAN.md
+diff --git a/chrome/browser/ui/spaces/space_model_window_unittest.cc b/chrome/browser/ui/spaces/space_model_window_unittest.cc
+index 1894b14b1775f..f5d377479f8f5 100644
+--- a/chrome/browser/ui/spaces/space_model_window_unittest.cc
++++ b/chrome/browser/ui/spaces/space_model_window_unittest.cc
+@@ -2174,6 +2174,45 @@ TEST_F(SpaceWindowTest, ExternalOpenLandsInTheDefaultSpace) {
+   EXPECT_EQ(home, model().SpaceForTab(tabs().GetActiveTab()));
+ }
+ 
++// routing D5 (BACKLOG S-162): a deleted Space's rules and its place as the
++// Space for links from other apps go with it. Left behind, the first rule that
++// matches decides, so a rule naming no Space hid a later one naming a live
++// Space, and the link opened where the user was.
++TEST_F(SpaceWindowTest, ADeletedSpacesRulesGoWithIt) {
++  const SpaceId home = model().active_id();
++  Space* const mail = model().AddSpace("Mail", SK_ColorGREEN);
++  Space* const work = model().AddSpace("Work", SK_ColorBLUE);
++  const SpaceId mail_id = mail->id();
++  const SpaceId work_id = work->id();
++  PrefService* const prefs = profile()->GetPrefs();
++  AddRoute(prefs, {Route::Match::kContains, "example", mail_id.ToString()});
++  AddRoute(prefs, {Route::Match::kSite, "example.com", work_id.ToString()});
++  prefs->SetString(stedding::prefs::kExternalDefaultSpace, mail_id.ToString());
++
++  ASSERT_TRUE(model().RemoveSpace(mail_id));
++
++  const std::vector<Route> routes = ReadRoutes(prefs);
++  ASSERT_EQ(1u, routes.size());
++  EXPECT_EQ(work_id.ToString(), routes[0].space);
++  EXPECT_TRUE(prefs->GetString(stedding::prefs::kExternalDefaultSpace).empty());
++  AddTab(browser(), GURL("https://example.com/a"));
++  EXPECT_EQ(work_id, model().SpaceForTab(tabs().GetActiveTab()))
++      << "the live Space's rule, which the deleted one's used to hide";
++  model().SetActiveSpace(home);
++}
++
++// routing D5 (BACKLOG S-162): a rule an earlier build left behind, naming a
++// Space that is gone, does not hide the rule after it.
++TEST_F(SpaceWindowTest, ARuleNamingNoSpaceHidesNoOther) {
++  Space* const work = model().AddSpace("Work", SK_ColorBLUE);
++  const SpaceId gone = SpaceId::GenerateNew();
++  PrefService* const prefs = profile()->GetPrefs();
++  AddRoute(prefs, {Route::Match::kContains, "example", gone.ToString()});
++  AddRoute(prefs, {Route::Match::kSite, "example.com", work->id().ToString()});
++  AddTab(browser(), GURL("https://example.com/a"));
++  EXPECT_EQ(work->id(), model().SpaceForTab(tabs().GetActiveTab()));
++}
++
+ // routing D3: an address typed into a fresh tab does not spend another app's
+ // mark on the same address, so the app's tab, inserted later (its profile
+ // still loading), still lands in the external default (BACKLOG S-201).
+diff --git a/chrome/browser/ui/spaces/space_router.cc b/chrome/browser/ui/spaces/space_router.cc
+index 082dfd044a072..5ec4e4251e888 100644
+--- a/chrome/browser/ui/spaces/space_router.cc
++++ b/chrome/browser/ui/spaces/space_router.cc
+@@ -262,6 +262,21 @@ void RemoveRoute(PrefService* prefs, size_t index) {
+   WriteRoutes(prefs, routes);
+ }
+ 
++void RemoveRoutesToSpace(PrefService* prefs, const std::string& space) {
++  if (!prefs || space.empty()) {
++    return;
++  }
++  std::vector<Route> routes = ReadRoutes(prefs);
++  if (std::erase_if(routes, [&](const Route& route) {
++        return route.space == space;
++      }) > 0) {
++    WriteRoutes(prefs, routes);
++  }
++  if (prefs->GetString(stedding::prefs::kExternalDefaultSpace) == space) {
++    prefs->ClearPref(stedding::prefs::kExternalDefaultSpace);
++  }
++}
++
+ void MarkExternalOpen(const GURL& url) {
+   if (url.is_valid()) {
+     ExternalOpens().emplace_back(url, base::TimeTicks::Now());
+diff --git a/chrome/browser/ui/spaces/space_router.h b/chrome/browser/ui/spaces/space_router.h
+index 78358e5ce550d..09168418d725e 100644
+--- a/chrome/browser/ui/spaces/space_router.h
++++ b/chrome/browser/ui/spaces/space_router.h
+@@ -57,6 +57,12 @@ void WriteRoutes(PrefService* prefs, const std::vector<Route>& routes);
+ void AddRoute(PrefService* prefs, Route route);
+ void RemoveRoute(PrefService* prefs, size_t index);
+ 
++// routing D5 (BACKLOG S-162): `space` is gone. Its rules go with it, since
++// the first rule that matches an address decides, and one naming no Space
++// would hide a later rule naming a live one. So does its place as the Space
++// for links from other apps.
++void RemoveRoutesToSpace(PrefService* prefs, const std::string& space);
++
+ // D3: an address handed over by another app is remembered for a moment, so
+ // the tab it opens can land in the default Space. Take returns true once.
+ void MarkExternalOpen(const GURL& url);
+diff --git a/chrome/browser/ui/stedding/clean_link.cc b/chrome/browser/ui/stedding/clean_link.cc
+index 7926e6b036d34..a602a4bdaa8c6 100644
+--- a/chrome/browser/ui/stedding/clean_link.cc
++++ b/chrome/browser/ui/stedding/clean_link.cc
+@@ -27,9 +27,10 @@ namespace {
+ // The whole table. A parameter is dropped when its lower-cased name matches
+ // an entry exactly, or starts with an entry ending in "_" (the utm_ family).
+ constexpr std::string_view kTrackingParameters[] = {
+-    "utm_",     "fbclid",  "gclid",  "dclid",   "msclkid", "mc_eid",
+-    "mc_cid",   "igshid",  "_hsenc", "_hsmi",   "mkt_tok", "yclid",
+-    "twclid",   "ref_src",
++    "utm_",     "fbclid",  "gclid",   "dclid",     "msclkid", "mc_eid",
++    "mc_cid",   "igshid",  "_hsenc",  "_hsmi",     "mkt_tok", "yclid",
++    "twclid",   "ref_src", "gbraid",  "wbraid",    "srsltid", "ttclid",
++    "li_fat_id",
+ };
+ 
+ // Parameters that track only on one site.
+diff --git a/chrome/browser/ui/stedding/clean_link_unittest.cc b/chrome/browser/ui/stedding/clean_link_unittest.cc
+index a085b5adf8609..730c89df78627 100644
+--- a/chrome/browser/ui/stedding/clean_link_unittest.cc
++++ b/chrome/browser/ui/stedding/clean_link_unittest.cc
+@@ -35,6 +35,10 @@ TEST(CleanLinkTest, TrackingParameters) {
+       {"https://a.test/p?_hsenc=1&_hsmi=2&mkt_tok=3&yclid=4&twclid=5&q=1",
+        "https://a.test/p?q=1", true},
+       {"https://a.test/p?ref_src=twsrc", "https://a.test/p", true},
++      {"https://a.test/p?gbraid=1&wbraid=2&srsltid=3&q=1",
++       "https://a.test/p?q=1", true},
++      {"https://a.test/p?ttclid=1&li_fat_id=2&q=1", "https://a.test/p?q=1",
++       true},
+       {"https://www.youtube.com/watch?v=abc&si=track",
+        "https://www.youtube.com/watch?v=abc", true},
+       {"https://youtu.be/abc?si=track", "https://youtu.be/abc", true},

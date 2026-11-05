@@ -34,7 +34,6 @@ A page the user opens loads without the tracking parameters a copied link alread
 - Space routing, little windows and Peek's new-tab path see the address before the throttle runs. Peek already judges a redirect link by its target (`PeekTargetOf`, peek P15), with a wider rule than Cl3, and that rule is unchanged.
 - A page that sends itself, with no click, to a different path with a tracking parameter, and is sent back again, is not caught by Cl13. It keeps loading until its site is a kept site (Cl8).
 - There is no per-site command-bar row that reloads the page as it was opened. Kept sites are added in Settings. Private windows list no preference rows (commandbar K15).
-- `gbraid`, `wbraid`, `ttclid` and `li_fat_id` are not in the table. Adding them would change copying too (copy-link L2).
 
 ```bash
 tooling/dev test clean-links

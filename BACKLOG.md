@@ -54,13 +54,13 @@ To build, in this order:
    Windows, acceptance on both, an update from the installed beta 10 on both, with S-420's stall
    on an installed Windows copy, and the owner's look at every changed state.
 
-Chromium stays on M157, its newest point release. 158.0.8127.18 is early stable: 0.5% of users on
-2026-11-05, before M158's stable cut (2026-11-10) and stable date (2026-11-17), and ADR 0007 has
-the pin follow a build only past 1%. The port is saved on the `chromium-158` branch and is for
-the release after, with Sparkle 2.10.1 (S-358). It has not built to the end. The built-in
-HTTPS-only list sets no deadline: a build on 157.0.8103.39 is dated 2026-11-01 and keeps it until
-2027-01-10. The Mac has about 40 GB free and a milestone sync wants at least 100 GB (S-58), so
-158's Mac turn waits for room.
+Chromium stays on M157, its newest point release, and nothing here hurries it. Betas come often,
+and M158 is not tied to any of them. 158.0.8127.18 is early stable: 0.5% of users on 2026-11-05,
+before M158's stable cut (2026-11-10) and stable date (2026-11-17), and ADR 0007 has the pin follow
+a build only past 1%. The built-in HTTPS-only list sets no deadline: a build on 157.0.8103.39 is
+dated 2026-11-01 and keeps it until 2027-01-10. The port is saved on the `chromium-158` branch and
+waits there, with Sparkle 2.10.1 (S-358) to go with it. It has not built to the end. The pin
+moves when the owner says so.
 
 Not this release: Widevine (S-270) and passkeys (S-239), waiting on Google and Apple; Safe
 Browsing (S-75, issue 60), skipped on the owner's word; Windows on ARM (S-404, issue 69), no

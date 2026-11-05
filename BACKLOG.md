@@ -15,22 +15,43 @@ infrastructure, then features. A request in chat comes before this list. A spec 
 
 ## Open
 
-### After 0.4.0 beta 10
+### The next release: 0.4.0 beta 11
 
-0.4.0 beta 10 was released on 2026-11-05 on Chromium 157.0.8103.39, with S-414 to S-419 (now in
-`docs/history/archive.md`). S-402's fix went out with it and waits on a real board, below.
-S-420, update downloads that try again, is built since and goes out with the next release. Its
-Windows half has not stalled on an installed copy yet: the next release's n-1 check runs it
-against a server that goes quiet.
+The plan of 2026-11-05. GitHub has no open bug. Its five open issues are one more request on a
+fixed bug (78, the folder's − button), three feature requests (77, 69, 60) and the pin bot's
+notice (70). The 127 rows here are mostly not bugs:
 
-1. The pin. Chromium 158.0.8127.18 was on the stable channel on 2026-11-04, and builds on 157
-   lose the built-in HTTPS-only list on 2026-12-13, so the next release moves to M158. That is a
-   milestone move: `tooling/update-pin --to <version>`, both checkouts, the suites on both
-   platforms with ASan on Windows, acceptance on both.
+| What the rows are | Rows |
+|---|---|
+| Fixed, waiting for a check on a real build (S-338 to S-351, S-353, S-326, S-323, S-393, S-394, S-399) | 20 |
+| Built, waiting on the owner's machine, a real profile or other hardware ("Checks still owed") | 24 |
+| Flaky tests and test tooling | 12 |
+| Product bugs not fixed yet, none reported by a user (S-251, S-314, S-318, S-336) | 4 |
+| Infrastructure and the ports | 20 |
+| Features, and what waits on Google, Apple or the owner ("Next") | 47 |
 
-| Id | Item | Feature / spec | Notes |
-|---|---|---|---|
-| S-402 | A site's device picker never opens (GitHub issue 73) | `docs/features/site-controls.md` | Reported 2026-11-03 on Windows, version not given: with an ESP32 attached, `navigator.serial.requestPort()` from a click rejects at once with "NotFoundError: No port selected by the user" and no picker shows; Chrome on the same machine shows one. Web Serial, WebUSB, WebHID and Web Bluetooth share Chromium's chooser (`ShowDeviceChooserDialog`), which shows only for the window's active tab and hangs from the page-info anchor; a pin, a peek, a split, or the address in the sidebar may defeat either. Reproduce on the PC with `requestPort()` from a click (no device needed: the picker then lists none), find which, and fix it with a browser test that sees the picker for each of the four. Not reproduced on 2026-11-03: `DevicePickerTest.ASerialRequestShowsThePicker` sees the picker from a loose tab, a pinned tab, an essential and with the address in the sidebar, and on the PC a real click on a page's button opened it over the real window, listing COM1. Chromium answers "No port selected by the user" at once when the profile blocks serial ports (Settings › Privacy › Site settings, or the site's own setting); asked of the reporter, with their version. Found 2026-11-04 by the reporter: only in a Space with an independent session. Chromium refuses the serial, USB, HID and Bluetooth pickers, the file pickers and on-device translation and speech to a website in any storage partition but the profile's default, and a Space's jar is such a partition. Done 2026-11-04, in a test: a Space's jar counts as the profile's for those checks (spaces B47; `SpaceJarTest.ASpacesJarMayOpenTheDevicePickers`). Left: the reporter's check with the ESP32. |
+The order of work:
+
+1. **The pin moves to M158** (158.0.8127.18 or its newest point release), with Sparkle 2.10.1
+   (S-358). Builds on 157 lose the built-in HTTPS-only list on 2026-12-13, so this one has a
+   date. `tooling/update-pin --apply --to <version>`, the PC first. The Mac has about 30 GB free
+   and a milestone sync wants at least 100 GB (S-58), so its turn waits for room.
+2. **Small fixes that need no decision**, each with its test: the tracking names `srsltid`,
+   `gbraid` and `wbraid` (S-155), a deleted Space's routes (S-162), S-251's https half, and S-314,
+   S-318 and S-336, reproduced first or closed as not reproduced.
+3. **A real-build pass on the final build**, the machines being free: S-341, S-338, S-342 and
+   S-340 first, where a fault loses data or wedges the browser, then the other review rows,
+   S-326, S-323 and S-399. This is what shrinks the list: each row that passes closes.
+4. **The release gate.** The suites on the shipping and DCHECK builds on both platforms, ASan on
+   Windows, acceptance on both, an update from the installed beta 10 on both, with S-420's stall
+   on an installed Windows copy, and the owner's look at every changed state.
+
+Waits for the owner's word: the − button on a folder (issue 78), and the answer to issue 77. Both
+are outside the order above until then.
+
+Not this release: Widevine (S-270) and passkeys (S-239), waiting on Google and Apple; Safe
+Browsing (S-75, issue 60), skipped on the owner's word; Windows on ARM (S-404, issue 69), no
+hardware; Linux (S-216); the signed Windows installer (S-56); cloud sync (issue 77).
 
 ### Left from beta 8
 
@@ -45,17 +66,6 @@ row). Issue 59 was declined on 2026-10-30 (S-362); issue 60 waits on S-75.
 | S-393 | A folder's icon in the sidebar file and sync | `docs/features/folders.md` F42; `docs/features/sidebar-file.md` | A folder's icon comes back after a restart. The export, the import and sidebar sync do not carry it yet. Done 2026-11-03: the icon is in the sidebar file (a `stedding` key Arc ignores) and in sync (the record's icon field), with unit tests (folders F42). Left: a check on a real build with two computers' sync. |
 
 ### Next
-
-The latest release is 0.4.0 beta 7, on Chromium 157.0.8103.31 (`S-278`). It carries the
-fixes of the 2026-10-28 review below, from beta 2, the fixes for GitHub issues 14, 35 and 63
-from beta 3, S-323 (issue 43) from beta 4, the command bar's site icons (issue 58) and issue
-45's sidebar and appearance settings from beta 5, peek over the page (issue 62), Spaces that
-loop (issue 66), the sidebar's width after an update (issue 65), the address row in the
-sidebar (issue 45's second round) and the Chromium family's imports from beta 6, and the
-owner's list of 2026-11-02 (a peek's edge, the welcome flow's privacy step, issue 45's version
-B, page bars under the page, folder icons for issue 68) with issues 71 and 72 from beta 7.
-Each row closes once its fix is checked on a real build.
-Google's schedule puts M157 on stable on 2026-11-03.
 
 S-306, shorter test runs, is the unfinished item of the 2026-10-26 order. Its Mac half
 is in. The Windows times are not.

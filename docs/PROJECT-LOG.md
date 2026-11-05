@@ -2,6 +2,38 @@
 
 What was built, newest first. Nothing here is needed to do a task: `AGENTS.md` carries what is true now, `BACKLOG.md` the order of work, `PLAN.md` the owner's decisions. This file was the "State of the project" section of `AGENTS.md` until 2026-09-30. This log starts at 2026-10-15. Closed work from before that is the table in [docs/history/archive.md](history/archive.md).
 
+## 2026-11-05 -- 0.4.0 beta 10: Chromium 157.0.8103.39, issues 78, 73 and 45, links from other apps as a peek
+
+The owner, after testing beta 9's fixes on the PC: a new window opens too close to the first;
+issue 78 as they commented on it, issues 73 and 45, whatever else is fast, then a release, with
+the pin moved to the latest point release of 157.
+
+Built, each with a test. The pin moved to 157.0.8103.39, and the series applied unchanged. A
+collapse keeps the pins selected in a folder listed, and a setting, off by default, keeps every
+awake pin (S-418, issue 78). The device pickers, a site's file pickers and on-device translation
+and speech work in a Space with an independent session; Chromium refuses them in any storage
+partition that is not the profile's own, and an independent session is one (S-402, issue 73). A
+site's permissions stay the profile's in every Space. The site panel's strip starts with Back,
+Forward and Reload when the sidebar's top line has no room for them (S-414), icons sit centred in
+their hover circles at 125% on Windows (S-415), and a second window has its corner buttons on
+Windows (S-416, all issue 45). A link from another app can open as a peek (S-417, issue 74), and
+a new window on Windows steps 22 points clear of the first (S-419).
+
+Found on the way. The build with DCHECKs stopped on a link from another app opened as a peek: it
+was marked as a page's navigation with no initiator, which a release build lets through. A link
+with no initiator is now the browser's own, as it is in the little window
+(`LittleWindowTest.ALinkAsAPeekKeepsItsTrust`). The peek's new row in the command bar broke K9
+and was taken out. Two tests failed once each among their neighbours in the last runs, the device
+picker because a bubble closes when its window loses the activation, and passed five of five
+alone; they now run one at a time.
+
+Checked: the suites on both platforms, release and DCHECK builds, and ASan on Windows; acceptance
+on both, with a clipboard manager holding ⇧⌘C on the Mac, so Copy Link's toast was not seen in
+that run; the update from beta 9 and the installer cycle on Windows; the Mac image notarized. Not
+checked: the device pickers against a real board, which waits on the reporter of issue 73. The
+owner gave the release its go-ahead overnight, before seeing the review folder, which holds both
+platforms' captures.
+
 ## 2026-11-04 -- 0.4.0 beta 9: an empty Space's page, issues 74, 75 and 76, issue 45 on beta 8
 
 The owner, in the morning: a screenshot of an empty Space beside an AI extension's tab group, a

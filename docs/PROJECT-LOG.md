@@ -2,6 +2,30 @@
 
 What was built, newest first. Nothing here is needed to do a task: `AGENTS.md` carries what is true now, `BACKLOG.md` the order of work, `PLAN.md` the owner's decisions. This file was the "State of the project" section of `AGENTS.md` until 2026-09-30. This log starts at 2026-10-15. Closed work from before that is the table in [docs/history/archive.md](history/archive.md).
 
+## 2026-11-05 -- Where someone from Arc looks (S-422, S-126)
+
+A comment on r/Stedding asked for Arc's Air Traffic Control, which Stedding has as routes. The
+features were there and people did not find them. Five commits on `stedding-work`, not yet in
+`patches/`.
+
+Settings has one list of routes: a card, "Sites routed to Spaces", with every rule in the order
+that decides, each edited where it is listed, an add row for a site or text in the address, and
+the Space for links from other apps, which moved there. A rule naming no Space is listed as "No
+Space"; `RoutesFromValue` used to drop one with an empty Space, and the next write lost it. The
+Space menu has "Route sites here…", which opens the card on that Space, and "Sort open tabs by
+these rules now". Arc's words find things in the command bar and in Settings' search box, from one
+table, and no label takes one. An Arc import ends on a page that says where each thing is and what
+did not come across, and Arc's routes come across where a rule names one Space
+(`StorableLinkRouting.json`).
+
+Each test was seen red first. On the real build, in light and dark, on a test copy with a made-up
+Arc under a made-up home: the import from Settings and from the welcome flow, Show to the card, the
+menu's two rows with the real pointer, the bar and Settings' search. That found three bugs the
+first tests passed: an apostrophe written as `&#39;` in a line of the card, the page after an
+import ending in a white band under the setup flow's arch, and the search not scrolling to a mark
+inside another element's shadow root. Each has a test now. The Mac's native menu draws no note, so
+a disabled sort row does not say why there. Not run: `mac-checks`, and anything on Windows.
+
 ## 2026-11-05 -- A six-hour test no longer takes 50 seconds on the Mac
 
 `IdleWindowsTest.NothingSweepsAPopupOrALittleWindow` went over the launcher's 45-second limit twice

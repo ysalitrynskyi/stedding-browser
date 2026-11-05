@@ -1,0 +1,881 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Thu, 5 Nov 2026 13:56:58 -0500
+Subject: feat: reach the routes from the Space menu, and sort open tabs by
+ them
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The Space menu gets two rows, above the colours. "Route sites here…" opens the
+list of routes on that Space: chrome://settings/stedding?card=routes&space=<id>
+brings the card into view, chooses that Space in the add row and puts the focus
+in its field, using a Settings tab already open (routing D15).
+
+"Sort open tabs by these rules now" moves this window's open tabs, from every
+Space, to the Spaces their rules name, every kind of rule counted. An essential,
+a Space pin, a tab in a folder and a tab in a split stay where they were put, a
+rule naming no Space moves nothing, and the window stays on the Space it shows:
+a tab that leaves it hands the selection on, and no Space comes on screen
+unasked. With nothing to move the row is disabled and says "Nothing to move". The
+card has the same words as a button, which says what it moved, and the command
+bar has "Sort Open Tabs by Routes" while there is a tab to move (routing D16;
+commandbar K40). A Blank Window's Space menu has neither row: no route moves a
+tab there.
+
+chrome://settings/stedding?card=<name> opens the page on the card of that name
+(settings T57), which the command bar and the page after an Arc import go by too.
+
+Why: the second pass of routing, which closes routing D5's partial state
+(BACKLOG S-126, S-422).
+
+Removable when: never as behaviour.
+---
+ .../settings/stedding_page/stedding_page.ts   |  22 +-
+ .../stedding_routes_card.html.ts              |   8 +
+ .../stedding_page/stedding_routes_card.ts     |  36 ++-
+ chrome/browser/ui/spaces/space_model.cc       |  50 ++++
+ chrome/browser/ui/spaces/space_model.h        |   8 +
+ .../ui/spaces/space_model_window_unittest.cc  |  84 +++++++
+ .../ui/views/commandbar/command_bar_view.cc   |   9 +
+ .../commandbar/command_bar_view_unittest.cc   |  24 ++
+ .../ui/views/spaces/space_switcher_view.cc    |  30 +++
+ .../browser/ui/webui/settings/settings_ui.cc  |   9 +
+ .../webui/settings/stedding_spaces_handler.cc |  16 ++
+ .../webui/settings/stedding_spaces_handler.h  |   2 +
+ chrome/test/stedding/BUILD.gn                 |   1 +
+ .../test/stedding/routes_card_browsertest.cc  |  49 ++++
+ .../test/stedding/routes_menu_browsertest.cc  | 216 ++++++++++++++++++
+ 15 files changed, 560 insertions(+), 4 deletions(-)
+ create mode 100644 chrome/test/stedding/routes_menu_browsertest.cc
+
+diff --git a/chrome/browser/resources/settings/stedding_page/stedding_page.ts b/chrome/browser/resources/settings/stedding_page/stedding_page.ts
+index 7c864a21e7fcc..d6233b0c1b50d 100644
+--- a/chrome/browser/resources/settings/stedding_page/stedding_page.ts
++++ b/chrome/browser/resources/settings/stedding_page/stedding_page.ts
+@@ -37,6 +37,7 @@ import {PrefServiceObserverMixinLit} from '/shared/settings/prefs2/pref_service_
+ 
+ import type {DropdownMenuOptionList} from '../controls/settings_dropdown_menu.js';
+ import type {SettingsToggleButtonElement} from '../controls/settings_toggle_button.js';
++import {Router} from '../router.js';
+ import {getSearchManager} from '../search_settings.js';
+ import type {SettingsPlugin} from '../settings_main/settings_plugin.js';
+ 
+@@ -247,8 +248,10 @@ export class SettingsSteddingPageElement extends
+     this.addWebUiListener(
+         'stedding-spaces-changed',
+         (spaces: SteddingSpace[]) => this.spaces_ = spaces);
+-    sendWithPromise('steddingGetSpaces').then((spaces: unknown) => {
++    sendWithPromise('steddingGetSpaces').then(async (spaces: unknown) => {
+       this.spaces_ = spaces as SteddingSpace[];
++      await this.updateComplete;
++      this.showCardFromAddress_();
+     });
+     // windows N5: only where the browser answers (the reference is the
+     // Mac's); a message with no handler kills the browser.
+@@ -482,6 +485,23 @@ export class SettingsSteddingPageElement extends
+         ([target, title]) => ({target, title: loadTimeData.getString(title)}));
+   }
+ 
++  // settings T57: chrome://settings/stedding?card=<name> opens on that card.
++  // routing D15: with &space=<id> it is the routes card, on that Space.
++  private showCardFromAddress_() {
++    const query = Router.getInstance().getQueryParameters();
++    const card = query.get('card');
++    if (!card || !/^[a-z]+$/.test(card)) {
++      return;
++    }
++    this.shadowRoot.querySelector<HTMLElement>(`#${card}Section`)
++        ?.scrollIntoView({block: 'start'});
++    const space = query.get('space');
++    if (space) {
++      this.shadowRoot.querySelector('settings-stedding-routes-card')
++          ?.addFor(space);
++    }
++  }
++
+   protected onSectionJumpClick_(e: Event) {
+     const target = (e.currentTarget as HTMLElement).dataset['target'];
+     const section =
+diff --git a/chrome/browser/resources/settings/stedding_page/stedding_routes_card.html.ts b/chrome/browser/resources/settings/stedding_page/stedding_routes_card.html.ts
+index 943058a46c461..ab83d2b6d241e 100644
+--- a/chrome/browser/resources/settings/stedding_page/stedding_routes_card.html.ts
++++ b/chrome/browser/resources/settings/stedding_page/stedding_routes_card.html.ts
+@@ -94,5 +94,13 @@ export function getHtml(this: SettingsSteddingRoutesCardElement) {
+     $i18n{steddingRouteAdd}
+   </cr-button>
+ </div>
++<div class="hr settings-box" id="routeSort">
++  <div class="flex secondary" id="routeSortResult">
++    ${this.sortLine_()}
++  </div>
++  <cr-button id="sortRoutes" @click="${this.onSortClick_}">
++    $i18n{steddingRouteSort}
++  </cr-button>
++</div>
+ <!--_html_template_end_-->`;
+ }
+diff --git a/chrome/browser/resources/settings/stedding_page/stedding_routes_card.ts b/chrome/browser/resources/settings/stedding_page/stedding_routes_card.ts
+index ce56abb9e5a9a..ae9b2afcae2d7 100644
+--- a/chrome/browser/resources/settings/stedding_page/stedding_routes_card.ts
++++ b/chrome/browser/resources/settings/stedding_page/stedding_routes_card.ts
+@@ -81,6 +81,7 @@ export class SettingsSteddingRoutesCardElement extends
+       addError_: {type: String},
+       ruleErrorIndex_: {type: Number},
+       ruleError_: {type: String},
++      sortResult_: {type: String},
+     };
+   }
+ 
+@@ -93,6 +94,10 @@ export class SettingsSteddingRoutesCardElement extends
+   // The row whose field says why it was refused, and what it says.
+   protected accessor ruleErrorIndex_: number = -1;
+   protected accessor ruleError_: string = '';
++  // What the last sort did, '' before one.
++  protected accessor sortResult_: string = '';
++  // Answered once the first list has come.
++  private routesRead_: Promise<void> = Promise.resolve();
+ 
+   override connectedCallback() {
+     super.connectedCallback();
+@@ -100,9 +105,19 @@ export class SettingsSteddingRoutesCardElement extends
+     this.addWebUiListener(
+         'stedding-routes-changed',
+         (routes: SteddingRoutes) => this.routes_ = routes);
+-    sendWithPromise('steddingGetRoutes').then((routes: unknown) => {
+-      this.routes_ = routes as SteddingRoutes;
+-    });
++    this.routesRead_ =
++        sendWithPromise('steddingGetRoutes').then((routes: unknown) => {
++          this.routes_ = routes as SteddingRoutes;
++        });
++  }
++
++  // routing D15: the add row on `space`, with the focus in its field, for the
++  // Space menu's "Route sites here…". The rules may still be on their way.
++  async addFor(space: string) {
++    this.addSpace_ = space;
++    await this.routesRead_;
++    await this.updateComplete;
++    this.shadowRoot.querySelector<CrInputElement>('#addText')?.focus();
+   }
+ 
+   // The Space the add row names: the one chosen while it is still there, else
+@@ -247,6 +262,21 @@ export class SettingsSteddingRoutesCardElement extends
+         () => select.value = rule.space);
+   }
+ 
++  // A string with an apostrophe written into the template is escaped for
++  // markup, and this line is text: it comes from loadTimeData.
++  protected sortLine_(): string {
++    return this.sortResult_ ||
++        loadTimeData.getString('steddingRouteSortSubLabel');
++  }
++
++  // routing D16: the same sort as the Space menu's row, and what it did.
++  protected async onSortClick_() {
++    const moved = Number(await sendWithPromise('steddingSortTabsByRoutes'));
++    this.sortResult_ = moved === 0 ?
++        loadTimeData.getString('steddingRouteSortNothing') :
++        loadTimeData.getStringF('steddingRouteSortMoved', moved.toString());
++  }
++
+   protected onRemoveClick_(e: Event) {
+     const rule = this.routes_.rules[this.indexOf_(e)];
+     this.ruleErrorIndex_ = -1;
+diff --git a/chrome/browser/ui/spaces/space_model.cc b/chrome/browser/ui/spaces/space_model.cc
+index 3c99c67d21430..fd7582adcced7 100644
+--- a/chrome/browser/ui/spaces/space_model.cc
++++ b/chrome/browser/ui/spaces/space_model.cc
+@@ -2961,6 +2961,56 @@ std::optional<SpaceId> SpaceModel::RouteTab(tabs::TabInterface* tab,
+   return target;
+ }
+ 
++std::vector<std::pair<tabs::TabInterface*, SpaceId>>
++SpaceModel::TabsRoutesWouldMove() {
++  std::vector<std::pair<tabs::TabInterface*, SpaceId>> moves;
++  if (!tab_strip_model_) {
++    return moves;
++  }
++  for (int i = 0; i < tab_strip_model_->count(); ++i) {
++    tabs::TabInterface* const tab = tab_strip_model_->GetTabAtIndex(i);
++    bool in_a_folder = false;
++    for (const tabs::TabCollection* each = tab->GetParentCollection(); each;
++         each = each->GetParentCollection()) {
++      in_a_folder |= each->type() == tabs::TabCollection::Type::FOLDER;
++    }
++    // Each of these was put where it is (routing D16).
++    if (tab->IsPinned() || IsSpacePinned(tab) || tab->IsSplit() ||
++        in_a_folder) {
++      continue;
++    }
++    content::WebContents* const contents = tab->GetContents();
++    const GURL committed = contents->GetLastCommittedURL();
++    const GURL url =
++        committed.is_valid() ? committed : contents->GetVisibleURL();
++    if (!url.SchemeIsHTTPOrHTTPS()) {
++      continue;
++    }
++    const std::optional<SpaceId> target =
++        RouteTargetFor(url, /*external=*/false, /*search=*/false);
++    if (target && *target != SpaceForTab(tab)) {
++      moves.emplace_back(tab, *target);
++    }
++  }
++  return moves;
++}
++
++size_t SpaceModel::CountTabsRoutesWouldMove() {
++  return TabsRoutesWouldMove().size();
++}
++
++size_t SpaceModel::SortOpenTabsByRoutes() {
++  const std::vector<std::pair<tabs::TabInterface*, SpaceId>> moves =
++      TabsRoutesWouldMove();
++  for (const auto& [tab, target] : moves) {
++    SetSpaceForTab(tab, target);
++  }
++  // The window stays on the Space it shows: a tab that left it hands the
++  // selection on as a move does, and no Space comes on screen unasked.
++  EnsureActiveSpaceHasAVisibleTab(/*essential_gives_way=*/false);
++  return moves.size();
++}
++
+ void SpaceModel::FinishRoute(tabs::TabHandle handle,
+                              SpaceId from,
+                              SpaceId to,
+diff --git a/chrome/browser/ui/spaces/space_model.h b/chrome/browser/ui/spaces/space_model.h
+index 5d691472ff2d1..e57231179057d 100644
+--- a/chrome/browser/ui/spaces/space_model.h
++++ b/chrome/browser/ui/spaces/space_model.h
+@@ -469,6 +469,12 @@ class SpaceModel : public TabStripModelObserver,
+                                   const GURL& url,
+                                   bool foreground,
+                                   bool external);
++  // routing D16: "Sort open tabs by these rules now". Moves this window's open
++  // tabs to the Spaces their rules name. Essentials, Space pins and tabs in a
++  // folder or a split stay where they were put. Returns how many moved.
++  size_t SortOpenTabsByRoutes();
++  // How many tabs SortOpenTabsByRoutes() would move now.
++  size_t CountTabsRoutesWouldMove();
+   // D2: the first navigation of a fresh tab, a typed address in a new-tab
+   // page; the tab is in front, so the window follows it. The tab gets new
+   // contents in the jar of the Space the address loads in -- the one the
+@@ -670,6 +676,8 @@ class SpaceModel : public TabStripModelObserver,
+   void SaveTabToSession(tabs::TabInterface* tab, const SpaceId& id);
+ 
+   // One tab's share of SetSpaceForTab and SetSpacePinned (splits J4).
++  // routing D16: each tab a sort would move, and the Space its rule names.
++  std::vector<std::pair<tabs::TabInterface*, SpaceId>> TabsRoutesWouldMove();
+   void SetSpaceForOneTab(tabs::TabInterface* tab, const SpaceId& id);
+   void SetSpacePinnedOnOneTab(tabs::TabInterface* tab, bool pinned, bool move);
+   // pins H14: moves `tab` to the boundary of the Space-pinned run: its end
+diff --git a/chrome/browser/ui/spaces/space_model_window_unittest.cc b/chrome/browser/ui/spaces/space_model_window_unittest.cc
+index 745ded66f6655..3942aa48e9fba 100644
+--- a/chrome/browser/ui/spaces/space_model_window_unittest.cc
++++ b/chrome/browser/ui/spaces/space_model_window_unittest.cc
+@@ -2104,6 +2104,90 @@ TEST_F(SpaceWindowTest, InsertedTabFollowsRoute) {
+   EXPECT_EQ(home, model().SpaceForTab(tabs().GetActiveTab()));
+ }
+ 
++// routing D16: a sort moves the loose tabs a rule names, from every Space, and
++// leaves what was put somewhere: an essential, a Space pin, a tab in a folder
++// or a split. A rule naming no Space moves nothing.
++TEST_F(SpaceWindowTest, SortMovesOnlyLooseTabsARuleNames) {
++  PrefService* const prefs = profile()->GetPrefs();
++  const SpaceId home = model().active_id();
++  Space* const work = model().AddSpace("Work", SK_ColorBLUE);
++  Space* const play = model().AddSpace("Play", SK_ColorGREEN);
++  // Made before the rules, or each would be routed as it opens.
++  AddTab(browser(), GURL("https://a.test/loose"));
++  tabs::TabInterface* const loose = tabs().GetActiveTab();
++  AddTab(browser(), GURL("https://a.test/essential"));
++  tabs::TabInterface* const essential = tabs().GetActiveTab();
++  AddTab(browser(), GURL("https://a.test/folder"));
++  tabs::TabInterface* const in_folder = tabs().GetActiveTab();
++  AddTab(browser(), GURL("https://a.test/split"));
++  tabs::TabInterface* const in_split = tabs().GetActiveTab();
++  AddTab(browser(), GURL("https://a.test/split2"));
++  tabs::TabInterface* const in_split_too = tabs().GetActiveTab();
++  AddTab(browser(), GURL("https://b.test/contains"));
++  tabs::TabInterface* const by_text = tabs().GetActiveTab();
++  AddTab(browser(), GURL("https://c.test/"));
++  tabs::TabInterface* const unruled = tabs().GetActiveTab();
++  AddTab(browser(), GURL("https://d.test/"));
++  tabs::TabInterface* const no_space = tabs().GetActiveTab();
++  model().SetSpaceForTab(by_text, work->id());
++  tabs().SetTabPinned(tabs().GetIndexOfTab(essential), true);
++  tabs().AddToNewFolder({tabs().GetIndexOfTab(in_folder)});
++  Use(tabs(), in_split_too);
++  tabs().AddToNewSplit({tabs().GetIndexOfTab(in_split)},
++                       split_tabs::SplitTabVisualData(),
++                       split_tabs::SplitTabCreatedSource::kToolbarButton);
++  ASSERT_TRUE(in_split->IsSplit() && in_split_too->IsSplit());
++
++  AddRoute(prefs, SiteRouteFor(GURL("https://a.test/"), work->id().ToString()));
++  Route by_contains;
++  by_contains.match = Route::Match::kContains;
++  by_contains.pattern = "/contains";
++  by_contains.space = play->id().ToString();
++  AddRoute(prefs, by_contains);
++  base::ListValue raw = prefs->GetList(stedding::prefs::kSpaceRoutes).Clone();
++  base::DictValue none;
++  none.Set("match", "site");
++  none.Set("pattern", "d.test");
++  none.Set("space", "");
++  raw.Append(std::move(none));
++  prefs->SetList(stedding::prefs::kSpaceRoutes, std::move(raw));
++
++  EXPECT_EQ(2u, model().CountTabsRoutesWouldMove());
++  EXPECT_EQ(2u, model().SortOpenTabsByRoutes());
++  EXPECT_EQ(work->id(), model().SpaceForTab(loose));
++  EXPECT_EQ(play->id(), model().SpaceForTab(by_text)) << "any kind, any Space";
++  EXPECT_EQ(home, model().SpaceForTab(in_folder));
++  EXPECT_EQ(home, model().SpaceForTab(in_split));
++  EXPECT_EQ(home, model().SpaceForTab(unruled));
++  EXPECT_EQ(home, model().SpaceForTab(no_space));
++  EXPECT_TRUE(essential->IsPinned());
++  EXPECT_EQ(0u, model().CountTabsRoutesWouldMove()) << "a second sort is quiet";
++  EXPECT_EQ(0u, model().SortOpenTabsByRoutes());
++}
++
++// routing D16: a Space pin stays, and the window stays on the Space it shows
++// when the active tab is the one that goes.
++TEST_F(SpaceWindowTest, SortStaysOnTheSpaceOnScreen) {
++  const SpaceId home = model().active_id();
++  Space* const work = model().AddSpace("Work", SK_ColorBLUE);
++  AddTab(browser(), GURL("https://b.test/"));
++  tabs::TabInterface* const stays = tabs().GetActiveTab();
++  AddTab(browser(), GURL("https://a.test/pin"));
++  tabs::TabInterface* const pin = tabs().GetActiveTab();
++  model().SetSpacePinned(pin, true);
++  AddTab(browser(), GURL("https://a.test/"));
++  tabs::TabInterface* const active = tabs().GetActiveTab();
++  AddRoute(profile()->GetPrefs(),
++           SiteRouteFor(GURL("https://a.test/"), work->id().ToString()));
++  EXPECT_EQ(1u, model().SortOpenTabsByRoutes());
++  task_environment()->RunUntilIdle();
++  EXPECT_EQ(work->id(), model().SpaceForTab(active));
++  EXPECT_EQ(home, model().SpaceForTab(pin));
++  EXPECT_EQ(home, model().active_id());
++  EXPECT_EQ(home, model().SpaceForTab(tabs().GetActiveTab()));
++  EXPECT_EQ(home, model().SpaceForTab(stays));
++}
++
+ // routing D2 / spaces B2: a tab rebuilt from a session keeps its Space.
+ TEST_F(SpaceWindowTest, RestoredTabIsNotRouted) {
+   const SpaceId home = model().active_id();
+diff --git a/chrome/browser/ui/views/commandbar/command_bar_view.cc b/chrome/browser/ui/views/commandbar/command_bar_view.cc
+index 52955e7e1325a..90271088c0233 100644
+--- a/chrome/browser/ui/views/commandbar/command_bar_view.cc
++++ b/chrome/browser/ui/views/commandbar/command_bar_view.cc
+@@ -975,6 +975,15 @@ void CommandBarView::BuildActions() {
+                               stedding::ShowWelcomeDialog(*browser, "import");
+                             },
+                             base::Unretained(browser_))});
++    // commandbar K40, routing D16: listed with a tab to move.
++    if (spaces && spaces->CountTabsRoutesWouldMove() > 0) {
++      actions_.push_back({u"Sort Open Tabs by Routes", std::u16string(),
++                          base::BindRepeating(
++                              [](spaces::SpaceModel* model) {
++                                model->SortOpenTabsByRoutes();
++                              },
++                              base::Unretained(spaces))});
++    }
+     // import I4: the Arc sidebar, when this Mac has one (the window primed
+     // the check off the UI thread).
+     if (spaces::ArcSidebarPresent()) {
+diff --git a/chrome/browser/ui/views/commandbar/command_bar_view_unittest.cc b/chrome/browser/ui/views/commandbar/command_bar_view_unittest.cc
+index 39ab14c695fa5..77ba6a6c671d2 100644
+--- a/chrome/browser/ui/views/commandbar/command_bar_view_unittest.cc
++++ b/chrome/browser/ui/views/commandbar/command_bar_view_unittest.cc
+@@ -31,6 +31,7 @@
+ #include "chrome/browser/ui/spaces/isolation_mark.h"
+ #include "chrome/browser/ui/spaces/space.h"
+ #include "chrome/browser/ui/spaces/space_model.h"
++#include "chrome/browser/ui/spaces/space_router.h"
+ #include "chrome/browser/ui/stedding/dark_pages.h"
+ #include "chrome/browser/ui/stedding/extension_keyword.h"
+ #include "chrome/browser/ui/stedding/new_documents.h"
+@@ -2826,6 +2827,29 @@ TEST_F(CommandBarViewTest, TheMakeAppRowFollowsItsCommand) {
+ // start only (K10): "move", the start of every Move Tab row, is inside
+ // "remove", and "all" inside "install" and "uninstall", and neither lists
+ // the two app rows.
++// commandbar K40, routing D16: the row is listed with a tab to move, and moves
++// it.
++TEST_F(CommandBarViewTest, TheSortRowFollowsTheRoutes) {
++  spaces::SpaceModel* const model = spaces::SpaceModel::From(browser());
++  ASSERT_TRUE(model);
++  spaces::Space* const work = model->AddSpace("Work", SK_ColorBLUE);
++  AddTab(browser(), GURL("https://a.test/"));
++  tabs::TabInterface* const tab = tabs().GetActiveTab();
++  auto bar = std::make_unique<CommandBarView>(browser());
++  bar->SetModeForTesting(CommandBarView::Mode::kActions);
++  EXPECT_FALSE(HasTitle(*bar, u"Sort Open Tabs by Routes")) << "no rule";
++  bar.reset();
++  spaces::AddRoute(profile()->GetPrefs(),
++                   spaces::SiteRouteFor(GURL("https://a.test/"),
++                                        work->id().ToString()));
++  bar = std::make_unique<CommandBarView>(browser());
++  bar->SetModeForTesting(CommandBarView::Mode::kActions);
++  bar->ContentsChanged(bar->field_for_testing(), u"Sort Open Tabs");
++  ASSERT_TRUE(HasTitle(*bar, u"Sort Open Tabs by Routes"));
++  EXPECT_TRUE(Enter(*bar));
++  EXPECT_EQ(work->id(), model->SpaceForTab(tab));
++}
++
+ TEST_F(CommandBarViewTest, TheManageAppsRowOpensTheAppsPage) {
+ #if BUILDFLAG(IS_MAC)
+   const std::u16string kMakeAppRow = u"Add to Dock…";
+diff --git a/chrome/browser/ui/views/spaces/space_switcher_view.cc b/chrome/browser/ui/views/spaces/space_switcher_view.cc
+index b931e547b6e52..f8fa5eaba1080 100644
+--- a/chrome/browser/ui/views/spaces/space_switcher_view.cc
++++ b/chrome/browser/ui/views/spaces/space_switcher_view.cc
+@@ -24,6 +24,7 @@
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/ui/accelerator_table.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/chrome_pages.h"
+ #include "chrome/browser/ui/color/chrome_color_id.h"
+ #include "chrome/browser/ui/spaces/isolation_mark.h"
+ #include "chrome/browser/ui/spaces/space.h"
+@@ -180,6 +181,9 @@ constexpr int kIsolateSpaceCommand = 203;
+ constexpr int kWipeSessionCommand = 204;
+ // pins H17: Collapse Pinned Tabs, or Expand Pinned Tabs while collapsed.
+ constexpr int kTogglePinsCollapsedCommand = 205;
++// routing D15, D16: the list of routes, on this Space; and a sort by it.
++constexpr int kRouteSitesHereCommand = 206;
++constexpr int kSortTabsByRoutesCommand = 207;
+ 
+ // The colour choices live in space_colors.h: the welcome flow shows the same
+ // five (welcome W7).
+@@ -963,6 +967,19 @@ void SpaceSwitcherView::BuildMenu(const SpaceId& id, SpaceMenuOrigin origin) {
+         u"No pinned tabs");
+   }
+   menu_model_->AddSeparator(ui::NORMAL_SEPARATOR);
++  // routing D15, D16: no route moves a tab into a Blank Window, which has no
++  // Space registry.
++  if (model_->registry()) {
++    menu_model_->AddItem(kRouteSitesHereCommand, u"Route sites here\u2026");
++    menu_model_->AddItem(kSortTabsByRoutesCommand,
++                         u"Sort open tabs by these rules now");
++    if (model_->CountTabsRoutesWouldMove() == 0) {
++      menu_model_->SetMinorText(
++          menu_model_->GetIndexOfCommandId(kSortTabsByRoutesCommand).value(),
++          u"Nothing to move");
++    }
++    menu_model_->AddSeparator(ui::NORMAL_SEPARATOR);
++  }
+   for (size_t i = 0; i < kSpaceColors.size(); ++i) {
+     // A swatch of the colour beside its name.
+     const SkColor color = kSpaceColors.at(i).color;
+@@ -1024,6 +1041,16 @@ void SpaceSwitcherView::ExecuteCommand(int command_id, int event_flags) {
+                              !model_->ArePinsCollapsed(*menu_space_));
+     return;
+   }
++  if (command_id == kRouteSitesHereCommand) {
++    chrome::ShowSettingsSubPage(
++        &*browser_,
++        base::StrCat({"stedding?card=routes&space=", menu_space_->ToString()}));
++    return;
++  }
++  if (command_id == kSortTabsByRoutesCommand) {
++    model_->SortOpenTabsByRoutes();
++    return;
++  }
+   if (command_id == kIsolateSpaceCommand) {
+     // PLAN.md SPC-9: open pages reload in the other jar; it asks first.
+     SetSpaceIsolatedAfterAsking(&*browser_, *menu_space_,
+@@ -1112,6 +1139,9 @@ bool SpaceSwitcherView::IsCommandIdEnabled(int command_id) const {
+     }
+     return false;
+   }
++  if (command_id == kSortTabsByRoutesCommand) {
++    return model_->CountTabsRoutesWouldMove() > 0;
++  }
+   if (command_id == kMoveTabHereCommand) {
+     // Pinned tabs are the essentials row and are in every Space already, so
+     // there is nowhere to move one to.
+diff --git a/chrome/browser/ui/webui/settings/settings_ui.cc b/chrome/browser/ui/webui/settings/settings_ui.cc
+index f1cdc4b6bea47..9095d0de51c81 100644
+--- a/chrome/browser/ui/webui/settings/settings_ui.cc
++++ b/chrome/browser/ui/webui/settings/settings_ui.cc
+@@ -1328,6 +1328,15 @@ SettingsUI::SettingsUI(content::WebUI* web_ui)
+                          "A site, such as github.com");
+   html_source->AddString("steddingRouteAddContainsPlaceholder",
+                          "Text in the address, such as /issues/");
++  // routing D16.
++  html_source->AddString("steddingRouteSort",
++                         "Sort open tabs by these rules now");
++  html_source->AddString(
++      "steddingRouteSortSubLabel",
++      "Moves this window's open tabs to the Spaces their rules name. "
++      "Essentials, pinned tabs and tabs in a folder or a split stay.");
++  html_source->AddString("steddingRouteSortNothing", "Nothing to move.");
++  html_source->AddString("steddingRouteSortMoved", "Tabs moved: $1.");
+   html_source->AddString("steddingRouteNeedsText",
+                          "Type the text to look for in the address.");
+   html_source->AddString(
+diff --git a/chrome/browser/ui/webui/settings/stedding_spaces_handler.cc b/chrome/browser/ui/webui/settings/stedding_spaces_handler.cc
+index de0971e2f1c47..3eb6981814045 100644
+--- a/chrome/browser/ui/webui/settings/stedding_spaces_handler.cc
++++ b/chrome/browser/ui/webui/settings/stedding_spaces_handler.cc
+@@ -106,6 +106,10 @@ void SteddingSpacesHandler::RegisterMessages() {
+       "steddingRemoveRouteRule",
+       base::BindRepeating(&SteddingSpacesHandler::HandleRemoveRouteRule,
+                           base::Unretained(this)));
++  web_ui()->RegisterMessageCallback(
++      "steddingSortTabsByRoutes",
++      base::BindRepeating(&SteddingSpacesHandler::HandleSortTabsByRoutes,
++                          base::Unretained(this)));
+   web_ui()->RegisterMessageCallback(
+       "steddingGetArcImport",
+       base::BindRepeating(&SteddingSpacesHandler::HandleGetArcImport,
+@@ -805,6 +809,18 @@ void SteddingSpacesHandler::HandleRemoveRouteRule(const base::ListValue& args) {
+   spaces::RemoveRouteEqualTo(Profile::FromWebUI(web_ui())->GetPrefs(), rule);
+ }
+ 
++void SteddingSpacesHandler::HandleSortTabsByRoutes(
++    const base::ListValue& args) {
++  if (args.size() != 1U) {
++    return;
++  }
++  AllowJavascript();
++  spaces::SpaceModel* const model = GetModel();
++  ResolveJavascriptCallback(
++      args[0],
++      base::Value(static_cast<int>(model ? model->SortOpenTabsByRoutes() : 0)));
++}
++
+ void SteddingSpacesHandler::HandleGetArcImport(const base::ListValue& args) {
+   if (args.size() != 1U) {
+     return;
+diff --git a/chrome/browser/ui/webui/settings/stedding_spaces_handler.h b/chrome/browser/ui/webui/settings/stedding_spaces_handler.h
+index 0ea199b35daf8..4eb087e2217ac 100644
+--- a/chrome/browser/ui/webui/settings/stedding_spaces_handler.h
++++ b/chrome/browser/ui/webui/settings/stedding_spaces_handler.h
+@@ -118,6 +118,8 @@ class SteddingSpacesHandler : public settings::SettingsPageUIHandler,
+   void HandleAddRouteRule(const base::ListValue& args);
+   void HandleUpdateRouteRule(const base::ListValue& args);
+   void HandleRemoveRouteRule(const base::ListValue& args);
++  // routing D16: steddingSortTabsByRoutes(callback) -> how many tabs moved.
++  void HandleSortTabsByRoutes(const base::ListValue& args);
+   // import I4: steddingGetArcImport(callback) -> the summary line, or "" when
+   // this Mac has no Arc sidebar; steddingImportFromArc(callback) -> what was
+   // imported.
+diff --git a/chrome/test/stedding/BUILD.gn b/chrome/test/stedding/BUILD.gn
+index 44c2719c92306..19cfbdd596b97 100644
+--- a/chrome/test/stedding/BUILD.gn
++++ b/chrome/test/stedding/BUILD.gn
+@@ -64,6 +64,7 @@ test("stedding_browser_tests") {
+     "restored_page_state_browsertest.cc",
+     "restored_title_browsertest.cc",
+     "routes_card_browsertest.cc",
++    "routes_menu_browsertest.cc",
+     "safari_dia_import_browsertest.cc",
+     "screenshot_browsertest.cc",
+     "search_default_browsertest.cc",
+diff --git a/chrome/test/stedding/routes_card_browsertest.cc b/chrome/test/stedding/routes_card_browsertest.cc
+index 7599be520ed2c..f346cd774b639 100644
+--- a/chrome/test/stedding/routes_card_browsertest.cc
++++ b/chrome/test/stedding/routes_card_browsertest.cc
+@@ -25,9 +25,12 @@
+ #include "chrome/test/base/in_process_browser_test.h"
+ #include "chrome/test/base/ui_test_utils.h"
+ #include "components/prefs/pref_service.h"
++#include "components/tabs/public/tab_interface.h"
+ #include "content/public/browser/web_contents.h"
+ #include "content/public/test/browser_test.h"
+ #include "content/public/test/browser_test_utils.h"
++#include "net/dns/mock_host_resolver.h"
++#include "net/test/embedded_test_server/embedded_test_server.h"
+ #include "third_party/skia/include/core/SkColor.h"
+ #include "url/gurl.h"
+ 
+@@ -110,6 +113,7 @@ class RoutesCardTest : public InProcessBrowserTest {
+  protected:
+   void SetUpOnMainThread() override {
+     InProcessBrowserTest::SetUpOnMainThread();
++    host_resolver()->AddRule("*", "127.0.0.1");
+     model_ = spaces::SpaceModel::From(browser());
+     ASSERT_TRUE(model_);
+     home_ = model_->active_id().ToString();
+@@ -139,6 +143,14 @@ class RoutesCardTest : public InProcessBrowserTest {
+     return browser()->GetTabStripModel()->GetActiveWebContents();
+   }
+ 
++  content::WebContents* OpenPageInNewTab() {
++    EXPECT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
++        browser(), GURL("chrome://settings/stedding"),
++        WindowOpenDisposition::NEW_FOREGROUND_TAB,
++        ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
++    return browser()->GetTabStripModel()->GetActiveWebContents();
++  }
++
+   std::string Rows(content::WebContents* page) {
+     return content::EvalJs(page, OnTheCard(kRows)).ExtractString();
+   }
+@@ -398,4 +410,41 @@ IN_PROC_BROWSER_TEST_F(RoutesCardTest, ARuleNamingNoSpaceIsListedAndRemovable) {
+   EXPECT_EQ(work_, spaces::ReadRoutes(prefs_).front().space);
+ }
+ 
++// routing D16: the card's button is the Space menu's sort, and says what it
++// did.
++IN_PROC_BROWSER_TEST_F(RoutesCardTest, TheSortButtonSaysWhatItMoved) {
++  ASSERT_TRUE(embedded_test_server()->Start());
++  ASSERT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
++      browser(), embedded_test_server()->GetURL("a.test", "/title1.html"),
++      WindowOpenDisposition::NEW_FOREGROUND_TAB,
++      ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
++  tabs::TabInterface* const routed =
++      browser()->GetTabStripModel()->GetActiveTab();
++  const auto sort = [&](content::WebContents* page) {
++    return content::ExecJs(page, OnTheCard(R"(
++        card.querySelector('#sortRoutes').click();)"));
++  };
++  const auto says = [&](content::WebContents* page) {
++    return content::EvalJs(page, OnTheCard(R"(
++        return card.querySelector('#routeSortResult').textContent.trim();)"))
++        .ExtractString();
++  };
++  content::WebContents* const page = OpenPageInNewTab();
++  ASSERT_TRUE(base::test::RunUntil([&]() {
++    return content::EvalJs(page, OnTheCard("return !!card && !!card."
++                                           "querySelector('#sortRoutes');"))
++        .ExtractBool();
++  })) << "the card has no button";
++  EXPECT_TRUE(says(page).starts_with("Moves this window's open tabs"))
++      << says(page);
++  ASSERT_TRUE(sort(page));
++  EXPECT_TRUE(base::test::RunUntil(
++      [&]() { return says(page) == "Nothing to move."; }));
++  AddRule(spaces::Route::Match::kSite, "a.test", work_);
++  ASSERT_TRUE(sort(page));
++  EXPECT_TRUE(base::test::RunUntil(
++      [&]() { return says(page) == "Tabs moved: 1."; }));
++  EXPECT_EQ(work_, model_->SpaceForTab(routed).ToString());
++}
++
+ }  // namespace
+diff --git a/chrome/test/stedding/routes_menu_browsertest.cc b/chrome/test/stedding/routes_menu_browsertest.cc
+new file mode 100644
+index 0000000000000..bd75e31ae2616
+--- /dev/null
++++ b/chrome/test/stedding/routes_menu_browsertest.cc
+@@ -0,0 +1,216 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++// docs/features/routing.md D15, D16 and settings T57: the Space menu's two
++// routes rows, run as a click on them runs them, and Settings opened on a card
++// by its address.
++
++#include <optional>
++#include <string>
++#include <string_view>
++
++#include "base/memory/raw_ptr.h"
++#include "base/strings/strcat.h"
++#include "base/strings/utf_string_conversions.h"
++#include "base/test/run_until.h"
++#include "chrome/app/chrome_command_ids.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/ui/browser_commands.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/spaces/space.h"
++#include "chrome/browser/ui/spaces/space_model.h"
++#include "chrome/browser/ui/spaces/space_router.h"
++#include "chrome/browser/ui/stedding/stedding_command_ids.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "chrome/browser/ui/views/frame/browser_view.h"
++#include "chrome/browser/ui/views/spaces/space_switcher_view.h"
++#include "chrome/test/base/in_process_browser_test.h"
++#include "chrome/test/base/ui_test_utils.h"
++#include "chrome/test/stedding/sidebar_test_util.h"
++#include "components/prefs/pref_service.h"
++#include "components/tabs/public/tab_interface.h"
++#include "content/public/browser/web_contents.h"
++#include "content/public/test/browser_test.h"
++#include "content/public/test/browser_test_utils.h"
++#include "net/dns/mock_host_resolver.h"
++#include "net/test/embedded_test_server/embedded_test_server.h"
++#include "third_party/skia/include/core/SkColor.h"
++#include "ui/menus/simple_menu_model.h"
++#include "ui/views/widget/widget.h"
++#include "url/gurl.h"
++
++namespace {
++
++constexpr char16_t kRouteHere[] = u"Route sites here…";
++constexpr char16_t kSortNow[] = u"Sort open tabs by these rules now";
++
++// `body`, run on the settings page with `pick(selector)`, through every shadow
++// root.
++std::string OnThePage(std::string_view body) {
++  return base::StrCat({R"(
++    (() => {
++      const find = (root, selector) => {
++        const hit = root.querySelector(selector);
++        if (hit) {
++          return hit;
++        }
++        for (const element of root.querySelectorAll('*')) {
++          if (element.shadowRoot) {
++            const found = find(element.shadowRoot, selector);
++            if (found) {
++              return found;
++            }
++          }
++        }
++        return null;
++      };
++      const pick = selector => find(document, selector);
++  )",
++                       body, "\n    })()"});
++}
++
++class RoutesMenuTest : public InProcessBrowserTest {
++ protected:
++  void SetUpOnMainThread() override {
++    InProcessBrowserTest::SetUpOnMainThread();
++    host_resolver()->AddRule("*", "127.0.0.1");
++    ASSERT_TRUE(embedded_test_server()->Start());
++    model_ = spaces::SpaceModel::From(browser());
++    ASSERT_TRUE(model_);
++    work_ = model_->AddSpace("Work", SK_ColorBLUE)->id();
++  }
++
++  void TearDownOnMainThread() override {
++    model_ = nullptr;
++    InProcessBrowserTest::TearDownOnMainThread();
++  }
++
++  TabStripModel& tabs() { return *browser()->GetTabStripModel(); }
++
++  ui::SimpleMenuModel* MenuFor(BrowserWindowInterface* window,
++                               const spaces::SpaceId& id) {
++    views::Widget* const widget =
++        BrowserView::GetBrowserViewForBrowser(window)->GetWidget();
++    spaces::SpaceSwitcherView* const switcher =
++        stedding::test::FindView<spaces::SpaceSwitcherView>(
++            widget->GetRootView());
++    return switcher ? switcher->BuildMenuForTesting(id) : nullptr;
++  }
++
++  static std::optional<size_t> RowOf(ui::SimpleMenuModel* menu,
++                                     const std::u16string& label) {
++    for (size_t i = 0; menu && i < menu->GetItemCount(); ++i) {
++      if (menu->GetLabelAt(i) == label) {
++        return i;
++      }
++    }
++    return std::nullopt;
++  }
++
++  tabs::TabInterface* OpenSite(const std::string& host) {
++    EXPECT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
++        browser(), embedded_test_server()->GetURL(host, "/title1.html"),
++        WindowOpenDisposition::NEW_FOREGROUND_TAB,
++        ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
++    return tabs().GetActiveTab();
++  }
++
++  raw_ptr<spaces::SpaceModel> model_ = nullptr;
++  std::optional<spaces::SpaceId> work_;
++};
++
++// routing D15: "Route sites here…" opens the list on that Space: the card in
++// view, the Space chosen in the add row, the field focused.
++IN_PROC_BROWSER_TEST_F(RoutesMenuTest, RouteSitesHereOpensTheListOnThatSpace) {
++  ui::SimpleMenuModel* const menu = MenuFor(browser(), *work_);
++  ASSERT_TRUE(menu) << "the sidebar has no Space switcher";
++  const std::optional<size_t> row = RowOf(menu, kRouteHere);
++  ASSERT_TRUE(row) << "the Space menu has no row for it";
++  ASSERT_TRUE(menu->IsEnabledAt(*row));
++  menu->ActivatedAt(*row);
++  ASSERT_TRUE(base::test::RunUntil([&]() {
++    return tabs().GetActiveWebContents()->GetVisibleURL().host() == "settings";
++  }));
++  content::WebContents* const page = tabs().GetActiveWebContents();
++  EXPECT_EQ("/stedding", page->GetVisibleURL().path());
++  EXPECT_TRUE(base::test::RunUntil([&]() {
++    return content::EvalJs(page, OnThePage(content::JsReplace(R"(
++        const card = pick('settings-stedding-routes-card');
++        if (!card) {
++          return false;
++        }
++        const space = card.shadowRoot.querySelector('#addSpace');
++        const field = card.shadowRoot.querySelector('#addText');
++        const box = card.getBoundingClientRect();
++        return !!space && space.value === $1 &&
++            card.shadowRoot.activeElement === field &&
++            box.top < window.innerHeight && box.bottom > 0;)",
++                                                              work_->ToString())))
++        .ExtractBool();
++  })) << "the card is not on that Space with its field focused";
++}
++
++// settings T57: a card named in the address is the one shown, which the
++// command bar and the page after an import go by.
++IN_PROC_BROWSER_TEST_F(RoutesMenuTest, ACardNamedInTheAddressIsShown) {
++  ASSERT_TRUE(ui_test_utils::NavigateToURL(
++      browser(), GURL("chrome://settings/stedding?card=sync")));
++  content::WebContents* const page = tabs().GetActiveWebContents();
++  EXPECT_TRUE(base::test::RunUntil([&]() {
++    return content::EvalJs(page, OnThePage(R"(
++        const card = pick('#syncSection');
++        if (!card) {
++          return false;
++        }
++        const box = card.getBoundingClientRect();
++        return box.top < window.innerHeight && box.bottom > 0;)"))
++        .ExtractBool();
++  })) << "the card named was not scrolled to";
++}
++
++// routing D16: the row moves what the rules name and is enabled only with
++// something to move.
++IN_PROC_BROWSER_TEST_F(RoutesMenuTest, TheSortRowMovesTheOpenTabs) {
++  const spaces::SpaceId home = model_->active_id();
++  tabs::TabInterface* const routed = OpenSite("a.test");
++  tabs::TabInterface* const other = OpenSite("b.test");
++  {
++    ui::SimpleMenuModel* const menu = MenuFor(browser(), home);
++    const std::optional<size_t> row = RowOf(menu, kSortNow);
++    ASSERT_TRUE(row) << "the Space menu has no row for it";
++    EXPECT_FALSE(menu->IsEnabledAt(*row)) << "no rule, nothing to move";
++    EXPECT_EQ(u"Nothing to move", menu->GetMinorTextAt(*row));
++  }
++  spaces::AddRoute(
++      browser()->GetProfile()->GetPrefs(),
++      spaces::SiteRouteFor(GURL("https://a.test/"), work_->ToString()));
++  EXPECT_EQ(home, model_->SpaceForTab(routed)) << "a rule moves nothing alone";
++  ui::SimpleMenuModel* const menu = MenuFor(browser(), home);
++  const std::optional<size_t> row = RowOf(menu, kSortNow);
++  ASSERT_TRUE(row);
++  ASSERT_TRUE(menu->IsEnabledAt(*row));
++  menu->ActivatedAt(*row);
++  EXPECT_EQ(*work_, model_->SpaceForTab(routed));
++  EXPECT_EQ(home, model_->SpaceForTab(other));
++  EXPECT_EQ(home, model_->active_id()) << "the window stays where it is";
++}
++
++// routing D15, D16: no route moves a tab into a Blank Window, so its menu
++// offers neither row.
++IN_PROC_BROWSER_TEST_F(RoutesMenuTest, ABlankWindowsMenuHasNeitherRow) {
++  ASSERT_TRUE(MenuFor(browser(), *work_));
++  EXPECT_TRUE(RowOf(MenuFor(browser(), *work_), kRouteHere));
++  ui_test_utils::BrowserCreatedObserver created;
++  chrome::ExecuteCommand(browser(), IDC_STEDDING_NEW_BLANK_WINDOW);
++  BrowserWindowInterface* const blank = created.Wait();
++  ASSERT_TRUE(blank);
++  spaces::SpaceModel* const blank_model = spaces::SpaceModel::From(blank);
++  ASSERT_TRUE(blank_model);
++  ui::SimpleMenuModel* const menu = MenuFor(blank, blank_model->active_id());
++  ASSERT_TRUE(menu);
++  EXPECT_FALSE(RowOf(menu, kRouteHere));
++  EXPECT_FALSE(RowOf(menu, kSortNow));
++}
++
++}  // namespace

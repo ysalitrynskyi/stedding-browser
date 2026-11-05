@@ -1,0 +1,876 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Thu, 5 Nov 2026 14:13:38 -0500
+Subject: feat: find routes and other places by the words of another browser
+
+A person from Arc types "air traffic" and Stedding answers with nothing, because
+no label says it, and none should. A few words are now search terms and nothing
+else, in one table, stedding::FindWordsTable, which Settings and the command bar
+both read. "air traffic", "air traffic control", "traffic", "routes" and
+"routing" find the routes card; "profile" and "profiles" find a Space's
+Independent session; "favorites" finds Essentials per row; "little arc" finds
+little windows; "auto archive" finds the archive; "url bar" finds the address.
+"boost" finds nothing (settings T58; commandbar K39). The last four are from
+the map on the site's page for people leaving Arc.
+
+In Settings a row carries its words in search-hint, on the element that holds
+its label or on its settings-toggle-button. search_settings.ts reads the hint
+from either, and when only the hint holds the word it marks the row's text whole,
+since the word itself is nowhere on the page. The Stedding page brings the first
+mark into view, for the same reason.
+
+In the bar each place is an action, and a place that has a row already, a
+preference's, is found by the table's words alone, so its name lists no second
+row. In Cmd-T's tabs mode a place shows too, labelled Settings, under the tabs
+and the archive and above the suggestions, for five letters or more and at most
+two places, so a person who types "air traffic" and not Tab finds it. The typed
+row stays first and chosen. Choosing a place opens the card (settings T57).
+
+Why: the features exist and people from Arc do not find them (BACKLOG S-422).
+
+Removable when: never as behaviour. The words may go when nobody comes from Arc.
+---
+ .../resources/settings/search_settings.ts     |  36 +++-
+ .../stedding_page/stedding_page.html.ts       |  10 +-
+ .../settings/stedding_page/stedding_page.ts   |  23 +-
+ .../stedding_routes_card.html.ts              |   2 +-
+ chrome/browser/ui/stedding/BUILD.gn           |  10 +
+ chrome/browser/ui/stedding/find_words.cc      |  31 +++
+ chrome/browser/ui/stedding/find_words.h       |  40 ++++
+ .../ui/stedding/find_words_unittest.cc        |  53 +++++
+ chrome/browser/ui/views/commandbar/BUILD.gn   |   2 +
+ .../ui/views/commandbar/command_bar_view.cc   |  60 +++++-
+ .../ui/views/commandbar/command_bar_view.h    |   6 +
+ .../commandbar/command_bar_view_unittest.cc   |  58 +++++
+ chrome/browser/ui/webui/settings/BUILD.gn     |   1 +
+ .../browser/ui/webui/settings/settings_ui.cc  |   5 +
+ chrome/test/stedding/BUILD.gn                 |   1 +
+ .../test/stedding/find_words_browsertest.cc   | 200 ++++++++++++++++++
+ 16 files changed, 525 insertions(+), 13 deletions(-)
+ create mode 100644 chrome/browser/ui/stedding/find_words.cc
+ create mode 100644 chrome/browser/ui/stedding/find_words.h
+ create mode 100644 chrome/browser/ui/stedding/find_words_unittest.cc
+ create mode 100644 chrome/test/stedding/find_words_browsertest.cc
+
+diff --git a/chrome/browser/resources/settings/search_settings.ts b/chrome/browser/resources/settings/search_settings.ts
+index dc64aa8f402d8..1bafd88d91af8 100644
+--- a/chrome/browser/resources/settings/search_settings.ts
++++ b/chrome/browser/resources/settings/search_settings.ts
+@@ -33,6 +33,27 @@ const SKIP_SEARCH_CSS_ATTRIBUTE: string = 'no-search';
+  */
+ const SEARCH_HINT_CSS_ATTRIBUTE: string = 'search-hint';
+ 
++/**
++ * settings T58: the hint of the text in `node`: its parent's, or, for the label
++ * of a settings-toggle-button, the one on the button itself, which is the row
++ * a page writes.
++ */
++function searchHintOf(node: Node): string {
++  const parent = node.parentElement;
++  if (!parent) {
++    return '';
++  }
++  if (parent.hasAttribute(SEARCH_HINT_CSS_ATTRIBUTE)) {
++    return parent.getAttribute(SEARCH_HINT_CSS_ATTRIBUTE)!;
++  }
++  const root = parent.getRootNode();
++  const isLabel = parent.matches('#labelWrapper > .label:not(#sub-label)');
++  return isLabel && root instanceof ShadowRoot &&
++          root.host.hasAttribute(SEARCH_HINT_CSS_ATTRIBUTE) ?
++      root.host.getAttribute(SEARCH_HINT_CSS_ATTRIBUTE)! :
++      '';
++}
++
+ /**
+  * List of elements types that should not be searched at all.
+  * The only DOM-MODULE node is in <body> which is not searched, therefore
+@@ -97,11 +118,7 @@ function findAndHighlightMatches(request: SearchRequest, root: Node): number {
+     if (node.nodeType === Node.TEXT_NODE) {
+       let textContent = node.nodeValue!;
+ 
+-      if (node.parentElement &&
+-          node.parentElement.hasAttribute(SEARCH_HINT_CSS_ATTRIBUTE)) {
+-        textContent +=
+-            node.parentElement.getAttribute(SEARCH_HINT_CSS_ATTRIBUTE);
+-      }
++      textContent += searchHintOf(node);
+ 
+       if (textContent.trim().length === 0) {
+         return;
+@@ -133,7 +150,14 @@ function findAndHighlightMatches(request: SearchRequest, root: Node): number {
+               /*horizontallyCenter=*/ true);
+         } else {
+           request.addTextObserver(node);
+-          highlights.push(highlight(node, ranges));
++          // settings T58: a word that only the hint holds has nothing of its
++          // own to mark, so the text is marked whole.
++          const length = node.nodeValue!.length;
++          highlights.push(highlight(
++              node,
++              ranges.every(range => range.start >= length) ?
++                  [{start: 0, length}] :
++                  ranges));
+         }
+       }
+ 
+diff --git a/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts b/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
+index be0cbca3ecc8c..297e409811615 100644
+--- a/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
++++ b/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
+@@ -173,13 +173,14 @@ export function getHtml(this: SettingsSteddingPageElement) {
+   <settings-toggle-button
+       id="addressInSidebar"
+       class="hr"
++      search-hint=" $i18n{steddingFindAddress}"
+       pref-key="stedding.sidebar.address_in_sidebar"
+       label="$i18n{steddingAddressInSidebarLabel}"
+       sub-label="$i18n{steddingAddressInSidebarSubLabel}">
+   </settings-toggle-button>
+   <div class="hr settings-box">
+     <div class="start" id="essentialsPerRowLabel">
+-      <div class="label">$i18n{steddingEssentialsPerRowLabel}</div>
++      <div class="label" search-hint=" $i18n{steddingFindEssentials}">$i18n{steddingEssentialsPerRowLabel}</div>
+       <div class="secondary">$i18n{steddingEssentialsPerRowSubLabel}</div>
+     </div>
+     <settings-dropdown-menu id="essentialsPerRow"
+@@ -378,7 +379,7 @@ export function getHtml(this: SettingsSteddingPageElement) {
+   </settings-toggle-button>
+   <div class="hr settings-box">
+     <div class="start" id="archiveLabel">
+-      <div class="label">$i18n{steddingArchiveLabel}</div>
++      <div class="label" search-hint=" $i18n{steddingFindArchive}">$i18n{steddingArchiveLabel}</div>
+       <div class="secondary">$i18n{steddingArchiveSubLabel}</div>
+     </div>
+     <settings-dropdown-menu id="archiveIdleHours"
+@@ -464,6 +465,7 @@ export function getHtml(this: SettingsSteddingPageElement) {
+   </div>
+   <settings-toggle-button
+       id="littleWindow"
++      search-hint=" $i18n{steddingFindLittleWindows}"
+       class="hr"
+       pref-key="stedding.little.enabled"
+       label="$i18n{steddingLittleLabel}"
+@@ -550,6 +552,7 @@ export function getHtml(this: SettingsSteddingPageElement) {
+   <settings-toggle-button
+       id="spacesOwnSession"
+       class="hr"
++      search-hint=" $i18n{steddingFindSessions}"
+       pref-key="stedding.spaces.own_session"
+       label="$i18n{steddingSpacesOwnSessionLabel}"
+       sub-label="$i18n{steddingSpacesOwnSessionSubLabel}"
+@@ -605,7 +608,8 @@ export function getHtml(this: SettingsSteddingPageElement) {
+             aria-label="$i18n{steddingIndependentSessionLabel}"
+             @change="${this.onSpaceIsolatedChange_}">
+         </cr-toggle>
+-        <span class="space-isolated-label" aria-hidden="true">
++        <span class="space-isolated-label" aria-hidden="true"
++            search-hint=" $i18n{steddingFindSessions}">
+           $i18n{steddingIndependentSessionLabel}
+         </span>
+       </div>
+diff --git a/chrome/browser/resources/settings/stedding_page/stedding_page.ts b/chrome/browser/resources/settings/stedding_page/stedding_page.ts
+index d6233b0c1b50d..f6417bb359033 100644
+--- a/chrome/browser/resources/settings/stedding_page/stedding_page.ts
++++ b/chrome/browser/resources/settings/stedding_page/stedding_page.ts
+@@ -677,7 +677,28 @@ export class SettingsSteddingPageElement extends
+   // SettingsPlugin implementation
+   async searchContents(query: string) {
+     const searchRequest = await getSearchManager().search(query, this);
+-    return searchRequest.getSearchResult();
++    const result = searchRequest.getSearchResult();
++    // settings T58: this page is long, and a word that is only a hint is
++    // nowhere to be seen: the first mark comes into view.
++    if (!result.canceled && query) {
++      this.firstMark_(this.shadowRoot)?.scrollIntoView({block: 'center'});
++    }
++    return result;
++  }
++
++  // The first search mark under `root`, through the shadow roots of the rows
++  // and the cards that are elements of their own.
++  private firstMark_(root: ParentNode): Element|null {
++    for (const element of root.querySelectorAll('*')) {
++      if (element.classList.contains('search-highlight-hit')) {
++        return element;
++      }
++      const inside = element.shadowRoot && this.firstMark_(element.shadowRoot);
++      if (inside) {
++        return inside;
++      }
++    }
++    return null;
+   }
+ }
+ 
+diff --git a/chrome/browser/resources/settings/stedding_page/stedding_routes_card.html.ts b/chrome/browser/resources/settings/stedding_page/stedding_routes_card.html.ts
+index ab83d2b6d241e..f4f9d90500430 100644
+--- a/chrome/browser/resources/settings/stedding_page/stedding_routes_card.html.ts
++++ b/chrome/browser/resources/settings/stedding_page/stedding_routes_card.html.ts
+@@ -9,7 +9,7 @@ import type {SettingsSteddingRoutesCardElement} from './stedding_routes_card.js'
+ export function getHtml(this: SettingsSteddingRoutesCardElement) {
+   return html`<!--_html_template_start_-->
+ <div class="settings-box" id="routesIntro">
+-  <div class="flex secondary">$i18n{steddingRoutesIntro}</div>
++  <div class="flex secondary" search-hint=" $i18n{steddingFindRoutes}">$i18n{steddingRoutesIntro}</div>
+ </div>
+ <div class="hr settings-box" id="externalDefault">
+   <div class="flex">
+diff --git a/chrome/browser/ui/stedding/BUILD.gn b/chrome/browser/ui/stedding/BUILD.gn
+index 3f037fed407ba..118447acbd3ba 100644
+--- a/chrome/browser/ui/stedding/BUILD.gn
++++ b/chrome/browser/ui/stedding/BUILD.gn
+@@ -249,6 +249,14 @@ source_set("media_keys") {
+ 
+ # docs/features/commandbar.md K28 (BACKLOG S-116): the services' blank
+ # documents the command bar offers. Pure data, so it takes only //base.
++# docs/features/settings.md T58, commandbar.md K39: the words another browser
++# uses, which Settings and the command bar read from one table.
++source_set("find_words") {
++  public = [ "find_words.h" ]
++  sources = [ "find_words.cc" ]
++  public_deps = [ "//base" ]
++}
++
+ source_set("new_documents") {
+   public = [ "new_documents.h" ]
+   sources = [ "new_documents.cc" ]
+@@ -1031,6 +1039,7 @@ source_set("unit_tests") {
+     "download_flight_unittest.cc",
+     "file_trash_unittest.cc",
+     "sidebar_panels_unittest.cc",
++    "find_words_unittest.cc",
+     "new_documents_unittest.cc",
+     "pin_lifecycle_unittest.cc",
+     "privacy_defaults_unittest.cc",
+@@ -1071,6 +1080,7 @@ source_set("unit_tests") {
+     ":menu_rules",
+     "//chrome/browser/ui/spaces:router",
+     ":motion",
++    ":find_words",
+     ":new_documents",
+     # docs/features/sidebar-panels.md.
+     ":download_flight",
+diff --git a/chrome/browser/ui/stedding/find_words.cc b/chrome/browser/ui/stedding/find_words.cc
+new file mode 100644
+index 0000000000000..2eb143e2e23d4
+--- /dev/null
++++ b/chrome/browser/ui/stedding/find_words.cc
+@@ -0,0 +1,31 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/stedding/find_words.h"
++
++namespace stedding {
++
++namespace {
++
++constexpr FindWords kFindWords[] = {
++    {u"Sites Routed to Spaces", "routes", "steddingFindRoutes",
++     u"air traffic control routes route routing", /*title_finds=*/true},
++    {u"Independent Sessions", "spaces", "steddingFindSessions",
++     u"profile profiles"},
++    {u"Essentials per Row", "sidebar", "steddingFindEssentials",
++     u"favorites favourites"},
++    {u"Little Windows", "peek", "steddingFindLittleWindows", u"little arc"},
++    {u"Archive Idle Tabs", "tabs", "steddingFindArchive",
++     u"auto archive auto-archive"},
++    {u"Show the Address in the Sidebar", "sidebar", "steddingFindAddress",
++     u"url bar"},
++};
++
++}  // namespace
++
++base::span<const FindWords> FindWordsTable() {
++  return kFindWords;
++}
++
++}  // namespace stedding
+diff --git a/chrome/browser/ui/stedding/find_words.h b/chrome/browser/ui/stedding/find_words.h
+new file mode 100644
+index 0000000000000..8a04a034561d7
+--- /dev/null
++++ b/chrome/browser/ui/stedding/find_words.h
+@@ -0,0 +1,40 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_STEDDING_FIND_WORDS_H_
++#define CHROME_BROWSER_UI_STEDDING_FIND_WORDS_H_
++
++#include <string_view>
++
++#include "base/containers/span.h"
++
++namespace stedding {
++
++// A place in Settings and the words that find it there and in the command bar
++// (docs/features/settings.md T58, commandbar.md K39; BACKLOG S-422). The words
++// are what a person who comes from another browser types. They are search
++// terms and nothing else: no label, heading or feature takes one.
++struct FindWords {
++  // The command bar's row, under Stedding's own name for the place.
++  std::u16string_view title;
++  // The card of chrome://settings/stedding?card=<card> the place is on.
++  std::string_view card;
++  // The string the settings page's rows read their search hint from.
++  std::string_view hint_id;
++  // The words, each found from its start in the bar, and anywhere, as a
++  // phrase, in Settings' search box.
++  std::u16string_view words;
++  // Whether the row's title finds it too. Off for a place the bar has a row
++  // for already, a preference's, which its title would only repeat.
++  bool title_finds = false;
++};
++
++// Every place, in the order the command bar lists them. Keep it small: a word
++// goes in when a person looking for that place would type it. Pure data, so it
++// can be tested with no window.
++base::span<const FindWords> FindWordsTable();
++
++}  // namespace stedding
++
++#endif  // CHROME_BROWSER_UI_STEDDING_FIND_WORDS_H_
+diff --git a/chrome/browser/ui/stedding/find_words_unittest.cc b/chrome/browser/ui/stedding/find_words_unittest.cc
+new file mode 100644
+index 0000000000000..ab3bf540aa8c6
+--- /dev/null
++++ b/chrome/browser/ui/stedding/find_words_unittest.cc
+@@ -0,0 +1,53 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/stedding/find_words.h"
++
++#include <string>
++#include <string_view>
++
++#include "base/strings/strcat.h"
++#include "base/strings/string_util.h"
++#include "base/strings/utf_string_conversions.h"
++#include "testing/gtest/include/gtest/gtest.h"
++
++namespace stedding {
++namespace {
++
++// The words of the row titled `title`.
++std::u16string_view WordsOf(std::u16string_view title) {
++  for (const FindWords& place : FindWordsTable()) {
++    if (place.title == title) {
++      return place.words;
++    }
++  }
++  return std::u16string_view();
++}
++
++// settings T58, commandbar K39: the words the owner named are in the table,
++// and they stay search terms: no Stedding name takes one.
++TEST(FindWordsTest, TheTableHoldsTheWordsAndNoLabelDoes) {
++  const std::u16string_view routes = WordsOf(u"Sites Routed to Spaces");
++  for (std::u16string_view word : {u"air", u"traffic", u"control", u"routes"}) {
++    EXPECT_NE(std::u16string_view::npos, routes.find(word));
++  }
++  EXPECT_NE(std::u16string_view::npos,
++            WordsOf(u"Independent Sessions").find(u"profile"));
++  EXPECT_NE(std::u16string_view::npos,
++            WordsOf(u"Essentials per Row").find(u"favorites"));
++  EXPECT_EQ(u"little arc", WordsOf(u"Little Windows"));
++  for (const FindWords& place : FindWordsTable()) {
++    const std::u16string title =
++        base::StrCat({u" ", base::ToLowerASCII(place.title), u" "});
++    for (const char16_t* word : {u" arc ", u" traffic ", u" profile "}) {
++      EXPECT_EQ(std::u16string::npos, title.find(word))
++          << base::UTF16ToUTF8(title);
++    }
++    EXPECT_FALSE(place.card.empty());
++    EXPECT_EQ(std::u16string_view::npos, place.words.find(u"boost"));
++  }
++}
++
++}  // namespace
++}  // namespace stedding
+diff --git a/chrome/browser/ui/views/commandbar/BUILD.gn b/chrome/browser/ui/views/commandbar/BUILD.gn
+index 6bf98b5bd92d6..d90b10ea30234 100644
+--- a/chrome/browser/ui/views/commandbar/BUILD.gn
++++ b/chrome/browser/ui/views/commandbar/BUILD.gn
+@@ -46,6 +46,7 @@ source_set("commandbar") {
+     "//chrome/browser/ui/stedding:prefs",
+     "//chrome/browser/ui/stedding:sleep_tabs",
+     "//chrome/browser/ui/stedding:media_keys",
++    "//chrome/browser/ui/stedding:find_words",
+     "//chrome/browser/ui/stedding:new_documents",
+     "//chrome/browser/ui/stedding:tab_names",
+     "//chrome/browser/ui/tabs:tab_strip",
+@@ -83,6 +84,7 @@ source_set("unit_tests") {
+     "//chrome/browser/ui/spaces",
+     "//chrome/browser/ui/stedding:address_row",
+     "//chrome/browser/ui/stedding:extension_keyword",
++    "//chrome/browser/ui/stedding:find_words",
+     "//chrome/browser/ui/stedding:new_documents",
+     "//chrome/browser/ui/stedding:prefs",
+     "//chrome/browser/ui/stedding:tab_names",
+diff --git a/chrome/browser/ui/views/commandbar/command_bar_view.cc b/chrome/browser/ui/views/commandbar/command_bar_view.cc
+index 90271088c0233..66bc933a81a46 100644
+--- a/chrome/browser/ui/views/commandbar/command_bar_view.cc
++++ b/chrome/browser/ui/views/commandbar/command_bar_view.cc
+@@ -39,9 +39,11 @@
+ #include "chrome/browser/ui/browser_command_controller.h"
+ #include "chrome/browser/ui/browser_live_tab_context.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/chrome_pages.h"
+ #include "chrome/browser/ui/navigator/browser_navigator.h"
+ #include "chrome/browser/ui/navigator/browser_navigator_params.h"
+ #include "chrome/browser/ui/singleton_tabs.h"
++#include "chrome/browser/ui/stedding/find_words.h"
+ #include "chrome/browser/ui/spaces/arc_sidebar_importer.h"
+ #include "chrome/browser/ui/spaces/folder_commands.h"
+ #include "chrome/browser/ui/spaces/space.h"
+@@ -177,6 +179,11 @@ constexpr size_t kMaxArchivedResults = 3;
+ // commandbar K28: blank-document rows in tabs mode, after the archived ones;
+ // actions mode lists them all.
+ constexpr size_t kMaxNewDocumentResults = 4;
++// commandbar K39: tabs mode lists a place of Settings from this many letters,
++// so a word on its way to a search or a site lists none, and at most this many
++// places.
++constexpr size_t kPlaceLetters = 5;
++constexpr size_t kMaxPlaceResults = 2;
+ // Between a row's title and what is drawn at its right.
+ constexpr char16_t kRowSeparator[] = u"   \u2014   ";
+ 
+@@ -975,6 +982,21 @@ void CommandBarView::BuildActions() {
+                               stedding::ShowWelcomeDialog(*browser, "import");
+                             },
+                             base::Unretained(browser_))});
++    // commandbar K39, settings T58: each place the words of another browser
++    // find, under Stedding's name for it.
++    for (const stedding::FindWords& place : stedding::FindWordsTable()) {
++      Action row;
++      row.title = std::u16string(place.title);
++      row.keywords = std::u16string(place.words);
++      row.words_only = !place.title_finds;
++      row.run = base::BindRepeating(
++          [](BrowserWindowInterface* browser, std::string_view card) {
++            chrome::ShowSettingsSubPage(browser,
++                                        base::StrCat({"stedding?card=", card}));
++          },
++          base::Unretained(browser_), place.card);
++      actions_.push_back(std::move(row));
++    }
+     // commandbar K40, routing D16: listed with a tab to move.
+     if (spaces && spaces->CountTabsRoutesWouldMove() > 0) {
+       actions_.push_back({u"Sort Open Tabs by Routes", std::u16string(),
+@@ -1569,8 +1591,13 @@ void CommandBarView::AddActionRows() {
+     if (extensions_only_ && !actions_[i].extension) {
+       continue;
+     }
+-    if (Matches(actions_[i].title, query_) ||
+-        MatchesKeywords(actions_[i].title, actions_[i].keywords, query_)) {
++    const bool found =
++        actions_[i].words_only
++            ? MatchesKeywords(std::u16string(), actions_[i].keywords, query_)
++            : Matches(actions_[i].title, query_) ||
++                  MatchesKeywords(actions_[i].title, actions_[i].keywords,
++                                  query_);
++    if (found) {
+       rows_.push_back({.kind = RowKind::kAction,
+                        .title = actions_[i].title,
+                        .detail = actions_[i].chord,
+@@ -2094,6 +2121,28 @@ void CommandBarView::UpdateResults(const std::u16string& query,
+     }
+   }
+ 
++  // commandbar K39: a place of Settings the typed words find, as actions mode
++  // finds it, so a person who types "air traffic" here and not Tab finds it
++  // too. The typed row stays first and chosen. Normal windows only (K15).
++  if (query_.size() >= kPlaceLetters &&
++      browser_->GetType() == BrowserWindowInterface::Type::TYPE_NORMAL &&
++      !browser_->GetProfile()->IsOffTheRecord()) {
++    size_t place_rows = 0;
++    for (const stedding::FindWords& place : stedding::FindWordsTable()) {
++      const std::u16string title(place.title);
++      if (place_rows < kMaxPlaceResults &&
++          MatchesKeywords(place.title_finds ? title : std::u16string(),
++                          std::u16string(place.words), query_)) {
++        rows_.push_back({.kind = RowKind::kPlace,
++                         .title = title,
++                         .detail = u"Settings",
++                         .url = GURL(base::StrCat(
++                             {"chrome://settings/stedding?card=", place.card}))});
++        ++place_rows;
++      }
++    }
++  }
++
+   // The omnibox's own providers -- history, bookmarks, search suggestions --
+   // answer asynchronously through OnResultChanged.
+   if (autocomplete_) {
+@@ -2504,6 +2553,8 @@ ui::ImageModel CommandBarView::RowIcon(const Row& row) {
+       return glyph(vector_icons::kSearchIcon);
+     case RowKind::kSiteInformation:
+       return glyph(vector_icons::kInfoIcon);
++    case RowKind::kPlace:
++      return glyph(vector_icons::kSettingsIcon);
+     case RowKind::kTyped:
+     case RowKind::kSuggestion:
+       if (!row.icon_page.is_valid()) {
+@@ -2728,6 +2779,11 @@ void CommandBarView::RunRow(size_t index) {
+       OpenNewDocument(row.url);
+       Close();
+       return;
++    case RowKind::kPlace:
++      chrome::ShowSettingsSubPage(browser_,
++                                  base::StrCat({"stedding?", row.url.query()}));
++      Close();
++      return;
+     case RowKind::kAction: {
+       const Action action = actions_.at(row.action);
+       Run(action);
+diff --git a/chrome/browser/ui/views/commandbar/command_bar_view.h b/chrome/browser/ui/views/commandbar/command_bar_view.h
+index e21204acee738..c0a72764d58f3 100644
+--- a/chrome/browser/ui/views/commandbar/command_bar_view.h
++++ b/chrome/browser/ui/views/commandbar/command_bar_view.h
+@@ -247,6 +247,8 @@ class CommandBarView : public views::View,
+     kNewDocument,
+     // Shows the page's site information, under Cmd-L's "Go" (K33).
+     kSiteInformation,
++    // Opens a card of Settings the words of another browser find (K39).
++    kPlace,
+   };
+ 
+   // One row of the list. `rows_` is what the bar draws, what the arrow keys
+@@ -310,6 +312,10 @@ class CommandBarView : public views::View,
+     // row whose title names it by another word ("Add to Dock…" answers
+     // "app" and "install"), each only from its start. Empty for most rows.
+     std::u16string keywords;
++    // K39: only `keywords` find the row: a place of Settings whose title
++    // would repeat a row of the bar's own (stedding::FindWords). Not listed
++    // while nothing is typed.
++    bool words_only = false;
+     // toolbar T39, commandbar K31: an extension's action, which the chord
+     // lists alone.
+     bool extension = false;
+diff --git a/chrome/browser/ui/views/commandbar/command_bar_view_unittest.cc b/chrome/browser/ui/views/commandbar/command_bar_view_unittest.cc
+index 77ba6a6c671d2..daed7f53afe7d 100644
+--- a/chrome/browser/ui/views/commandbar/command_bar_view_unittest.cc
++++ b/chrome/browser/ui/views/commandbar/command_bar_view_unittest.cc
+@@ -2827,6 +2827,64 @@ TEST_F(CommandBarViewTest, TheMakeAppRowFollowsItsCommand) {
+ // start only (K10): "move", the start of every Move Tab row, is inside
+ // "remove", and "all" inside "install" and "uninstall", and neither lists
+ // the two app rows.
++// commandbar K39: the words a person from Arc types find the place in actions
++// mode, each from its start, and a word only inside one finds nothing.
++TEST_F(CommandBarViewTest, ArcsWordsFindAPlaceInSettings) {
++  AddTab(browser(), GURL("https://example.com/"));
++  auto bar = std::make_unique<CommandBarView>(browser());
++  bar->SetModeForTesting(CommandBarView::Mode::kActions);
++  for (const char16_t* words : {u"air traffic", u"air traffic control",
++                                u"traffic", u"routes", u"routing"}) {
++    bar->ContentsChanged(bar->field_for_testing(), words);
++    EXPECT_TRUE(HasTitle(*bar, u"Sites Routed to Spaces")) << words;
++  }
++  for (const char16_t* words : {u"profile", u"profiles"}) {
++    bar->ContentsChanged(bar->field_for_testing(), words);
++    EXPECT_TRUE(HasTitle(*bar, u"Independent Sessions")) << words;
++  }
++  bar->ContentsChanged(bar->field_for_testing(), u"favorites");
++  EXPECT_TRUE(HasTitle(*bar, u"Essentials per Row"));
++  bar->ContentsChanged(bar->field_for_testing(), u"little arc");
++  EXPECT_TRUE(HasTitle(*bar, u"Little Windows"));
++  bar->ContentsChanged(bar->field_for_testing(), u"raffic");
++  EXPECT_FALSE(HasTitle(*bar, u"Sites Routed to Spaces"));
++
++  // In tabs mode too, under the typed row.
++  auto tabs_bar = std::make_unique<CommandBarView>(browser());
++  ASSERT_EQ(CommandBarView::Mode::kTabs, tabs_bar->mode_for_testing());
++  tabs_bar->ContentsChanged(tabs_bar->field_for_testing(), u"air traffic");
++  EXPECT_TRUE(HasTitle(*tabs_bar, u"Sites Routed to Spaces"));
++  tabs_bar->ContentsChanged(tabs_bar->field_for_testing(), u"routes");
++  EXPECT_TRUE(HasTitle(*tabs_bar, u"Sites Routed to Spaces"));
++}
++
++// commandbar K39: Stedding has no Boosts, and no table row answers one.
++TEST_F(CommandBarViewTest, ABoostFindsNoPlace) {
++  AddTab(browser(), GURL("https://example.com/"));
++  auto bar = std::make_unique<CommandBarView>(browser());
++  bar->ContentsChanged(bar->field_for_testing(), u"boost");
++  for (size_t i = 0; i < bar->row_count_for_testing(); ++i) {
++    EXPECT_NE(u"Settings", bar->row_detail_for_testing(i))
++        << bar->row_title_for_testing(i);
++  }
++  bar->SetModeForTesting(CommandBarView::Mode::kActions);
++  bar->ContentsChanged(bar->field_for_testing(), u"boost");
++  EXPECT_EQ(0u, bar->row_count_for_testing());
++}
++
++// commandbar K39: in tabs mode a place stays out of the way: under the typed
++// row, which stays chosen, and only from five letters on.
++TEST_F(CommandBarViewTest, APlaceRowLeavesTheTypedRowChosen) {
++  AddTab(browser(), GURL("https://example.com/"));
++  auto bar = std::make_unique<CommandBarView>(browser());
++  bar->ContentsChanged(bar->field_for_testing(), u"rout");
++  EXPECT_FALSE(HasTitle(*bar, u"Sites Routed to Spaces")) << "too short";
++  bar->ContentsChanged(bar->field_for_testing(), u"route");
++  ASSERT_TRUE(HasTitle(*bar, u"Sites Routed to Spaces"));
++  EXPECT_EQ(0u, bar->selected_row_for_testing());
++  EXPECT_NE(u"Sites Routed to Spaces", bar->row_title_for_testing(0));
++}
++
+ // commandbar K40, routing D16: the row is listed with a tab to move, and moves
+ // it.
+ TEST_F(CommandBarViewTest, TheSortRowFollowsTheRoutes) {
+diff --git a/chrome/browser/ui/webui/settings/BUILD.gn b/chrome/browser/ui/webui/settings/BUILD.gn
+index 8da9dc3d9d9c5..02eb3b9209724 100644
+--- a/chrome/browser/ui/webui/settings/BUILD.gn
++++ b/chrome/browser/ui/webui/settings/BUILD.gn
+@@ -202,6 +202,7 @@ source_set("impl") {
+     "//chrome/app:command_ids",
+     "//chrome/app:generated_resources",
+     "//chrome/browser/ui/stedding:app_updater",
++    "//chrome/browser/ui/stedding:find_words",
+     "//chrome/browser/ui/stedding:clean_link",
+     "//chrome/browser/ui/stedding:clean_links",
+     # shortcuts Z5-Z22: the editable Shortcuts block.
+diff --git a/chrome/browser/ui/webui/settings/settings_ui.cc b/chrome/browser/ui/webui/settings/settings_ui.cc
+index 9095d0de51c81..6cfc612d13ae0 100644
+--- a/chrome/browser/ui/webui/settings/settings_ui.cc
++++ b/chrome/browser/ui/webui/settings/settings_ui.cc
+@@ -67,6 +67,7 @@
+ #include "chrome/browser/ui/webui/settings/browser_lifetime_handler.h"
+ #include "chrome/browser/ui/webui/settings/device_tab_visibility_handler.h"
+ #include "chrome/browser/ui/webui/settings/dictation_handler.h"
++#include "chrome/browser/ui/stedding/find_words.h"
+ #include "chrome/browser/ui/webui/settings/stedding_blocker_handler.h"
+ #include "chrome/browser/ui/webui/settings/stedding_clean_links_handler.h"
+ #include "chrome/browser/ui/webui/settings/stedding_dark_pages_handler.h"
+@@ -1303,6 +1304,10 @@ SettingsUI::SettingsUI(content::WebUI* web_ui)
+   html_source->AddString("steddingExternalDefaultSubLabel",
+                          "A site with a rule below goes to its Space instead.");
+   html_source->AddString("steddingExternalActiveSpace", "The active Space");
++  // settings T58: the words of another browser, as search hints.
++  for (const stedding::FindWords& place : stedding::FindWordsTable()) {
++    html_source->AddString(place.hint_id, place.words);
++  }
+   // routing D12-D14: the one list of routes.
+   html_source->AddString("steddingRoutesTitle", "Sites routed to Spaces");
+   html_source->AddString(
+diff --git a/chrome/test/stedding/BUILD.gn b/chrome/test/stedding/BUILD.gn
+index 19cfbdd596b97..4024f3f456053 100644
+--- a/chrome/test/stedding/BUILD.gn
++++ b/chrome/test/stedding/BUILD.gn
+@@ -40,6 +40,7 @@ test("stedding_browser_tests") {
+     "edit_space_browsertest.cc",
+     "external_extensions_browsertest.cc",
+     "folder_tabs_browsertest.cc",
++    "find_words_browsertest.cc",
+     "fullscreen_hint_browsertest.cc",
+     "hidden_row_controls_browsertest.cc",
+     "horizontal_strip_browsertest.cc",
+diff --git a/chrome/test/stedding/find_words_browsertest.cc b/chrome/test/stedding/find_words_browsertest.cc
+new file mode 100644
+index 0000000000000..310387b9012ff
+--- /dev/null
++++ b/chrome/test/stedding/find_words_browsertest.cc
+@@ -0,0 +1,200 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++// docs/features/settings.md T58, commandbar K39: the words another browser
++// uses find Stedding's rows, in Settings' search box and in the command bar,
++// through the page and the bar themselves.
++
++#include <string>
++#include <string_view>
++
++#include "base/strings/escape.h"
++#include "base/strings/strcat.h"
++#include "base/test/run_until.h"
++#include "chrome/app/chrome_command_ids.h"
++#include "chrome/browser/ui/browser_commands.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "chrome/browser/ui/views/commandbar/command_bar_view.h"
++#include "chrome/browser/ui/views/frame/browser_view.h"
++#include "chrome/test/base/in_process_browser_test.h"
++#include "chrome/test/base/ui_test_utils.h"
++#include "content/public/browser/web_contents.h"
++#include "content/public/test/browser_test.h"
++#include "content/public/test/browser_test_utils.h"
++#include "ui/events/event.h"
++#include "ui/events/keycodes/keyboard_codes.h"
++#include "url/gurl.h"
++
++namespace {
++
++// Every marked hit on the settings page, through every shadow root, one a
++// line: the ids of what holds it, out through its shadow hosts, then its text.
++constexpr char kHits[] = R"(
++  (() => {
++    const hits = [];
++    const walk = root => {
++      for (const element of root.querySelectorAll('*')) {
++        if (element.classList.contains('search-highlight-hit')) {
++          const ids = [];
++          for (let at = element; at;
++               at = at.parentElement || at.getRootNode().host) {
++            if (at.id) {
++              ids.push(at.id);
++            }
++          }
++          hits.push(ids.join(',') + ':' + element.textContent.trim());
++        }
++        if (element.shadowRoot) {
++          walk(element.shadowRoot);
++        }
++      }
++    };
++    walk(document);
++    return hits.join('\n');
++  })()
++)";
++
++constexpr char kSteddingPageHidden[] = R"(
++  (() => {
++    const find = (root, selector) => {
++      const hit = root.querySelector(selector);
++      if (hit) {
++        return hit;
++      }
++      for (const element of root.querySelectorAll('*')) {
++        if (element.shadowRoot) {
++          const found = find(element.shadowRoot, selector);
++          if (found) {
++            return found;
++          }
++        }
++      }
++      return null;
++    };
++    const page = find(document, 'settings-stedding-page');
++    return !page || page.hasAttribute('hidden-by-search');
++  })()
++)";
++
++void PressKey(stedding::CommandBarView& bar, ui::KeyboardCode key) {
++  bar.HandleKeyEvent(bar.field_for_testing(),
++                     ui::KeyEvent(ui::EventType::kKeyPressed, key, ui::EF_NONE));
++}
++
++class FindWordsTest : public InProcessBrowserTest {
++ protected:
++  content::WebContents* Search(std::string_view words) {
++    EXPECT_TRUE(ui_test_utils::NavigateToURL(
++        browser(),
++        GURL(base::StrCat({"chrome://settings/?search=",
++                           base::EscapeQueryParamValue(words,
++                                                       /*use_plus=*/false)}))));
++    return browser()->GetTabStripModel()->GetActiveWebContents();
++  }
++
++  // Waits until a hit marks the row `row` with the row's own text, not
++  // the word searched for, which is nowhere on the page.
++  bool MarksRow(content::WebContents* page, std::string_view row) {
++    return base::test::RunUntil([&]() {
++      const std::string hits = content::EvalJs(page, kHits).ExtractString();
++      return hits.find(row) != std::string::npos;
++    });
++  }
++};
++
++// settings T58: each word marks its row, and no label holds the word.
++IN_PROC_BROWSER_TEST_F(FindWordsTest, ArcsWordsFindTheirRowsInSettings) {
++  for (const char* words :
++       {"air traffic", "air traffic control", "traffic", "routes", "routing"}) {
++    SCOPED_TRACE(words);
++    EXPECT_TRUE(MarksRow(Search(words), "routesIntro"))
++        << content::EvalJs(Search(words), kHits).ExtractString();
++  }
++  for (const char* words : {"profile", "profiles"}) {
++    SCOPED_TRACE(words);
++    EXPECT_TRUE(MarksRow(Search(words), "spacesOwnSession"));
++  }
++  {
++    SCOPED_TRACE("favorites");
++    EXPECT_TRUE(MarksRow(Search("favorites"), "essentialsPerRowLabel"));
++  }
++  {
++    SCOPED_TRACE("little arc");
++    EXPECT_TRUE(MarksRow(Search("little arc"), "littleWindow"));
++  }
++  {
++    SCOPED_TRACE("auto-archive");
++    EXPECT_TRUE(MarksRow(Search("auto-archive"), "archiveLabel"));
++  }
++  {
++    SCOPED_TRACE("url bar");
++    EXPECT_TRUE(MarksRow(Search("url bar"), "addressInSidebar"));
++  }
++}
++
++// settings T58: the word is nowhere on the page and the page is long, so the
++// first mark comes into view. On the real build the page stayed at its top.
++IN_PROC_BROWSER_TEST_F(FindWordsTest, TheFirstMarkComesIntoView) {
++  content::WebContents* const page = Search("air traffic");
++  ASSERT_TRUE(MarksRow(page, "routesIntro"));
++  EXPECT_TRUE(base::test::RunUntil([&]() {
++    return content::EvalJs(page, R"(
++        (() => {
++          const find = root => {
++            for (const element of root.querySelectorAll('*')) {
++              if (element.classList.contains('search-highlight-hit')) {
++                return element;
++              }
++              const inside = element.shadowRoot && find(element.shadowRoot);
++              if (inside) {
++                return inside;
++              }
++            }
++            return null;
++          };
++          const box = find(document).getBoundingClientRect();
++          return box.top >= 0 && box.bottom <= window.innerHeight;
++        })())")
++        .ExtractBool();
++  })) << "the mark is off screen";
++}
++
++// settings T58: a word the table does not hold finds nothing: Stedding has no
++// Boosts, and its page stays out of the results.
++IN_PROC_BROWSER_TEST_F(FindWordsTest, ABoostFindsNothingInSettings) {
++  content::WebContents* const page = Search("boost");
++  EXPECT_TRUE(base::test::RunUntil(
++      [&]() { return content::EvalJs(page, kSteddingPageHidden).ExtractBool(); }))
++      << content::EvalJs(page, kHits).ExtractString();
++}
++
++// commandbar K39: "air traffic" in ⌘T's bar, not its actions, lists the
++// routes card, and choosing the row opens Settings on it.
++IN_PROC_BROWSER_TEST_F(FindWordsTest, TheBarFindsTheRoutesCard) {
++  chrome::ExecuteCommand(browser(), IDC_NEW_TAB);  // ⌘T
++  stedding::CommandBarView* const bar = stedding::CommandBarView::GetOpenBar(
++      BrowserView::GetBrowserViewForBrowser(browser()));
++  ASSERT_TRUE(bar);
++  bar->ContentsChanged(bar->field_for_testing(), u"air traffic");
++  size_t place = bar->row_count_for_testing();
++  for (size_t i = 0; i < bar->row_count_for_testing(); ++i) {
++    if (bar->row_title_for_testing(i) == u"Sites Routed to Spaces") {
++      place = i;
++    }
++  }
++  ASSERT_LT(place, bar->row_count_for_testing()) << "no row for the card";
++  // ↓ to the row, then Enter, as a person chooses it (K5).
++  for (size_t i = bar->selected_row_for_testing(); i < place; ++i) {
++    PressKey(*bar, ui::VKEY_DOWN);
++  }
++  ASSERT_EQ(place, bar->selected_row_for_testing());
++  PressKey(*bar, ui::VKEY_RETURN);
++  EXPECT_TRUE(base::test::RunUntil([&]() {
++    return browser()->GetTabStripModel()->GetActiveWebContents()->GetVisibleURL()
++               == GURL("chrome://settings/stedding?card=routes");
++  })) << browser()->GetTabStripModel()->GetActiveWebContents()->GetVisibleURL();
++}
++
++}  // namespace

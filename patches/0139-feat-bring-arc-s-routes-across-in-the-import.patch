@@ -1,0 +1,653 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Thu, 5 Nov 2026 14:23:27 -0500
+Subject: feat: bring Arc's routes across in the import
+
+Arc keeps its routes in StorableLinkRouting.json, beside the sidebar file. The
+import reads it from a copy on the pool, as it reads the sidebar. A rule whose
+destination names one Arc Space becomes a route to the Space that Space became,
+one route for each of its sources, in the file's order: "contains" keeps its
+text, and "matches" is a host rule for a bare host and an exact address for
+anything else (import I48).
+
+What a route cannot say stays out and is counted: a rule for a little window, for
+the Space used last or a profile's last, one whose Space did not come across, and
+a source of another kind. The summary counts the routes before anything is
+applied, the result line says how many came and how many stayed out, and the page
+after the import says the same and why (import I49). Arc's default for links from
+other apps does not come across: little windows are on by default, and the Space
+for links from other apps stays the user's.
+
+A second import adds nothing: a route is remembered by its source's id in
+stedding.import.arc_ids, so one the user removed stays removed, and one already
+here, by kind and text, keeps its Space.
+
+The shape was taken from Arc's own type metadata, which names the cases. A rule
+naming a Space and a "matches" source are read as those types declare them; no
+real file holding either has been seen. The tests use a made-up file.
+
+Why: a person moving from Arc loses their routes otherwise (BACKLOG S-422).
+
+Removable when: Arc's files are gone from people's computers.
+---
+ .../resources/stedding_welcome/from_arc.ts    |  32 ++--
+ .../browser/ui/spaces/arc_sidebar_importer.cc | 137 ++++++++++++++++-
+ .../browser/ui/spaces/arc_sidebar_importer.h  |  18 +++
+ .../spaces/arc_sidebar_importer_unittest.cc   | 140 ++++++++++++++++++
+ chrome/test/stedding/from_arc_browsertest.cc  |  32 ++++
+ chrome/test/stedding/import_browsertest.cc    |  39 +++++
+ 6 files changed, 385 insertions(+), 13 deletions(-)
+
+diff --git a/chrome/browser/resources/stedding_welcome/from_arc.ts b/chrome/browser/resources/stedding_welcome/from_arc.ts
+index c11c8e5d304ab..01b1363acb678 100644
+--- a/chrome/browser/resources/stedding_welcome/from_arc.ts
++++ b/chrome/browser/resources/stedding_welcome/from_arc.ts
+@@ -29,7 +29,7 @@ interface Place {
+ const isMac = /Mac/.test(navigator.userAgent);
+ const key = (mac: string, other: string) => isMac ? mac : other;
+ 
+-function places(): Place[] {
++function places(routes: number): Place[] {
+   return [
+     {
+       was: 'URL bar',
+@@ -83,7 +83,8 @@ function places(): Place[] {
+     {
+       was: 'Air Traffic Control',
+       now: 'Sites routed to Spaces',
+-      text: 'A site always opens in the Space you choose.',
++      text: 'A site always opens in the Space you choose.' +
++          (routes === 0 ? '' : ` ${count(routes, 'route')} came across.`),
+       card: 'routes',
+     },
+     {
+@@ -108,14 +109,17 @@ function places(): Place[] {
+ }
+ 
+ // What did not come across, each with where to go instead.
+-function leftOut(): Array<{text: string, card?: string, name?: string}> {
++function leftOut(routesLeftOut: number):
++    Array<{text: string, card?: string, name?: string}> {
+   return [
+-    {
+-      text: 'Routes. Arc’s rules for which site opens where stayed in Arc. ' +
+-          'Make them again in Sites routed to Spaces.',
+-      card: 'routes',
+-      name: 'Sites routed to Spaces',
+-    },
++    ...(routesLeftOut === 0 ? [] : [{
++          text: `${count(routesLeftOut, 'route')}. A route to a little ` +
++              'window, or to the Space you used last, has no match here, ' +
++              'and one to a Space that did not come across has nowhere to ' +
++              'go. Make them again in Sites routed to Spaces.',
++          card: 'routes',
++          name: 'Sites routed to Spaces',
++        }]),
+     {
+       text: 'Per-Space profiles. Every Space shares one profile here, and ' +
+           'what you were signed in to stays in Arc. Turn on Independent ' +
+@@ -133,6 +137,10 @@ function leftOut(): Array<{text: string, card?: string, name?: string}> {
+   ];
+ }
+ 
++function count(n: number, word: string): string {
++  return `${n} ${word}${n === 1 ? '' : 's'}`;
++}
++
+ function el<K extends keyof HTMLElementTagNameMap>(
+     tag: K, className?: string, text?: string): HTMLElementTagNameMap[K] {
+   const element = document.createElement(tag);
+@@ -154,7 +162,7 @@ function openButton(card: string, label: string): HTMLButtonElement {
+   return button;
+ }
+ 
+-function render(_answer: FromArc) {
++function render(answer: FromArc) {
+   const page = el('div', 'from-arc');
+   page.append(
+       el('h1', '', 'Where everything from Arc went'),
+@@ -165,7 +173,7 @@ function render(_answer: FromArc) {
+ 
+   const list = el('ul', 'places');
+   list.setAttribute('aria-label', 'From Arc to Stedding');
+-  for (const place of places()) {
++  for (const place of places(answer.routes)) {
+     const row = el('li', 'place');
+     const now = el('div', 'now');
+     now.append(el('span', 'name', place.now), el('span', 'hint', place.text));
+@@ -180,7 +188,7 @@ function render(_answer: FromArc) {
+   page.append(el('h2', '', 'What did not come across'));
+   const missing = el('ul', 'places');
+   missing.setAttribute('aria-label', 'What did not come across');
+-  for (const item of leftOut()) {
++  for (const item of leftOut(answer.routesLeftOut)) {
+     const row = el('li', 'place left-out');
+     row.append(el('span', '', item.text));
+     if (item.card) {
+diff --git a/chrome/browser/ui/spaces/arc_sidebar_importer.cc b/chrome/browser/ui/spaces/arc_sidebar_importer.cc
+index 876f083275ad1..10825d209f807 100644
+--- a/chrome/browser/ui/spaces/arc_sidebar_importer.cc
++++ b/chrome/browser/ui/spaces/arc_sidebar_importer.cc
+@@ -1055,6 +1055,63 @@ std::optional<ArcImportPlan> ParseArcSidebar(std::string_view json) {
+   return plan;
+ }
+ 
++void ParseArcRoutes(std::string_view json, ArcImportPlan& plan) {
++  const std::optional<base::Value> parsed = base::JSONReader::Read(
++      json, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
++  const base::DictValue* const root = parsed ? parsed->GetIfDict() : nullptr;
++  const base::ListValue* const rules = root ? root->FindList("rules") : nullptr;
++  if (!rules) {
++    return;
++  }
++  for (const base::Value& entry : *rules) {
++    const base::DictValue* const rule = entry.GetIfDict();
++    // I49: only a rule that names one Space can be a route. Arc's own types
++    // say destination is space or littleArc, each holding mostRecent, profile
++    // or space.
++    const std::string* const space =
++        rule ? rule->FindStringByDottedPath("destination.space._0.space._0")
++             : nullptr;
++    const base::ListValue* const components =
++        rule ? rule->FindList("sourceComponents") : nullptr;
++    if (!components) {
++      ++plan.routes_left_out;
++      continue;
++    }
++    for (const base::Value& each : *components) {
++      const base::DictValue* const component = each.GetIfDict();
++      const std::string* const id =
++          component ? component->FindString("id") : nullptr;
++      const base::DictValue* const url_match =
++          component ? component->FindDictByDottedPath("componentType.urlMatch")
++                    : nullptr;
++      const std::string* const text =
++          url_match ? url_match->FindString("_1") : nullptr;
++      const base::DictValue* const style =
++          url_match ? url_match->FindDict("_0") : nullptr;
++      std::optional<Route> route;
++      if (space && id && text && style) {
++        if (style->contains("contains")) {
++          route = RouteFromTyped(Route::Match::kContains, *text, *space);
++        } else if (style->contains("matches")) {
++          // A bare host is that host; anything else is the whole address.
++          route = RouteFromTyped(Route::Match::kHost, *text, *space);
++          if (!route || text->find(':') != std::string::npos) {
++            route = RouteFromTyped(Route::Match::kEquals, *text, *space);
++          }
++        }
++      }
++      if (!route) {
++        ++plan.routes_left_out;
++        continue;
++      }
++      plan.routes.push_back({.arc_id = *id,
++                             .match = route->match,
++                             .pattern = route->pattern,
++                             .arc_space = *space});
++    }
++  }
++}
++
+ std::u16string SummariseArcImport(const ArcImportPlan& plan) {
+   const auto count = [](size_t n, std::u16string_view one,
+                         std::u16string_view many) {
+@@ -1074,6 +1131,11 @@ std::u16string SummariseArcImport(const ArcImportPlan& plan) {
+                         u" become essentials)"});
+     }
+   }
++  // I49: the routes that can come across.
++  if (!plan.routes.empty()) {
++    text += base::StrCat(
++        {u" \u00B7 ", count(plan.routes.size(), u"route", u"routes")});
++  }
+   const std::vector<std::string> profiles = plan.dropped_profiles();
+   if (!profiles.empty()) {
+     text += u" \u00B7 Arc's per-Space profiles are not carried over: ";
+@@ -1189,6 +1251,50 @@ SkColor NearestSpaceColor(SkColor arc_color) {
+   return nearest;
+ }
+ 
++namespace {
++
++// I48: `plan`'s routes, each to the Space its Arc Space became, after the
++// routes already here. A route an earlier import brought stays as it is, or
++// gone, as the person left it (I12). I49: one whose Space did not come across
++// is counted with those no route can say.
++void ApplyArcRoutes(const ArcImportPlan& plan,
++                    bool spaces,
++                    SpaceModel& model,
++                    ImportedIds& ids,
++                    PrefService* prefs,
++                    ArcImportResult& result) {
++  result.routes_left_out = plan.routes_left_out;
++  for (const ArcImportPlan::ArcRoute& arc_route : plan.routes) {
++    const std::string id = "route:" + arc_route.arc_id;
++    if (ids.Contains(id)) {
++      continue;
++    }
++    const std::optional<SpaceId> space =
++        spaces ? ids.SpaceFor(arc_route.arc_space) : std::nullopt;
++    if (!space || !model.GetSpace(*space)) {
++      ++result.routes_left_out;
++      continue;
++    }
++    const std::vector<Route> routes = ReadRoutes(prefs);
++    const bool here = std::ranges::any_of(routes, [&](const Route& route) {
++      return route.match == arc_route.match &&
++             base::ToLowerASCII(route.pattern) ==
++                 base::ToLowerASCII(arc_route.pattern);
++    });
++    if (!here) {
++      Route route;
++      route.match = arc_route.match;
++      route.pattern = arc_route.pattern;
++      route.space = space->ToString();
++      AddRoute(prefs, std::move(route));
++      ++result.routes;
++    }
++    ids.Add(id);
++  }
++}
++
++}  // namespace
++
+ ArcImportResult ApplyArcImport(BrowserWindowInterface* browser,
+                                const ArcImportPlan& plan,
+                                const ArcImportOptions& options) {
+@@ -1309,6 +1415,7 @@ ArcImportResult ApplyArcImport(BrowserWindowInterface* browser,
+       }
+     }
+   }
++  ApplyArcRoutes(plan, options.spaces, *model, ids, profile->GetPrefs(), result);
+   ids.Save();
+   return result;
+ }
+@@ -1337,6 +1444,19 @@ ArcImportResult ImportNodesAsPins(
+ 
+ namespace {
+ 
++// I48: Arc's routes, read from a copy as the sidebar is, beside it.
++void ReadArcRoutes(ArcImportPlan& plan) {
++  const base::FilePath arc = ArcFolder();
++  if (arc.empty()) {
++    return;
++  }
++  const std::optional<std::string> json = ReadArcSidebar(
++      arc.Append(FILE_PATH_LITERAL("StorableLinkRouting.json")));
++  if (json) {
++    ParseArcRoutes(*json, plan);
++  }
++}
++
+ ArcSidebarInfo LoadInfoOnPool() {
+   ArcSidebarInfo info;
+   const std::optional<std::string> json = ReadArcSidebar(ArcSidebarPath());
+@@ -1347,6 +1467,7 @@ ArcSidebarInfo LoadInfoOnPool() {
+   if (!info.plan) {
+     return info;
+   }
++  ReadArcRoutes(*info.plan);
+   info.found = true;
+   info.arc_running = IsArcRunning();
+   info.summary = SummariseArcImport(*info.plan);
+@@ -1361,7 +1482,12 @@ ArcSidebarInfo LoadInfoOnPool() {
+ // enough to stall the window.
+ std::optional<ArcImportPlan> ReadAndParseOnPool() {
+   const std::optional<std::string> json = ReadArcSidebar(ArcSidebarPath());
+-  return json ? ParseArcSidebar(*json) : std::nullopt;
++  std::optional<ArcImportPlan> plan =
++      json ? ParseArcSidebar(*json) : std::nullopt;
++  if (plan) {
++    ReadArcRoutes(*plan);
++  }
++  return plan;
+ }
+ 
+ void ApplyRead(base::WeakPtr<BrowserWindowInterface> browser,
+@@ -1497,10 +1623,19 @@ std::u16string DescribeArcImportResult(const ArcImportResult& result) {
+     text += base::StrCat(
+         {u", ", count(result.passwords, u"password", u"passwords")});
+   }
++  if (result.routes) {
++    text += base::StrCat({u", ", count(result.routes, u"route", u"routes")});
++  }
+   if (result.skipped) {
+     text += base::StrCat({u" \u00B7 ", base::NumberToString16(result.skipped),
+                           u" already here"});
+   }
++  // I49.
++  if (result.routes_left_out) {
++    text += base::StrCat({u" \u00B7 ",
++                          count(result.routes_left_out, u"route", u"routes"),
++                          u" left out"});
++  }
+   // I23 (BACKLOG S-346): the least recently used, past the 10,000 read.
+   if (result.passwords_past_the_cap) {
+     text += base::StrCat({u" \u00B7 ",
+diff --git a/chrome/browser/ui/spaces/arc_sidebar_importer.h b/chrome/browser/ui/spaces/arc_sidebar_importer.h
+index 20526a6f581c6..87949e2cd5e6e 100644
+--- a/chrome/browser/ui/spaces/arc_sidebar_importer.h
++++ b/chrome/browser/ui/spaces/arc_sidebar_importer.h
+@@ -12,6 +12,7 @@
+ 
+ #include "base/files/file_path.h"
+ #include "base/functional/callback.h"
++#include "chrome/browser/ui/spaces/space_router.h"
+ #include "third_party/skia/include/core/SkColor.h"
+ #include "url/gurl.h"
+ 
+@@ -72,6 +73,16 @@ struct ArcImportPlan {
+     std::vector<Node> essentials;
+   };
+ 
++  // import I48: a rule of Arc's routes, as the route it becomes: the Space is
++  // still Arc's, and the import finds the one it became.
++  struct ArcRoute {
++    // The rule's source component, by which a later import knows it (I12).
++    std::string arc_id;
++    Route::Match match = Route::Match::kContains;
++    std::string pattern;
++    std::string arc_space;
++  };
++
+   ArcImportPlan();
+   ArcImportPlan(const ArcImportPlan& other);
+   ArcImportPlan(ArcImportPlan&& other);
+@@ -82,6 +93,9 @@ struct ArcImportPlan {
+   std::vector<Space> spaces;
+   // The shared essentials row.
+   std::vector<Node> essentials;
++  // I48, I49: Arc's routes, and how many of its rules no route can say.
++  std::vector<ArcRoute> routes;
++  size_t routes_left_out = 0;
+   // sidebar-file Sf2: the file says Stedding wrote it. Its ids are durable
+   // (a Space's token, "tab:<tab token>", "folder:<FolderId>"): an import
+   // skips what is open now under those ids and remembers none of them, so a
+@@ -102,6 +116,10 @@ inline constexpr size_t kMaxEssentials = 12;
+ // Parses the file's JSON. Nullopt when it is not Arc's sidebar.
+ std::optional<ArcImportPlan> ParseArcSidebar(std::string_view json);
+ 
++// I48, I49: fills `plan`'s routes from Arc's StorableLinkRouting.json. Text
++// that is no such file leaves them empty.
++void ParseArcRoutes(std::string_view json, ArcImportPlan& plan);
++
+ // The one line the welcome flow and the settings row show before anything
+ // is applied (I2), with the dropped profiles (I8) and the essentials beyond
+ // twelve (I11) named.
+diff --git a/chrome/browser/ui/spaces/arc_sidebar_importer_unittest.cc b/chrome/browser/ui/spaces/arc_sidebar_importer_unittest.cc
+index f10ba185f0d06..117ccb31dbd4d 100644
+--- a/chrome/browser/ui/spaces/arc_sidebar_importer_unittest.cc
++++ b/chrome/browser/ui/spaces/arc_sidebar_importer_unittest.cc
+@@ -12,12 +12,15 @@
+ #include "base/files/scoped_temp_dir.h"
+ #include "base/strings/string_number_conversions.h"
+ #include "base/strings/utf_string_conversions.h"
++#include "base/token.h"
+ #include "chrome/browser/ui/browser.h"
+ #include "chrome/browser/ui/spaces/space.h"
+ #include "chrome/browser/ui/spaces/space_colors.h"
+ #include "chrome/browser/ui/spaces/space_model.h"
++#include "chrome/browser/ui/spaces/space_router.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "chrome/test/base/browser_with_test_window_test.h"
++#include "components/prefs/pref_service.h"
+ #include "components/tabs/public/folder_tab_collection.h"
+ #include "components/tabs/public/tab_collection.h"
+ #include "components/tabs/public/tab_interface.h"
+@@ -162,6 +165,99 @@ TEST(ArcSidebarImporterTest, SummaryCountsThePlan) {
+       << summary;
+ }
+ 
++// A made-up StorableLinkRouting.json, in Arc's shape (import I48, I49): one
++// rule to a Space, with three sources, then each kind that stays out.
++constexpr char kRouting[] = R"json({
++  "version": 1,
++  "defaultDestination": {"littleArc": {"_0": {"mostRecent": {}}}},
++  "rules": [
++    {
++      "id": "rule-work",
++      "destination": {"space": {"_0": {"space": {"_0": "space-work"}}}},
++      "sourceComponents": [
++        {"id": "from-text", "componentType": {"urlMatch": {
++          "_0": {"contains": {}}, "_1": "figma.example"}}},
++        {"id": "from-host", "componentType": {"urlMatch": {
++          "_0": {"matches": {}}, "_1": "Mail.example"}}},
++        {"id": "from-page", "componentType": {"urlMatch": {
++          "_0": {"matches": {}}, "_1": "https://docs.example/a"}}}
++      ]
++    },
++    {
++      "id": "rule-last-space",
++      "destination": {"space": {"_0": {"mostRecent": {}}}},
++      "sourceComponents": [{"id": "last-space", "componentType": {"urlMatch": {
++        "_0": {"contains": {}}, "_1": "meet.example"}}}]
++    },
++    {
++      "id": "rule-little",
++      "destination": {"littleArc": {"_0": {"mostRecent": {}}}},
++      "sourceComponents": [{"id": "little", "componentType": {"urlMatch": {
++        "_0": {"contains": {}}, "_1": "small.example"}}}]
++    },
++    {
++      "id": "rule-profile",
++      "destination": {"space": {"_0": {"profile": {"_0": {"default": true}}}}},
++      "sourceComponents": [{"id": "profile", "componentType": {"urlMatch": {
++        "_0": {"contains": {}}, "_1": "profile.example"}}}]
++    },
++    {
++      "id": "rule-other-source",
++      "destination": {"space": {"_0": {"space": {"_0": "space-work"}}}},
++      "sourceComponents": [{"id": "other", "componentType": {"app": {}}}]
++    }
++  ]
++})json";
++
++// import I48: each source of a rule that names a Space is one route, in the
++// file's order: "contains" keeps its text, "matches" is a host or an address.
++TEST(ArcSidebarImporterTest, ReadsArcsRoutes) {
++  ArcImportPlan plan;
++  ParseArcRoutes(kRouting, plan);
++  ASSERT_EQ(3u, plan.routes.size());
++  EXPECT_EQ(Route::Match::kContains, plan.routes[0].match);
++  EXPECT_EQ("figma.example", plan.routes[0].pattern);
++  EXPECT_EQ("space-work", plan.routes[0].arc_space);
++  EXPECT_EQ("from-text", plan.routes[0].arc_id);
++  EXPECT_EQ(Route::Match::kHost, plan.routes[1].match);
++  EXPECT_EQ("mail.example", plan.routes[1].pattern);
++  EXPECT_EQ(Route::Match::kEquals, plan.routes[2].match);
++  EXPECT_EQ("https://docs.example/a", plan.routes[2].pattern);
++  // I49: the Space used last, a little window, a profile, another source.
++  EXPECT_EQ(4u, plan.routes_left_out);
++}
++
++// import I48: what is no such file is no routes, and no error.
++TEST(ArcSidebarImporterTest, AFileOfNoRoutesIsNone) {
++  for (std::string_view json :
++       {"", "{", "[]", "{}", R"({"rules": 7})", R"({"rules": [7]})"}) {
++    ArcImportPlan plan;
++    ParseArcRoutes(json, plan);
++    EXPECT_TRUE(plan.routes.empty()) << json;
++  }
++  ArcImportPlan none;
++  ParseArcRoutes(R"({"rules": []})", none);
++  EXPECT_EQ(0u, none.routes_left_out);
++}
++
++// import I49: the summary counts what can come across, and the result line
++// what came and what stayed out.
++TEST(ArcSidebarImporterTest, DescribeCountsTheRoutes) {
++  std::optional<ArcImportPlan> plan = ParseArcSidebar(kSidebar);
++  ASSERT_TRUE(plan.has_value());
++  EXPECT_EQ(std::u16string::npos, SummariseArcImport(*plan).find(u"route"));
++  ParseArcRoutes(kRouting, *plan);
++  EXPECT_NE(std::u16string::npos, SummariseArcImport(*plan).find(u"3 routes"));
++  ArcImportResult result;
++  EXPECT_EQ(std::u16string::npos,
++            DescribeArcImportResult(result).find(u"route"));
++  result.routes = 2;
++  result.routes_left_out = 1;
++  const std::u16string line = DescribeArcImportResult(result);
++  EXPECT_NE(std::u16string::npos, line.find(u"2 routes")) << line;
++  EXPECT_NE(std::u16string::npos, line.find(u"1 route left out")) << line;
++}
++
+ // I10: every theme lands on one of the swatches (spaces B40), the nearest
+ // by hue, and a grey on Slate.
+ TEST(ArcSidebarImporterTest, ThemeMapsToTheNearestSwatch) {
+@@ -462,6 +558,50 @@ TEST_F(ArcSidebarImportWindowTest, ASpaceNamedTwiceIsOneSpace) {
+ }
+ 
+ // I12: a second import adds nothing.
++// import I48, I49: a route goes to the Space its Arc Space became, and one
++// whose Space did not come across is counted with those left out. A second
++// import brings no route twice, and one the person removed stays removed.
++TEST_F(ArcSidebarImportWindowTest, ARuleWithNoSpaceIsLeftOutAndCounted) {
++  std::optional<ArcImportPlan> plan = ParseArcSidebar(kSidebar);
++  ASSERT_TRUE(plan.has_value());
++  const std::string arc_space = plan->spaces.front().arc_id;
++  plan->routes.push_back({.arc_id = "one",
++                          .match = Route::Match::kContains,
++                          .pattern = "one.example",
++                          .arc_space = arc_space});
++  plan->routes.push_back({.arc_id = "two",
++                          .match = Route::Match::kSite,
++                          .pattern = "two.example",
++                          .arc_space = arc_space});
++  plan->routes.push_back({.arc_id = "gone",
++                          .match = Route::Match::kContains,
++                          .pattern = "gone.example",
++                          .arc_space = "a-space-of-no-import"});
++  plan->routes_left_out = 2;
++  PrefService* const prefs = profile()->GetPrefs();
++  const ArcImportResult first =
++      ApplyArcImport(browser(), *plan, ArcImportOptions());
++  EXPECT_EQ(2u, first.routes);
++  EXPECT_EQ(3u, first.routes_left_out);
++  std::vector<Route> routes = ReadRoutes(prefs);
++  ASSERT_EQ(2u, routes.size());
++  EXPECT_EQ("one.example", routes[0].pattern);
++  SpaceModel* const model = SpaceModel::From(browser());
++  EXPECT_EQ(plan->spaces.front().title,
++            model
++                ->GetSpace(*SpaceId::FromOptionalToken(
++                    base::Token::FromString(routes[0].space)))
++                ->name());
++
++  ASSERT_TRUE(RemoveRouteEqualTo(prefs, routes[0]));
++  const ArcImportResult second =
++      ApplyArcImport(browser(), *plan, ArcImportOptions());
++  EXPECT_EQ(0u, second.routes);
++  routes = ReadRoutes(prefs);
++  ASSERT_EQ(1u, routes.size());
++  EXPECT_EQ("two.example", routes[0].pattern);
++}
++
+ TEST_F(ArcSidebarImportWindowTest, SecondImportAddsNothing) {
+   const std::optional<ArcImportPlan> plan = ParseArcSidebar(kSidebar);
+   ASSERT_TRUE(plan.has_value());
+diff --git a/chrome/test/stedding/from_arc_browsertest.cc b/chrome/test/stedding/from_arc_browsertest.cc
+index 619cfaf80380b..16b636b2edb53 100644
+--- a/chrome/test/stedding/from_arc_browsertest.cc
++++ b/chrome/test/stedding/from_arc_browsertest.cc
+@@ -209,6 +209,38 @@ IN_PROC_BROWSER_TEST_F(FromArcPageTest, ThePageEndsWithItsGround) {
+           document.getElementById('app').offsetHeight + 1)"));
+ }
+ 
++// import I49: the page says how many routes came and how many did not.
++IN_PROC_BROWSER_TEST_F(FromArcPageTest, ThePageCountsTheRoutes) {
++  WriteSidebar();
++  {
++    base::ScopedAllowBlockingForTesting allow_blocking;
++    ASSERT_TRUE(base::WriteFile(
++        arc_.Append(FILE_PATH_LITERAL("StorableLinkRouting.json")), R"json({
++          "rules": [{
++            "id": "rule",
++            "destination": {"space": {"_0": {"space": {"_0": "space-work"}}}},
++            "sourceComponents": [
++              {"id": "one", "componentType": {"urlMatch":
++                {"_0": {"contains": {}}, "_1": "one.example"}}},
++              {"id": "two", "componentType": {"urlMatch":
++                {"_0": {"contains": {}}, "_1": "two.example"}}}
++            ]
++          }, {
++            "id": "little",
++            "destination": {"littleArc": {"_0": {"mostRecent": {}}}},
++            "sourceComponents": [{"id": "three", "componentType": {"urlMatch":
++              {"_0": {"contains": {}}, "_1": "three.example"}}}]
++          }]
++        })json"));
++  }
++  ASSERT_TRUE(Import());
++  content::WebContents* const page = WaitForThePage();
++  const std::string text =
++      content::EvalJs(page, "document.body.innerText").ExtractString();
++  EXPECT_NE(std::string::npos, text.find("2 routes came across")) << text;
++  EXPECT_NE(std::string::npos, text.find("1 route.")) << text;
++}
++
+ // import I47: a second import opens no second page, and the page reads again.
+ IN_PROC_BROWSER_TEST_F(FromArcPageTest, ANewImportReadsThePageAgain) {
+   WriteSidebar();
+diff --git a/chrome/test/stedding/import_browsertest.cc b/chrome/test/stedding/import_browsertest.cc
+index 9ba3d0f7edb75..56f0eb0abc33f 100644
+--- a/chrome/test/stedding/import_browsertest.cc
++++ b/chrome/test/stedding/import_browsertest.cc
+@@ -44,6 +44,7 @@
+ #include "chrome/browser/ui/spaces/sidebar_backup.h"
+ #include "chrome/browser/ui/spaces/space.h"
+ #include "chrome/browser/ui/spaces/space_model.h"
++#include "chrome/browser/ui/spaces/space_router.h"
+ #include "chrome/browser/ui/stedding/pin_home.h"
+ #include "chrome/browser/ui/stedding/pin_lifecycle.h"
+ #include "chrome/browser/ui/stedding/stedding_prefs.h"
+@@ -570,6 +571,22 @@ class ArcImportTest : public InProcessBrowserTest {
+                             kArcSidebar, {std::string(docs)}, nullptr)));
+   }
+ 
++  // Arc's StorableLinkRouting.json, made up: one rule to Space Work.
++  void WriteRouting() {
++    base::ScopedAllowBlockingForTesting allow_blocking;
++    ASSERT_TRUE(base::WriteFile(
++        arc_.Append(FILE_PATH_LITERAL("StorableLinkRouting.json")), R"json({
++          "version": 1,
++          "defaultDestination": {"littleArc": {"_0": {"mostRecent": {}}}},
++          "rules": [{
++            "id": "rule",
++            "destination": {"space": {"_0": {"space": {"_0": "space-work"}}}},
++            "sourceComponents": [{"id": "source", "componentType": {"urlMatch":
++              {"_0": {"contains": {}}, "_1": "routed.example"}}}]
++          }]
++        })json"));
++  }
++
+   // Arc's History: two pages, last visited an hour ago, as Chromium keeps
+   // them (microseconds since 1601).
+   void WriteHistory() {
+@@ -757,4 +774,26 @@ IN_PROC_BROWSER_TEST_F(ArcImportTest, ImportingAgainBringsOnlyWhatArcGained) {
+   }();
+ }
+ 
++// import I48: importing from Settings brings Arc's route to the Space it names,
++// and a link there follows it. A second import adds no route.
++IN_PROC_BROWSER_TEST_F(ArcImportTest, ArcsRoutesComeAcrossOnce) {
++  WriteSidebar(R"("tab-doc-a")");
++  WriteRouting();
++  content::WebContents* const page = OpenSettings();
++  ASSERT_TRUE(page);
++  const std::string line = ImportFromSettings(page);
++  EXPECT_NE(std::string::npos, line.find("1 route")) << line;
++  PrefService* const prefs = browser()->GetProfile()->GetPrefs();
++  std::vector<spaces::Route> routes = spaces::ReadRoutes(prefs);
++  ASSERT_EQ(1u, routes.size());
++  EXPECT_EQ(spaces::Route::Match::kContains, routes[0].match);
++  EXPECT_EQ("routed.example", routes[0].pattern);
++  spaces::Space* const work = SpaceNamed("Work");
++  ASSERT_TRUE(work);
++  EXPECT_EQ(work->id().ToString(), routes[0].space);
++
++  EXPECT_EQ(std::string::npos, ImportFromSettings(page).find("route"));
++  EXPECT_EQ(1u, spaces::ReadRoutes(prefs).size());
++}
++
+ }  // namespace

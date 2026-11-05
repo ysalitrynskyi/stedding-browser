@@ -210,9 +210,11 @@ a `+` (`features/sidebar.md` Y44). The Library is not this foot (§9).
 - **Air Traffic Control** **[1.0]** — Stedding's routing: rules sending a site, a part
   of an address or an exact address to a Space, plus a default Space for links from
   other applications (`features/routing.md`). A site rule is made from the tab menu
-  ("Always Open <site> in"); Settings lists each Space's rules, with add and remove
-  (D5). Not built: "Route sites here…" on the Space menu, and "Sort open tabs by these
-  rules now" (D5, `S-126`).
+  ("Always Open <site> in"). Settings has one list of every rule, each edited where it
+  is listed, with an add row (D12–D14); the Space menu's "Route sites here…" opens it
+  on that Space (D15), and "Sort open tabs by these rules now" moves what is open (D16).
+  "air traffic" and "routes" find it in the command bar and in Settings' search box
+  (settings T58). Arc's own routes come across in the import (import I48).
 - **Focus and Hide Other Spaces** **[1.0]**, Stedding's own — one Space on screen at a
   time, from the command bar (`features/focus.md`, `features/share-coat.md`). Focus
   does not survive a restart (focus Fc3, `S-61`). The coat does not arm itself when a

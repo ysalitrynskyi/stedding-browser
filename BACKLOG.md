@@ -19,6 +19,9 @@ infrastructure, then features. A request in chat comes before this list. A spec 
 
 0.4.0 beta 10 was released on 2026-11-05 on Chromium 157.0.8103.39, with S-414 to S-419 (now in
 `docs/history/archive.md`). S-402's fix went out with it and waits on a real board, below.
+S-420, update downloads that try again, is built since and goes out with the next release. Its
+Windows half has not stalled on an installed copy yet: the next release's n-1 check runs it
+against a server that goes quiet.
 
 1. The pin. Chromium 158.0.8127.18 was on the stable channel on 2026-11-04, and builds on 157
    lose the built-in HTTPS-only list on 2026-12-13, so the next release moves to M158. That is a

@@ -59,9 +59,11 @@ question above).
 Yes. A Mac copy from 0.2.0 beta 16 on, and a Windows copy from 0.2.0 beta 19 on, looks
 for a new version when you open it, unless it looked in the past hour, and every six
 hours while it runs. It downloads in the background and shows **New Stedding Version
-Available** above the Spaces. A click restarts into it. The download is checked against
-the project’s key before it installs, and the check sends nothing that identifies you
-([PRIVACY.md](PRIVACY.md)). Settings → Stedding → Updates → **Update Stedding
+Available** above the Spaces. A click restarts into it. A download that stops starts over
+by itself, three tries in all. If it still fails, the About page says so, and reloading
+that page tries again. The download is checked against the project’s key before it
+installs, and the check sends nothing that identifies you ([PRIVACY.md](PRIVACY.md)).
+Settings → Stedding → Updates → **Update Stedding
 automatically** turns it off. A Windows copy older than 0.2.0 beta 19 needs one newer
 release installed by hand.
 

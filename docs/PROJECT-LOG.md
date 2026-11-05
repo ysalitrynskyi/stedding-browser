@@ -2,6 +2,36 @@
 
 What was built, newest first. Nothing here is needed to do a task: `AGENTS.md` carries what is true now, `BACKLOG.md` the order of work, `PLAN.md` the owner's decisions. This file was the "State of the project" section of `AGENTS.md` until 2026-09-30. This log starts at 2026-10-15. Closed work from before that is the table in [docs/history/archive.md](history/archive.md).
 
+## 2026-11-05 -- Update downloads try again, and About says how to retry (S-420)
+
+The owner, updating their Mac from beta 9 to beta 10: About stopped at 38% and then said the
+download had failed. The log showed GitHub's connection going quiet after 73 MB of 190 MB and
+CFNetwork giving up a minute later. Nothing was wrong with the release: six more downloads came
+down whole, and a reload installed it. The owner asked for an automatic retry, and for the
+failure to say that a reload tries again.
+
+Built. A download that fails, or gets no byte for a minute, starts over ten seconds later, three
+tries in all, before the failure is said (Up25). On the Mac a try is a new check, because Sparkle
+downloads only in a session of its own. On Windows the updater got a stall timer of its own: the
+request's two-hour timeout was all there was. About's failure line now says how to try again
+(Up5), and the Mac says Stedding's own sentence for a failed download, because Sparkle's ends in
+"Please try again later". Patch 0128.
+
+The evidence. A test copy of the signed build, signed with the Developer ID and given a local feed
+whose server sends 38% of the image and goes quiet, on real Sparkle. With every try stalled, About
+said Updating through three tries, 71 seconds apart, then "The new version could not be downloaded.
+Reload this page to try again."; a reload downloaded the image, and a quit installed it. With one
+stall and About closed, the scheduled download tried again 70 seconds later, with nothing on
+screen, and installed at the quit. Unit tests: `AppUpdaterMacTest` 13 and `WinAppUpdaterTest` and
+`WinUpdateInstallerTest` 22, on the builds with DCHECKs. `UpdatesTest` on the Mac (release and
+DCHECKs) and on Windows (DCHECKs). Every unit test on Windows with DCHECKs (1379). On the Mac
+release build, 1390 of 1391: `IdleWindowsTest.NothingSweepsAPopupOrALittleWindow` passes alone in
+51 seconds and went over the launcher's 45-second limit on the busy machine, twice. It is not an
+updater test; it takes 2 seconds on Windows.
+
+Not checked: a stall on an installed Windows copy. The next release's Windows n-1 check owes that
+run, against a server that goes quiet. A real stall from GitHub was seen once and not repeated.
+
 ## 2026-11-05 -- 0.4.0 beta 10: Chromium 157.0.8103.39, issues 78, 73 and 45, links from other apps as a peek
 
 The owner, after testing beta 9's fixes on the PC: a new window opens too close to the first;

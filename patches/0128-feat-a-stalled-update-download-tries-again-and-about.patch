@@ -1,0 +1,897 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Thu, 5 Nov 2026 07:33:46 -0500
+Subject: feat: a stalled update download tries again, and About says how to
+ retry
+
+An update download that fails, or gets no byte for a minute, starts over
+ten seconds later, three tries in all, before the failure is said (updates
+Up25; BACKLOG S-420). The owner's Mac updated from beta 9 with GitHub's
+connection gone quiet at 38%: CFNetwork gave up after a minute, Sparkle
+called the update failed, and nothing said a reload would try again.
+
+On the Mac a try is a new check, because Sparkle downloads only in a session
+of its own: its delegate says the download failed, the session ends, and
+didFinishUpdateCycleForUpdateCheck, its last word, starts the ten seconds. A
+download the user watches goes on saying Updating; one on the schedule tries
+again as quietly as it failed. A yes given to a version covers all its tries
+(Up4). A failure after the download arrived is not tried again.
+
+On Windows the updater now has its own stall timer. The request's two-hour
+timeout was all there was, so a connection that went quiet held the download
+and the page's percentage until it ran out.
+
+A failure on the About page now says how to try again (Up5): reload the
+page with automatic updates on, because it checks when it opens; off, the
+Check for Updates command. A failed download and an unreachable feed say
+Stedding's own sentences on the Mac too, because Sparkle's end in "Please
+try again later", which that advice would contradict.
+
+Why: the owner's update stopped at 38% and ended in an error that gave no
+way forward, and a connection that goes quiet is not the user's to notice.
+
+Removable when: never as behaviour; the Mac's half goes when Sparkle retries
+a failed download itself.
+---
+ chrome/browser/ui/stedding/app_updater.h      |   8 +
+ chrome/browser/ui/stedding/app_updater_mac.mm | 114 ++++++++-
+ .../ui/stedding/app_updater_mac_unittest.mm   | 221 ++++++++++++++++++
+ chrome/browser/ui/stedding/app_updater_win.cc |  52 ++++-
+ .../ui/stedding/app_updater_win_unittest.cc   | 127 +++++++++-
+ .../ui/webui/help/version_updater_stedding.cc |  13 +-
+ chrome/test/stedding/updates_browsertest.cc   |  47 +++-
+ 7 files changed, 569 insertions(+), 13 deletions(-)
+
+diff --git a/chrome/browser/ui/stedding/app_updater.h b/chrome/browser/ui/stedding/app_updater.h
+index 38d0f66f686af..a7161b8b7f24c 100644
+--- a/chrome/browser/ui/stedding/app_updater.h
++++ b/chrome/browser/ui/stedding/app_updater.h
+@@ -119,6 +119,14 @@ class AppUpdater {
+ inline constexpr base::TimeDelta kUpdateCheckInterval = base::Hours(6);
+ inline constexpr base::TimeDelta kLaunchCheckAge = base::Hours(1);
+ 
++// updates Up25 (BACKLOG S-420): an update download that fails, or gets no byte
++// for a minute, starts over ten seconds later, three tries in all, before the
++// failure is said. A connection that goes quiet is not the user's to notice.
++// On the Mac the minute is CFNetwork's request timeout; on Windows it is the
++// updater's own (kDownloadStall).
++inline constexpr int kUpdateDownloadTries = 3;
++inline constexpr base::TimeDelta kUpdateDownloadRetryDelay = base::Seconds(10);
++
+ // Whether a launch at `now` checks for updates, the last check having been
+ // made at `last` (null: never). A last check later than `now` (the clock was
+ // set back) counts as a recent one.
+diff --git a/chrome/browser/ui/stedding/app_updater_mac.mm b/chrome/browser/ui/stedding/app_updater_mac.mm
+index 347650ce4175c..e65de2f94f70c 100644
+--- a/chrome/browser/ui/stedding/app_updater_mac.mm
++++ b/chrome/browser/ui/stedding/app_updater_mac.mm
+@@ -61,6 +61,9 @@ constexpr NSInteger kSparkleFeedSignatureFailed = 2;
+ // SUError: no later version; the user cancelled installing it.
+ constexpr NSInteger kSparkleNoUpdateError = 1001;
+ constexpr NSInteger kSparkleInstallationCanceledError = 4007;
++// SUError: the feed, or the update, could not be fetched.
++constexpr NSInteger kSparkleAppcastError = 1002;
++constexpr NSInteger kSparkleDownloadError = 2001;
+ 
+ @protocol SteddingSparkleUpdater <NSObject>
+ - (instancetype)initWithHostBundle:(NSBundle*)hostBundle
+@@ -131,6 +134,20 @@ std::u16string ImportantReasonOf(id<SteddingSparkleItem> item) {
+                        : u"It fixes something that matters.";
+ }
+ 
++// updates Up5: what went wrong, for the About page, which goes on to say how
++// to try again. Sparkle's words for these two end in "Please try again later",
++// which that sentence would contradict; Windows says the same two sentences.
++std::u16string FailureToSay(NSError* error) {
++  switch (error.code) {
++    case kSparkleAppcastError:
++      return u"Stedding could not reach its update server.";
++    case kSparkleDownloadError:
++      return u"The new version could not be downloaded.";
++    default:
++      return base::SysNSStringToUTF16(error.localizedDescription);
++  }
++}
++
+ }  // namespace
+ }  // namespace stedding
+ 
+@@ -253,8 +270,10 @@ class SparkleAppUpdater : public AppUpdater {
+     // Each update Sparkle finds is an attempt of its own. A yes the user gave
+     // an earlier one, whose install was then cancelled at the administrator's
+     // password or failed, does not install this one without asking (BACKLOG
+-    // S-343).
+-    restart_when_ready_ = false;
++    // S-343). A try after a failed download is the same attempt (updates Up25).
++    if (download_failures_ == 0) {
++      restart_when_ready_ = false;
++    }
+     // updates Up12: an informational entry, or one from a feed whose
+     // signature fails, is never offered: the feed is signed, so either means
+     // the feed is not ours.
+@@ -330,6 +349,13 @@ class SparkleAppUpdater : public AppUpdater {
+   void OnNotFound() { FinishUserCheck(State::kUpToDate); }
+ 
+   void OnError(NSError* error) {
++    if (TriesAgainAfter(error)) {
++      // A download the user is watching: as far as they can see, it goes on.
++      retry_for_user_ = true;
++      SetState(State::kDownloading);
++      SetProgress(0);
++      return;
++    }
+     // The attempt the user said yes to is over, however it ended, the
+     // administrator's password cancelled included: a later one asks again
+     // (BACKLOG S-343).
+@@ -343,12 +369,16 @@ class SparkleAppUpdater : public AppUpdater {
+       return;
+     }
+     user_asked_ = false;
+-    SetError(base::SysNSStringToUTF16(error.localizedDescription));
++    SetError(FailureToSay(error));
+     SetState(State::kFailed);
+   }
+ 
+   void OnDismissed() {
+     pending_reply_ = nil;
++    // updates Up25: Sparkle ending a try, with another to come.
++    if (retry_due_) {
++      return;
++    }
+     switch (state()) {
+       case State::kChecking:
+       case State::kDownloading:
+@@ -401,7 +431,25 @@ class SparkleAppUpdater : public AppUpdater {
+     SetState(State::kReady);
+   }
+ 
++  // updates Up25: Sparkle says this before it ends the attempt. If a try is
++  // left, the end of this one changes nothing on screen (OnError, OnDismissed,
++  // OnAborted), and OnCycleFinished, Sparkle's last word, sets up the next.
++  void OnDownloadFailed() {
++    retry_due_ = ++download_failures_ < kUpdateDownloadTries;
++  }
++
++  // The tries are over; what can still fail is not the download.
++  void OnDownloaded() { download_failures_ = 0; }
++
+   void OnAborted(NSError* error) {
++    if (TriesAgainAfter(error)) {
++      retry_for_user_ |= state() == State::kChecking || user_asked_;
++      // A scheduled download says nothing of its tries, as of its failure.
++      if (!retry_for_user_ && state() == State::kDownloading) {
++        SetState(State::kIdle);
++      }
++      return;
++    }
+     // As in OnError: the yes was for the attempt that stopped here.
+     restart_when_ready_ = false;
+     if (state() == State::kChecking || user_asked_) {
+@@ -417,6 +465,14 @@ class SparkleAppUpdater : public AppUpdater {
+   }
+ 
+   void OnCycleFinished(NSError* error) {
++    if (retry_due_) {
++      retry_due_ = false;
++      download_retry_.Start(FROM_HERE, kUpdateDownloadRetryDelay,
++                            base::BindOnce(&SparkleAppUpdater::TryDownloadAgain,
++                                           base::Unretained(this)));
++      return;
++    }
++    download_failures_ = 0;
+     if (state() != State::kChecking) {
+       return;
+     }
+@@ -465,6 +521,37 @@ class SparkleAppUpdater : public AppUpdater {
+     }
+   }
+ 
++  // updates Up25: whether what just ended the attempt leaves a try. A failed
++  // download has said so; the check that starts a try needs the feed first,
++  // on the same network, and failing there uses the try up too.
++  bool TriesAgainAfter(NSError* error) {
++    if (!retry_due_ && download_failures_ > 0 &&
++        error.code != kSparkleNoUpdateError &&
++        error.code != kSparkleInstallationCanceledError) {
++      OnDownloadFailed();
++    }
++    return retry_due_;
++  }
++
++  // Sparkle downloads only in a session of its own, so a try is a new check:
++  // it reads the feed again and finds the same version. A check on Sparkle's
++  // schedule may have begun meanwhile; it then takes no check from us, and its
++  // answer comes through the delegate all the same.
++  void TryDownloadAgain() {
++    if (std::exchange(retry_for_user_, false)) {
++      user_asked_ = true;
++      if (updater_.canCheckForUpdates) {
++        [updater_ checkForUpdates];
++      }
++      return;
++    }
++    if (Automatic() && state() == State::kIdle && updater_.canCheckForUpdates) {
++      [updater_ checkForUpdatesInBackground];
++      return;
++    }
++    download_failures_ = 0;
++  }
++
+   // Starts Sparkle's schedule; false if Sparkle refused its configuration.
+   bool Start() {
+     if (started_) {
+@@ -542,6 +629,13 @@ class SparkleAppUpdater : public AppUpdater {
+   bool restart_prepared_ = false;
+   uint64_t expected_ = 0;
+   uint64_t received_ = 0;
++  // updates Up25. Failed tries of this attempt; a try is due once Sparkle has
++  // finished with the last; the next waits on the timer, and is a check the
++  // user asked for if the failed one was.
++  int download_failures_ = 0;
++  bool retry_due_ = false;
++  bool retry_for_user_ = false;
++  base::OneShotTimer download_retry_;
+   SteddingSparkleReply pending_reply_ = nil;
+   void (^install_on_quit_)(void) = nil;
+   void (^retry_quit_)(void) = nil;
+@@ -783,6 +877,20 @@ using stedding::SparkleAppUpdater;
+   return YES;
+ }
+ 
++- (void)updater:(id)updater didDownloadUpdate:(id)item {
++  if (_updater) {
++    _updater->OnDownloaded();
++  }
++}
++
++- (void)updater:(id)updater
++    failedToDownloadUpdate:(id)item
++                     error:(NSError*)error {
++  if (_updater) {
++    _updater->OnDownloadFailed();
++  }
++}
++
+ - (void)updater:(id)updater didAbortWithError:(NSError*)error {
+   if (_updater) {
+     _updater->OnAborted(error);
+diff --git a/chrome/browser/ui/stedding/app_updater_mac_unittest.mm b/chrome/browser/ui/stedding/app_updater_mac_unittest.mm
+index dcd4b3ce44c9f..8ee989b472b7c 100644
+--- a/chrome/browser/ui/stedding/app_updater_mac_unittest.mm
++++ b/chrome/browser/ui/stedding/app_updater_mac_unittest.mm
+@@ -52,8 +52,18 @@ FakeSparkle* g_sparkle = nullptr;
+                               (void (^)(void))retryTerminatingApplication;
+ - (void)showUpdaterError:(NSError*)error
+          acknowledgement:(void (^)(void))acknowledgement;
++- (void)showUserInitiatedUpdateCheckWithCancellation:
++    (void (^)(void))cancellation;
+ - (void)dismissUpdateInstallation;
+ - (void)updater:(id)updater didFindValidUpdate:(id)item;
++- (void)updater:(id)updater didDownloadUpdate:(id)item;
++- (void)updater:(id)updater
++    failedToDownloadUpdate:(id)item
++                     error:(NSError*)error;
++- (void)updater:(id)updater didAbortWithError:(NSError*)error;
++- (void)updater:(id)updater
++    didFinishUpdateCycleForUpdateCheck:(NSInteger)updateCheck
++                                 error:(NSError*)error;
+ - (BOOL)updater:(id)updater
+        willInstallUpdateOnQuit:(id)item
+     immediateInstallationBlock:(void (^)(void))immediateInstallHandler;
+@@ -137,6 +147,14 @@ namespace {
+ constexpr NSInteger kInstall = 1;
+ constexpr NSInteger kNotDownloaded = 0;
+ constexpr NSInteger kInstallationCanceled = 4007;
++// SUError: the feed or the update could not be fetched; the update, fetched,
++// could not be unpacked.
++constexpr NSInteger kAppcastError = 1002;
++constexpr NSInteger kDownloadError = 2001;
++constexpr NSInteger kUnarchivingError = 3000;
++// SPUUpdateCheck.
++constexpr NSInteger kUserCheck = 0;
++constexpr NSInteger kScheduledCheck = 1;
+ 
+ // A later version Sparkle found on its own schedule that it cannot install
+ // alone: the app is not the user's to replace, so it needs an
+@@ -155,6 +173,21 @@ SteddingFakeSparkleState* FoundOnSchedule() {
+   return state;
+ }
+ 
++SteddingFakeSparkleState* FoundForTheUser() {
++  SteddingFakeSparkleState* const state = FoundOnSchedule();
++  state.userInitiated = YES;
++  return state;
++}
++
++NSError* SparkleError(NSInteger code) {
++  return [NSError errorWithDomain:@"SUSparkleErrorDomain"
++                             code:code
++                         userInfo:@{
++                           NSLocalizedDescriptionKey :
++                               @"An error occurred. Please try again later."
++                         }];
++}
++
+ class AppUpdaterMacTest : public testing::Test {
+  protected:
+   void SetUp() override {
+@@ -183,6 +216,42 @@ class AppUpdaterMacTest : public testing::Test {
+   // The browser as Sparkle sees it.
+   id<SteddingFakeSparkleCalls> Driver() { return sparkle_.driver; }
+ 
++  // Sparkle's check for the user, up to the version found and the yes.
++  void FindForTheUser() {
++    [Driver() showUserInitiatedUpdateCheckWithCancellation:^{
++    }];
++    [Driver() showUpdateFoundWithAppcastItem:LaterVersion()
++                                       state:FoundForTheUser()
++                                       reply:^(NSInteger choice){
++                                       }];
++  }
++
++  // What ends an attempt the user watches, in Sparkle 2.10's order: the
++  // delegate if the download failed, the user driver, the end of the session.
++  void EndWatchedAttempt(NSError* error, bool download_failed) {
++    if (download_failed) {
++      [Driver() updater:nil failedToDownloadUpdate:nil error:error];
++    }
++    [Driver() showUpdaterError:error
++               acknowledgement:^{
++               }];
++    [Driver() dismissUpdateInstallation];
++    [Driver() updater:nil didAbortWithError:error];
++    [Driver() updater:nil
++        didFinishUpdateCycleForUpdateCheck:kUserCheck
++                                     error:error];
++  }
++
++  // A scheduled download's end: its user driver is told nothing.
++  void FailScheduledDownload() {
++    NSError* const error = SparkleError(kDownloadError);
++    [Driver() updater:nil failedToDownloadUpdate:nil error:error];
++    [Driver() updater:nil didAbortWithError:error];
++    [Driver() updater:nil
++        didFinishUpdateCycleForUpdateCheck:kScheduledCheck
++                                     error:error];
++  }
++
+   base::test::TaskEnvironment task_environment_{
+       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
+   TestingPrefServiceSimple local_state_;
+@@ -370,5 +439,157 @@ TEST_F(AppUpdaterMacTest, ADismissedDownloadIsNotAYesToTheNextOne) {
+   EXPECT_EQ(0, restarts_);
+ }
+ 
++// updates Up25 (BACKLOG S-420): a download the user is watching that fails or
++// stalls starts over ten seconds later, and the page goes on saying Updating.
++// Only the third failure is said, in Stedding's words: Sparkle's end in "try
++// again later", and the About page goes on to say how to try now.
++TEST_F(AppUpdaterMacTest, AWatchedDownloadGetsThreeTriesBeforeItFails) {
++  Launch(base::Hours(2));
++  updater_->CheckNow();
++  ASSERT_TRUE(Driver());
++  ASSERT_EQ(1, sparkle_.user_checks);
++  for (int tries = 1; tries < kUpdateDownloadTries; ++tries) {
++    SCOPED_TRACE(tries);
++    FindForTheUser();
++    ASSERT_EQ(AppUpdater::State::kDownloading, updater_->state());
++    EndWatchedAttempt(SparkleError(kDownloadError), /*download_failed=*/true);
++    EXPECT_EQ(AppUpdater::State::kDownloading, updater_->state());
++    EXPECT_TRUE(updater_->error().empty());
++    EXPECT_EQ(0, updater_->progress()) << "the next try starts from nothing";
++    task_environment_.FastForwardBy(kUpdateDownloadRetryDelay -
++                                    base::Seconds(1));
++    EXPECT_EQ(tries, sparkle_.user_checks) << "too soon";
++    task_environment_.FastForwardBy(base::Seconds(1));
++    EXPECT_EQ(tries + 1, sparkle_.user_checks);
++  }
++  FindForTheUser();
++  EndWatchedAttempt(SparkleError(kDownloadError), /*download_failed=*/true);
++  EXPECT_EQ(AppUpdater::State::kFailed, updater_->state());
++  EXPECT_EQ(u"The new version could not be downloaded.", updater_->error());
++  task_environment_.FastForwardBy(base::Hours(1));
++  EXPECT_EQ(kUpdateDownloadTries, sparkle_.user_checks);
++
++  // The About page's next check is a new attempt with its own three tries.
++  updater_->CheckNow();
++  EXPECT_EQ(kUpdateDownloadTries + 1, sparkle_.user_checks);
++  FindForTheUser();
++  EndWatchedAttempt(SparkleError(kDownloadError), /*download_failed=*/true);
++  EXPECT_EQ(AppUpdater::State::kDownloading, updater_->state());
++}
++
++// updates Up25: a try that works ends the matter: the version is ready, and
++// the failure before it is not said.
++TEST_F(AppUpdaterMacTest, ATryThatWorksLeavesNoFailureBehind) {
++  Launch(base::Hours(2));
++  updater_->CheckNow();
++  FindForTheUser();
++  EndWatchedAttempt(SparkleError(kDownloadError), /*download_failed=*/true);
++  task_environment_.FastForwardBy(kUpdateDownloadRetryDelay);
++  FindForTheUser();
++  [Driver() updater:nil didDownloadUpdate:LaterVersion()];
++  [Driver() showReadyToInstallAndRelaunch:^(NSInteger choice){
++  }];
++  EXPECT_EQ(AppUpdater::State::kReady, updater_->state());
++  EXPECT_TRUE(updater_->error().empty());
++}
++
++// updates Up25: a download on Sparkle's schedule tries again as quietly as it
++// failed. Nothing is said, and the tries are checks on the schedule's terms.
++TEST_F(AppUpdaterMacTest, AScheduledDownloadTriesAgainSaysNothing) {
++  Launch(base::Hours(2));
++  task_environment_.FastForwardBy(base::Seconds(10));
++  ASSERT_EQ(1, sparkle_.background_checks);
++  for (int tries = 1; tries < kUpdateDownloadTries; ++tries) {
++    SCOPED_TRACE(tries);
++    [Driver() updater:nil didFindValidUpdate:LaterVersion()];
++    ASSERT_EQ(AppUpdater::State::kDownloading, updater_->state());
++    FailScheduledDownload();
++    EXPECT_EQ(AppUpdater::State::kIdle, updater_->state());
++    task_environment_.FastForwardBy(kUpdateDownloadRetryDelay);
++    EXPECT_EQ(tries + 1, sparkle_.background_checks);
++  }
++  [Driver() updater:nil didFindValidUpdate:LaterVersion()];
++  FailScheduledDownload();
++  EXPECT_EQ(AppUpdater::State::kIdle, updater_->state());
++  EXPECT_TRUE(updater_->error().empty());
++  task_environment_.FastForwardBy(base::Hours(1));
++  EXPECT_EQ(kUpdateDownloadTries, sparkle_.background_checks)
++      << "Sparkle's schedule makes the next";
++  EXPECT_EQ(0, sparkle_.user_checks);
++}
++
++// updates Up25, Up6: automatic updates turned off between a scheduled
++// download's tries: no request follows.
++TEST_F(AppUpdaterMacTest, TurningAutomaticOffBetweenTriesEndsThem) {
++  Launch(base::Hours(2));
++  task_environment_.FastForwardBy(base::Seconds(10));
++  [Driver() updater:nil didFindValidUpdate:LaterVersion()];
++  FailScheduledDownload();
++  local_state_.SetBoolean(prefs::kUpdatesAutomatic, false);
++  task_environment_.FastForwardBy(base::Hours(1));
++  EXPECT_EQ(1, sparkle_.background_checks);
++  EXPECT_EQ(AppUpdater::State::kIdle, updater_->state());
++}
++
++// updates Up25, Up4 (BACKLOG S-343): the press that said yes to a version
++// covers every try of its download, and the restart still follows it.
++TEST_F(AppUpdaterMacTest, ATryKeepsTheYesThatStartedTheDownload) {
++  Launch(base::Hours(2));
++  task_environment_.FastForwardBy(base::Seconds(10));
++  [Driver() showUpdateFoundWithAppcastItem:LaterVersion()
++                                     state:FoundOnSchedule()
++                                     reply:^(NSInteger choice){
++                                     }];
++  ASSERT_EQ(AppUpdater::State::kAvailable, updater_->state());
++  updater_->InstallNow();
++  EndWatchedAttempt(SparkleError(kDownloadError), /*download_failed=*/true);
++  task_environment_.FastForwardBy(kUpdateDownloadRetryDelay);
++  ASSERT_EQ(1, sparkle_.user_checks) << "the user's yes: a check of theirs";
++  FindForTheUser();
++  [Driver() showReadyToInstallAndRelaunch:^(NSInteger choice){
++  }];
++  EXPECT_EQ(1, restarts_) << "the press asked for the restart";
++}
++
++// updates Up25: a try starts by reading the feed, on the same network. Failing
++// there uses the try up rather than ending the tries, and the last failure is
++// what is said.
++TEST_F(AppUpdaterMacTest, ATryThatCannotReachTheFeedUsesTheTryUp) {
++  Launch(base::Hours(2));
++  updater_->CheckNow();
++  FindForTheUser();
++  EndWatchedAttempt(SparkleError(kDownloadError), /*download_failed=*/true);
++  task_environment_.FastForwardBy(kUpdateDownloadRetryDelay);
++  ASSERT_EQ(2, sparkle_.user_checks);
++  [Driver() showUserInitiatedUpdateCheckWithCancellation:^{
++  }];
++  EndWatchedAttempt(SparkleError(kAppcastError), /*download_failed=*/false);
++  EXPECT_EQ(AppUpdater::State::kDownloading, updater_->state());
++  task_environment_.FastForwardBy(kUpdateDownloadRetryDelay);
++  ASSERT_EQ(3, sparkle_.user_checks);
++  [Driver() showUserInitiatedUpdateCheckWithCancellation:^{
++  }];
++  EndWatchedAttempt(SparkleError(kAppcastError), /*download_failed=*/false);
++  EXPECT_EQ(AppUpdater::State::kFailed, updater_->state());
++  EXPECT_EQ(u"Stedding could not reach its update server.", updater_->error());
++}
++
++// updates Up25: the tries are for the download. An update that arrived and
++// then could not be unpacked is not fetched again, and Sparkle's words stand.
++TEST_F(AppUpdaterMacTest, AFailureAfterTheDownloadIsNotTried) {
++  Launch(base::Hours(2));
++  updater_->CheckNow();
++  FindForTheUser();
++  EndWatchedAttempt(SparkleError(kDownloadError), /*download_failed=*/true);
++  task_environment_.FastForwardBy(kUpdateDownloadRetryDelay);
++  FindForTheUser();
++  [Driver() updater:nil didDownloadUpdate:LaterVersion()];
++  EndWatchedAttempt(SparkleError(kUnarchivingError), /*download_failed=*/false);
++  EXPECT_EQ(AppUpdater::State::kFailed, updater_->state());
++  EXPECT_EQ(u"An error occurred. Please try again later.", updater_->error());
++  task_environment_.FastForwardBy(base::Hours(1));
++  EXPECT_EQ(2, sparkle_.user_checks);
++}
++
+ }  // namespace
+ }  // namespace stedding
+diff --git a/chrome/browser/ui/stedding/app_updater_win.cc b/chrome/browser/ui/stedding/app_updater_win.cc
+index 4bf84aed9fbb8..23a4344b7e739 100644
+--- a/chrome/browser/ui/stedding/app_updater_win.cc
++++ b/chrome/browser/ui/stedding/app_updater_win.cc
+@@ -78,6 +78,10 @@ constexpr size_t kMaxFeedSize = 1024 * 1024;
+ // minute, the installer within two hours (170 MB at under 0.2 Mbit/s).
+ constexpr base::TimeDelta kFeedTimeout = base::Minutes(1);
+ constexpr base::TimeDelta kDownloadTimeout = base::Hours(2);
++// updates Up25: a minute without a byte is a stall, whatever the two hours
++// allow: a connection that went quiet held the download and the page's
++// percentage until they ran out.
++constexpr base::TimeDelta kDownloadStall = base::Minutes(1);
+ // A check that could not reach the feed tries again within the hour rather
+ // than six hours later: a copy offline at launch is not left behind.
+ constexpr base::TimeDelta kRetryDelay = base::Hours(1);
+@@ -417,8 +421,13 @@ class WinAppUpdater : public AppUpdater {
+                                 .Set("version", item_.version)
+                                 .Set("reason", item_.important));
+     }
++    download_failures_ = 0;
+     SetProgress(0);
+     SetState(State::kDownloading);
++    StartDownload();
++  }
++
++  void StartDownload() {
+     base::ThreadPool::PostTaskAndReplyWithResult(
+         FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
+         base::BindOnce(&NewDownloadDir),
+@@ -449,22 +458,56 @@ class WinAppUpdater : public AppUpdater {
+         base::BindOnce(&WinAppUpdater::OnDownloaded,
+                        weak_factory_.GetWeakPtr()),
+         download_, item_.length + 1);
++    stall_timer_.Start(FROM_HERE, kDownloadStall,
++                       base::BindOnce(&WinAppUpdater::OnDownloadStalled,
++                                      base::Unretained(this)));
++  }
++
++  void OnDownloadStalled() {
++    LOG(WARNING) << "Stedding update: the download stalled.";
++    // The loader stops with its request, and tells nobody.
++    loader_.reset();
++    OnDownloaded(base::FilePath());
+   }
+ 
+   void OnProgress(uint64_t current) {
++    if (stall_timer_.IsRunning()) {
++      stall_timer_.Reset();
++    }
+     if (item_.length > 0) {
+       SetProgress(static_cast<int>(
+           std::min<uint64_t>(100, current * 100 / item_.length)));
+     }
+   }
+ 
++  // updates Up25: the check stays busy between tries, so the timer is free.
++  void TryDownloadAgain() {
++    // updates Up20: automatic updates went off between tries.
++    if (!user_asked_ && !Automatic()) {
++      Finish(State::kIdle);
++      return;
++    }
++    StartDownload();
++  }
++
+   void OnDownloaded(base::FilePath path) {
++    stall_timer_.Stop();
+     loader_.reset();
+     if (path.empty()) {
+       Forget(download_, /*keep_log=*/false);
+-      // updates Up14 (BACKLOG S-279): a download that failed, as one refused
+-      // in the minutes after a release is published, tries again within the
+-      // hour, as a feed that could not be reached does, not six hours later.
++      // updates Up25: the page goes on saying Updating until the tries are
++      // over.
++      if (++download_failures_ < kUpdateDownloadTries) {
++        SetProgress(0);
++        timer_.Start(FROM_HERE, kUpdateDownloadRetryDelay,
++                     base::BindOnce(&WinAppUpdater::TryDownloadAgain,
++                                    base::Unretained(this)));
++        return;
++      }
++      // updates Up14 (BACKLOG S-279): a download that failed every try, as one
++      // refused in the minutes after a release is published, tries again
++      // within the hour, as a feed that could not be reached does, not six
++      // hours later.
+       retry_soon_ = true;
+       Fail(u"The new version could not be downloaded.");
+       return;
+@@ -585,6 +628,7 @@ class WinAppUpdater : public AppUpdater {
+   PrefChangeRegistrar registrar_;
+   base::OneShotTimer timer_;
+   base::OneShotTimer quit_grace_;
++  base::OneShotTimer stall_timer_;
+   std::unique_ptr<network::SimpleURLLoader> loader_;
+   UpdateItem item_;
+   base::FilePath download_;
+@@ -592,6 +636,8 @@ class WinAppUpdater : public AppUpdater {
+   bool user_asked_ = false;
+   // The last check could not reach the feed (Finish retries within the hour).
+   bool retry_soon_ = false;
++  // Failed tries of this download (updates Up25).
++  int download_failures_ = 0;
+   base::WeakPtrFactory<WinAppUpdater> weak_factory_{this};
+ };
+ 
+diff --git a/chrome/browser/ui/stedding/app_updater_win_unittest.cc b/chrome/browser/ui/stedding/app_updater_win_unittest.cc
+index 2b45290c1c318..82661e873fc63 100644
+--- a/chrome/browser/ui/stedding/app_updater_win_unittest.cc
++++ b/chrome/browser/ui/stedding/app_updater_win_unittest.cc
+@@ -12,6 +12,7 @@
+ 
+ #include "base/base64.h"
+ #include "base/base_switches.h"
++#include "base/byte_size.h"
+ #include "base/command_line.h"
+ #include "base/files/file_util.h"
+ #include "base/files/scoped_temp_dir.h"
+@@ -28,6 +29,7 @@
+ #include "chrome/browser/ui/stedding/app_updater.h"
+ #include "chrome/browser/ui/stedding/stedding_prefs.h"
+ #include "components/prefs/testing_pref_service.h"
++#include "mojo/public/cpp/system/data_pipe.h"
+ #include "net/base/net_errors.h"
+ #include "net/base/request_priority.h"
+ #include "net/http/http_status_code.h"
+@@ -36,6 +38,7 @@
+ #include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
+ #include "services/network/public/mojom/url_response_head.mojom.h"
+ #include "services/network/test/test_url_loader_factory.h"
++#include "services/network/test/test_utils.h"
+ #include "testing/gtest/include/gtest/gtest.h"
+ #include "testing/multiprocess_func_list.h"
+ #include "third_party/boringssl/src/include/openssl/curve25519.h"
+@@ -409,9 +412,9 @@ TEST_F(WinAppUpdaterTest, AnOfflineCheckTriesAgainWithinTheHour) {
+   EXPECT_EQ(2u, loader_factory_.total_requests());
+ }
+ 
+-// updates Up14 (BACKLOG S-279): a download that fails, as one refused in the
+-// minutes after a release is published, does not wait six hours for the next
+-// check: the next one comes within the hour, and installs.
++// updates Up14 (BACKLOG S-279), Up25: a download that fails every try, as one
++// refused in the minutes after a release is published, does not wait six hours
++// for the next check: the next one comes within the hour, and installs.
+ TEST_F(WinAppUpdaterTest, AFailedDownloadTriesAgainWithinTheHour) {
+   const std::string installer = "MZ the beta 19 installer";
+   loader_factory_.AddResponse(
+@@ -421,19 +424,133 @@ TEST_F(WinAppUpdaterTest, AFailedDownloadTriesAgainWithinTheHour) {
+   Start();
+   task_environment_.FastForwardBy(base::Seconds(11));
+   task_environment_.RunUntilIdle();
+-  EXPECT_EQ(2u, loader_factory_.total_requests()) << "the feed and the download";
++  task_environment_.FastForwardBy(kUpdateDownloadRetryDelay * 2);
++  task_environment_.RunUntilIdle();
++  EXPECT_EQ(4u, loader_factory_.total_requests())
++      << "the feed and the download's three tries";
+   EXPECT_EQ(0, installer_runs());
+   EXPECT_NE(State::kReady, updater_->state());
+ 
+   loader_factory_.AddResponse(kInstallerUrl, installer);
+   task_environment_.FastForwardBy(base::Hours(1));
+   task_environment_.RunUntilIdle();
+-  EXPECT_EQ(4u, loader_factory_.total_requests())
++  EXPECT_EQ(6u, loader_factory_.total_requests())
+       << "the feed and the download again, within the hour";
+   EXPECT_EQ(1, installer_runs());
+   EXPECT_EQ(State::kReady, updater_->state());
+ }
+ 
++// updates Up25 (BACKLOG S-420): a download that fails starts over ten seconds
++// later, and the page goes on saying Updating. Only the third failure is said.
++TEST_F(WinAppUpdaterTest, ADownloadGetsThreeTriesBeforeItFails) {
++  const std::string installer = "MZ the beta 19 installer";
++  loader_factory_.AddResponse(
++      kFeedUrl,
++      SignedFeed(key_, "156.2.0.19", key_.Sign(installer), installer.size()));
++  loader_factory_.AddResponse(kInstallerUrl, "Not Found", net::HTTP_NOT_FOUND);
++  Start();
++  task_environment_.FastForwardBy(base::Seconds(11));
++  task_environment_.RunUntilIdle();
++  for (int tries = 1; tries < kUpdateDownloadTries; ++tries) {
++    SCOPED_TRACE(tries);
++    EXPECT_EQ(1u + tries, loader_factory_.total_requests());
++    EXPECT_EQ(State::kDownloading, updater_->state());
++    EXPECT_TRUE(updater_->error().empty());
++    task_environment_.FastForwardBy(kUpdateDownloadRetryDelay);
++    task_environment_.RunUntilIdle();
++  }
++  EXPECT_EQ(4u, loader_factory_.total_requests());
++  EXPECT_EQ(State::kFailed, updater_->state());
++  EXPECT_EQ(u"The new version could not be downloaded.", updater_->error());
++}
++
++// updates Up25: a minute without a byte is a stall, however long the request
++// could still run. The stalled try ends and the next one installs.
++TEST_F(WinAppUpdaterTest, ADownloadThatStallsStartsOverAfterAMinute) {
++  const std::string installer = "MZ the beta 19 installer";
++  loader_factory_.AddResponse(
++      kFeedUrl,
++      SignedFeed(key_, "156.2.0.19", key_.Sign(installer), installer.size()));
++  Start();
++  task_environment_.FastForwardBy(base::Seconds(11));
++  task_environment_.RunUntilIdle();
++  ASSERT_EQ(State::kDownloading, updater_->state());
++  ASSERT_EQ(1, loader_factory_.NumPending()) << "the server never answers";
++  ASSERT_EQ(2u, loader_factory_.total_requests());
++
++  // The download began ten seconds after the launch, a second ago.
++  task_environment_.FastForwardBy(base::Seconds(58));
++  EXPECT_EQ(2u, loader_factory_.total_requests());
++  EXPECT_EQ(1, loader_factory_.NumPending()) << "not stalled yet";
++  task_environment_.FastForwardBy(base::Seconds(1) + kUpdateDownloadRetryDelay);
++  task_environment_.RunUntilIdle();
++  EXPECT_EQ(3u, loader_factory_.total_requests());
++  EXPECT_EQ(State::kDownloading, updater_->state());
++
++  loader_factory_.AddResponse(kInstallerUrl, installer);
++  task_environment_.RunUntilIdle();
++  EXPECT_EQ(1, installer_runs());
++  EXPECT_EQ(State::kReady, updater_->state());
++}
++
++// updates Up25: bytes that keep arriving are not a stall, however slowly, and
++// however long the whole takes.
++TEST_F(WinAppUpdaterTest, ASlowDownloadIsNotAStall) {
++  const std::string installer = "MZ the beta 19 installer";
++  loader_factory_.AddResponse(
++      kFeedUrl,
++      SignedFeed(key_, "156.2.0.19", key_.Sign(installer), installer.size()));
++  Start();
++  task_environment_.FastForwardBy(base::Seconds(11));
++  task_environment_.RunUntilIdle();
++  ASSERT_EQ(1, loader_factory_.NumPending());
++
++  mojo::ScopedDataPipeProducerHandle producer;
++  mojo::ScopedDataPipeConsumerHandle consumer;
++  ASSERT_EQ(MOJO_RESULT_OK, mojo::CreateDataPipe(1024, producer, consumer));
++  network::TestURLLoaderFactory::PendingRequest* const request =
++      loader_factory_.GetPendingRequest(0);
++  request->client->OnReceiveResponse(
++      network::CreateURLResponseHead(net::HTTP_OK), std::move(consumer),
++      std::nullopt);
++  // Each byte fifty seconds after the last: minutes in all, never a minute
++  // without one.
++  for (const char byte : installer) {
++    ASSERT_EQ(MOJO_RESULT_OK,
++              producer->WriteAllData(base::as_bytes(base::span_from_ref(byte))));
++    task_environment_.RunUntilIdle();
++    task_environment_.FastForwardBy(base::Seconds(50));
++    ASSERT_EQ(2u, loader_factory_.total_requests());
++    ASSERT_EQ(State::kDownloading, updater_->state());
++  }
++  producer.reset();
++  network::URLLoaderCompletionStatus status(net::OK);
++  status.decoded_body_length = base::ByteSize(installer.size());
++  request->client->OnComplete(status);
++  task_environment_.RunUntilIdle();
++  EXPECT_EQ(1, installer_runs());
++  EXPECT_EQ(State::kReady, updater_->state());
++}
++
++// updates Up25, Up20: automatic updates turned off between the tries of a
++// download the user did not ask for: no request follows.
++TEST_F(WinAppUpdaterTest, TurningAutomaticOffBetweenTriesEndsThem) {
++  const std::string installer = "MZ the beta 19 installer";
++  loader_factory_.AddResponse(
++      kFeedUrl,
++      SignedFeed(key_, "156.2.0.19", key_.Sign(installer), installer.size()));
++  loader_factory_.AddResponse(kInstallerUrl, "Not Found", net::HTTP_NOT_FOUND);
++  Start();
++  task_environment_.FastForwardBy(base::Seconds(11));
++  task_environment_.RunUntilIdle();
++  ASSERT_EQ(2u, loader_factory_.total_requests());
++  local_state_.SetBoolean(prefs::kUpdatesAutomatic, false);
++  task_environment_.FastForwardBy(base::Days(1));
++  task_environment_.RunUntilIdle();
++  EXPECT_EQ(2u, loader_factory_.total_requests());
++  EXPECT_EQ(State::kIdle, updater_->state());
++}
++
+ // updates Up14 (BACKLOG S-279): the installer is downloaded above IDLE, so
+ // its file is written on a sequence a busy browser does not starve; at IDLE
+ // the download stalled while a UI Automation client read the window, and the
+diff --git a/chrome/browser/ui/webui/help/version_updater_stedding.cc b/chrome/browser/ui/webui/help/version_updater_stedding.cc
+index 687b2f1fbf5de..633b4bf3108f6 100644
+--- a/chrome/browser/ui/webui/help/version_updater_stedding.cc
++++ b/chrome/browser/ui/webui/help/version_updater_stedding.cc
+@@ -26,7 +26,8 @@ using UpdaterState = stedding::AppUpdater::State;
+ // build does not ship. Opening the page checks, as Chrome's About
+ // page does, while automatic updates are on; off, it says so and checks only
+ // when asked (Stedding › Check for Updates…). A later version downloads at
+-// once and the page's Relaunch restarts into it (BrowserLifetimeHandler).
++// once and the page's Relaunch restarts into it (BrowserLifetimeHandler). A
++// failure says how to try again, the same two ways.
+ //
+ // Without an updater (a build without Sparkle, a test) it reports what the
+ // stock basic updater would: nothing, or "nearly up to date" once a newer
+@@ -128,6 +129,16 @@ class VersionUpdaterStedding : public VersionUpdater,
+       case UpdaterState::kFailed:
+         status = FAILED;
+         message = updater.error();
++        if (Automatic()) {
++          message += u" Reload this page to try again.";
++        } else {
++#if BUILDFLAG(IS_MAC)
++          message += u" To try again, choose Stedding › Check for Updates…";
++#else
++          message += u" To try again, choose Check for Updates in the command "
++                     u"bar.";
++#endif
++        }
+         break;
+     }
+     callback_.Run(status, progress, false, false, version, 0, message);
+diff --git a/chrome/test/stedding/updates_browsertest.cc b/chrome/test/stedding/updates_browsertest.cc
+index f4ff3517547d5..b795ab89561a2 100644
+--- a/chrome/test/stedding/updates_browsertest.cc
++++ b/chrome/test/stedding/updates_browsertest.cc
+@@ -320,7 +320,6 @@ IN_PROC_BROWSER_TEST_F(UpdatesTest, AboutsRelaunchRestartsThroughTheUpdater) {
+   ASSERT_TRUE(base::test::RunUntil([&]() { return updater_->installs == 1; }));
+ }
+ 
+-#if BUILDFLAG(IS_MAC)
+ // The About page's update line, found through the settings page's shadow
+ // roots: its text while shown, or "(hidden)".
+ constexpr char kAboutUpdateLine[] = R"(
+@@ -341,6 +340,52 @@ constexpr char kAboutUpdateLine[] = R"(
+       return line.hidden ? '(hidden)' : line.innerText.trim();
+     })())";
+ 
++// updates Up5: a failure says how to try again. With automatic updates on a
++// reload does it, because the page checks when it opens; off, the page does
++// not check, so it names the command that does.
++IN_PROC_BROWSER_TEST_F(UpdatesTest, AboutSaysHowToTryAgainAfterAFailure) {
++  local_state()->SetBoolean(stedding::prefs::kUpdatesAutomatic, true);
++  updater_->Fail(u"The new version could not be downloaded.");
++  ASSERT_TRUE(
++      ui_test_utils::NavigateToURL(browser(), GURL("chrome://settings/help")));
++  content::WebContents* const page =
++      browser()->GetTabStripModel()->GetActiveWebContents();
++  ASSERT_TRUE(base::test::RunUntil([&]() {
++    return content::EvalJs(page, kAboutUpdateLine).ExtractString() ==
++           "The new version could not be downloaded. Reload this page to try "
++           "again.";
++  }));
++  const int checks = updater_->checks;
++  ui_test_utils::NavigateToURLWithDisposition(
++      browser(), GURL("chrome://settings/help"),
++      WindowOpenDisposition::CURRENT_TAB,
++      ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
++  ASSERT_TRUE(
++      base::test::RunUntil([&]() { return updater_->checks == checks + 1; }))
++      << "the reload did not try again";
++
++  local_state()->SetBoolean(stedding::prefs::kUpdatesAutomatic, false);
++  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GURL("about:blank")));
++  ASSERT_TRUE(
++      ui_test_utils::NavigateToURL(browser(), GURL("chrome://settings/help")));
++  content::WebContents* const off =
++      browser()->GetTabStripModel()->GetActiveWebContents();
++#if BUILDFLAG(IS_MAC)
++  const std::string expected =
++      "The new version could not be downloaded. To try again, choose "
++      "Stedding › Check for Updates…";
++#else
++  const std::string expected =
++      "The new version could not be downloaded. To try again, choose Check "
++      "for Updates in the command bar.";
++#endif
++  ASSERT_TRUE(base::test::RunUntil([&]() {
++    return content::EvalJs(off, kAboutUpdateLine).ExtractString() == expected;
++  }));
++  EXPECT_EQ(checks + 1, updater_->checks) << "no check with automatic updates off";
++}
++
++#if BUILDFLAG(IS_MAC)
+ // updates Up5, Up6: opening the About page checks while automatic updates
+ // are on; off, it does not, and says how to check.
+ IN_PROC_BROWSER_TEST_F(UpdatesTest, AboutChecksOnlyWithAutomaticUpdatesOn) {

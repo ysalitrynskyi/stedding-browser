@@ -19,44 +19,53 @@ infrastructure, then features. A request in chat comes before this list. A spec 
 
 The plan of 2026-11-05. GitHub has no open bug. Its five open issues are one more request on a
 fixed bug (78, the folder's − button), three feature requests (77, 69, 60) and the pin bot's
-notice (70). The 129 rows here are mostly not bugs:
+notice (70). The 132 rows here are mostly not bugs:
 
 | What the rows are | Rows |
 |---|---|
 | Fixed, waiting for a check on a real build (S-338 to S-351, S-353, S-326, S-323, S-393, S-394, S-399) | 20 |
 | Built, waiting on the owner's machine, a real profile or other hardware ("Checks still owed") | 24 |
 | Flaky tests and test tooling | 12 |
-| Product bugs not fixed yet, none reported by a user (S-251, S-314, S-318, S-336) | 4 |
+| Product bugs not fixed yet (S-251, S-314, S-318, S-336, and the owner's S-423 and S-424) | 6 |
 | Infrastructure and the ports | 20 |
-| Features, and what waits on Google, Apple or the owner ("Next") | 49 |
+| Features, and what waits on Google, Apple or the owner ("Next") | 50 |
 
-The order of work:
+What goes into beta 11, the owner's list of 2026-11-05. It does not rush.
 
-1. **Chromium stays on M157 for this release**, its newest point release, unless the owner says
-   otherwise. 158.0.8127.18 is early stable: 0.5% of users on 2026-11-05, before M158's stable
-   cut (2026-11-10) and stable date (2026-11-17), and ADR 0007 has the pin follow a build only
-   past 1%. The series is already rebased onto it on the PC (`series-157` there holds the M157
-   series), ready for the release after, with Sparkle 2.10.1 (S-358). The built-in HTTPS-only
-   list sets no deadline here: a build on 157.0.8103.39 is dated 2026-11-01 and keeps the list
-   until 2027-01-10. The Mac has about 40 GB free and a milestone sync wants at least 100 GB
-   (S-58), so 158's Mac turn waits for room.
-2. **Small fixes that need no decision**, each with its test: the tracking names (S-155), a
-   deleted Space's routes (S-162), a double click off the sidebar's edge (S-336), S-251's https
-   half, S-314 and S-318, reproduced first or closed as not reproduced. **The notice on sites
-   that need DRM** (S-421, the owner, 2026-11-05).
-3. **A real-build pass on the final build**, the machines being free: S-341, S-338, S-342 and
-   S-340 first, where a fault loses data or wedges the browser, then the other review rows,
-   S-326, S-323 and S-399. This is what shrinks the list: each row that passes closes.
-4. **The release gate.** The suites on the shipping and DCHECK builds on both platforms, ASan on
+Built and on main: update downloads that try again and a failure that says how to retry (S-420),
+the tracking names (S-155), a deleted Space's routes (S-162), a double click off the sidebar's
+edge (S-336).
+
+To build, in this order:
+
+1. The notice on sites that need DRM (S-421).
+2. The owner's three from 2026-11-05: a folder's − button, shown on hover (S-425, issue 78); the
+   shield's and moon's lit circle, smaller and dimmer (S-423); a gap between a selected folder and
+   the selected tab under it (S-424).
+3. Where someone from Arc looks (S-422): one list of routes in Settings with "Route sites here…"
+   on the Space menu (S-126), Arc's words as search terms, and a page after an Arc import saying
+   where each thing went.
+4. Spaces that share a named session (S-272), with its ADR.
+5. S-251's https half, S-314 and S-318, reproduced first or closed as not reproduced.
+6. A real-build pass on the final build: S-341, S-338, S-342 and S-340 first, where a fault loses
+   data or wedges the browser, then the other review rows, S-326, S-323, S-399, S-155, S-162 and
+   S-336. Each row that passes closes.
+7. The release gate: the suites on the shipping and DCHECK builds on both platforms, ASan on
    Windows, acceptance on both, an update from the installed beta 10 on both, with S-420's stall
    on an installed Windows copy, and the owner's look at every changed state.
 
-Waits for the owner's word: the − button on a folder (issue 78), and the answer to issue 77. Both
-are outside the order above until then.
+Chromium stays on M157, its newest point release. 158.0.8127.18 is early stable: 0.5% of users on
+2026-11-05, before M158's stable cut (2026-11-10) and stable date (2026-11-17), and ADR 0007 has
+the pin follow a build only past 1%. The port is saved on the `chromium-158` branch and is for
+the release after, with Sparkle 2.10.1 (S-358). It has not built to the end. The built-in
+HTTPS-only list sets no deadline: a build on 157.0.8103.39 is dated 2026-11-01 and keeps it until
+2027-01-10. The Mac has about 40 GB free and a milestone sync wants at least 100 GB (S-58), so
+158's Mac turn waits for room.
 
 Not this release: Widevine (S-270) and passkeys (S-239), waiting on Google and Apple; Safe
 Browsing (S-75, issue 60), skipped on the owner's word; Windows on ARM (S-404, issue 69), no
-hardware; Linux (S-216); the signed Windows installer (S-56); cloud sync (issue 77).
+hardware; Linux (S-216); the signed Windows installer (S-56); cloud sync (issue 77); a Space that
+holds tabs from different sessions, which Arc never had.
 
 ### Left from beta 8
 
@@ -117,6 +126,8 @@ Crashes and broken privacy promises first, then what a user sees.
 
 | Id | Item | Feature / spec | Notes |
 |---|---|---|---|
+| S-423 | The shield's and the moon's lit circle is too big | `docs/features/toolbar.md` | The owner, 2026-11-05, from a capture: on the address row the circle behind a lit shield or moon is too big for that place, and too bright. Make it smaller and a little dimmer. `stedding_blocker_button.cc`, `stedding_dark_pages_button.cc`. |
+| S-424 | A selected folder touches the selected tab under it | `docs/features/folders.md` | The owner, 2026-11-05, from a capture: when a folder's header and the first tab under it are both selected, their backgrounds meet with no gap. Leave at least 1 DIP between them. |
 | S-323 | ⌘Q may open an empty window, as the close button did (GitHub issue 43) | `docs/features/windows.md` G9 | The close-button half is G9 (the Dock brings the last window back). ⌘Q has not shown the same in a restore test or a quit by hand. Read again 2026-10-28: a ⌘Q writes the session before the windows close, and with On startup set to Continue where you left off the next launch restores it. The report fits On startup set to the New Tab page, where the window is meant to stay in Recently Closed (archive A13). The reporter answered on 2026-10-29, on 0.4.0 beta 1: it happens with On startup set to the New Tab page or to specific pages, and not with Continue where you left off. So the code does what Chromium's startup choices say. Left for the owner: with those two choices the sidebar's pins and folders stay behind in Recently Closed at every launch, where Arc keeps them. Keep them whatever the choice, or say in Settings what each choice does to the sidebar? The owner, 2026-10-30: Spaces' pins, essentials and folders come back whatever On startup says; the choice decides only the loose tabs, as in Arc. For a later beta, not the next. Built for 0.4.0 beta 4 in patch 0114 (windows G10, 2026-10-31): with the New Tab page or specific pages a launch restores the session with `RESTORE_SIDEBAR_ONLY`, which keeps the essentials, the Space pins, the tabs in folders and the splits holding one, then adds the New Tab page or the pages; the Dock and the no-window restore follow it, and the archive marks only the tabs that come back. `StartupKeepsTheSidebarTest.TheNewTabPageKeepsTheSidebar` and `StartupPagesKeepTheSidebarTest.SpecificPagesKeepTheSidebar` failed first (no sidebar came back) and pass on the Mac's release build, with the Dock and archive tests changed to match. Both platforms' sweeps pass on it, `win-checks` and `mac-checks` included, but for S-371 once. On the Mac's release build, with the real pointer: On startup set to the New Tab page in Settings, a quit and a launch brought back Home's pin above the line and its folder with Page B, with a New Tab page shown, and left Pages A and D, Work's Page E and the Settings tab closed and listed under Archived (2026-10-31). A New Tab page is no archive row now (archive A16). Released in 0.4.0 beta 4; Windows' sweeps and the installed copy's acceptance run passed on it. Left: a quit and launch with the New Tab page on Windows' installed copy. |
 | S-326 | A little window comes back as a plain popup | `docs/features/little.md` E1, E8 | A link from another app opened a little window; the next launch restored it as Chromium's popup (its own title bar, the read-only address, no Copy Link, no "Open in Stedding"). The little mark is not saved with the window. Keep little windows out of the session, as peeks are (peek P17), or mark the restored window. A test restarts with one open. |
 | S-333 | `SidebarPanelsTest.TheHistoryPanelListsOpensAndStaysOnTheMachine` is flaky on the Mac | `docs/features/sidebar-panels.md` Pn6 | Failed once in the four-at-a-time leg and once in three runs alone, at two waits for the History rows (This Week at 50 rows, and a first page that fits bringing the next to 65), each a 45-second timeout. It inserts no tab before those lines. The paging observer is the suspect. |
@@ -198,6 +209,7 @@ Rows the specs still leave open. M10 is in ROADMAP's order (ADR 0021).
 | Id | Item | Feature / spec | Notes |
 |---|---|---|---|
 | S-422 | Where someone from Arc looks | `docs/features/routing.md`; `docs/features/commandbar.md`; `docs/features/welcome.md` | The owner, 2026-11-05, after a comment on r/Stedding asked for Arc's Air Traffic Control, which Stedding has as routes. The features are there and people do not find them. Proposed: one list of routes in Settings, with "Route sites here…" on the Space menu (S-126); Arc's words as search terms in the command bar and Settings, which name no feature after Arc; and, after an Arc import, a page saying where each thing went and what did not come across. Arc's routes are not imported, and where Arc keeps them is not known yet. The site's `/arc/` page already has the map. Arc's Library, the tools a swipe left of the first Space shows, stays out (the owner). |
+| S-425 | A folder's − button (GitHub issue 78) | `docs/features/folders.md` | The reporter's second ask, and the owner's yes, 2026-11-05: a − on a folder's header closes its open tabs and collapses it, for leaving a folder with nothing open in a press. It shows only while the pointer is on the folder's header. |
 | S-421 | A notice on sites that need DRM | `docs/features/drm-notice.md` | The owner, 2026-11-05: the page is not blocked; a bar under it says Stedding cannot play protected video yet, with a button that opens the page in Safari on the Mac and Edge on Windows. Widevine itself is S-270. |
 | S-404 | A Windows build for ARM (GitHub issue 69) | `docs/ROADMAP.md` | Asked 2026-11-02, on a Snapdragon machine. Chromium builds for `target_cpu = "arm64"` on Windows and the PC can cross-compile it, but there is no ARM machine to try it on, so a build would ship untried. The owner, 2026-11-03: if it takes little extra time, build it and publish it as a release of its own that installed copies never update to; otherwise later. Put off: it is a second full Chromium build on the PC beside the release's own, an installer for ARM, and an update feed of its own, since an ARM copy reading today's feed would replace itself with the x64 build. A release of its own must also not become GitHub's latest, which the site reads (ADR 0014). |
 | S-320 | Bookmarks pinned in the sidebar (GitHub issue 40) | `docs/features/pins.md`; `docs/features/sidebar.md` | Waits for the owner. Space pins and essentials already keep a page and cost nothing while asleep (H3). Answer that pins serve this and ask what is missing, or plan a bookmarks block. |

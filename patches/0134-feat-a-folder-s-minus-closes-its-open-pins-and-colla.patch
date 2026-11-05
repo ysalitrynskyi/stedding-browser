@@ -1,0 +1,1501 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Thu, 5 Nov 2026 13:13:20 -0500
+Subject: feat: a folder's minus closes its open pins and collapses it
+
+A folder in the pinned run, a nested one included, shows a minus at the end of
+its header while the pointer is on that header and the folder holds an open
+pin of the Space on screen. It is the rows' close button on their column, and
+it takes its room from the name only while it shows, so nothing else on the
+row moves. It does not show in the rail, during a rename or Change Icon, while
+the header is dragged or while a tab is dragged over it. A folder under the
+Clear line has none: its tabs are plain rows, and Close Folder's Tabs is the
+command that deletes rows (folders F44).
+
+A press does to each open pin what Cmd-W does, through the same path
+(SleepOrLeaveToClose): the pin sleeps at home and stays a pin, a page that can
+ask "Leave site?" asks first, and the window lands where Cmd-W lands. Once no
+page has kept its pin the folder collapses with nothing left out, whatever is
+selected and whatever "Keep open tabs out of a collapsed folder" says
+(SpaceModel::CollapseFolderLeavingNothingOut). Stay leaves the folder open. With
+"Cmd-W on a pinned tab puts it to sleep" off the press closes the open pins by
+Close Folder's Tabs' own close, which now takes a list (folders F45).
+
+Close Open Tabs and Collapse on the header's menu does the same, for the
+keyboard and in the rail (folders F46; menus M7).
+
+Why: the reporter's second ask on GitHub issue 78 and the owner's yes of
+2026-11-05, shown on hover (BACKLOG S-425).
+
+Removable when: never as behaviour.
+---
+ chrome/browser/ui/spaces/space_model.cc       |  29 +-
+ chrome/browser/ui/spaces/space_model.h        |   7 +
+ .../ui/spaces/space_model_window_unittest.cc  | 121 ++++
+ chrome/browser/ui/stedding/pin_lifecycle.cc   |  73 ++-
+ chrome/browser/ui/stedding/pin_lifecycle.h    |  17 +
+ chrome/browser/ui/tabs/tab_strip_model.cc     |   7 +-
+ chrome/browser/ui/tabs/tab_strip_model.h      |   4 +
+ .../spaces/space_tab_visibility_controller.cc |  10 +-
+ .../ui/views/tabs/common/folder_view.cc       | 116 ++++
+ .../ui/views/tabs/common/folder_view.h        |  20 +-
+ .../common/tab_strip_collection_controller.cc |  13 +
+ .../common/tab_strip_collection_controller.h  |   4 +
+ .../test/stedding/folder_tabs_browsertest.cc  | 542 ++++++++++++++++++
+ 13 files changed, 955 insertions(+), 8 deletions(-)
+
+diff --git a/chrome/browser/ui/spaces/space_model.cc b/chrome/browser/ui/spaces/space_model.cc
+index a62e9ef8149a6..3c99c67d21430 100644
+--- a/chrome/browser/ui/spaces/space_model.cc
++++ b/chrome/browser/ui/spaces/space_model.cc
+@@ -1628,7 +1628,8 @@ void SpaceModel::OnCollectionDataChanged(
+   const auto* const folder =
+       static_cast<const tabs::FolderTabCollection*>(collection);
+   if (folder->collapsed()) {
+-    if (!collapsed_folders_.insert(changed).second || !tab_strip_model_) {
++    if (!collapsed_folders_.insert(changed).second || !tab_strip_model_ ||
++        collapse_leaves_nothing_out_) {
+       return;
+     }
+     // folders F3 (GitHub issue 78): the collapse keeps listed the pins the
+@@ -1653,6 +1654,32 @@ void SpaceModel::OnCollectionDataChanged(
+   }
+ }
+ 
++void SpaceModel::CollapseFolderLeavingNothingOut(
++    tabs::FolderTabCollection* folder) {
++  if (!folder || !tab_strip_model_) {
++    return;
++  }
++  const std::vector<tabs::TabInterface*> tabs = folder->GetTabsRecursive();
++  // A folder already collapsed may have left some listed.
++  for (const tabs::TabInterface* const tab : tabs) {
++    left_under_collapsed_folder_.erase(tab->GetHandle());
++  }
++  {
++    const base::AutoReset<bool> nothing_out(&collapse_leaves_nothing_out_,
++                                            true);
++    folder->SetCollapsed(true);
++  }
++  // A row folded away stays out of the selection, or the next Cmd-W takes it.
++  for (const tabs::TabInterface* const tab : tabs) {
++    const int index = tab_strip_model_->GetIndexOfTab(tab);
++    if (index != TabStripModel::kNoTab &&
++        index != tab_strip_model_->active_index() &&
++        tab_strip_model_->IsTabSelected(index)) {
++      tab_strip_model_->DeselectTabAt(index);
++    }
++  }
++}
++
+ void SpaceModel::SetActiveSpaceByIndex(size_t index) {
+   if (in_focus_) {
+     return;
+diff --git a/chrome/browser/ui/spaces/space_model.h b/chrome/browser/ui/spaces/space_model.h
+index 668dca3b4ca6b..5d691472ff2d1 100644
+--- a/chrome/browser/ui/spaces/space_model.h
++++ b/chrome/browser/ui/spaces/space_model.h
+@@ -554,6 +554,11 @@ class SpaceModel : public TabStripModelObserver,
+   // folder whole to the end of the run; unpinning unpins them and moves it
+   // to the top of the rows under the line. A nested folder, or one in no
+   // unpinned block, is refused.
++  // folders F45: collapses `folder` with nothing kept out of it: neither the
++  // pins selected nor, with the setting on, the pins awake stay listed
++  // (folders F3), and none of its rows stays selected.
++  void CollapseFolderLeavingNothingOut(tabs::FolderTabCollection* folder);
++
+   bool CanPinFolder(const tabs::FolderTabCollection* folder) const;
+   void SetFolderSpacePinned(tabs::FolderTabCollection* folder, bool pinned);
+   // folders F38, pins H14 (the owner, 2026-10-21: a folder moves in the run
+@@ -646,6 +651,8 @@ class SpaceModel : public TabStripModelObserver,
+   // one on screen: a pinned folder whose pins were all awake kept them all
+   // listed, and seemed never to collapse.
+   std::set<tabs::TabHandle> left_under_collapsed_folder_;
++  // folders F45: the collapse under way keeps nothing listed.
++  bool collapse_leaves_nothing_out_ = false;
+   // folders F3 (GitHub issue 78): the folders seen collapsed, so a collapse
+   // is told from another change to a collapsed folder (a rename, a colour).
+   std::set<tabs::TabCollection::Handle> collapsed_folders_;
+diff --git a/chrome/browser/ui/spaces/space_model_window_unittest.cc b/chrome/browser/ui/spaces/space_model_window_unittest.cc
+index f5d377479f8f5..745ded66f6655 100644
+--- a/chrome/browser/ui/spaces/space_model_window_unittest.cc
++++ b/chrome/browser/ui/spaces/space_model_window_unittest.cc
+@@ -73,6 +73,7 @@
+ #include "services/network/public/mojom/cookie_manager.mojom.h"
+ #include "services/network/public/mojom/network_context.mojom.h"
+ #include "services/network/test/test_network_context.h"
++#include "testing/gmock/include/gmock/gmock.h"
+ #include "testing/gtest/include/gtest/gtest.h"
+ #include "ui/base/models/list_selection_model.h"
+ #include "ui/base/window_open_disposition.h"
+@@ -3111,6 +3112,126 @@ TEST_F(SpaceWindowTest, TheSettingKeepsOpenPinsOutOfACollapsedFolder) {
+       << "the pin stayed listed once asleep";
+ }
+ 
++// folders F44 (GitHub issue 78): the - on a folder's header takes the pins
++// of this Space that are awake, a nested folder's included. A pin asleep has
++// nothing to give up, a pin of another Space is not under the header here,
++// and a folder with a plain tab in it has no pins to take.
++TEST_F(SpaceWindowTest, OpenPinsInAFolderAreItsAwakePinsInThisSpace) {
++  Space* const work = model().AddSpace("Work", kBlue);
++  model().SetActiveSpace(work->id());
++  std::vector<tabs::TabInterface*> pins;
++  for (int i = 0; i < 4; ++i) {
++    pins.push_back(OpenTab());
++    model().SetSpacePinned(pins.back(), true);
++  }
++  auto index = [&](tabs::TabInterface* tab) {
++    return tabs().GetIndexOfTab(tab);
++  };
++  std::vector<int> indices;
++  for (tabs::TabInterface* const pin : pins) {
++    indices.push_back(index(pin));
++  }
++  std::ranges::sort(indices);
++  tabs::FolderTabCollection* const folder = tabs().AddToNewFolder(indices);
++  ASSERT_NE(nullptr, folder);
++  // The last of them in a folder of its own, inside the first.
++  tabs::FolderTabCollection* const nested =
++      tabs().AddToNewFolder({index(folder->GetTabAtIndexRecursive(3))});
++  ASSERT_NE(nullptr, nested);
++  tabs::TabInterface* const inner = nested->GetTabAtIndexRecursive(0);
++  tabs::TabInterface* const asleep = folder->GetTabAtIndexRecursive(0);
++  tabs::TabInterface* const awake = folder->GetTabAtIndexRecursive(1);
++  tabs::TabInterface* const elsewhere = folder->GetTabAtIndexRecursive(2);
++  tabs::TabInterface* const loose = OpenTab();
++  tabs().ActivateTabAt(index(loose));
++  asleep->GetContents()->SetWasDiscarded(true);
++  Space* const other = model().AddSpace("Other", kBlue);
++  model().SetSpaceForTab(elsewhere, other->id());
++
++  EXPECT_THAT(stedding::OpenPinsInFolder(browser(), folder),
++              testing::UnorderedElementsAre(awake, inner));
++  EXPECT_THAT(stedding::OpenPinsInFolder(browser(), nested),
++              testing::ElementsAre(inner));
++
++  // A folder of plain tabs, and one with a plain tab among its pins.
++  tabs::TabInterface* const plain = OpenTab();
++  tabs::TabInterface* const other_plain = OpenTab();
++  std::vector<int> plain_indices = {index(plain), index(other_plain)};
++  std::ranges::sort(plain_indices);
++  tabs::FolderTabCollection* const plain_folder =
++      tabs().AddToNewFolder(plain_indices);
++  ASSERT_NE(nullptr, plain_folder);
++  EXPECT_TRUE(stedding::OpenPinsInFolder(browser(), plain_folder).empty());
++
++  tabs::TabInterface* const pin = OpenTab();
++  model().SetSpacePinned(pin, true);
++  tabs::TabInterface* const beside = OpenTab();
++  std::vector<int> mixed_indices = {index(pin), index(beside)};
++  std::ranges::sort(mixed_indices);
++  tabs::FolderTabCollection* const mixed = tabs().AddToNewFolder(mixed_indices);
++  ASSERT_NE(nullptr, mixed);
++  EXPECT_TRUE(stedding::OpenPinsInFolder(browser(), mixed).empty());
++}
++
++// folders F45: the press leaves nothing out of the folder: neither the pins
++// selected nor, with "Keep open tabs out of a collapsed folder" on, a pin that
++// is awake stays listed (a plain collapse keeps both, F3).
++TEST_F(SpaceWindowTest, TheMinusLeavesNothingListed) {
++  profile()->GetPrefs()->SetBoolean(stedding::prefs::kCollapseKeepsOpenPins,
++                                    true);
++  Space* const work = model().AddSpace("Work", kBlue);
++  model().SetActiveSpace(work->id());
++  std::vector<tabs::TabInterface*> pins;
++  for (int i = 0; i < 3; ++i) {
++    pins.push_back(OpenTab());
++    model().SetSpacePinned(pins.back(), true);
++  }
++  auto index = [&](tabs::TabInterface* tab) {
++    return tabs().GetIndexOfTab(tab);
++  };
++  std::vector<int> indices = {index(pins[0]), index(pins[1]), index(pins[2])};
++  std::ranges::sort(indices);
++  tabs::FolderTabCollection* const folder = tabs().AddToNewFolder(indices);
++  ASSERT_NE(nullptr, folder);
++  tabs::TabInterface* const loose = OpenTab();
++  // The loose row on screen and a pin selected with it.
++  ui::ListSelectionModel selection;
++  selection.AddIndexToSelection(index(loose));
++  selection.AddIndexToSelection(index(pins[1]));
++  selection.set_active(index(loose));
++  selection.set_anchor(index(loose));
++  tabs().SetSelectionFromModel(selection);
++
++  stedding::CloseOpenPinsAndCollapse(browser(), folder);
++  EXPECT_TRUE(folder->collapsed());
++  for (int i : {0, 1, 2}) {
++    EXPECT_TRUE(tabs().IsTabHidden(index(pins[i])))
++        << "the press left pin " << i << " listed";
++    EXPECT_TRUE(model().IsSpacePinned(pins[i])) << "still a pin";
++  }
++  EXPECT_EQ(loose, tabs().GetActiveTab());
++  EXPECT_EQ(4, tabs().count());
++}
++
++// folders F45, pins H11: with the folder's pins the Space's only rows, the
++// press leaves the window on the Space with no page, as Cmd-W on them does.
++TEST_F(SpaceWindowTest, TheMinusOnTheSpacesLastRowsShowsTheSpacesPage) {
++  tabs::TabInterface* const first = OpenTab();
++  model().SetSpacePinned(first, true);
++  tabs::TabInterface* const second = OpenTab();
++  model().SetSpacePinned(second, true);
++  std::vector<int> indices = {tabs().GetIndexOfTab(first),
++                              tabs().GetIndexOfTab(second)};
++  std::ranges::sort(indices);
++  tabs::FolderTabCollection* const folder = tabs().AddToNewFolder(indices);
++  ASSERT_NE(nullptr, folder);
++
++  stedding::CloseOpenPinsAndCollapse(browser(), folder);
++  EXPECT_TRUE(folder->collapsed());
++  EXPECT_EQ(3, tabs().count()) << "the pins stay and the Space's page opened";
++  EXPECT_TRUE(stedding::IsEmptySpaceStandIn(tabs().GetActiveTab()));
++}
++
+ // folders F19: Close Folder's Tabs closes the folder's tabs in this Space,
+ // collapsed ones included, and leaves a tab moved to another Space open.
+ TEST_F(SpaceWindowTest, CloseFolderTabsLeavesAnotherSpacesTabOpen) {
+diff --git a/chrome/browser/ui/stedding/pin_lifecycle.cc b/chrome/browser/ui/stedding/pin_lifecycle.cc
+index 583976ef17729..864dc46ac0005 100644
+--- a/chrome/browser/ui/stedding/pin_lifecycle.cc
++++ b/chrome/browser/ui/stedding/pin_lifecycle.cc
+@@ -33,6 +33,8 @@
+ #include "chrome/common/webui_url_constants.h"
+ #include "components/favicon/content/content_favicon_driver.h"
+ #include "components/prefs/pref_service.h"
++#include "components/tabs/public/folder_tab_collection.h"
++#include "components/tabs/public/tab_collection.h"
+ #include "components/tabs/public/tab_interface.h"
+ #include "content/public/browser/navigation_controller.h"
+ #include "content/public/browser/navigation_entry.h"
+@@ -295,11 +297,17 @@ std::vector<tabs::TabInterface*> StillPins(
+   return out;
+ }
+ 
+-// The answers of the pages asked for one close, and the pins that close.
++// What follows a close once its pins are unloaded and no page kept its pin:
++// the window they are in is the argument.
++using AfterClose = base::OnceCallback<void(BrowserWindowInterface*)>;
++
++// The answers of the pages asked for one close, the pins that close, and what
++// follows it.
+ struct PendingClose {
+   std::vector<tabs::TabHandle> pins;
+   std::vector<tabs::TabHandle> stayed;
+   size_t unanswered = 0;
++  AfterClose after;
+ };
+ 
+ void OnPinPageAnswered(std::shared_ptr<PendingClose> pending,
+@@ -331,12 +339,18 @@ void OnPinPageAnswered(std::shared_ptr<PendingClose> pending,
+     }
+   }
+   UnloadPinsAtHome(browser, same_window);
++  // folders F45: a Stay keeps what the close was for from happening.
++  if (pending->stayed.empty() && pending->after) {
++    std::move(pending->after).Run(browser);
++  }
+ }
+ 
+ // Runs the rule for `doomed`: true when it took care of them here, false
+-// when they close as Chromium closes any tab.
++// when they close as Chromium closes any tab. `after` runs once they are
++// unloaded, unless a page keeps its pin.
+ bool SleepOrLeaveToClose(BrowserWindowInterface* browser,
+-                         const std::vector<tabs::TabInterface*>& doomed) {
++                         const std::vector<tabs::TabInterface*>& doomed,
++                         AfterClose after = AfterClose()) {
+   Profile* const profile = browser ? browser->GetProfile() : nullptr;
+   if (CloseActionForTabs(browser, profile ? profile->GetPrefs() : nullptr,
+                          doomed) == CloseAction::kClose) {
+@@ -352,6 +366,9 @@ bool SleepOrLeaveToClose(BrowserWindowInterface* browser,
+   }
+   if (asking.empty()) {
+     UnloadPinsAtHome(browser, doomed);
++    if (after) {
++      std::move(after).Run(browser);
++    }
+     return true;
+   }
+   // A question already open for one of them (a second Cmd-W while the
+@@ -366,6 +383,7 @@ bool SleepOrLeaveToClose(BrowserWindowInterface* browser,
+     pending->pins.push_back(tab->GetHandle());
+   }
+   pending->unanswered = asking.size();
++  pending->after = std::move(after);
+   for (tabs::TabInterface* const tab : asking) {
+     PinUnloadRequest::Ask(
+         tab->GetContents(),
+@@ -374,6 +392,18 @@ bool SleepOrLeaveToClose(BrowserWindowInterface* browser,
+   return true;
+ }
+ 
++// folders F45: the end of a press on the - of the folder `handle` names.
++void CollapseFolderAfterClose(tabs::TabCollection::Handle handle,
++                              BrowserWindowInterface* browser) {
++  tabs::TabCollection* const collection = handle.Get();
++  spaces::SpaceModel* const model = spaces::SpaceModel::From(browser);
++  if (model && collection &&
++      collection->type() == tabs::TabCollection::Type::FOLDER) {
++    model->CollapseFolderLeavingNothingOut(
++        static_cast<tabs::FolderTabCollection*>(collection));
++  }
++}
++
+ }  // namespace
+ 
+ CloseAction CloseActionFor(BrowserWindowInterface* browser,
+@@ -468,6 +498,43 @@ bool SleepInsteadOfClosingTabs(BrowserWindowInterface* browser,
+   return SleepOrLeaveToClose(browser, tabs);
+ }
+ 
++std::vector<tabs::TabInterface*> OpenPinsInFolder(
++    BrowserWindowInterface* browser,
++    const tabs::FolderTabCollection* folder) {
++  std::vector<tabs::TabInterface*> open;
++  spaces::SpaceModel* const model =
++      browser ? spaces::SpaceModel::From(browser) : nullptr;
++  if (!model || !model->IsFolderSpacePinned(folder)) {
++    return open;
++  }
++  for (tabs::TabInterface* const tab : folder->GetTabsRecursive()) {
++    if (!IsAsleep(tab) && model->IsTabInActiveSpace(tab)) {
++      open.push_back(tab);
++    }
++  }
++  return open;
++}
++
++void CloseOpenPinsAndCollapse(BrowserWindowInterface* browser,
++                              tabs::FolderTabCollection* folder) {
++  const std::vector<tabs::TabInterface*> open =
++      OpenPinsInFolder(browser, folder);
++  if (open.empty()) {
++    return;
++  }
++  // By its handle: a page's answer can come after the folder has gone.
++  const tabs::TabCollection::Handle handle = folder->GetHandle();
++  if (SleepOrLeaveToClose(browser, open,
++                          base::BindOnce(&CollapseFolderAfterClose, handle))) {
++    return;
++  }
++  // H9: Cmd-W closes a pin here, so the press closes the open ones, as Close
++  // Folder's Tabs closes a folder's (F19), and what is left collapses. A page
++  // that asks answers Chromium's close, and the folder does not wait for it.
++  browser->GetTabStripModel()->CloseTabsOfFolder(folder, open);
++  CollapseFolderAfterClose(handle, browser);
++}
++
+ void ResetToHome(BrowserWindowInterface* browser, tabs::TabInterface* tab) {
+   spaces::SpaceModel* const model = spaces::SpaceModel::From(browser);
+   const std::optional<GURL> home = model ? model->HomeUrl(tab) : std::nullopt;
+diff --git a/chrome/browser/ui/stedding/pin_lifecycle.h b/chrome/browser/ui/stedding/pin_lifecycle.h
+index d7298fb984e35..cd01f1892d29f 100644
+--- a/chrome/browser/ui/stedding/pin_lifecycle.h
++++ b/chrome/browser/ui/stedding/pin_lifecycle.h
+@@ -6,6 +6,7 @@
+ #define CHROME_BROWSER_UI_STEDDING_PIN_LIFECYCLE_H_
+ 
+ #include <optional>
++#include <vector>
+ 
+ #include "chrome/browser/ui/stedding/pin_home.h"
+ #include "url/gurl.h"
+@@ -14,6 +15,7 @@ class BrowserWindowInterface;
+ class PrefService;
+ 
+ namespace tabs {
++class FolderTabCollection;
+ class TabInterface;
+ }
+ 
+@@ -88,6 +90,21 @@ void RemovePinnedRow(BrowserWindowInterface* browser, tabs::TabInterface* tab);
+ bool SleepInsteadOfClosingTabs(BrowserWindowInterface* browser,
+                                const std::vector<tabs::TabInterface*>& tabs);
+ 
++// folders F44 (GitHub issue 78): the pins the - on `folder`'s header takes:
++// those of the Space on screen that are awake, its nested folders' included.
++// None on a folder that holds a tab that is no pin: such a tab is a row the
++// user keeps, and only Close Folder's Tabs closes it (F19).
++std::vector<tabs::TabInterface*> OpenPinsInFolder(
++    BrowserWindowInterface* browser,
++    const tabs::FolderTabCollection* folder);
++
++// folders F45: does to OpenPinsInFolder() what Cmd-W does to them, and once no
++// page that could ask "Leave site?" has kept its pin, collapses `folder` with
++// nothing left out of it. With H9 off, where Cmd-W closes a pin, they close as
++// F19 closes a folder's tabs.
++void CloseOpenPinsAndCollapse(BrowserWindowInterface* browser,
++                              tabs::FolderTabCollection* folder);
++
+ // H5, H6: the pin loads its home page again. Only a web home (H13): any other
+ // is refused, so a reset never runs a javascript: URL or opens a file.
+ void ResetToHome(BrowserWindowInterface* browser, tabs::TabInterface* tab);
+diff --git a/chrome/browser/ui/tabs/tab_strip_model.cc b/chrome/browser/ui/tabs/tab_strip_model.cc
+index a25be75e4510f..12b432afaccf1 100644
+--- a/chrome/browser/ui/tabs/tab_strip_model.cc
++++ b/chrome/browser/ui/tabs/tab_strip_model.cc
+@@ -5392,7 +5392,12 @@ void TabStripModel::CloseFolderTabs(tabs::FolderTabCollection* folder) {
+       doomed.push_back(tab);
+     }
+   }
+-  if (doomed.empty()) {
++  CloseTabsOfFolder(folder, std::move(doomed));
++}
++
++void TabStripModel::CloseTabsOfFolder(tabs::FolderTabCollection* folder,
++                                      std::vector<tabs::TabInterface*> doomed) {
++  if (!folder || doomed.empty()) {
+     return;
+   }
+   if (std::ranges::contains(doomed, GetActiveTab())) {
+diff --git a/chrome/browser/ui/tabs/tab_strip_model.h b/chrome/browser/ui/tabs/tab_strip_model.h
+index 593abee7c0a33..2ae69924330b0 100644
+--- a/chrome/browser/ui/tabs/tab_strip_model.h
++++ b/chrome/browser/ui/tabs/tab_strip_model.h
+@@ -790,6 +790,10 @@ class TabStripModel {
+   // it, is activated first, or a New Tab opened when there is none, so no tab
+   // of the folder is shown on the way out.
+   void CloseFolderTabs(tabs::FolderTabCollection* folder);
++  // The same for `doomed`, tabs of `folder`; the folder keeps its others
++  // (folders F45).
++  void CloseTabsOfFolder(tabs::FolderTabCollection* folder,
++                         std::vector<tabs::TabInterface*> doomed);
+ 
+   // Stedding (folders F31): puts `folder`'s own rows -- its tabs, splits and
+   // nested folders -- in a new order. `order[i]` is the current child index
+diff --git a/chrome/browser/ui/views/spaces/space_tab_visibility_controller.cc b/chrome/browser/ui/views/spaces/space_tab_visibility_controller.cc
+index f3c5594d4ea90..64877a6ee79bc 100644
+--- a/chrome/browser/ui/views/spaces/space_tab_visibility_controller.cc
++++ b/chrome/browser/ui/views/spaces/space_tab_visibility_controller.cc
+@@ -490,6 +490,8 @@ void SpaceTabVisibilityController::UpdateFolder(FolderView& view) {
+   view.SetOnCollapsedChanged(
+       base::BindRepeating(&SpaceTabVisibilityController::UpdateTabVisibility,
+                           weak_factory_.GetWeakPtr()));
++  // folders F44: a pin that slept or woke under the pointer.
++  view.UpdateCloseOpenPinsButton();
+ }
+ 
+ void SpaceTabVisibilityController::OnGroupShowedItsRows() {
+@@ -600,12 +602,16 @@ void SpaceTabVisibilityController::OnTabChangedAt(tabs::TabInterface* tab,
+   if (change_type != TabChangeType::kAll) {
+     return;
+   }
++  // folders F44: a pin that went to sleep may leave its folder's - with nothing
++  // to do, open or collapsed, under a pointer that has not moved.
++  content::WebContents* const contents = tab ? tab->GetContents() : nullptr;
++  const bool asleep = contents && contents->WasDiscarded();
+   for (const tabs::TabCollection* collection =
+            tab ? tab->GetParentCollection() : nullptr;
+        collection; collection = collection->GetParentCollection()) {
+     if (collection->type() == tabs::TabCollection::Type::FOLDER &&
+-        static_cast<const tabs::FolderTabCollection*>(collection)
+-            ->collapsed()) {
++        (asleep || static_cast<const tabs::FolderTabCollection*>(collection)
++                       ->collapsed())) {
+       PostUpdateTabVisibility();
+       return;
+     }
+diff --git a/chrome/browser/ui/views/tabs/common/folder_view.cc b/chrome/browser/ui/views/tabs/common/folder_view.cc
+index 234f1d202fa93..3b8e001e35bac 100644
+--- a/chrome/browser/ui/views/tabs/common/folder_view.cc
++++ b/chrome/browser/ui/views/tabs/common/folder_view.cc
+@@ -14,6 +14,7 @@
+ #include <vector>
+ 
+ #include "base/functional/bind.h"
++#include "base/functional/callback_helpers.h"
+ #include "base/location.h"
+ #include "base/strings/string_number_conversions.h"
+ #include "base/strings/string_util.h"
+@@ -27,6 +28,7 @@
+ #include "chrome/browser/ui/spaces/space_model.h"
+ #include "chrome/browser/ui/stedding_ui_metrics.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "chrome/browser/ui/tabs/tab_style.h"
+ #include "chrome/browser/ui/views/stedding/glyph_ink.h"
+ #include "chrome/browser/ui/views/stedding/rename_field_watcher.h"
+ #include "chrome/browser/ui/views/tabs/common/clear_tabs_separator.h"
+@@ -38,6 +40,7 @@
+ #include "chrome/browser/ui/views/tabs/common/tab_strip_view.h"
+ #include "chrome/browser/ui/views/tabs/common/tab_view.h"
+ #include "chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h"
++#include "chrome/browser/ui/views/tabs/tab/tab_close_button.h"
+ #include "chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h"
+ #include "components/tabs/public/folder_tab_collection.h"
+ #include "components/tabs/public/tab_collection.h"
+@@ -51,6 +54,7 @@
+ #include "ui/color/color_provider.h"
+ #include "ui/events/event.h"
+ #include "ui/events/keycodes/keyboard_codes.h"
++#include "ui/gfx/color_utils.h"
+ #include "ui/gfx/font.h"
+ #include "ui/gfx/font_list.h"
+ #include "ui/gfx/geometry/rect.h"
+@@ -93,6 +97,9 @@ constexpr int kGlyphTitleGap = 8;
+ // unpinned_tab_container_view_layout.cc). They touched, and a selected header
+ // met the selected row under it.
+ constexpr int kRowGap = 2;
++// folders F44, F46: what the - on the header says, and its row on the menu.
++constexpr char16_t kCloseOpenPinsName[] = u"Close open tabs and collapse";
++constexpr char16_t kCloseOpenPinsMenuRow[] = u"Close Open Tabs and Collapse";
+ 
+ tabs::FolderTabCollection* FolderFromNode(TabCollectionNode* node) {
+   if (!node) {
+@@ -246,6 +253,9 @@ class FolderView::HeaderView : public views::View {
+         views::BoxLayout::CrossAxisAlignment::kCenter);
+     SetPreferredSize(
+         gfx::Size(0, GetLayoutConstant(LayoutConstant::kVerticalTabHeight)));
++    // folders F44: the - is a child, and the pointer on it is on the header:
++    // the hover that shows it would end as the pointer reached it.
++    SetNotifyEnterExitOnChild(true);
+     // The rows' own focus behaviour: on the Mac, Tab reaches the header with
+     // Full Keyboard Access on, as it reaches a row. Its name and state are
+     // set with the folder's (UpdateHeader).
+@@ -257,12 +267,23 @@ class FolderView::HeaderView : public views::View {
+         GetLayoutConstant(LayoutConstant::kVerticalTabCornerRadius));
+   }
+ 
++  // folders F44: the second click of a double click on the - lands here, once
++  // the - has gone, and does nothing. The window drops a double click's mark
++  // when its two presses have different targets, so it is told by its time.
++  void OnMinusClicked(base::TimeTicks released_at) {
++    minus_clicked_at_ = released_at;
++  }
++
+   // Every button's press is the header's, so a middle press does not reach
+   // the ground behind it, where it opens the command bar (sidebar Y24).
+   bool OnMousePressed(const ui::MouseEvent& event) override {
+     if (!event.IsOnlyLeftMouseButton()) {
+       return true;
+     }
++    ignore_click_ = !minus_clicked_at_.is_null() &&
++                    event.time_stamp() - minus_clicked_at_ <=
++                        views::GetDoubleClickInterval();
++    minus_clicked_at_ = base::TimeTicks();
+     press_location_ = event.location();
+     dragging_ = false;
+     // folders F4: a double click renames only when both of its presses
+@@ -291,6 +312,11 @@ class FolderView::HeaderView : public views::View {
+   void OnMouseExited(const ui::MouseEvent& event) override {
+     owner_->SetHeaderHovered(false);
+   }
++  // folders F44: a pin that woke under the pointer shows the - at the next
++  // move: the page's load that says so is not a change this view hears of.
++  void OnMouseMoved(const ui::MouseEvent& event) override {
++    owner_->UpdateCloseOpenPinsButton();
++  }
+   // folders F38, F39: a drag past the threshold carries the folder to a
+   // place among the rows, over the Clear line or under it, or into another
+   // folder; the release decides. A nested folder's header drags too.
+@@ -331,6 +357,10 @@ class FolderView::HeaderView : public views::View {
+         !GetLocalBounds().Contains(event.location())) {
+       return;
+     }
++    if (ignore_click_) {
++      ignore_click_ = false;
++      return;
++    }
+     const bool rename = event.GetClickCount() >= 2 && rename_on_release_ &&
+                         owner_->IsOnName(event.location());
+     rename_on_release_ = false;
+@@ -397,6 +427,10 @@ class FolderView::HeaderView : public views::View {
+   // being dragged.
+   gfx::Point press_location_;
+   bool dragging_ = false;
++  // folders F44: when the - was last clicked, and whether the press under way
++  // is the second click of a double click on it.
++  base::TimeTicks minus_clicked_at_;
++  bool ignore_click_ = false;
+ };
+ 
+ FolderView::FolderView(TabCollectionNode* collection_node)
+@@ -458,6 +492,25 @@ FolderView::FolderView(TabCollectionNode* collection_node)
+   static_cast<views::BoxLayout*>(header->GetLayoutManager())
+       ->SetFlexForView(name_.get(), 1);
+ 
++  // folders F44 (GitHub issue 78): the rows' close button, as the minus it is
++  // on a pin (pins H29), at the header's end. Only the pointer shows it; the
++  // keyboard and a screen reader reach it on the header's menu (F46). It takes
++  // its room from the name while it shows, so nothing else moves.
++  auto minus = std::make_unique<TabCloseButton>(
++      base::BindRepeating(&FolderView::OnCloseOpenPinsPressed,
++                          base::Unretained(this)),
++      base::DoNothingAs<void(views::View*, const ui::MouseEvent&)>());
++  minus->SetKeepsPin(true);
++  minus->GetViewAccessibility().SetName(kCloseOpenPinsName);
++  minus->SetTooltipText(kCloseOpenPinsName);
++  minus->SetFocusBehavior(FocusBehavior::NEVER);
++  // The whole of the favicons' column takes a press: a row's border has no
++  // use here.
++  minus->SetBorder(nullptr);
++  minus->set_context_menu_controller(this);
++  minus->SetVisible(false);
++  close_open_pins_button_ = header->AddChildView(std::move(minus));
++
+   header_ = AddChildView(std::move(header));
+   // The header is the folder's own row, on the tab rows' favicon column;
+   // only its children are indented (ViewHierarchyChanged). Until 2026-09-05
+@@ -505,6 +558,7 @@ void FolderView::ResetCollectionNode() {
+   }
+   data_changed_subscription_ = {};
+   collection_node_ = nullptr;
++  UpdateCloseOpenPinsButton();
+ }
+ 
+ void FolderView::OnFolderDataChanged() {
+@@ -519,6 +573,36 @@ views::View* FolderView::header_for_testing() {
+   return header_;
+ }
+ 
++views::View* FolderView::close_open_pins_button_for_testing() {
++  return close_open_pins_button_;
++}
++
++void FolderView::UpdateCloseOpenPinsButton() {
++  if (!close_open_pins_button_) {
++    return;
++  }
++  // folders F44: the pointer is on this header, nothing else has the row, and
++  // a press would do something. Asked only under the pointer: this runs for
++  // every folder on every pass of the rows' visibility.
++  TabStripCollectionController* const controller =
++      collection_node_ ? collection_node_->GetController() : nullptr;
++  close_open_pins_button_->SetVisible(
++      header_hovered_ && controller && folder() && !rail_ &&
++      !header_dragging_ && !drop_highlighted_ &&
++      !rename_field_->GetVisible() && controller->FolderHoldsOpenPins(folder()));
++}
++
++void FolderView::OnCloseOpenPinsPressed(const ui::Event& event) {
++  header_->OnMinusClicked(event.time_stamp());
++  // A turn later: with pins closing rather than sleeping (pins H9), the last
++  // of them takes this header with it, and with it the button still in its
++  // press.
++  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
++      FROM_HERE, base::BindOnce(&FolderView::ExecuteCommand,
++                                weak_factory_.GetWeakPtr(),
++                                kCloseOpenPinsCommand, /*event_flags=*/0));
++}
++
+ gfx::Rect FolderView::GetHeaderBoundsInScreen() const {
+   return header_ ? header_->GetBoundsInScreen() : gfx::Rect();
+ }
+@@ -526,6 +610,7 @@ gfx::Rect FolderView::GetHeaderBoundsInScreen() const {
+ void FolderView::SetDropHighlight(bool highlighted) {
+   drop_highlighted_ = highlighted;
+   UpdateHeaderBackground();
++  UpdateCloseOpenPinsButton();
+ }
+ 
+ bool FolderView::CanDragHeader() const {
+@@ -878,12 +963,14 @@ void FolderView::ShowDropIndicator(const std::optional<DropPlace>& place) {
+ 
+ void FolderView::OnHeaderDragged(const gfx::Point& screen_point) {
+   header_dragging_ = true;
++  UpdateCloseOpenPinsButton();
+   ShowDropIndicator(DropPlaceAt(screen_point));
+ }
+ 
+ void FolderView::OnHeaderDragEnded(const gfx::Point& screen_point,
+                                    bool drop) {
+   header_dragging_ = false;
++  UpdateCloseOpenPinsButton();
+   ShowDropIndicator(std::nullopt);
+   if (!drop) {
+     return;
+@@ -970,6 +1057,7 @@ void FolderView::MoveInto(tabs::TabCollection::Handle into,
+ void FolderView::SetHeaderHovered(bool hovered) {
+   header_hovered_ = hovered;
+   UpdateHeaderBackground();
++  UpdateCloseOpenPinsButton();
+ }
+ 
+ void FolderView::UpdateHeaderBackground() {
+@@ -1091,6 +1179,7 @@ void FolderView::ApplyRail() {
+   if (!rename_field_->GetVisible()) {
+     name_->SetVisible(!rail_);
+   }
++  UpdateCloseOpenPinsButton();
+   InvalidateLayout();
+ }
+ 
+@@ -1142,6 +1231,10 @@ void FolderView::UpdateHeader() {
+   if (glyph_->GetPreferredSize() != glyph_box) {
+     glyph_->SetPreferredSize(glyph_box);
+   }
++  // folders F44: the - on the rows' close column, the favicon's width.
++  if (close_open_pins_button_->GetPreferredSize() != glyph_box) {
++    close_open_pins_button_->SetPreferredSize(glyph_box);
++  }
+   const std::string& title = f->title();
+   name_->SetText(title.empty() ? u"New Folder" : base::UTF8ToUTF16(title));
+   // The header is the folder's control: a screen reader reads it by the name
+@@ -1195,6 +1288,11 @@ void FolderView::UpdateLook() {
+                                         stedding::SidebarFont(), text,
+                                         stedding::SidebarFaviconSize()));
+   name_->SetEnabledColor(text);
++  // folders F44: its glyph in the rows' text colour, and its hover the
++  // colour's own side of the ground.
++  close_open_pins_button_->SetColors(TabStyle::TabColors(
++      text, color_utils::GetColorWithMaxContrast(text),
++      kColorTabFocusRingInactive, kColorTabCloseButtonFocusRingInactive));
+ }
+ 
+ bool FolderView::IsOnName(const gfx::Point& point_in_header) const {
+@@ -1223,6 +1321,7 @@ void FolderView::BeginRename() {
+   // renamed; the field takes the name's slot.
+   name_->SetVisible(false);
+   rename_field_->SetVisible(true);
++  UpdateCloseOpenPinsButton();
+   rename_field_->RequestFocus();
+   rename_field_->SelectAll(false);
+ }
+@@ -1248,6 +1347,7 @@ void FolderView::BeginIconEdit() {
+   rename_field_->SetPlaceholderText(u"Type or paste an emoji");
+   name_->SetVisible(false);
+   rename_field_->SetVisible(true);
++  UpdateCloseOpenPinsButton();
+   rename_field_->RequestFocus();
+   rename_field_->SelectAll(false);
+   if (g_opens_emoji_panel && ui::IsEmojiPanelSupported()) {
+@@ -1272,6 +1372,7 @@ void FolderView::EndRename(bool commit) {
+   editing_icon_ = false;
+   rename_field_->SetVisible(false);
+   name_->SetVisible(!rail_);
++  UpdateCloseOpenPinsButton();
+   UpdateHeader();
+ }
+ 
+@@ -1315,6 +1416,10 @@ void FolderView::BuildMenuModel() {
+   }
+   menu_model_->AddSeparator(ui::NORMAL_SEPARATOR);
+   menu_model_->AddItem(kMoveTabsOutCommand, u"Move Tabs Out of Folder");
++  // folders F46: what the - does, for a folder in the pinned run.
++  if (controller && f && controller->IsFolderPinned(f)) {
++    menu_model_->AddItem(kCloseOpenPinsCommand, kCloseOpenPinsMenuRow);
++  }
+   menu_model_->AddItem(kCloseTabsCommand, u"Close Folder\u2019s Tabs");
+ }
+ 
+@@ -1327,6 +1432,12 @@ bool FolderView::IsCommandIdEnabled(int command_id) const {
+   if (command_id == kAlphabetizeCommand) {
+     return f->ChildCount() > 1;
+   }
++  // folders F46: with nothing open a press would do nothing.
++  if (command_id == kCloseOpenPinsCommand) {
++    TabStripCollectionController* const controller =
++        collection_node_ ? collection_node_->GetController() : nullptr;
++    return controller && controller->FolderHoldsOpenPins(f);
++  }
+   return true;
+ }
+ 
+@@ -1358,6 +1469,11 @@ void FolderView::ExecuteCommand(int command_id, int event_flags) {
+         controller->CloseFolderTabs(folder());
+       }
+       break;
++    case kCloseOpenPinsCommand:
++      if (controller && folder()) {
++        controller->CloseOpenPinsAndCollapse(folder());
++      }
++      break;
+     case kNewTabCommand:
+       if (controller && folder()) {
+         controller->NewTabInFolder(folder());
+diff --git a/chrome/browser/ui/views/tabs/common/folder_view.h b/chrome/browser/ui/views/tabs/common/folder_view.h
+index 01cc54cc729d0..a02cc226033eb 100644
+--- a/chrome/browser/ui/views/tabs/common/folder_view.h
++++ b/chrome/browser/ui/views/tabs/common/folder_view.h
+@@ -27,6 +27,7 @@
+ #include "ui/views/view_tracker.h"
+ 
+ class BrowserWindowInterface;
++class TabCloseButton;
+ class TabCollectionNode;
+ 
+ namespace tabs {
+@@ -34,6 +35,10 @@ class FolderTabCollection;
+ class TabInterface;
+ }  // namespace tabs
+ 
++namespace ui {
++class Event;
++}  // namespace ui
++
+ namespace views {
+ class MenuRunner;
+ class ImageView;
+@@ -60,7 +65,7 @@ class FolderView : public views::View,
+  public:
+   // The header menu's rows (docs/features/menus.md M7): Rename, Collapse or
+   // Expand -- New Tab in Folder (folders F32), Alphabetize (F31) -- Move Tabs
+-  // Out, Close Folder's Tabs.
++  // Out, Close Open Tabs and Collapse (F46), Close Folder's Tabs.
+   static constexpr int kRenameCommand = 1;
+   static constexpr int kToggleCommand = 2;
+   static constexpr int kMoveTabsOutCommand = 3;
+@@ -73,6 +78,8 @@ class FolderView : public views::View,
+   // is one.
+   static constexpr int kIconCommand = 8;
+   static constexpr int kRemoveIconCommand = 9;
++  // folders F46: what the - on the header does, on a folder in the pinned run.
++  static constexpr int kCloseOpenPinsCommand = 10;
+ 
+   // folders F42: the name's field, empty, takes one character for the
+   // folder's icon -- typed, pasted or from the system's emoji picker, which
+@@ -94,7 +101,14 @@ class FolderView : public views::View,
+   // rows' visibility can apply the new state (folders F3).
+   void SetOnCollapsedChanged(base::RepeatingClosure on_collapsed_changed);
+ 
++  // folders F44: shows the - on the header while the pointer is on it and a
++  // press would do something, and hides it otherwise. The rows' visibility
++  // pass calls it too: a pin that sleeps or wakes under the pointer changes
++  // the answer.
++  void UpdateCloseOpenPinsButton();
++
+   views::ImageView* glyph_for_testing() { return glyph_; }
++  views::View* close_open_pins_button_for_testing();
+   views::View* header_for_testing();
+   views::Label* name_for_testing() { return name_; }
+   void UpdateHeaderForTesting() { UpdateHeader(); }
+@@ -178,6 +192,8 @@ class FolderView : public views::View,
+   class HeaderView;
+ 
+   void BuildMenuModel();
++  // folders F45: the - pressed.
++  void OnCloseOpenPinsPressed(const ui::Event& event);
+   // folders F31: puts the rows' views in the folder's order, right after the
+   // header, before the box layout lays them out in view order.
+   void SyncRowOrder();
+@@ -264,6 +280,8 @@ class FolderView : public views::View,
+   raw_ptr<views::ImageView> glyph_ = nullptr;
+   raw_ptr<views::Label> name_ = nullptr;
+   raw_ptr<views::Textfield> rename_field_ = nullptr;
++  // folders F44: the - at the header's end.
++  raw_ptr<TabCloseButton> close_open_pins_button_ = nullptr;
+   std::unique_ptr<stedding::RenameFieldWatcher> rename_watcher_;
+   bool header_hovered_ = false;
+   bool drop_highlighted_ = false;
+diff --git a/chrome/browser/ui/views/tabs/common/tab_strip_collection_controller.cc b/chrome/browser/ui/views/tabs/common/tab_strip_collection_controller.cc
+index db3d84eedada7..d68bcd38c7719 100644
+--- a/chrome/browser/ui/views/tabs/common/tab_strip_collection_controller.cc
++++ b/chrome/browser/ui/views/tabs/common/tab_strip_collection_controller.cc
+@@ -590,6 +590,19 @@ void TabStripCollectionController::CloseFolderTabs(
+   model_->CloseFolderTabs(folder);
+ }
+ 
++bool TabStripCollectionController::FolderHoldsOpenPins(
++    const tabs::FolderTabCollection* folder) const {
++  return browser_view_ &&
++         !stedding::OpenPinsInFolder(browser_view_->browser(), folder).empty();
++}
++
++void TabStripCollectionController::CloseOpenPinsAndCollapse(
++    tabs::FolderTabCollection* folder) {
++  if (browser_view_) {
++    stedding::CloseOpenPinsAndCollapse(browser_view_->browser(), folder);
++  }
++}
++
+ void TabStripCollectionController::AlphabetizeFolder(
+     tabs::FolderTabCollection* folder) {
+   spaces::AlphabetizeFolder(*model_, folder);
+diff --git a/chrome/browser/ui/views/tabs/common/tab_strip_collection_controller.h b/chrome/browser/ui/views/tabs/common/tab_strip_collection_controller.h
+index 4b439aa5b5241..8d1b703bfcea9 100644
+--- a/chrome/browser/ui/views/tabs/common/tab_strip_collection_controller.h
++++ b/chrome/browser/ui/views/tabs/common/tab_strip_collection_controller.h
+@@ -136,6 +136,10 @@ class TabStripCollectionController : public TabContextMenuController::Delegate {
+   // Stedding (docs/features/menus.md M7): the folder header's verbs.
+   void MoveTabsOutOfFolder(tabs::FolderTabCollection* folder);
+   void CloseFolderTabs(tabs::FolderTabCollection* folder);
++  // folders F44, F45: whether the - on `folder`'s header would do something,
++  // and what it does.
++  bool FolderHoldsOpenPins(const tabs::FolderTabCollection* folder) const;
++  void CloseOpenPinsAndCollapse(tabs::FolderTabCollection* folder);
+   // folders F31: the folder's own rows in alphabetical order.
+   void AlphabetizeFolder(tabs::FolderTabCollection* folder);
+   // folders F32: a New Tab page as the folder's last row, then the command
+diff --git a/chrome/test/stedding/folder_tabs_browsertest.cc b/chrome/test/stedding/folder_tabs_browsertest.cc
+index 4503a8ba62a81..f84b0b386af3f 100644
+--- a/chrome/test/stedding/folder_tabs_browsertest.cc
++++ b/chrome/test/stedding/folder_tabs_browsertest.cc
+@@ -48,6 +48,8 @@
+ #include "chrome/browser/sessions/session_service_factory.h"
+ #include "chrome/browser/sessions/session_service_test_helper.h"
+ #include "chrome/browser/sessions/tab_restore_service_factory.h"
++#include "chrome/browser/themes/theme_service.h"
++#include "chrome/browser/themes/theme_service_factory.h"
+ #include "chrome/browser/ui/archive/closed_folder.h"
+ #include "chrome/browser/ui/archive/closed_tabs_undo.h"
+ #include "chrome/browser/ui/browser_commands.h"
+@@ -119,6 +121,8 @@
+ #include "extensions/common/extension_builder.h"
+ #include "net/test/embedded_test_server/embedded_test_server.h"
+ #include "third_party/skia/include/core/SkColor.h"
++#include "ui/accessibility/ax_enums.mojom.h"
++#include "ui/accessibility/ax_node_data.h"
+ #include "ui/base/accelerators/accelerator.h"
+ #include "ui/base/l10n/l10n_util.h"
+ #include "ui/base/models/menu_model.h"
+@@ -136,8 +140,12 @@
+ #include "ui/gfx/geometry/point.h"
+ #include "ui/gfx/geometry/point_f.h"
+ #include "ui/gfx/geometry/rect.h"
++#include "ui/gfx/geometry/vector2d.h"
+ #include "ui/gfx/native_ui_types.h"
+ #include "ui/gfx/scoped_animation_duration_scale_mode.h"
++#include "ui/gfx/text_utils.h"
++#include "ui/menus/simple_menu_model.h"
++#include "ui/views/accessibility/view_accessibility.h"
+ #include "ui/views/controls/label.h"
+ #include "ui/views/controls/scroll_view.h"
+ #include "ui/views/controls/textfield/textfield.h"
+@@ -323,6 +331,63 @@ class FolderTabsTest
+     return tab_strip_model()->GetActiveTab();
+   }
+ 
++  // folders F44: the pointer moves to `screen_point`, as the window hands a
++  // move, and the rows lay out what it changed.
++  void MovePointerTo(const gfx::Point& screen_point) {
++    views::View* const root = widget()->GetRootView();
++    gfx::Point in_root = screen_point;
++    views::View::ConvertPointFromScreen(root, &in_root);
++    root->OnMouseMoved(ui::MouseEvent(ui::EventType::kMouseMoved, in_root,
++                                      in_root, ui::EventTimeForNow(),
++                                      ui::EF_NONE, ui::EF_NONE));
++    views::test::RunScheduledLayout(widget());
++  }
++
++  // folders F44: a tab at the end on a page of the test server, pinned to the
++  // Space on screen, and a folder of `pins`.
++  tabs::TabInterface* OpenPin(const std::string& host) {
++    tabs::TabInterface* const tab = OpenLoaded(host);
++    spaces::SpaceModel::From(browser())->SetSpacePinned(tab, true);
++    return tab;
++  }
++  tabs::FolderTabCollection* FolderOf(
++      const std::vector<tabs::TabInterface*>& pins) {
++    std::vector<int> indices;
++    for (tabs::TabInterface* const pin : pins) {
++      indices.push_back(IndexOf(pin));
++    }
++    std::ranges::sort(indices);
++    return tab_strip_model()->AddToNewFolder(indices);
++  }
++
++  // folders F44: the pointer on `folder`'s header, and its - as it then is.
++  views::View* MinusUnderThePointer(const tabs::FolderTabCollection* folder) {
++    FolderView* const header = DrawnFolder(folder);
++    EXPECT_TRUE(header) << "the folder is not drawn";
++    if (!header) {
++      return nullptr;
++    }
++    MovePointerTo(header->GetHeaderBoundsInScreen().CenterPoint());
++    return header->close_open_pins_button_for_testing();
++  }
++
++  // folders F45: a click on `folder`'s - where the pointer shows it, and
++  // whether the tab is asleep once it has run.
++  [[nodiscard]] bool PressMinus(const tabs::FolderTabCollection* folder) {
++    views::View* const minus = MinusUnderThePointer(folder);
++    if (!minus || !minus->GetVisible()) {
++      return false;
++    }
++    const gfx::Point centre = minus->GetBoundsInScreen().CenterPoint();
++    MovePointerTo(centre);
++    stedding::test::ClickLeftMouse(widget(), centre);
++    return true;
++  }
++  [[nodiscard]] bool WaitUntilAsleep(tabs::TabInterface* tab) {
++    return base::test::RunUntil(
++        [&]() { return tab->GetContents()->WasDiscarded(); });
++  }
++
+   // Four tabs, the middle two in a folder.
+   tabs::FolderTabCollection* MakeFolder() {
+     AppendTab();
+@@ -1402,6 +1467,483 @@ IN_PROC_BROWSER_TEST_F(FolderTabsTest, AFoldersRowsStandApartAsTheListsDo) {
+   }
+ }
+ 
++// folders F44 (GitHub issue 78; the owner, 2026-11-05): the - shows only while
++// the pointer is on that folder's own header, a nested folder's being its
++// own, and stays while the pointer is on the - itself. Nothing on the row
++// moves when it comes or goes. It wears the rows' text colour, and says what
++// it does.
++IN_PROC_BROWSER_TEST_F(FolderTabsTest, TheMinusShowsOnlyOverItsHeader) {
++  ASSERT_TRUE(embedded_test_server()->Start());
++  CloseDownToOne();
++  tabs::TabInterface* const first = OpenPin("a.test");
++  tabs::TabInterface* const second = OpenPin("b.test");
++  tabs::TabInterface* const inner = OpenPin("c.test");
++  tabs::FolderTabCollection* const folder = FolderOf({first, second, inner});
++  ASSERT_TRUE(folder);
++  tabs::FolderTabCollection* const nested =
++      tab_strip_model()->AddToNewFolder({IndexOf(inner)});
++  ASSERT_TRUE(nested);
++  tabs::TabInterface* const loose = OpenLoaded("d.test");
++  FolderView* const header = DrawnFolder(folder);
++  FolderView* const nested_header = DrawnFolder(nested);
++  ASSERT_TRUE(header && nested_header);
++  views::View* const minus = header->close_open_pins_button_for_testing();
++  views::View* const nested_minus =
++      nested_header->close_open_pins_button_for_testing();
++  ASSERT_TRUE(minus && nested_minus);
++  EXPECT_FALSE(minus->GetVisible()) << "shown with no pointer on the header";
++
++  const gfx::Rect box = header->GetHeaderBoundsInScreen();
++  const gfx::Rect glyph = header->glyph_for_testing()->GetBoundsInScreen();
++  const int name_x = header->name_for_testing()->GetBoundsInScreen().x();
++  const gfx::Rect row_below = DrawnRow(first)->GetBoundsInScreen();
++
++  MovePointerTo(box.CenterPoint());
++  EXPECT_TRUE(minus->GetVisible()) << "no - with the pointer on the header";
++  EXPECT_FALSE(nested_minus->GetVisible());
++  EXPECT_EQ(box, header->GetHeaderBoundsInScreen()) << "the header moved";
++  EXPECT_EQ(glyph, header->glyph_for_testing()->GetBoundsInScreen());
++  EXPECT_EQ(name_x, header->name_for_testing()->GetBoundsInScreen().x());
++  EXPECT_EQ(row_below, DrawnRow(first)->GetBoundsInScreen());
++  EXPECT_TRUE(box.Contains(minus->GetBoundsInScreen()))
++      << "the - is not on the header";
++  EXPECT_EQ(box.CenterPoint().y(), minus->GetBoundsInScreen().CenterPoint().y())
++      << "the - is off the header's middle";
++  EXPECT_EQ(box.right() - 8, minus->GetBoundsInScreen().right())
++      << "the - is not on the rows' close column";
++
++  EXPECT_EQ(u"Close open tabs and collapse",
++            views::AsViewClass<TabCloseButton>(minus)->GetTooltipText());
++  ui::AXNodeData node;
++  minus->GetViewAccessibility().GetAccessibleNodeData(&node);
++  EXPECT_EQ("Close open tabs and collapse",
++            node.GetStringAttribute(ax::mojom::StringAttribute::kName));
++  for (const bool dark : {false, true}) {
++    SCOPED_TRACE(dark ? "dark" : "light");
++    ThemeServiceFactory::GetForProfile(browser()->GetProfile())
++        ->SetBrowserColorScheme(dark ? ThemeService::BrowserColorScheme::kDark
++                                     : ThemeService::BrowserColorScheme::kLight);
++    ASSERT_TRUE(base::test::RunUntil([&]() {
++      return widget()->GetColorProviderKeyForTesting().color_mode ==
++             (dark ? ui::ColorProviderKey::ColorMode::kDark
++                   : ui::ColorProviderKey::ColorMode::kLight);
++    }));
++    EXPECT_EQ(minus->GetColorProvider()->GetColor(
++                  kColorTabForegroundInactiveFrameActive),
++              views::AsViewClass<TabCloseButton>(minus)
++                  ->GetColors()
++                  .foreground_color);
++  }
++
++  // Onto the - itself: a view of its own, and still the header.
++  MovePointerTo(minus->GetBoundsInScreen().CenterPoint());
++  EXPECT_TRUE(minus->GetVisible()) << "the - went as the pointer reached it";
++
++  // A row of the folder is not its header.
++  MovePointerTo(DrawnRow(second)->GetBoundsInScreen().CenterPoint());
++  EXPECT_FALSE(minus->GetVisible()) << "the - stayed over a row";
++
++  // A nested folder's header shows that folder's alone.
++  MovePointerTo(nested_header->GetHeaderBoundsInScreen().CenterPoint());
++  EXPECT_FALSE(minus->GetVisible());
++  EXPECT_TRUE(nested_minus->GetVisible());
++
++  MovePointerTo(DrawnRow(loose)->GetBoundsInScreen().CenterPoint());
++  EXPECT_FALSE(nested_minus->GetVisible()) << "the - stayed off the header";
++}
++
++// folders F44: while the - shows a long name elides to make room, and only
++// then; a short name is not touched.
++IN_PROC_BROWSER_TEST_F(FolderTabsTest, TheNameElidesOnlyWhileTheMinusShows) {
++  ASSERT_TRUE(embedded_test_server()->Start());
++  CloseDownToOne();
++  tabs::TabInterface* const pin = OpenPin("a.test");
++  tabs::FolderTabCollection* const folder = FolderOf({pin});
++  ASSERT_TRUE(folder);
++  OpenLoaded("b.test");
++  FolderView* const header = DrawnFolder(folder);
++  ASSERT_TRUE(header);
++  views::Label* const name = header->name_for_testing();
++  const gfx::Point away = DrawnRow(pin)->GetBoundsInScreen().CenterPoint();
++
++  folder->SetTitle("Work");
++  views::test::RunScheduledLayout(widget());
++  MovePointerTo(away);
++  EXPECT_FALSE(name->IsDisplayTextTruncated());
++  views::View* const minus = MinusUnderThePointer(folder);
++  ASSERT_TRUE(minus && minus->GetVisible());
++  EXPECT_FALSE(name->IsDisplayTextTruncated()) << "a short name was cut";
++
++  MovePointerTo(away);
++  // As long as fits: the name's own width, with no - beside it, less a little.
++  std::string title;
++  while (gfx::GetStringWidth(base::UTF8ToUTF16(title), name->font_list()) <
++         name->width() - 6) {
++    title += "W";
++  }
++  title.pop_back();
++  folder->SetTitle(title);
++  views::test::RunScheduledLayout(widget());
++  const int room = name->width();
++  EXPECT_FALSE(name->IsDisplayTextTruncated())
++      << "with no - the whole name fits";
++  ASSERT_TRUE(MinusUnderThePointer(folder)->GetVisible());
++  EXPECT_LT(name->width(), room);
++  EXPECT_TRUE(name->IsDisplayTextTruncated()) << "the name ran under the -";
++  EXPECT_LE(name->GetBoundsInScreen().right(),
++            minus->GetBoundsInScreen().x());
++  MovePointerTo(away);
++  EXPECT_EQ(room, name->width());
++  EXPECT_FALSE(name->IsDisplayTextTruncated());
++}
++
++// folders F44: no - where a press would do nothing or would delete rows: a
++// folder of plain rows, a folder with nothing open; and none in the rail,
++// during a rename or Change Icon, while the header is dragged, or under a tab
++// dragged over it.
++IN_PROC_BROWSER_TEST_F(FolderTabsTest, TheMinusShowsOnlyWhereItCanDoSomething) {
++  ASSERT_TRUE(embedded_test_server()->Start());
++  CloseDownToOne();
++  tabs::TabInterface* const pin = OpenPin("a.test");
++  tabs::TabInterface* const other_pin = OpenPin("b.test");
++  tabs::FolderTabCollection* const pinned = FolderOf({pin, other_pin});
++  ASSERT_TRUE(pinned);
++  tabs::TabInterface* const plain = OpenLoaded("c.test");
++  tabs::TabInterface* const other_plain = OpenLoaded("d.test");
++  tabs::FolderTabCollection* const loose = FolderOf({plain, other_plain});
++  ASSERT_TRUE(loose);
++  tabs::TabInterface* const elsewhere = OpenLoaded("e.test");
++  ASSERT_EQ(elsewhere, tab_strip_model()->GetActiveTab());
++  FolderView::SetOpensEmojiPanelForTesting(false);
++
++  {
++    SCOPED_TRACE("a folder of plain rows");
++    views::View* const minus = MinusUnderThePointer(loose);
++    ASSERT_TRUE(minus);
++    EXPECT_FALSE(minus->GetVisible());
++  }
++  {
++    SCOPED_TRACE("a rename");
++    FolderView* const header = DrawnFolder(pinned);
++    ASSERT_TRUE(header);
++    views::View* const minus = MinusUnderThePointer(pinned);
++    ASSERT_TRUE(minus->GetVisible());
++    header->ExecuteCommand(FolderView::kRenameCommand, 0);
++    EXPECT_FALSE(minus->GetVisible()) << "the - stayed beside the field";
++    header->rename_field_for_testing()->SetText(u"Work");
++    ui::KeyEvent enter(ui::EventType::kKeyPressed, ui::VKEY_RETURN,
++                       ui::EF_NONE);
++    header->HandleKeyEvent(header->rename_field_for_testing(), enter);
++    EXPECT_TRUE(minus->GetVisible()) << "the - did not come back";
++    header->ExecuteCommand(FolderView::kIconCommand, 0);
++    EXPECT_FALSE(minus->GetVisible()) << "the - stayed beside the icon's field";
++    ui::KeyEvent escape(ui::EventType::kKeyPressed, ui::VKEY_ESCAPE,
++                        ui::EF_NONE);
++    header->HandleKeyEvent(header->rename_field_for_testing(), escape);
++    EXPECT_TRUE(minus->GetVisible());
++  }
++  {
++    SCOPED_TRACE("a tab dragged over the header");
++    FolderView* const header = DrawnFolder(pinned);
++    ASSERT_TRUE(header);
++    views::View* const minus = MinusUnderThePointer(pinned);
++    ASSERT_TRUE(minus->GetVisible());
++    header->SetDropHighlight(true);
++    EXPECT_FALSE(minus->GetVisible());
++    header->SetDropHighlight(false);
++    EXPECT_TRUE(minus->GetVisible());
++  }
++  {
++    SCOPED_TRACE("a drag of the header");
++    FolderView* const header = DrawnFolder(pinned);
++    ASSERT_TRUE(header);
++    views::View* const minus = MinusUnderThePointer(pinned);
++    ASSERT_TRUE(minus->GetVisible());
++    const gfx::Point start = header->GetHeaderBoundsInScreen().CenterPoint();
++    stedding::test::SendLeftMouse(widget(), ui::EventType::kMousePressed,
++                                  start);
++    stedding::test::SendLeftMouse(widget(), ui::EventType::kMouseDragged,
++                                  start + gfx::Vector2d(0, 12));
++    ASSERT_TRUE(header->header_dragging_for_testing());
++    EXPECT_FALSE(minus->GetVisible()) << "the - stayed on a dragged header";
++    stedding::test::SendLeftMouse(widget(), ui::EventType::kMouseReleased,
++                                  start);
++    EXPECT_FALSE(header->header_dragging_for_testing());
++  }
++  {
++    SCOPED_TRACE("nothing open");
++    ASSERT_EQ(elsewhere, tab_strip_model()->GetActiveTab());
++    stedding::UnloadTabNow(pin);
++    stedding::UnloadTabNow(other_pin);
++    ASSERT_TRUE(WaitUntilAsleep(pin));
++    ASSERT_TRUE(WaitUntilAsleep(other_pin));
++    views::View* const minus = MinusUnderThePointer(pinned);
++    ASSERT_TRUE(minus);
++    EXPECT_TRUE(base::test::RunUntil([&]() { return !minus->GetVisible(); }))
++        << "a - with no open pin, under a pointer that did not move";
++    // One wakes: the - comes back at the pointer's next move.
++    tab_strip_model()->ActivateTabAt(IndexOf(pin));
++    ASSERT_TRUE(base::test::RunUntil(
++        [&]() { return !pin->GetContents()->WasDiscarded(); }));
++    views::View* const again = MinusUnderThePointer(pinned);
++    ASSERT_TRUE(again);
++    EXPECT_TRUE(again->GetVisible()) << "no - on a pin that woke";
++  }
++  {
++    SCOPED_TRACE("the rail");
++    tabs::VerticalTabStripStateController::From(browser())->RequestCollapse(
++        true);
++    ASSERT_TRUE(base::test::RunUntil([&]() {
++      return VerticalTabStripRegionView::IsRailWidth(
++          BrowserView::GetBrowserViewForBrowser(browser())
++              ->vertical_tab_strip_region_view_for_testing()
++              ->width());
++    }));
++    views::View* const minus = MinusUnderThePointer(pinned);
++    ASSERT_TRUE(minus);
++    EXPECT_FALSE(minus->GetVisible()) << "a - in the rail";
++  }
++}
++
++// folders F45 (GitHub issue 78): a press does to each open pin what Cmd-W
++// does: it sleeps at home, a pin in its place, nested folders' too. Pins
++// already asleep stay. The folder collapses and its rows go; the tab on
++// screen, outside it, stays; the - goes, though the pointer stays.
++IN_PROC_BROWSER_TEST_F(FolderTabsTest,
++                       TheMinusSleepsTheOpenPinsAndCollapsesTheFolder) {
++  ASSERT_TRUE(embedded_test_server()->Start());
++  CloseDownToOne();
++  spaces::SpaceModel* const model = spaces::SpaceModel::From(browser());
++  tabs::TabInterface* const first = OpenPin("a.test");
++  tabs::TabInterface* const second = OpenPin("b.test");
++  tabs::TabInterface* const inner = OpenPin("c.test");
++  tabs::FolderTabCollection* const folder = FolderOf({first, second, inner});
++  ASSERT_TRUE(folder);
++  tabs::FolderTabCollection* const nested =
++      tab_strip_model()->AddToNewFolder({IndexOf(inner)});
++  ASSERT_TRUE(nested);
++  tabs::TabInterface* const loose = OpenLoaded("d.test");
++  const int count = tab_strip_model()->count();
++  ASSERT_FALSE(folder->collapsed());
++
++  ASSERT_TRUE(PressMinus(folder));
++  for (tabs::TabInterface* const pin : {first, second, inner}) {
++    ASSERT_TRUE(WaitUntilAsleep(pin));
++    EXPECT_TRUE(model->IsSpacePinned(pin)) << "the - unpinned a pin";
++  }
++  ASSERT_TRUE(base::test::RunUntil([&]() { return folder->collapsed(); }));
++  EXPECT_FALSE(nested->collapsed()) << "a nested folder keeps its own state";
++  EXPECT_EQ(count, tab_strip_model()->count()) << "the - closed a tab";
++  EXPECT_EQ(loose, tab_strip_model()->GetActiveTab());
++  EXPECT_FALSE(DrawnRow(first));
++  EXPECT_FALSE(DrawnRow(second));
++  EXPECT_FALSE(DrawnRow(inner));
++  FolderView* const header = DrawnFolder(folder);
++  ASSERT_TRUE(header);
++  views::View* const minus = header->close_open_pins_button_for_testing();
++  EXPECT_TRUE(base::test::RunUntil([&]() { return !minus->GetVisible(); }))
++      << "a - with nothing left to close, under the pointer";
++}
++
++// folders F45, pins H3: with the tab on screen in the folder, the window lands
++// where Cmd-W on that pin lands: the row used before it.
++IN_PROC_BROWSER_TEST_F(FolderTabsTest, TheMinusLandsWhereCmdWLands) {
++  ASSERT_TRUE(embedded_test_server()->Start());
++  CloseDownToOne();
++  tabs::TabInterface* const first = OpenPin("a.test");
++  tabs::TabInterface* const second = OpenPin("b.test");
++  tabs::FolderTabCollection* const folder = FolderOf({first, second});
++  ASSERT_TRUE(folder);
++  tabs::TabInterface* const used_before = OpenLoaded("c.test");
++  OpenLoaded("d.test");
++  tab_strip_model()->ActivateTabAt(IndexOf(used_before));
++  tab_strip_model()->ActivateTabAt(IndexOf(second));
++  ASSERT_EQ(second, tab_strip_model()->GetActiveTab());
++
++  ASSERT_TRUE(PressMinus(folder));
++  ASSERT_TRUE(WaitUntilAsleep(second));
++  ASSERT_TRUE(WaitUntilAsleep(first));
++  EXPECT_EQ(used_before, tab_strip_model()->GetActiveTab())
++      << "not the row used before the pin";
++  ASSERT_TRUE(base::test::RunUntil([&]() { return folder->collapsed(); }));
++  EXPECT_FALSE(DrawnRow(second)) << "the pin stayed under the folder";
++}
++
++// folders F45, pins H3: a page that can ask "Leave site?" asks first. Stay
++// keeps that pin awake and the folder open, the other pin asleep. A second
++// press asks again, and Leave sleeps it and collapses the folder.
++IN_PROC_BROWSER_TEST_F(FolderTabsTest, TheMinusAsksLeaveSiteFirst) {
++  ASSERT_TRUE(embedded_test_server()->Start());
++  CloseDownToOne();
++  tabs::TabInterface* const asks = OpenPin("a.test");
++  content::WebContents* const page = asks->GetContents();
++  ASSERT_TRUE(content::ExecJs(
++      page,
++      "window.stay = (e) => { e.preventDefault(); e.returnValue = ''; };"
++      "window.addEventListener('beforeunload', window.stay);"));
++  content::PrepContentsForBeforeUnloadTest(page);
++  tabs::TabInterface* const quiet = OpenPin("b.test");
++  tabs::FolderTabCollection* const folder = FolderOf({asks, quiet});
++  ASSERT_TRUE(folder);
++  OpenLoaded("c.test");
++  tab_strip_model()->ActivateTabAt(IndexOf(asks));
++
++  ASSERT_TRUE(PressMinus(folder));
++  javascript_dialogs::AppModalDialogController* dialog =
++      ui_test_utils::WaitForAppModalDialog();
++  ASSERT_TRUE(dialog);
++  ASSERT_TRUE(dialog->is_before_unload_dialog());
++  EXPECT_FALSE(folder->collapsed()) << "the folder did not wait for the answer";
++  dialog->view()->CancelAppModalDialog();  // Stay.
++  ASSERT_TRUE(WaitUntilAsleep(quiet));
++  base::RunLoop().RunUntilIdle();
++  EXPECT_FALSE(page->WasDiscarded()) << "Stay unloaded the pin";
++  EXPECT_EQ(asks, tab_strip_model()->GetActiveTab()) << "Stay left the pin";
++  EXPECT_FALSE(folder->collapsed()) << "Stay folded the page it kept";
++
++  ASSERT_TRUE(PressMinus(folder));
++  dialog = ui_test_utils::WaitForAppModalDialog();
++  ASSERT_TRUE(dialog);
++  dialog->view()->AcceptAppModalDialog();  // Leave.
++  ASSERT_TRUE(WaitUntilAsleep(asks));
++  EXPECT_TRUE(base::test::RunUntil([&]() { return folder->collapsed(); }));
++  EXPECT_FALSE(DrawnRow(asks));
++}
++
++// folders F45: the press leaves nothing out of the folder: not the pins
++// selected, not the pins awake with "Keep open tabs out of a collapsed folder"
++// on. A plain collapse keeps both (F3).
++IN_PROC_BROWSER_TEST_F(FolderTabsTest, TheMinusLeavesNothingOut) {
++  ASSERT_TRUE(embedded_test_server()->Start());
++  CloseDownToOne();
++  browser()->GetProfile()->GetPrefs()->SetBoolean(
++      stedding::prefs::kCollapseKeepsOpenPins, true);
++  tabs::TabInterface* const first = OpenPin("a.test");
++  tabs::TabInterface* const second = OpenPin("b.test");
++  tabs::FolderTabCollection* const folder = FolderOf({first, second});
++  ASSERT_TRUE(folder);
++  tabs::TabInterface* const loose = OpenLoaded("c.test");
++  tab_strip_model()->ActivateTabAt(IndexOf(first));
++  tab_strip_model()->ActivateTabAt(IndexOf(loose));
++  tab_strip_model()->SelectTabAt(IndexOf(second));
++  ASSERT_TRUE(tab_strip_model()->IsTabSelected(IndexOf(second)));
++
++  ASSERT_TRUE(PressMinus(folder));
++  ASSERT_TRUE(WaitUntilAsleep(first));
++  ASSERT_TRUE(WaitUntilAsleep(second));
++  ASSERT_TRUE(base::test::RunUntil([&]() { return folder->collapsed(); }));
++  EXPECT_FALSE(DrawnRow(first));
++  EXPECT_FALSE(DrawnRow(second));
++  EXPECT_FALSE(tab_strip_model()->IsTabSelected(IndexOf(second)))
++      << "a row folded away stayed in the selection";
++  EXPECT_EQ(loose, tab_strip_model()->GetActiveTab());
++}
++
++// folders F45, pins H9: with Cmd-W closing pins, the press closes the open
++// pins as Close Folder's Tabs does, and collapses what is left. A pin asleep
++// stays, and a folder with nothing left goes.
++IN_PROC_BROWSER_TEST_F(FolderTabsTest, TheMinusClosesWhereCmdWCloses) {
++  ASSERT_TRUE(embedded_test_server()->Start());
++  CloseDownToOne();
++  browser()->GetProfile()->GetPrefs()->SetBoolean(
++      stedding::prefs::kPinsCloseSleeps, false);
++  tabs::TabInterface* const open = OpenPin("a.test");
++  tabs::TabInterface* const asleep = OpenPin("b.test");
++  tabs::FolderTabCollection* const folder = FolderOf({open, asleep});
++  ASSERT_TRUE(folder);
++  tabs::TabInterface* const loose = OpenLoaded("c.test");
++  stedding::SleepTabList({asleep});
++  ASSERT_TRUE(WaitUntilAsleep(asleep));
++  const int count = tab_strip_model()->count();
++  const tabs::TabHandle open_handle = open->GetHandle();
++
++  ASSERT_TRUE(PressMinus(folder));
++  ASSERT_TRUE(base::test::RunUntil([&]() { return !open_handle.Get(); }));
++  EXPECT_EQ(count - 1, tab_strip_model()->count());
++  EXPECT_NE(TabStripModel::kNoTab, IndexOf(asleep));
++  EXPECT_TRUE(base::test::RunUntil([&]() { return folder->collapsed(); }));
++  EXPECT_EQ(loose, tab_strip_model()->GetActiveTab());
++}
++
++// folders F46: the same thing from the header's menu, where a folder of the
++// run has it, in the rail too; disabled with nothing open; absent on a folder
++// of plain rows.
++IN_PROC_BROWSER_TEST_F(FolderTabsTest, TheHeaderMenuDoesWhatTheMinusDoes) {
++  ASSERT_TRUE(embedded_test_server()->Start());
++  CloseDownToOne();
++  tabs::TabInterface* const pin = OpenPin("a.test");
++  tabs::FolderTabCollection* const pinned = FolderOf({pin});
++  ASSERT_TRUE(pinned);
++  tabs::TabInterface* const plain = OpenLoaded("b.test");
++  tabs::FolderTabCollection* const loose = FolderOf({plain});
++  ASSERT_TRUE(loose);
++  OpenLoaded("c.test");
++  const auto row_of = [](ui::SimpleMenuModel* menu) {
++    return menu->GetIndexOfCommandId(FolderView::kCloseOpenPinsCommand);
++  };
++  EXPECT_FALSE(row_of(DrawnFolder(loose)->menu_model_for_testing()).has_value())
++      << "the row is on a folder of plain rows";
++
++  tabs::VerticalTabStripStateController::From(browser())->RequestCollapse(true);
++  ASSERT_TRUE(base::test::RunUntil([&]() {
++    return VerticalTabStripRegionView::IsRailWidth(
++        BrowserView::GetBrowserViewForBrowser(browser())
++            ->vertical_tab_strip_region_view_for_testing()
++            ->width());
++  }));
++  FolderView* const header = DrawnFolder(pinned);
++  ASSERT_TRUE(header);
++  ui::SimpleMenuModel* const menu = header->menu_model_for_testing();
++  const std::optional<size_t> row = row_of(menu);
++  ASSERT_TRUE(row.has_value()) << "no row on a folder of the run";
++  EXPECT_EQ(u"Close Open Tabs and Collapse", menu->GetLabelAt(*row));
++  EXPECT_TRUE(menu->IsEnabledAt(*row));
++  menu->ActivatedAt(*row);
++  ASSERT_TRUE(WaitUntilAsleep(pin));
++  ASSERT_TRUE(base::test::RunUntil([&]() { return pinned->collapsed(); }));
++
++  ui::SimpleMenuModel* const after = header->menu_model_for_testing();
++  EXPECT_FALSE(after->IsEnabledAt(*row_of(after)))
++      << "the row is enabled with nothing open";
++}
++
++// folders F44: the second click of a double click on the - lands on the header
++// once the - has gone, and does nothing: it had opened the folder again.
++IN_PROC_BROWSER_TEST_F(FolderTabsTest, ASecondClickOnTheMinusDoesNothing) {
++  ASSERT_TRUE(embedded_test_server()->Start());
++  CloseDownToOne();
++  tabs::TabInterface* const pin = OpenPin("a.test");
++  tabs::FolderTabCollection* const folder = FolderOf({pin});
++  ASSERT_TRUE(folder);
++  OpenLoaded("b.test");
++  views::View* const minus = MinusUnderThePointer(folder);
++  ASSERT_TRUE(minus && minus->GetVisible());
++  const gfx::Point centre = minus->GetBoundsInScreen().CenterPoint();
++  const base::TimeTicks clicked = ui::EventTimeForNow();
++  ASSERT_TRUE(PressMinus(folder));
++  ASSERT_TRUE(WaitUntilAsleep(pin));
++  ASSERT_TRUE(base::test::RunUntil([&]() { return folder->collapsed(); }));
++  views::test::RunScheduledLayout(widget());
++  ASSERT_FALSE(minus->GetVisible());
++
++  // At a double click's pace, whatever this machine took. The window has
++  // dropped the mark of a double click: its first press went to the -.
++  views::View* const root = widget()->GetRootView();
++  gfx::Point in_root = centre;
++  views::View::ConvertPointFromScreen(root, &in_root);
++  const auto second_click = [&](ui::EventType type) {
++    return ui::MouseEvent(type, in_root, in_root,
++                          clicked + base::Milliseconds(150),
++                          ui::EF_LEFT_MOUSE_BUTTON, ui::EF_LEFT_MOUSE_BUTTON);
++  };
++  root->OnMousePressed(second_click(ui::EventType::kMousePressed));
++  root->OnMouseReleased(second_click(ui::EventType::kMouseReleased));
++  EXPECT_TRUE(folder->collapsed()) << "the second click opened the folder";
++
++  stedding::test::ClickLeftMouse(widget(), centre);
++  EXPECT_FALSE(folder->collapsed()) << "the next click is a click";
++}
++
+ // folders F42 (GitHub issue 68): Change Icon takes one character for the
+ // folder's icon in the name's field, drawn on the favicons' column in place
+ // of the glyph, and the name stays; Escape leaves the icon as it was; Remove

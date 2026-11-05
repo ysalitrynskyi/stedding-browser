@@ -2,6 +2,16 @@
 
 What was built, newest first. Nothing here is needed to do a task: `AGENTS.md` carries what is true now, `BACKLOG.md` the order of work, `PLAN.md` the owner's decisions. This file was the "State of the project" section of `AGENTS.md` until 2026-09-30. This log starts at 2026-10-15. Closed work from before that is the table in [docs/history/archive.md](history/archive.md).
 
+## 2026-11-05 -- A six-hour test no longer takes 50 seconds on the Mac
+
+`IdleWindowsTest.NothingSweepsAPopupOrALittleWindow` went over the launcher's 45-second limit twice
+on a busy Mac. It ran six hours of mock time, and on the Mac each timer's wake-up runs NSApplication
+for real, so it took 51 seconds there and 2 on Windows. A count of the tasks found no product bug:
+the busiest timers are stock Chromium's, on periods of 10 and 15 seconds, and Stedding's own fired
+20 and 74 times in the six hours. The test now jumps the clock six hours, which leaves every timer
+due in them overdue, and runs the two sweeps: 1.4 seconds on the Mac, what it asserts unchanged. Its
+fix is in patch 0071, the slowest unit test on the Mac is now under 5 seconds, and all 1391 pass.
+
 ## 2026-11-05 -- Update downloads try again, and About says how to retry (S-420)
 
 The owner, updating their Mac from beta 9 to beta 10: About stopped at 38% and then said the
@@ -25,9 +35,7 @@ stall and About closed, the scheduled download tried again 70 seconds later, wit
 screen, and installed at the quit. Unit tests: `AppUpdaterMacTest` 13 and `WinAppUpdaterTest` and
 `WinUpdateInstallerTest` 22, on the builds with DCHECKs. `UpdatesTest` on the Mac (release and
 DCHECKs) and on Windows (DCHECKs). Every unit test on Windows with DCHECKs (1379). On the Mac
-release build, 1390 of 1391: `IdleWindowsTest.NothingSweepsAPopupOrALittleWindow` passes alone in
-51 seconds and went over the launcher's 45-second limit on the busy machine, twice. It is not an
-updater test; it takes 2 seconds on Windows.
+release build, every unit test (1391), after the fix below.
 
 Not checked: a stall on an installed Windows copy. The next release's Windows n-1 check owes that
 run, against a server that goes quiet. A real stall from GitHub was seen once and not repeated.

@@ -2,18 +2,22 @@
 
 What was built, newest first. Nothing here is needed to do a task: `AGENTS.md` carries what is true now, `BACKLOG.md` the order of work, `PLAN.md` the owner's decisions. This file was the "State of the project" section of `AGENTS.md` until 2026-09-30. This log starts at 2026-10-15. Closed work from before that is the table in [docs/history/archive.md](history/archive.md).
 
-## 2026-11-06 -- After beta 11: private windows, the Space name, the − buttons
+## 2026-11-06 -- After beta 11: private windows, the Space name, the − buttons, the lit circle
 
-Patches 0157 to 0159, on Windows alone: the owner had the Mac. A private or Guest window has no Space
+Patches 0157 to 0160, on Windows alone: the owner had the Mac. A private or Guest window has no Space
 model, which is what made the address row's rules, so it ignored every setting that hides the row
 (S-439, issue 83); the window makes its own now. The Space name no longer reorders the sidebar's
 children during a layout, the crash the AddressSanitizer run found (S-440); its new test crashed on
 the same CHECK before the fix. The − buttons have their glyph on the centre of a 20 DIP circle
-(S-441, a comment on issue 78).
+(S-441, a comment on issue 78). The owner looked at the lit shield and moon on the Mac and asked for
+a pixel more, so the circle is 21 DIP, the size of the chips beside it (S-423).
 
 Checked: 1432 unit tests and 794 browser tests on `win-release` and `win-checks`; a private window
 with the address in the sidebar and Ctrl+Shift+D on the real build; the − on a folder and a pin
-measured at twice the size, light and dark. Not checked: the Mac, AddressSanitizer on these patches.
+measured at twice the size, light and dark. For the circle, the last of them: the 39 tests of the
+blocker, dark pages and the row's colour on both builds, not the whole suites, and a look on the real
+build at 1× and 2×, on a light row and a dark one. Not checked: the Mac, AddressSanitizer on these
+patches.
 
 ## 2026-11-06 -- 0.4.0 beta 11
 

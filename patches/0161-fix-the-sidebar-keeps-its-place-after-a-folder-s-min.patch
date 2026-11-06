@@ -1,0 +1,363 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Fri, 6 Nov 2026 13:16:52 -0500
+Subject: fix: the sidebar keeps its place after a folder's minus and a rename
+
+A press on a folder's minus sleeps its open pins, and the row that comes to the
+front can be far down a long list, past pins asleep. The list went to that row,
+over 1,000 DIP in the test, and the header left the pointer. The press now holds
+the list where it is.
+
+Enter or Escape in a rename handed the keys to the next view that takes them
+when the row takes none, which on the Mac is the address field with its address
+selected, so the next key typed replaced it. They go back to the page, or stay
+on the row where it takes focus.
+
+Why: the owner's report on the folder's minus, 2026-11-06 (BACKLOG S-442,
+folders F49), and a rename seen on beta 11 (BACKLOG S-438, tabs R14).
+
+Removable when: the sidebar's list and its rename fields are no longer these
+views.
+---
+ chrome/browser/ui/stedding/pin_lifecycle.cc   | 23 +++++++-
+ chrome/browser/ui/stedding/pin_lifecycle.h    |  5 ++
+ .../ui/views/spaces/space_switcher_view.cc    |  5 ++
+ .../ui/views/tabs/common/folder_view.cc       |  6 ++
+ .../ui/views/tabs/common/tab_strip_view.cc    | 14 +++++
+ .../browser/ui/views/tabs/common/tab_view.cc  |  9 ++-
+ .../test/stedding/folder_tabs_browsertest.cc  | 59 +++++++++++++++++++
+ .../stedding/sidebar_click_browsertest.cc     | 28 +++++++++
+ 8 files changed, 145 insertions(+), 4 deletions(-)
+
+diff --git a/chrome/browser/ui/stedding/pin_lifecycle.cc b/chrome/browser/ui/stedding/pin_lifecycle.cc
+index 864dc46ac0005..9ced638839342 100644
+--- a/chrome/browser/ui/stedding/pin_lifecycle.cc
++++ b/chrome/browser/ui/stedding/pin_lifecycle.cc
+@@ -13,6 +13,7 @@
+ #include <utility>
+ #include <vector>
+ 
++#include "base/auto_reset.h"
+ #include "base/functional/bind.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+@@ -243,10 +244,14 @@ void UnloadAtHome(BrowserWindowInterface* browser, tabs::TabInterface* tab) {
+   ReplaceWithHomeAsleep(browser->GetTabStripModel(), tab, *home);
+ }
+ 
++// folders F49: true while a press on a folder's - changes the active row.
++bool g_list_held_in_place = false;
++
+ // The rule's second half, once every page that could ask has let go: shows
+ // the next row when the pins leave the screen, then unloads them at home.
+ void UnloadPinsAtHome(BrowserWindowInterface* browser,
+-                      const std::vector<tabs::TabInterface*>& doomed) {
++                      const std::vector<tabs::TabInterface*>& doomed,
++                      bool list_stays = false) {
+   if (doomed.empty()) {
+     return;
+   }
+@@ -259,6 +264,11 @@ void UnloadPinsAtHome(BrowserWindowInterface* browser,
+   // (GitHub issue 72).
+   // TabStripModel::SelectNextTab chose it before 2026-10-18: it wrapped
+   // round the strip, and from a Space's last row landed on an essential.
++  // folders F49: what follows a press on a folder's - may be out of view.
++  std::optional<base::AutoReset<bool>> list_held;
++  if (list_stays) {
++    list_held.emplace(&g_list_held_in_place, true);
++  }
+   tabs::TabInterface* const active = tabs->GetActiveTab();
+   if (active && std::ranges::contains(doomed, active)) {
+     if (tabs::TabInterface* const next =
+@@ -338,7 +348,8 @@ void OnPinPageAnswered(std::shared_ptr<PendingClose> pending,
+       same_window.push_back(tab);
+     }
+   }
+-  UnloadPinsAtHome(browser, same_window);
++  UnloadPinsAtHome(browser, same_window,
++                   /*list_stays=*/!pending->after.is_null());
+   // folders F45: a Stay keeps what the close was for from happening.
+   if (pending->stayed.empty() && pending->after) {
+     std::move(pending->after).Run(browser);
+@@ -365,7 +376,7 @@ bool SleepOrLeaveToClose(BrowserWindowInterface* browser,
+     }
+   }
+   if (asking.empty()) {
+-    UnloadPinsAtHome(browser, doomed);
++    UnloadPinsAtHome(browser, doomed, /*list_stays=*/!after.is_null());
+     if (after) {
+       std::move(after).Run(browser);
+     }
+@@ -515,6 +526,10 @@ std::vector<tabs::TabInterface*> OpenPinsInFolder(
+   return open;
+ }
+ 
++bool IsListHeldInPlace() {
++  return g_list_held_in_place;
++}
++
+ void CloseOpenPinsAndCollapse(BrowserWindowInterface* browser,
+                               tabs::FolderTabCollection* folder) {
+   const std::vector<tabs::TabInterface*> open =
+@@ -531,6 +546,8 @@ void CloseOpenPinsAndCollapse(BrowserWindowInterface* browser,
+   // H9: Cmd-W closes a pin here, so the press closes the open ones, as Close
+   // Folder's Tabs closes a folder's (F19), and what is left collapses. A page
+   // that asks answers Chromium's close, and the folder does not wait for it.
++  // folders F49: the list stays here too.
++  const base::AutoReset<bool> list_held(&g_list_held_in_place, true);
+   browser->GetTabStripModel()->CloseTabsOfFolder(folder, open);
+   CollapseFolderAfterClose(handle, browser);
+ }
+diff --git a/chrome/browser/ui/stedding/pin_lifecycle.h b/chrome/browser/ui/stedding/pin_lifecycle.h
+index cd01f1892d29f..779f6a2897559 100644
+--- a/chrome/browser/ui/stedding/pin_lifecycle.h
++++ b/chrome/browser/ui/stedding/pin_lifecycle.h
+@@ -102,6 +102,11 @@ std::vector<tabs::TabInterface*> OpenPinsInFolder(
+ // page that could ask "Leave site?" has kept its pin, collapses `folder` with
+ // nothing left out of it. With H9 off, where Cmd-W closes a pin, they close as
+ // F19 closes a folder's tabs.
++// folders F49 (BACKLOG S-442): true while a press on a folder's - changes the
++// active row. The row that follows can be far down a long list and the pointer
++// is on the -, so the sidebar's list stays where it is.
++bool IsListHeldInPlace();
++
+ void CloseOpenPinsAndCollapse(BrowserWindowInterface* browser,
+                               tabs::FolderTabCollection* folder);
+ 
+diff --git a/chrome/browser/ui/views/spaces/space_switcher_view.cc b/chrome/browser/ui/views/spaces/space_switcher_view.cc
+index f8fa5eaba1080..a15f7c82d9997 100644
+--- a/chrome/browser/ui/views/spaces/space_switcher_view.cc
++++ b/chrome/browser/ui/views/spaces/space_switcher_view.cc
+@@ -23,6 +23,7 @@
+ #include "chrome/app/chrome_command_ids.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/ui/accelerator_table.h"
++#include "chrome/browser/ui/browser_commands.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/chrome_pages.h"
+ #include "chrome/browser/ui/color/chrome_color_id.h"
+@@ -1260,6 +1261,10 @@ void SpaceSwitcherView::EndRename(bool commit) {
+     model_->SetSpaceName(*renaming_, name);
+   }
+   renaming_.reset();
++  // tabs R14 (BACKLOG S-438): the keys go back to the page.
++  if (rename_field_->HasFocus()) {
++    chrome::FocusWebContentsPane(&browser_.get());
++  }
+   rename_field_->SetVisible(false);
+   icon_row_->SetVisible(true);
+ }
+diff --git a/chrome/browser/ui/views/tabs/common/folder_view.cc b/chrome/browser/ui/views/tabs/common/folder_view.cc
+index f9a8176a21297..6562009b432de 100644
+--- a/chrome/browser/ui/views/tabs/common/folder_view.cc
++++ b/chrome/browser/ui/views/tabs/common/folder_view.cc
+@@ -21,6 +21,7 @@
+ #include "base/strings/utf_string_conversions.h"
+ #include "base/task/sequenced_task_runner.h"
+ #include "base/time/time.h"
++#include "chrome/browser/ui/browser_commands.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/color/chrome_color_id.h"
+ #include "chrome/browser/ui/layout_constants.h"
+@@ -1450,6 +1451,11 @@ void FolderView::EndRename(bool commit) {
+     f->SetTitle(base::UTF16ToUTF8(title));
+   }
+   editing_icon_ = false;
++  // tabs R14 (BACKLOG S-438): the keys go back to the page.
++  if (BrowserWindowInterface* const window = GetBrowserWindow();
++      rename_field_->HasFocus() && window) {
++    chrome::FocusWebContentsPane(window);
++  }
+   rename_field_->SetVisible(false);
+   name_->SetVisible(!rail_);
+   UpdateCloseOpenPinsButton();
+diff --git a/chrome/browser/ui/views/tabs/common/tab_strip_view.cc b/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
+index 46df0b2d6773d..6db93cc2fa053 100644
+--- a/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
++++ b/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
+@@ -17,11 +17,13 @@
+ #include "base/strings/strcat.h"
+ #include "build/build_config.h"
+ #include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/ui/browser_commands.h"
+ #include "chrome/browser/ui/browser_element_identifiers.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/color/chrome_color_id.h"
+ #include "chrome/browser/ui/layout_constants.h"
+ #include "chrome/browser/ui/spaces/isolation_mark.h"
++#include "chrome/browser/ui/stedding/pin_lifecycle.h"
+ #include "chrome/browser/ui/stedding_ui_metrics.h"
+ #include "chrome/browser/ui/tabs/horizontal_tab_strip_metrics.h"
+ #include "chrome/browser/ui/tabs/tab_group_model.h"
+@@ -617,6 +619,11 @@ void TabStripView::EndSpaceTitleRename(bool commit) {
+   }
+   std::u16string typed(space_title_field_->GetText());
+   base::OnceCallback<void(std::u16string)> done = std::move(space_title_done_);
++  // tabs R14 (BACKLOG S-438): the keys go back to the page.
++  if (space_title_field_->HasFocus() && collection_node_) {
++    chrome::FocusWebContentsPane(
++        collection_node_->GetController()->GetBrowserView()->browser());
++  }
+   space_title_field_->SetVisible(false);
+   InvalidateLayout();
+   if (commit && done) {
+@@ -786,6 +793,13 @@ void TabStripView::OnTabChanged(const tabs::TabInterface* active_tab) {
+     }
+   }
+ 
++  // folders F49 (BACKLOG S-442): after a press on a folder's -, the list stays
++  // where it is, under the pointer, though the row now active may be out of
++  // view.
++  if (stedding::IsListHeldInPlace()) {
++    return;
++  }
++
+   TabCollectionNode* activated_node =
+       collection_node_->GetNodeForHandle(active_tab->GetHandle());
+   CHECK(activated_node);
+diff --git a/chrome/browser/ui/views/tabs/common/tab_view.cc b/chrome/browser/ui/views/tabs/common/tab_view.cc
+index 6a7a15c0d98b0..54981a6e949bc 100644
+--- a/chrome/browser/ui/views/tabs/common/tab_view.cc
++++ b/chrome/browser/ui/views/tabs/common/tab_view.cc
+@@ -27,6 +27,7 @@
+ #include "chrome/browser/glic/public/glic_enabling.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/themes/theme_properties.h"
++#include "chrome/browser/ui/browser_commands.h"
+ #include "chrome/browser/ui/browser_element_identifiers.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/layout_constants.h"
+@@ -2317,10 +2318,16 @@ void TabView::EndRename(bool commit) {
+   if (!IsRenaming()) {
+     return;
+   }
+-  rename_field_->SetVisible(false);
+   tabs::TabInterface* const tab =
+       collection_node_ ? const_cast<tabs::TabInterface*>(GetTabInterface())
+                        : nullptr;
++  // tabs R14 (BACKLOG S-438): the keys go back to the page. Hiding the field
++  // handed them to the next view, the address field, its address selected. A
++  // press elsewhere has already moved them.
++  if (rename_field_->HasFocus() && tab) {
++    chrome::FocusWebContentsPane(tab->GetBrowserWindowInterface());
++  }
++  rename_field_->SetVisible(false);
+   content::WebContents* const contents = tab ? tab->GetContents() : nullptr;
+   if (!commit || !contents) {
+     return;
+diff --git a/chrome/test/stedding/folder_tabs_browsertest.cc b/chrome/test/stedding/folder_tabs_browsertest.cc
+index 2cf5ec6145773..f7777a1c7dcde 100644
+--- a/chrome/test/stedding/folder_tabs_browsertest.cc
++++ b/chrome/test/stedding/folder_tabs_browsertest.cc
+@@ -33,6 +33,7 @@
+ #include "base/run_loop.h"
+ #include "base/strings/strcat.h"
+ #include "base/strings/string_number_conversions.h"
++#include "base/strings/stringprintf.h"
+ #include "base/strings/string_util.h"
+ #include "base/strings/utf_string_conversions.h"
+ #include "base/test/run_until.h"
+@@ -1724,6 +1725,64 @@ IN_PROC_BROWSER_TEST_F(FolderTabsTest, TheMinusShowsOnlyWhereItCanDoSomething) {
+   }
+ }
+ 
++// folders F49 (the owner, 2026-11-06; BACKLOG S-442): a press on the - leaves
++// the list where it is, with the header under the pointer, though the row
++// that comes to the front is far down a long list, past pins asleep. The list
++// went to that row.
++IN_PROC_BROWSER_TEST_F(FolderTabsTest, TheMinusLeavesTheListWhereItIs) {
++  ASSERT_TRUE(embedded_test_server()->Start());
++  CloseDownToOne();
++  tabs::TabInterface* const below = tab_strip_model()->GetActiveTab();
++  tabs::TabInterface* const first = OpenPin("a.test");
++  tabs::TabInterface* const second = OpenPin("b.test");
++  tabs::FolderTabCollection* const folder = FolderOf({first, second});
++  ASSERT_TRUE(folder);
++  for (int pin = 0; pin < 36; ++pin) {
++    tabs::TabInterface* const asleep =
++        OpenPin(base::StringPrintf("p%d.test", pin));
++    tab_strip_model()->ActivateTabAt(IndexOf(first));
++    stedding::UnloadTabNow(asleep);
++    ASSERT_TRUE(WaitUntilAsleep(asleep));
++  }
++  // The tab that stays awake comes after every pin, and then the last used
++  // is in the folder, so the row that shows next is far down the list.
++  tab_strip_model()->ActivateTabAt(IndexOf(below));
++  tab_strip_model()->ActivateTabAt(IndexOf(first));
++  views::test::RunScheduledLayout(widget());
++
++  TabStripView* const strip = stedding::test::FindView<TabStripView>(
++      BrowserView::GetBrowserViewForBrowser(browser())
++          ->vertical_tab_strip_region_view_for_testing());
++  ASSERT_TRUE(strip);
++  views::ScrollView* const list = strip->unpinned_tabs_scroll_view();
++  ASSERT_TRUE(list);
++  ASSERT_GT(list->contents()->height(), 2 * list->GetVisibleRect().height())
++      << "not a long list";
++  // The list at its top, with the header in view: the activations above left
++  // it with the folder's first row at the top edge.
++  list->ScrollToOffset(gfx::PointF());
++  views::test::RunScheduledLayout(widget());
++  const int offset = list->GetVisibleRect().y();
++  const int header = DrawnFolder(folder)->GetHeaderBoundsInScreen().y();
++
++  ASSERT_TRUE(PressMinus(folder));
++  ASSERT_TRUE(WaitUntilAsleep(first));
++  ASSERT_TRUE(WaitUntilAsleep(second));
++  ASSERT_EQ(below, tab_strip_model()->GetActiveTab());
++  // Through the rows' folding and the layouts a scroll would come in.
++  for (int turn = 0; turn < 24; ++turn) {
++    base::RunLoop wait;
++    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
++        FROM_HERE, wait.QuitClosure(), base::Milliseconds(25));
++    wait.Run();
++    views::test::RunScheduledLayout(widget());
++    ASSERT_EQ(offset, list->GetVisibleRect().y())
++        << "the list moved, turn " << turn;
++    ASSERT_EQ(header, DrawnFolder(folder)->GetHeaderBoundsInScreen().y())
++        << "the header left the pointer, turn " << turn;
++  }
++}
++
+ // folders F45 (GitHub issue 78): a press does to each open pin what Cmd-W
+ // does: it sleeps at home, a pin in its place, nested folders' too. Pins
+ // already asleep stay. The folder collapses and its rows go; the tab on
+diff --git a/chrome/test/stedding/sidebar_click_browsertest.cc b/chrome/test/stedding/sidebar_click_browsertest.cc
+index 1e013f5106657..40cdb6c993b6c 100644
+--- a/chrome/test/stedding/sidebar_click_browsertest.cc
++++ b/chrome/test/stedding/sidebar_click_browsertest.cc
+@@ -1707,6 +1707,34 @@ IN_PROC_BROWSER_TEST_F(SidebarClickTest,
+ 
+ // A long list scrolls past its last row; a close shows the right row next and
+ // leaves the list where it was, and a split's other pane stays.
++// tabs R14 (BACKLOG S-438): Enter and Escape give the keys back to the page.
++// Hiding the field handed them to the address field, its address selected, so
++// the next key typed replaced it.
++IN_PROC_BROWSER_TEST_F(SidebarClickTest, ARenameEndedByAKeyLeavesThePageFocused) {
++  views::View* const page = browser_view()->GetActiveContentsWebView();
++  ASSERT_TRUE(page);
++  // With no full keyboard access, the Mac's default, a row takes no focus. With
++  // it the keys stay on the row, for the arrows.
++  browser_view()->GetWidget()->GetFocusManager()->SetKeyboardAccessible(false);
++  for (const ui::KeyboardCode key : {ui::VKEY_RETURN, ui::VKEY_ESCAPE}) {
++    SCOPED_TRACE(key == ui::VKEY_RETURN ? "Enter" : "Escape");
++    TabView* const row = RowFor(0);
++    ASSERT_TRUE(row);
++    row->BeginRename();
++    ASSERT_TRUE(row->IsRenaming());
++    views::Textfield* const field = row->rename_field_for_testing();
++    ASSERT_TRUE(field->HasFocus());
++    const ui::KeyEvent press(ui::EventType::kKeyPressed, key, ui::EF_NONE);
++    row->HandleKeyEvent(field, press);
++    ASSERT_FALSE(row->IsRenaming());
++    const views::View* const focused =
++        browser_view()->GetWidget()->GetFocusManager()->GetFocusedView();
++    EXPECT_EQ(page, focused)
++        << "the keys went to "
++        << (focused ? focused->GetClassName() : "nothing");
++  }
++}
++
+ IN_PROC_BROWSER_TEST_F(SidebarClickTest,
+                        TheListScrollsPastItsEndAndACloseShowsTheRightRow) {
+   // sidebar Y30 (the owner, 2026-10-22): a list taller than the sidebar

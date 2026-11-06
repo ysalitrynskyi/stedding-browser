@@ -64,7 +64,7 @@ To build, in this order:
    S-336. Each row that passes closes.
 8. The release gate: the suites on the shipping and DCHECK builds on both platforms, ASan on
    Windows, acceptance on both, an update from the installed beta 10 on both, with S-420's stall
-   on an installed Windows copy, and the owner's look at every changed state.
+   on an installed Windows copy, and a review of every changed state on both platforms, light and dark.
 
 Chromium stays on M157, its newest point release, and nothing here hurries it. Betas come often,
 and M158 is not tied to any of them. 158.0.8127.18 is early stable: 0.5% of users on 2026-11-05,

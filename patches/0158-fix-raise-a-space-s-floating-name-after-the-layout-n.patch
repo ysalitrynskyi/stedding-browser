@@ -1,0 +1,160 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Fri, 6 Nov 2026 10:56:11 -0500
+Subject: fix: raise a Space's floating name after the layout, not in it
+
+Removing a closed row synthesizes a mouse move inside the window's layout
+(TabCollectionAnimatingLayoutManager::RemoveNonAnimatingPendingDeleteViews). A
+chip that took its first hover there floated its name with ReorderChildView on
+the sidebar, whose layout was walking those children: CHECK(!iterating_), in
+every build. It takes a pointer on a chip that has not been told so, and a name
+not yet the last child. AddressSanitizer's run of 0.4.0 beta 11 hit it once in
+CommandBarActionsTest.EveryRowRuns.
+
+The name is raised a turn later, and only when it is not last already.
+
+Why: a hover must not stop the browser (BACKLOG S-440, sidebar Y14).
+
+Removable when: the floating name no longer needs to be last among the
+sidebar's children.
+---
+ .../frame/vertical_tab_strip_region_view.cc   | 18 +++++-
+ .../frame/vertical_tab_strip_region_view.h    |  2 +
+ .../test/stedding/space_switch_browsertest.cc | 61 +++++++++++++++++++
+ 3 files changed, 79 insertions(+), 2 deletions(-)
+
+diff --git a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+index 06f6243a911c7..4c623fbee0f35 100644
+--- a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
++++ b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+@@ -4056,8 +4056,22 @@ void VerticalTabStripRegionView::OnSpaceChipHovered(
+   const int y = chip_in_view.y() - height - 4;
+   space_hover_pill_->SetBoundsRect(gfx::Rect(x, y, width, height));
+   space_hover_pill_->SetVisible(true);
+-  // Above the chips in paint order.
+-  ReorderChildView(space_hover_pill_, children().size() - 1);
++  // Above the chips in paint order. A turn later: the hover can come in this
++  // view's own layout, from the move Chromium synthesizes when a closed row
++  // goes, and children cannot be reordered while they are walked (BACKLOG
++  // S-440).
++  if (children().back().get() != space_hover_pill_.get()) {
++    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
++        FROM_HERE,
++        base::BindOnce(&VerticalTabStripRegionView::RaiseSpaceHoverPill,
++                       weak_factory_.GetWeakPtr()));
++  }
++}
++
++void VerticalTabStripRegionView::RaiseSpaceHoverPill() {
++  if (space_hover_pill_) {
++    ReorderChildView(space_hover_pill_, children().size() - 1);
++  }
+ }
+ 
+ void VerticalTabStripRegionView::ClearCurrentSpaceTabs() {
+diff --git a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
+index 5d6893b006744..f2b59897d8ab4 100644
+--- a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
++++ b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
+@@ -741,6 +741,8 @@ class VerticalTabStripRegionView final
+   // from further out than a click's switch brings it.
+   bool space_swipe_switching_ = false;
+ 
++  // Puts the Space's floating name last in paint order.
++  void RaiseSpaceHoverPill();
+   void OnSpaceChipHovered(const std::u16string& name,
+                           const gfx::Rect& chip_bounds);
+ 
+diff --git a/chrome/test/stedding/space_switch_browsertest.cc b/chrome/test/stedding/space_switch_browsertest.cc
+index 2fcd74cc7fa10..85c92a022e4e6 100644
+--- a/chrome/test/stedding/space_switch_browsertest.cc
++++ b/chrome/test/stedding/space_switch_browsertest.cc
+@@ -29,6 +29,7 @@
+ #include "base/strings/string_number_conversions.h"
+ #include "base/strings/utf_string_conversions.h"
+ #include "base/task/single_thread_task_runner.h"
++#include "base/test/bind.h"
+ #include "base/test/run_until.h"
+ #include "base/time/time.h"
+ #include "build/build_config.h"
+@@ -131,6 +132,8 @@
+ #include "ui/views/focus/focus_manager.h"
+ #include "ui/views/test/views_test_utils.h"
+ #include "ui/views/view.h"
++#include "ui/base/metadata/metadata_header_macros.h"
++#include "ui/base/metadata/metadata_impl_macros.h"
+ #include "ui/views/view_observer.h"
+ #include "ui/views/view_tracker.h"
+ #include "ui/views/view_utils.h"
+@@ -256,6 +259,25 @@ class HiddenActiveTabWatcher : public TabStripModelObserver,
+   std::string step_;
+ };
+ 
++// A child that runs `on_layout` from its own layout, inside its parent's walk
++// of its children.
++class CallsDuringLayout : public views::View {
++  METADATA_HEADER(CallsDuringLayout, views::View)
++
++ public:
++  void Layout(PassKey) override {
++    LayoutSuperclass<views::View>(this);
++    if (on_layout) {
++      std::move(on_layout).Run();
++    }
++  }
++
++  base::OnceClosure on_layout;
++};
++
++BEGIN_METADATA(CallsDuringLayout)
++END_METADATA
++
+ class SpaceSwitchTest
+     : public VerticalTabsBrowserTestMixin<InProcessBrowserTest> {
+  protected:
+@@ -2286,6 +2308,45 @@ IN_PROC_BROWSER_TEST_F(SpaceSwitchTest, AChipShowsItsNameOnce) {
+   EXPECT_EQ(name, chip->GetViewAccessibility().GetCachedName());
+ }
+ 
++// BACKLOG S-440: removing a closed row synthesizes a mouse move inside the
++// window's layout (TabCollectionAnimatingLayoutManager), and a chip that takes
++// its first hover there floated its name by reordering the sidebar's children
++// while the sidebar's layout walked them, a CHECK in every build.
++IN_PROC_BROWSER_TEST_F(SpaceSwitchTest, AChipHoveredDuringALayoutFloatsItsName) {
++  MakeThreeSpaces();
++  views::Widget* const window = browser_view()->GetWidget();
++  VerticalTabStripRegionView* const region =
++      browser_view()->vertical_tab_strip_region_view_for_testing();
++  ASSERT_TRUE(region);
++  views::Label* const pill = region->space_hover_pill_for_testing();
++  ASSERT_TRUE(pill);
++  views::View* const chip = Switcher()->ChipForTesting(ids_[1]);
++  ASSERT_TRUE(chip);
++  // Last among the children, so that the name has somewhere to go.
++  auto* const during = region->AddChildView(std::make_unique<CallsDuringLayout>());
++  views::test::RunScheduledLayout(window);
++  ASSERT_NE(pill, region->children().back().get());
++
++  during->on_layout = base::BindLambdaForTesting([&]() {
++    views::View* const root = window->GetRootView();
++    gfx::Point point = chip->GetBoundsInScreen().CenterPoint();
++    views::View::ConvertPointFromScreen(root, &point);
++    ui::MouseEvent move(ui::EventType::kMouseMoved, point, point,
++                        ui::EventTimeForNow(), ui::EF_NONE, ui::EF_NONE);
++    root->OnMouseMoved(move);
++  });
++  during->InvalidateLayout();
++  views::test::RunScheduledLayout(window);
++  EXPECT_FALSE(during->on_layout) << "no layout ran the hover";
++  EXPECT_TRUE(pill->GetVisible()) << "no floating name";
++  EXPECT_EQ(u"Two", pill->GetText());
++  EXPECT_TRUE(base::test::RunUntil(
++      [&]() { return region->children().back().get() == pill; }))
++      << "the name stayed under what came after it";
++
++  region->RemoveChildViewT(during);
++}
++
+ // PLAN.md SPC-28 (BACKLOG S-145), sidebar Y8: the switcher takes the rail's
+ // stack, and the open row back, at the frame where the strip's width crosses
+ // the rail's -- in the middle of a collapse, an expand or a hover-expand,

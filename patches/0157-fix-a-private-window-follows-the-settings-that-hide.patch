@@ -1,0 +1,172 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Fri, 6 Nov 2026 10:56:09 -0500
+Subject: fix: a private window follows the settings that hide the address row
+
+The address row's rules are AddressRow, which a normal window's Space model
+makes. A private or Guest window has no Space model, so AddressRow::From was
+null and BrowserView::IsToolbarVisible never asked: the row stayed with the
+address in the sidebar, with the sidebar closed under "Hide the address row
+with the sidebar", and against Shift-Cmd-D, and its buttons stayed on it.
+
+The window makes one of its own, beside the page's colour it already makes for
+the same reason.
+
+On a Mac the row beside the camera reaches these windows with it. That has not
+been tried.
+
+Why: the settings are the person's, in every window (BACKLOG S-439, GitHub
+issue 83, private V10).
+
+Removable when: the Space model no longer owns the address row.
+---
+ .../ui/browser_window/internal/BUILD.gn       |  1 +
+ .../internal/browser_window_features.cc       |  4 ++
+ .../public/browser_window_features.h          |  4 ++
+ .../stedding/sidebar_address_browsertest.cc   | 70 +++++++++++++++++++
+ 4 files changed, 79 insertions(+)
+
+diff --git a/chrome/browser/ui/browser_window/internal/BUILD.gn b/chrome/browser/ui/browser_window/internal/BUILD.gn
+index 6262faed52915..284f430c14d27 100644
+--- a/chrome/browser/ui/browser_window/internal/BUILD.gn
++++ b/chrome/browser/ui/browser_window/internal/BUILD.gn
+@@ -101,6 +101,7 @@ source_set("internal") {
+       "//chrome/browser/ui:ui_features",
+       "//chrome/browser/ui/animation",
+       "//chrome/browser/ui/archive:undo",
++      "//chrome/browser/ui/stedding:address_row",
+       "//chrome/browser/ui/stedding:little_mark",
+       "//chrome/browser/ui/stedding:private_window",
+       "//chrome/browser/ui/stedding/theme",
+diff --git a/chrome/browser/ui/browser_window/internal/browser_window_features.cc b/chrome/browser/ui/browser_window/internal/browser_window_features.cc
+index fed7f85d4c53b..6c911960054f3 100644
+--- a/chrome/browser/ui/browser_window/internal/browser_window_features.cc
++++ b/chrome/browser/ui/browser_window/internal/browser_window_features.cc
+@@ -97,6 +97,7 @@
+ #include "chrome/browser/ui/spaces/space_model.h"
+ #include "chrome/browser/ui/stedding/little_mark.h"
+ #include "chrome/browser/ui/stedding/private_window.h"
++#include "chrome/browser/ui/stedding/address_row.h"
+ #include "chrome/browser/ui/stedding/theme/page_theme_color_controller.h"
+ #include "chrome/browser/ui/sync/browser_synced_window_delegate.h"
+ #include "chrome/browser/ui/tabs/organizer/organizer_panel_controller.h"
+@@ -302,6 +303,9 @@ void BrowserWindowFeatures::Init(BrowserWindowInterface* browser) {
+     // it (operator, 2026-10-13).
+     page_theme_color_ = std::make_unique<stedding::PageThemeColorController>(
+         *browser, stedding::IsPrivateWindow(browser->GetProfile()));
++    // private V10 (GitHub issue 83): the rules that hide the address row too,
++    // or it stayed whatever the settings said.
++    address_row_ = std::make_unique<stedding::AddressRow>(*browser);
+   } else if (browser->GetType() == BrowserWindowInterface::Type::TYPE_POPUP &&
+              stedding::TakeNextWindowLittle()) {
+     // docs/features/little.md E8: a little window is marked before its views
+diff --git a/chrome/browser/ui/browser_window/public/browser_window_features.h b/chrome/browser/ui/browser_window/public/browser_window_features.h
+index ea46594fd7464..542b86dc50362 100644
+--- a/chrome/browser/ui/browser_window/public/browser_window_features.h
++++ b/chrome/browser/ui/browser_window/public/browser_window_features.h
+@@ -120,6 +120,7 @@ class SpaceModel;
+ }
+ 
+ namespace stedding {
++class AddressRow;
+ class ClosedTabsUndo;
+ class PageThemeColorController;
+ class TabArchiver;
+@@ -357,6 +358,9 @@ class BrowserWindowFeatures {
+   // address row of a private or Guest window, which has no Space model to
+   // own it.
+   std::unique_ptr<stedding::PageThemeColorController> page_theme_color_;
++  // private V10 (GitHub issue 83): the address row's rules in a private or
++  // Guest window, which has no Space model to own them either.
++  std::unique_ptr<stedding::AddressRow> address_row_;
+   std::unique_ptr<ActorBorderViewController> actor_border_view_controller_;
+   std::unique_ptr<ttc::AiOverlayDialogController> ai_overlay_dialog_controller_;
+ 
+diff --git a/chrome/test/stedding/sidebar_address_browsertest.cc b/chrome/test/stedding/sidebar_address_browsertest.cc
+index 919916f2112ec..bcd41808a8d02 100644
+--- a/chrome/test/stedding/sidebar_address_browsertest.cc
++++ b/chrome/test/stedding/sidebar_address_browsertest.cc
+@@ -18,6 +18,7 @@
+ #include "chrome/browser/ui/animation/browser_animation_controller.h"
+ #include "chrome/browser/ui/browser_commands.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/spaces/space_model.h"
+ #include "chrome/browser/ui/stedding/stedding_command_ids.h"
+ #include "chrome/browser/ui/stedding/stedding_prefs.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+@@ -132,6 +133,75 @@ class SidebarAddressTest
+   }
+ };
+ 
++// private V10, toolbar T8, T10, T50, T51 (GitHub issue 83, BACKLOG S-439): a
++// private or Guest window has no Space model, which makes a normal window's
++// address row, so the window makes its own. The settings are the normal
++// profile's; these windows only read them.
++IN_PROC_BROWSER_TEST_F(SidebarAddressTest,
++                       AnOffTheRecordWindowFollowsTheRowsSettings) {
++  for (BrowserWindowInterface* const window :
++       {CreateIncognitoBrowser(), CreateGuestBrowser()}) {
++    SCOPED_TRACE(window->GetProfile()->IsGuestSession() ? "Guest" : "private");
++    ASSERT_FALSE(spaces::SpaceModel::From(window));
++    BrowserView* const view = BrowserView::GetBrowserViewForBrowser(window);
++    tabs::VerticalTabStripStateController* const sidebar =
++        tabs::VerticalTabStripStateController::From(window);
++    ASSERT_TRUE(sidebar);
++    PrefService* const settings =
++        window->GetProfile()->GetOriginalProfile()->GetPrefs();
++    const auto row_is = [&](bool shown) {
++      return base::test::RunUntil(
++          [&]() { return view->IsToolbarVisible() == shown; });
++    };
++    const auto close_sidebar = [&](bool closed) {
++      sidebar->RequestCollapse(closed);
++      ASSERT_TRUE(base::test::RunUntil([&]() {
++        return !BrowserAnimationController::From(window)->IsAnimating(
++            TabStripAnimations::kVerticalTabStrip);
++      }));
++      views::test::RunScheduledLayout(view->GetWidget());
++    };
++    views::test::RunScheduledLayout(view->GetWidget());
++    EXPECT_TRUE(view->IsToolbarVisible());
++
++    // The report: the address in the sidebar, and the row beside it too.
++    settings->SetBoolean(stedding::prefs::kSidebarAddressInSidebar, true);
++    EXPECT_TRUE(row_is(false))
++        << "the open sidebar shows the address; the row stayed";
++    // T51: what the row held goes with it.
++    EXPECT_TRUE(base::test::RunUntil(
++        [&]() { return view->toolbar()->stedding_buttons_host() != nullptr; }))
++        << "the row's buttons stayed on a row that is gone";
++    close_sidebar(true);
++    EXPECT_TRUE(row_is(true)) << "the rail has no address";
++    close_sidebar(false);
++    EXPECT_TRUE(row_is(false));
++
++    // T10: the key shows it and hides it.
++    chrome::ExecuteCommand(window, IDC_STEDDING_TOGGLE_ADDRESS_ROW);
++    EXPECT_TRUE(row_is(true)) << "the key did nothing";
++    chrome::ExecuteCommand(window, IDC_STEDDING_TOGGLE_ADDRESS_ROW);
++    EXPECT_TRUE(row_is(false));
++    // The key's answer lasts until the sidebar changes.
++    close_sidebar(true);
++    close_sidebar(false);
++    settings->SetBoolean(stedding::prefs::kSidebarAddressInSidebar, false);
++    EXPECT_TRUE(row_is(true));
++
++    // T8: hidden with the sidebar. Windows' caption buttons keep it (T22).
++    settings->SetBoolean(stedding::prefs::kToolbarHideWithSidebar, true);
++    close_sidebar(true);
++#if BUILDFLAG(IS_WIN)
++    EXPECT_TRUE(view->IsToolbarVisible());
++#else
++    EXPECT_TRUE(row_is(false)) << "the row stayed with the sidebar closed";
++#endif
++    close_sidebar(false);
++    settings->SetBoolean(stedding::prefs::kToolbarHideWithSidebar, false);
++    EXPECT_TRUE(row_is(true));
++  }
++}
++
+ // sidebar Y46, toolbar T50 (GitHub issue 45): off by default. On, the open
+ // sidebar's top row has Back, Forward and Reload on the toggle's line and the
+ // page's site under it; the address row hides while the sidebar is open,

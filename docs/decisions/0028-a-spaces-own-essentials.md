@@ -2,7 +2,7 @@
 
 Narrows ADR 0019. “Essentials stay on the default partition” now holds for shared essentials only. The current rule is `docs/features/spaces.md` B6 and `docs/features/sessions.md` S8.
 
-Status: Accepted (the owner, 2026-10-22; GitHub issue 8)
+Status: Accepted (the owner, 2026-10-22; GitHub issue 8). Amended by [ADR 0032](0032-spaces-that-share-a-named-session.md), proposed 2026-11-05: the Spaces of one session share their own essentials.
 Date: 2026-10-22
 
 ## Context

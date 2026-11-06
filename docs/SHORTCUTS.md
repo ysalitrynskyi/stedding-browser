@@ -99,7 +99,7 @@ Muting a tab, collapsing every folder, picture in picture and clearing a site's 
 
 Running an extension is ⌘E on the Mac, as in Arc, and Ctrl+Alt+E on Windows, where Ctrl+E stays the search key. Actions mode also lists each extension, **Show Media Controls** while something plays, and **View Site Information**.
 
-Independent session is not a shortcut. It is a check item on the Space chip menu, a toggle on each Space in Settings → Stedding → Spaces, and an **Independent Session** row in the command bar's actions mode. It is off at first.
+Independent session is not a shortcut. It is a check item on the Space chip menu, an **Independent Session** row in the command bar's actions mode, and a choice of session in Edit Space and on each Space in Settings → Stedding → Spaces. It is off at first.
 
 The tab-group chords are not bound. Those rows are absent from the short tab menus, which are on at first. Turning off Settings → Stedding → Pages and menus → Short context menus brings Chromium's menu back, still without those chords.
 

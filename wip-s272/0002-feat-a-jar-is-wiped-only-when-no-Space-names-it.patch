@@ -1,0 +1,821 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Thu, 5 Nov 2026 15:21:12 -0500
+Subject: [PATCH 2/3] feat: a jar is wiped only when no Space names it
+
+Spaces can share a session, and everything that assumed a jar had one Space
+would have lost someone's sign-ins. RemoveSpace wiped the jar of the Space
+deleted. It now wipes only when no Space names that jar, a Space with its
+session off among them, and leaves nothing on the pending list and asks for no
+collection otherwise (sessions S41, S42).
+
+A wipe is checked when it runs as well as when it is asked for. A window's
+session can bring back a Space that names a jar a wipe is waiting on, and a
+session row can name one a quit left pending; neither is wiped (S44).
+
+Clear Independent Session tells every Space with that session on, so each
+window reloads their tabs (S46). A jar several Spaces name belongs to the Space
+on screen when it uses the jar, else the first that uses it: a Space with its
+session off had stood in front of one with it on (S49).
+
+An essential of a session shows in every Space of that session, and stays with
+the session when the Space it is filed under leaves or is deleted (S47).
+
+Changing a Space's session goes through the registry, so every window moves the
+Space's tabs by the road a session turned on takes, a page with unsaved changes
+kept where it is (S40). Moving away erases nothing, and a session no Space uses
+ends only by DeleteUnusedSession (S43, S45).
+
+Why: the wipe was the one place this feature could lose a user's data (ADR
+0032).
+
+Removable when: never; it is what makes a shared session safe.
+---
+ chrome/browser/ui/spaces/space_model.cc       | 169 ++++++-
+ chrome/browser/ui/spaces/space_model.h        |  25 ++
+ .../ui/spaces/space_model_window_unittest.cc  | 416 ++++++++++++++++++
+ 3 files changed, 589 insertions(+), 21 deletions(-)
+
+diff --git a/chrome/browser/ui/spaces/space_model.cc b/chrome/browser/ui/spaces/space_model.cc
+index fd7582adcced7..df019fc9e22fa 100644
+--- a/chrome/browser/ui/spaces/space_model.cc
++++ b/chrome/browser/ui/spaces/space_model.cc
+@@ -503,6 +503,12 @@ SpaceModel::~SpaceModel() {
+     for (WaitingWipe& wipe : waiting_wipes_) {
+       if (heir) {
+         heir->waiting_wipes_.push_back(std::move(wipe));
++      } else if (JarIsNamed(wipe.jar)) {
++        // sessions S44: see RetryWaitingWipes.
++        ForgetPendingWipe(profile_, wipe.jar);
++        if (wipe.done) {
++          std::move(wipe.done).Run();
++        }
+       } else if (wipe.context && !IsJarInUse(wipe.context, wipe.jar)) {
+         WipeIsolatedSpacePartition(
+             wipe.context, wipe.jar,
+@@ -743,6 +749,7 @@ void SpaceModel::SyncWithRegistry(bool seed) {
+   isolated_jars_.clear();
+   std::map<SpaceId, std::string> jars;
+   std::vector<SpaceId> jar_moved;
++  const std::map<SpaceId, std::string> jars_before = effective_jars_;
+   for (const RegistryEntry& entry : registry_->entries()) {
+     if (!entry.profile_id.empty()) {
+       isolated_jars_[entry.id] = entry.profile_id;
+@@ -755,6 +762,9 @@ void SpaceModel::SyncWithRegistry(bool seed) {
+     jars[entry.id] = jar;
+   }
+   effective_jars_ = std::move(jars);
++  // sessions S47: before any tab follows its Space, an essential of a session
++  // that Space has left stays with the session.
++  KeepEssentialsInTheirSessions(jars_before);
+   // The Space this window shows next is named before any tab moves: a moved
+   // tab's observers ask for the active Space, and the deleted one is gone
+   // (BACKLOG S-222; the window showing it stopped on active_space()'s check).
+@@ -916,10 +926,21 @@ bool SpaceModel::RemoveSpace(const SpaceId& space_id,
+   // sessions S17, PLAN.md SPC-24: the jar is wiped once, here, after every
+   // tab has left it. The rebinds that move the tabs to their new jar are
+   // posted, so the wipe is posted behind them.
+-  if (jar.empty()) {
++  // sessions S41 (ADR 0032): a jar is wiped only when no Space names it. The
++  // Spaces left in the session keep it, a Space with its session off among
++  // them (S7).
++  if (jar.empty() || (registry_ && registry_->NamesJar(jar))) {
+     std::move(wipe_done).Run();
+     return true;
+   }
++  if (registry_) {
++    registry_->ForgetSession(jar);
++  }
++  EndJar(jar, std::move(wipe_done));
++  return true;
++}
++
++void SpaceModel::EndJar(const std::string& jar, base::OnceClosure done) {
+   // The wipe empties the jar; the next start's storage-partition collection
+   // removes its directory, which no Space names now (the collection keeps
+   // every jar a Space names).
+@@ -941,7 +962,17 @@ bool SpaceModel::RemoveSpace(const SpaceId& space_id,
+             }
+             model->WipeIsolatedJarOnceLeft(std::move(jar), std::move(done));
+           },
+-          weak_factory_.GetWeakPtr(), jar, std::move(wipe_done)));
++          weak_factory_.GetWeakPtr(), jar, std::move(done)));
++}
++
++bool SpaceModel::DeleteUnusedSession(const std::string& session,
++                                     base::OnceClosure done) {
++  if (!registry_ || !registry_->HasSessionRow(session) ||
++      registry_->NamesJar(session)) {
++    return false;
++  }
++  registry_->ForgetSession(session);
++  EndJar(session, std::move(done));
+   return true;
+ }
+ 
+@@ -1484,10 +1515,15 @@ void SpaceModel::OnTabStripModelChanged(
+     // with its own session) brings the first Space that shows it.
+     if (tabs::TabInterface* const active = tab_strip_model->GetActiveTab();
+         active) {
+-      const std::optional<SpaceId> space =
+-          !IsSharedEssential(active) ? FindSpaceForTab(active)
+-          : IsTabInActiveSpace(active) ? std::nullopt
+-                                       : SpaceForSharedEssentials();
++      // sessions S47: an essential of the session on screen brings none.
++      std::optional<SpaceId> space;
++      if (IsSharedEssential(active)) {
++        if (!IsTabInActiveSpace(active)) {
++          space = SpaceForSharedEssentials();
++        }
++      } else if (!IsOwnEssential(active) || !IsTabInActiveSpace(active)) {
++        space = FindSpaceForTab(active);
++      }
+       if (space && *space != active_id_) {
+         base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+             FROM_HERE,
+@@ -2320,6 +2356,29 @@ bool SpaceModel::SpaceIsIsolated(const SpaceId& id) const {
+   return entry && entry->isolated;
+ }
+ 
++std::string SpaceModel::SessionOf(const SpaceId& id) const {
++  const RegistryEntry* const entry = registry_ ? registry_->Find(id) : nullptr;
++  return entry && entry->isolated ? entry->profile_id : std::string();
++}
++
++bool SpaceModel::SpacesShareSession(const SpaceId& a, const SpaceId& b) const {
++  if (a == b) {
++    return true;
++  }
++  const std::string session = SessionOf(a);
++  return !session.empty() && session == SessionOf(b);
++}
++
++void SpaceModel::SetSpaceSession(const SpaceId& id,
++                                 const std::string& session) {
++  if (!registry_) {
++    return;
++  }
++  // The registry's change comes back through SyncWithRegistry in every
++  // window, which moves the Space's tabs there (sessions S22, S40).
++  registry_->SetSession(id, session);
++}
++
+ std::optional<SpaceId> SpaceModel::SpaceKeepingJar(
+     const content::StoragePartitionConfig& config) const {
+   const std::optional<SpaceId> id = SpaceNamingJar(config);
+@@ -2331,17 +2390,30 @@ std::optional<SpaceId> SpaceModel::SpaceNamingJar(
+   if (!registry_ || !IsSpaceStoragePartition(config)) {
+     return std::nullopt;
+   }
++  // sessions S49: several Spaces may name one jar. The Space on screen when
++  // it uses the jar, else the first that uses it, else the first that names
++  // it: one with its session off must not stand in front of one with it on.
++  std::optional<SpaceId> first_using;
++  std::optional<SpaceId> first_naming;
+   for (const RegistryEntry& entry : registry_->entries()) {
+-    if (entry.profile_id != config.partition_name()) {
++    if (entry.profile_id != config.partition_name() ||
++        std::ranges::none_of(spaces_,
++                             [&](const std::unique_ptr<Space>& space) {
++                               return space->id() == entry.id;
++                             })) {
+       continue;
+     }
+-    if (std::ranges::any_of(spaces_, [&](const std::unique_ptr<Space>& space) {
+-          return space->id() == entry.id;
+-        })) {
++    if (entry.isolated && entry.id == active_id_) {
+       return entry.id;
+     }
++    if (entry.isolated && !first_using) {
++      first_using = entry.id;
++    }
++    if (!first_naming) {
++      first_naming = entry.id;
++    }
+   }
+-  return std::nullopt;
++  return first_using ? first_using : first_naming;
+ }
+ 
+ bool SpaceModel::WipeIsolatedSession(const SpaceId& id) {
+@@ -2367,11 +2439,21 @@ bool SpaceModel::WipeIsolatedSession(const SpaceId& id,
+   return WipeIsolatedSpacePartition(
+       BrowserContextForWipe(), entry->profile_id,
+       base::BindOnce(
+-          [](base::WeakPtr<SpaceModel> self, SpaceId id,
++          [](base::WeakPtr<SpaceModel> self, SpaceId id, std::string jar,
+              base::OnceClosure done) {
+-            // Every window's tabs of the Space are signed out now (SPC-13).
++            // Every window's tabs of the Space are signed out now (SPC-13),
++            // and those of every Space that has this session on (sessions
++            // S46). A Space keeping it with its session off has no tab in it.
+             if (self && self->registry_) {
+-              self->registry_->NotifySpaceJarWiped(id);
++              std::vector<SpaceId> users;
++              for (const RegistryEntry& each : self->registry_->entries()) {
++                if (each.isolated && each.profile_id == jar) {
++                  users.push_back(each.id);
++                }
++              }
++              for (const SpaceId& user : users) {
++                self->registry_->NotifySpaceJarWiped(user);
++              }
+             } else if (self) {
+               self->ReloadTabsInSpace(id);
+             }
+@@ -2379,7 +2461,7 @@ bool SpaceModel::WipeIsolatedSession(const SpaceId& id,
+               std::move(done).Run();
+             }
+           },
+-          weak_factory_.GetWeakPtr(), id, std::move(done)));
++          weak_factory_.GetWeakPtr(), id, entry->profile_id, std::move(done)));
+ }
+ 
+ content::BrowserContext* SpaceModel::BrowserContextForWipe() const {
+@@ -2449,6 +2531,15 @@ void SpaceModel::RetryWaitingWipes() {
+   std::vector<WaitingWipe> waiting;
+   std::vector<WaitingWipe> ready;
+   for (WaitingWipe& wipe : waiting_wipes_) {
++    // sessions S44: a Space or a session may have come to name the jar since
++    // the wipe was asked for (S2). The jar is theirs.
++    if (JarIsNamed(wipe.jar)) {
++      ForgetPendingWipe(profile_, wipe.jar);
++      if (wipe.done) {
++        std::move(wipe.done).Run();
++      }
++      continue;
++    }
+     if (!wipe.context) {
+       wipe.context = BrowserContextForWipe();
+     }
+@@ -2486,11 +2577,9 @@ void SpaceModel::ResumePendingWipes() {
+     if (!jar || jar->empty()) {
+       continue;
+     }
+-    // A jar a Space names is that Space's, whatever the list says.
+-    if (std::ranges::any_of(registry_->entries(),
+-                            [&](const RegistryEntry& entry) {
+-                              return entry.profile_id == *jar;
+-                            })) {
++    // A jar a Space or a session names is theirs, whatever the list says
++    // (sessions S44).
++    if (JarIsNamed(*jar)) {
+       named.push_back(*jar);
+       continue;
+     }
+@@ -2539,6 +2628,11 @@ void SpaceModel::PostRetryWaitingWipes() {
+                      weak_factory_.GetWeakPtr()));
+ }
+ 
++bool SpaceModel::JarIsNamed(std::string_view jar) const {
++  return registry_ &&
++         (registry_->NamesJar(jar) || registry_->HasSessionRow(jar));
++}
++
+ bool SpaceModel::IsJarInUse(content::BrowserContext* context,
+                             std::string_view jar) const {
+   const std::optional<content::StoragePartitionConfig> config =
+@@ -3123,8 +3217,10 @@ bool SpaceModel::IsTabInActiveSpace(const tabs::TabInterface* tab) const {
+   // 8; the owner, 2026-10-22).
+   if (tab->IsPinned()) {
+     if (IsOwnEssential(tab)) {
++      // sessions S47: and in every Space of its session (ADR 0032).
+       const auto it = tab_spaces_.find(tab->GetHandle());
+-      return it != tab_spaces_.end() && it->second == active_id_;
++      return it != tab_spaces_.end() &&
++             SpacesShareSession(it->second, active_id_);
+     }
+     // With every Space on a session of its own, the shared essentials show
+     // in each: hidden everywhere, they could not be reached at all.
+@@ -3181,6 +3277,37 @@ bool SpaceModel::KeepsJarItWasMadeIn(const tabs::TabInterface* tab) const {
+   return contents && HasNoPageOfItsOwnYet(contents);
+ }
+ 
++void SpaceModel::KeepEssentialsInTheirSessions(
++    const std::map<SpaceId, std::string>& jars_before) {
++  if (!tab_strip_model_) {
++    return;
++  }
++  for (const tabs::TabHandle& handle : own_essentials_) {
++    tabs::TabInterface* const tab = handle.Get();
++    const auto filed = tab ? tab_spaces_.find(handle) : tab_spaces_.end();
++    if (filed == tab_spaces_.end()) {
++      continue;
++    }
++    const auto before = jars_before.find(filed->second);
++    const auto now = effective_jars_.find(filed->second);
++    const std::string jar =
++        before == jars_before.end() ? std::string() : before->second;
++    if (jar.empty() ||
++        (now != effective_jars_.end() && now->second == jar)) {
++      continue;
++    }
++    for (const std::unique_ptr<Space>& space : spaces_) {
++      const auto there = effective_jars_.find(space->id());
++      if (there != effective_jars_.end() && there->second == jar) {
++        filed->second = space->id();
++        SaveTabToSession(tab, filed->second);
++        observers_.Notify(&Observer::OnTabSpaceChanged, tab);
++        break;
++      }
++    }
++  }
++}
++
+ void SpaceModel::SettleOwnEssentials() {
+   if (!tab_strip_model_) {
+     return;
+diff --git a/chrome/browser/ui/spaces/space_model.h b/chrome/browser/ui/spaces/space_model.h
+index e57231179057d..9b1b4fea2ca66 100644
+--- a/chrome/browser/ui/spaces/space_model.h
++++ b/chrome/browser/ui/spaces/space_model.h
+@@ -378,6 +378,19 @@ class SpaceModel : public TabStripModelObserver,
+   // a registry (blank, private, a model with no window).
+   void SetSpaceIsolated(const SpaceId& id, bool isolated);
+   bool SpaceIsIsolated(const SpaceId& id) const;
++  // sessions S38 (ADR 0032): the jar `id` uses now, empty when it is Shared.
++  std::string SessionOf(const SpaceId& id) const;
++  // sessions S47: whether two Spaces are the same Space, or both have their
++  // session on and on one jar.
++  bool SpacesShareSession(const SpaceId& a, const SpaceId& b) const;
++  // sessions S40: puts Space `id` in `session`; empty is Shared (S7). Its tabs
++  // follow in every window, as they follow SetSpaceIsolated. No-op without a
++  // registry (a Blank Window, S18).
++  void SetSpaceSession(const SpaceId& id, const std::string& session);
++  // sessions S45: ends a session no Space uses. Its jar is wiped as a deleted
++  // Space's is (S17) and `done` runs when that has finished. False, and
++  // nothing changes, while a Space names it.
++  bool DeleteUnusedSession(const std::string& session, base::OnceClosure done);
+   const SpaceRegistry* registry() const { return registry_; }
+   // The Space of this window whose own jar `config` is, while that Space
+   // keeps one: a page or a service worker in that jar belongs there
+@@ -722,6 +735,12 @@ class SpaceModel : public TabStripModelObserver,
+   void PostRetryWaitingWipes();
+   // Whether a tab of a window of this profile shows a page in `jar`.
+   bool IsJarInUse(content::BrowserContext* context, std::string_view jar) const;
++  // sessions S44: whether a Space or the sessions list names `jar`, so that
++  // no wipe may run on it.
++  bool JarIsNamed(std::string_view jar) const;
++  // sessions S17, S45: asks for the next start's collection and wipes `jar`,
++  // which nothing names any more, once it has been left.
++  void EndJar(const std::string& jar, base::OnceClosure done);
+   // The session keys, the name's session entry and the jar of a tab whose
+   // contents were replaced (a sleep, a rebind); posted from the replace
+   // notification.
+@@ -735,6 +754,12 @@ class SpaceModel : public TabStripModelObserver,
+   std::string IsolatedJarOf(const SpaceId& id) const;
+   // Moves every tab of `from` to `to`, saving and rebinding each.
+   void RefileTabs(const SpaceId& from, const SpaceId& to);
++  // sessions S47: an essential filed under a Space that has left its session,
++  // by a change or a deletion, is filed under a Space of this window still in
++  // that session, and so stays in its jar. `jars_before` is what
++  // effective_jars_ held before the change.
++  void KeepEssentialsInTheirSessions(
++      const std::map<SpaceId, std::string>& jars_before);
+   // spaces B6 (the owner, 2026-10-22): a Space's own essentials whose Space
+   // has no session of its own any more -- turned off, or deleted and its
+   // tabs given to a Space without one -- become that Space's pinned tabs,
+diff --git a/chrome/browser/ui/spaces/space_model_window_unittest.cc b/chrome/browser/ui/spaces/space_model_window_unittest.cc
+index 3942aa48e9fba..4c4b9eea3e644 100644
+--- a/chrome/browser/ui/spaces/space_model_window_unittest.cc
++++ b/chrome/browser/ui/spaces/space_model_window_unittest.cc
+@@ -38,6 +38,7 @@
+ #include "chrome/browser/ui/spaces/space_model.h"
+ #include "chrome/browser/ui/spaces/space_registry.h"
+ #include "chrome/browser/ui/spaces/space_registry_factory.h"
++#include "chrome/browser/ui/spaces/space_registry_factory.h"
+ #include "chrome/browser/ui/spaces/space_router.h"
+ #include "chrome/browser/ui/spaces/space_storage_partition.h"
+ #include "chrome/browser/ui/spaces/tab_space_restore_data.h"
+@@ -61,6 +62,7 @@
+ #include "components/tabs/public/folder_tab_collection.h"
+ #include "components/tabs/public/tab_interface.h"
+ #include "content/public/browser/browser_context.h"
++#include "content/public/browser/site_instance.h"
+ #include "content/public/browser/storage_partition.h"
+ #include "content/public/browser/storage_partition_config.h"
+ #include "content/public/browser/web_contents.h"
+@@ -3582,5 +3584,419 @@ TEST_F(SpaceWindowTest, ARestoredTabsTagGoesWithItsFirstFiling) {
+   second->GetTabStripModel()->CloseAllTabs();
+ }
+ 
++// The fixture for the rows of ADR 0032, on SpaceWindowTest's helpers.
++class SharedSessionWindowTest : public SpaceWindowTest {
++ protected:
++  SpaceRegistry& registry() {
++    return *SpaceRegistryFactory::GetForProfile(profile());
++  }
++
++  // A session with `first` and `second` in it, `first` having made it.
++  std::string ShareSession(const SpaceId& first, const SpaceId& second) {
++    model().SetSpaceIsolated(first, true);
++    const std::string jar = model().registry()->Find(first)->profile_id;
++    model().SetSpaceSession(second, jar);
++    return jar;
++  }
++
++  content::StoragePartitionConfig ConfigFor(const std::string& jar) {
++    return *StoragePartitionConfigForProfileId(profile(), jar);
++  }
++
++  // The Space's tab, put in `jar` by opening it there.
++  tabs::TabInterface* OpenTabIn(const SpaceId& space) {
++    model().SetActiveSpace(space);
++    return OpenTab();
++  }
++
++  bool WasWiped(const content::StoragePartitionConfig& config,
++                const GURL& url) {
++    return CookieCount(profile(), config, url) == 0u;
++  }
++};
++
++// sessions S38 (ADR 0032): two Spaces of one session put their tabs in one
++// partition; a third does not.
++TEST_F(SharedSessionWindowTest, TwoSpacesOfASessionShareAPartition) {
++  const SpaceId home = model().active_id();
++  const SpaceId mail = model().AddSpace("Mail", kBlue)->id();
++  const SpaceId docs = model().AddSpace("Docs", kBlue)->id();
++  const SpaceId alone = model().AddSpace("Alone", kBlue)->id();
++  const std::string jar = ShareSession(mail, docs);
++  model().SetSpaceIsolated(alone, true);
++
++  const auto in_mail = PartitionOf(OpenTabIn(mail));
++  const auto in_docs = PartitionOf(OpenTabIn(docs));
++  EXPECT_EQ(jar, in_mail.partition_name());
++  EXPECT_EQ(in_mail, in_docs);
++  EXPECT_NE(in_mail, PartitionOf(OpenTabIn(alone)));
++  EXPECT_FALSE(IsSpaceStoragePartition(PartitionOf(OpenTabIn(home))));
++  EXPECT_EQ(jar, model().SessionOf(docs));
++  EXPECT_TRUE(model().SpacesShareSession(mail, docs));
++  EXPECT_FALSE(model().SpacesShareSession(mail, alone));
++  EXPECT_FALSE(model().SpacesShareSession(mail, home));
++  EXPECT_TRUE(model().SpacesShareSession(home, home));
++}
++
++// sessions S40: the session changes in the registry, so each window moves the
++// Space's tabs as it does for a session turned on (S22).
++TEST_F(SharedSessionWindowTest, ChangingASessionMovesTheTabsInEveryWindow) {
++  OpenTab();
++  const SpaceId work = model().AddSpace("Work", kBlue)->id();
++  const SpaceId mail = model().AddSpace("Mail", kBlue)->id();
++  model().SetSpaceIsolated(mail, true);
++  const std::string jar = model().registry()->Find(mail)->profile_id;
++  std::unique_ptr<BrowserWindowInterface> second =
++      CreateBrowser(profile(), Browser::TYPE_NORMAL, /*hosted_app=*/false);
++  SpaceModel* const other = SpaceModel::From(second.get());
++  ASSERT_TRUE(other);
++  ASSERT_TRUE(other->SetActiveSpace(work));
++  AddTab(second.get(), GURL("https://example.com/"));
++  tabs::TabInterface* const there = second->GetTabStripModel()->GetActiveTab();
++  ASSERT_FALSE(IsSpaceStoragePartition(PartitionOf(there)));
++
++  model().SetSpaceSession(work, jar);
++  task_environment()->RunUntilIdle();
++  EXPECT_EQ(jar, PartitionOf(there).partition_name());
++
++  const std::string other_jar = registry().AddSession("Other");
++  model().SetSpaceSession(work, other_jar);
++  task_environment()->RunUntilIdle();
++  EXPECT_EQ(other_jar, PartitionOf(there).partition_name());
++
++  model().SetSpaceSession(work, std::string());
++  task_environment()->RunUntilIdle();
++  EXPECT_FALSE(IsSpaceStoragePartition(PartitionOf(there)));
++  second->GetTabStripModel()->CloseAllTabs();
++}
++
++// sessions S41, the first test of ADR 0032: deleting a Space whose session
++// another Space names wipes nothing. The cookie stays, no wipe begins, nothing
++// is left on the pending list, and no collection is asked for.
++TEST_F(SharedSessionWindowTest, DeletingASpaceLeavesTheJarAnotherSpaceNames) {
++  PrefService* const prefs = profile()->GetPrefs();
++  const SpaceId home = model().active_id();
++  const SpaceId mail = model().AddSpace("Mail", kBlue)->id();
++  const SpaceId docs = model().AddSpace("Docs", kBlue)->id();
++  const std::string jar = ShareSession(mail, docs);
++  tabs::TabInterface* const tab = OpenTabIn(mail);
++  const GURL url("https://example.com/");
++  ASSERT_EQ(jar, PartitionOf(tab).partition_name());
++  PutCookie(profile(), ConfigFor(jar), url);
++  model().SetActiveSpace(home);
++  prefs->SetBoolean(::prefs::kShouldGarbageCollectStoragePartitions, false);
++
++  const int wipes = SpacePartitionWipesBegunForTesting();
++  base::RunLoop loop;
++  ASSERT_TRUE(model().RemoveSpace(mail, loop.QuitClosure()));
++  loop.Run();
++  task_environment()->RunUntilIdle();
++
++  EXPECT_EQ(wipes, SpacePartitionWipesBegunForTesting()) << "a wipe began";
++  EXPECT_FALSE(WasWiped(ConfigFor(jar), url)) << "Docs lost its sign-ins";
++  EXPECT_TRUE(prefs->GetList(stedding::prefs::kPendingJarWipes).empty());
++  EXPECT_FALSE(
++      prefs->GetBoolean(::prefs::kShouldGarbageCollectStoragePartitions));
++  EXPECT_EQ(jar, model().registry()->Find(docs)->profile_id);
++}
++
++// sessions S41: a Space with its session off still names the jar, so deleting
++// the one Space that has it on wipes nothing either.
++TEST_F(SharedSessionWindowTest, DeletingLeavesAJarASpaceKeepsWithItsSessionOff) {
++  const SpaceId home = model().active_id();
++  const SpaceId mail = model().AddSpace("Mail", kBlue)->id();
++  const SpaceId docs = model().AddSpace("Docs", kBlue)->id();
++  const std::string jar = ShareSession(mail, docs);
++  model().SetSpaceIsolated(docs, false);
++  OpenTabIn(mail);
++  const GURL url("https://example.com/");
++  PutCookie(profile(), ConfigFor(jar), url);
++  model().SetActiveSpace(home);
++
++  base::RunLoop loop;
++  ASSERT_TRUE(model().RemoveSpace(mail, loop.QuitClosure()));
++  loop.Run();
++  task_environment()->RunUntilIdle();
++  EXPECT_FALSE(WasWiped(ConfigFor(jar), url));
++
++  model().SetSpaceIsolated(docs, true);
++  EXPECT_EQ(jar, model().registry()->Find(docs)->profile_id);
++}
++
++// sessions S41: the last Space that names a jar takes it, and its name.
++TEST_F(SharedSessionWindowTest, DeletingTheLastSpaceOfASessionWipesItAndItsName) {
++  const SpaceId home = model().active_id();
++  const SpaceId mail = model().AddSpace("Mail", kBlue)->id();
++  const SpaceId docs = model().AddSpace("Docs", kBlue)->id();
++  const std::string jar = ShareSession(mail, docs);
++  OpenTabIn(mail);
++  const GURL url("https://example.com/");
++  PutCookie(profile(), ConfigFor(jar), url);
++  model().SetActiveSpace(home);
++  {
++    base::RunLoop loop;
++    ASSERT_TRUE(model().RemoveSpace(mail, loop.QuitClosure()));
++    loop.Run();
++  }
++  ASSERT_FALSE(WasWiped(ConfigFor(jar), url));
++  {
++    base::RunLoop loop;
++    ASSERT_TRUE(model().RemoveSpace(docs, loop.QuitClosure()));
++    loop.Run();
++  }
++  EXPECT_TRUE(WasWiped(ConfigFor(jar), url));
++  EXPECT_FALSE(model().registry()->FindSession(jar));
++  EXPECT_TRUE(profile()
++                  ->GetPrefs()
++                  ->GetList(stedding::prefs::kPendingJarWipes)
++                  .empty());
++}
++
++// sessions S42: a Space leaving for the shared jar takes its own tabs and
++// leaves the jar and the other Space's tabs as they are.
++TEST_F(SharedSessionWindowTest, TurningASessionOffLeavesItsOtherSpacesAlone) {
++  const SpaceId mail = model().AddSpace("Mail", kBlue)->id();
++  const SpaceId docs = model().AddSpace("Docs", kBlue)->id();
++  const std::string jar = ShareSession(mail, docs);
++  tabs::TabInterface* const in_mail = OpenTabIn(mail);
++  tabs::TabInterface* const in_docs = OpenTabIn(docs);
++  const content::WebContents* const docs_contents = in_docs->GetContents();
++  const GURL url("https://example.com/");
++  PutCookie(profile(), ConfigFor(jar), url);
++  const int wipes = SpacePartitionWipesBegunForTesting();
++
++  model().SetSpaceSession(mail, std::string());
++  task_environment()->RunUntilIdle();
++
++  EXPECT_FALSE(IsSpaceStoragePartition(PartitionOf(in_mail)));
++  EXPECT_EQ(jar, PartitionOf(in_docs).partition_name());
++  EXPECT_EQ(docs_contents, in_docs->GetContents()) << "Docs' tab was rebound";
++  EXPECT_EQ(wipes, SpacePartitionWipesBegunForTesting());
++  EXPECT_FALSE(WasWiped(ConfigFor(jar), url));
++}
++
++// sessions S44: a wipe waiting on a page in the jar is asked again when it
++// runs. A window's session can bring back a Space that names the jar while it
++// waits (S2), and that jar is that Space's.
++TEST_F(SharedSessionWindowTest, AWaitingWipeIsDroppedWhenASpaceNamesTheJarAgain) {
++  PrefService* const prefs = profile()->GetPrefs();
++  const SpaceId home = model().active_id();
++  const SpaceId work = model().AddSpace("Work", kBlue)->id();
++  model().SetSpaceIsolated(work, true);
++  const std::string jar = model().registry()->Find(work)->profile_id;
++  OpenTabIn(work);
++  const GURL url("https://example.com/");
++  PutCookie(profile(), ConfigFor(jar), url);
++  model().SetActiveSpace(home);
++
++  // A popup holds a page in the jar, so the wipe waits (S17).
++  std::unique_ptr<BrowserWindowInterface> popup =
++      CreateBrowser(profile(), Browser::TYPE_POPUP, /*hosted_app=*/false);
++  content::WebContents::CreateParams params(
++      profile(), content::SiteInstance::CreateForFixedStoragePartition(
++                     profile(), url, ConfigFor(jar)));
++  TabStripModel* const popup_tabs = popup->GetTabStripModel();
++  popup_tabs->AppendTab(
++      std::make_unique<tabs::TabModel>(content::WebContents::Create(params),
++                                       popup_tabs),
++      /*foreground=*/true);
++
++  ASSERT_TRUE(model().RemoveSpace(work));
++  task_environment()->RunUntilIdle();
++  ASSERT_EQ(1u, prefs->GetList(stedding::prefs::kPendingJarWipes).size());
++
++  RegistryEntry back(SpaceId::GenerateNew(), "Back", kBlue);
++  back.profile_id = jar;
++  back.isolated = true;
++  registry().AddExisting(back);
++  popup->GetTabStripModel()->CloseAllTabs();
++
++  EXPECT_TRUE(base::test::RunUntil([&]() {
++    return prefs->GetList(stedding::prefs::kPendingJarWipes).empty();
++  })) << "the wipe never ran";
++  task_environment()->RunUntilIdle();
++  EXPECT_FALSE(WasWiped(ConfigFor(jar), url)) << "a jar a Space names";
++}
++
++// sessions S44: a pending wipe left by a quit keeps off a jar a session row
++// names, as it does a jar a Space names.
++TEST_F(SharedSessionWindowTest, APendingWipeLeavesAJarASessionNames) {
++  PrefService* const prefs = profile()->GetPrefs();
++  const std::string jar = registry().AddSession("Kept");
++  const GURL url("https://example.com/");
++  PutCookie(profile(), ConfigFor(jar), url);
++  base::ListValue pending;
++  pending.Append(jar);
++  prefs->SetList(stedding::prefs::kPendingJarWipes, std::move(pending));
++
++  std::unique_ptr<BrowserWindowInterface> second =
++      CreateBrowser(profile(), Browser::TYPE_NORMAL, /*hosted_app=*/false);
++  ASSERT_TRUE(base::test::RunUntil([&]() {
++    return prefs->GetList(stedding::prefs::kPendingJarWipes).empty();
++  }));
++  task_environment()->RunUntilIdle();
++  EXPECT_FALSE(WasWiped(ConfigFor(jar), url));
++  second->GetTabStripModel()->CloseAllTabs();
++}
++
++// sessions S45: a session no Space uses ends when the user says so, once, and
++// a session a Space names is not offered that way.
++TEST_F(SharedSessionWindowTest, DeletingAnUnusedSessionWipesItOnce) {
++  const SpaceId work = model().AddSpace("Work", kBlue)->id();
++  model().SetSpaceIsolated(work, true);
++  const std::string jar = model().registry()->Find(work)->profile_id;
++  const std::string other = registry().AddSession("Other");
++  OpenTabIn(work);
++  const GURL url("https://example.com/");
++  PutCookie(profile(), ConfigFor(jar), url);
++  EXPECT_FALSE(model().DeleteUnusedSession(jar, base::DoNothing()))
++      << "Work uses it";
++  EXPECT_FALSE(WasWiped(ConfigFor(jar), url));
++
++  model().SetSpaceSession(work, other);
++  task_environment()->RunUntilIdle();
++  ASSERT_TRUE(model().registry()->FindSession(jar));
++  const int wipes = SpacePartitionWipesBegunForTesting();
++  base::RunLoop loop;
++  EXPECT_TRUE(model().DeleteUnusedSession(jar, loop.QuitClosure()));
++  loop.Run();
++  EXPECT_EQ(wipes + 1, SpacePartitionWipesBegunForTesting());
++  EXPECT_TRUE(WasWiped(ConfigFor(jar), url));
++  EXPECT_FALSE(model().registry()->FindSession(jar));
++  EXPECT_TRUE(profile()
++                  ->GetPrefs()
++                  ->GetList(stedding::prefs::kPendingJarWipes)
++                  .empty());
++}
++
++// sessions S46: Clear empties one jar, and every Space with that session on
++// hears of it, so every window reloads their tabs. A Space that keeps the jar
++// with its session off has no tab in it.
++TEST_F(SharedSessionWindowTest, ClearingASessionReloadsEverySpaceInIt) {
++  class Heard : public SpaceRegistry::Observer {
++   public:
++    void OnSpaceJarWiped(const SpaceId& id) override { ids.push_back(id); }
++    std::vector<SpaceId> ids;
++  };
++  const SpaceId mail = model().AddSpace("Mail", kBlue)->id();
++  const SpaceId docs = model().AddSpace("Docs", kBlue)->id();
++  const SpaceId off = model().AddSpace("Off", kBlue)->id();
++  const std::string jar = ShareSession(mail, docs);
++  model().SetSpaceSession(off, jar);
++  model().SetSpaceIsolated(off, false);
++  OpenTabIn(mail);
++  const GURL url("https://example.com/");
++  PutCookie(profile(), ConfigFor(jar), url);
++
++  Heard heard;
++  registry().AddObserver(&heard);
++  base::RunLoop loop;
++  EXPECT_TRUE(model().WipeIsolatedSession(docs, loop.QuitClosure()));
++  loop.Run();
++  registry().RemoveObserver(&heard);
++
++  EXPECT_TRUE(WasWiped(ConfigFor(jar), url));
++  EXPECT_THAT(heard.ids, testing::UnorderedElementsAre(mail, docs));
++  EXPECT_EQ(jar, registry().Find(off)->profile_id);
++}
++
++// sessions S47 (ADR 0028, ADR 0032): an essential of a session shows in every
++// Space on that jar, using it there brings no other Space, and a Space on
++// another jar does not show it.
++TEST_F(SharedSessionWindowTest, SpacesOfOneSessionShareTheirEssentials) {
++  const SpaceId home = model().active_id();
++  tabs::TabInterface* const shared = OpenTab();
++  tabs().SetTabPinned(tabs().GetIndexOfTab(shared), true);
++  const SpaceId mail = model().AddSpace("Mail", kBlue)->id();
++  const SpaceId docs = model().AddSpace("Docs", kBlue)->id();
++  ShareSession(mail, docs);
++  tabs::TabInterface* const own = OpenTabIn(mail);
++  tabs().SetTabPinned(tabs().GetIndexOfTab(own), true);
++  task_environment()->RunUntilIdle();
++  ASSERT_TRUE(model().IsOwnEssential(own));
++
++  model().SetActiveSpace(docs);
++  EXPECT_FALSE(model().HidesTab(own)) << "Mail's essential in Docs";
++  EXPECT_TRUE(model().HidesTab(shared));
++  tabs().ActivateTabAt(tabs().GetIndexOfTab(own));
++  task_environment()->RunUntilIdle();
++  EXPECT_EQ(docs, model().active_id()) << "using it brought its Space";
++
++  model().SetActiveSpace(home);
++  EXPECT_TRUE(model().HidesTab(own));
++  EXPECT_FALSE(model().HidesTab(shared));
++}
++
++// sessions S47: an essential stays with its session, where it is signed in,
++// while another Space is still in it. Otherwise it goes with its Space.
++TEST_F(SharedSessionWindowTest, AnEssentialStaysInItsSessionWhenItsSpaceLeaves) {
++  const SpaceId mail = model().AddSpace("Mail", kBlue)->id();
++  const SpaceId docs = model().AddSpace("Docs", kBlue)->id();
++  const std::string jar = ShareSession(mail, docs);
++  tabs::TabInterface* const own = OpenTabIn(mail);
++  tabs().SetTabPinned(tabs().GetIndexOfTab(own), true);
++  task_environment()->RunUntilIdle();
++  model().SetActiveSpace(docs);
++
++  model().SetSpaceSession(mail, std::string());
++  task_environment()->RunUntilIdle();
++  EXPECT_TRUE(model().IsOwnEssential(own));
++  EXPECT_EQ(docs, model().SpaceForTab(own));
++  EXPECT_EQ(jar, PartitionOf(own).partition_name());
++
++  // Docs is the last in it: the essential goes with Docs to the shared jar,
++  // a pin of that Space (ADR 0028).
++  model().SetSpaceSession(docs, std::string());
++  task_environment()->RunUntilIdle();
++  EXPECT_FALSE(model().IsOwnEssential(own));
++  EXPECT_TRUE(model().IsSpacePinned(own));
++  EXPECT_FALSE(IsSpaceStoragePartition(PartitionOf(own)));
++}
++
++// sessions S47: a deleted Space's essential does not follow its tabs out of
++// the session while another Space is in it.
++TEST_F(SharedSessionWindowTest, AnEssentialStaysInItsSessionWhenItsSpaceIsDeleted) {
++  const SpaceId home = model().active_id();
++  const SpaceId mail = model().AddSpace("Mail", kBlue)->id();
++  const SpaceId docs = model().AddSpace("Docs", kBlue)->id();
++  const std::string jar = ShareSession(mail, docs);
++  tabs::TabInterface* const own = OpenTabIn(mail);
++  tabs().SetTabPinned(tabs().GetIndexOfTab(own), true);
++  task_environment()->RunUntilIdle();
++  model().SetActiveSpace(home);
++
++  base::RunLoop loop;
++  ASSERT_TRUE(model().RemoveSpace(mail, loop.QuitClosure()));
++  loop.Run();
++  task_environment()->RunUntilIdle();
++  EXPECT_TRUE(model().IsOwnEssential(own));
++  EXPECT_EQ(docs, model().SpaceForTab(own));
++  EXPECT_EQ(jar, PartitionOf(own).partition_name());
++}
++
++// sessions S49: the jar several Spaces name goes to the Space on screen when
++// it uses the jar, else the first that uses it, else the first that names it.
++TEST_F(SharedSessionWindowTest, AJarBelongsToTheSpaceOnScreenThatUsesIt) {
++  const SpaceId home = model().active_id();
++  const SpaceId off = model().AddSpace("Off", kBlue)->id();
++  const SpaceId mail = model().AddSpace("Mail", kBlue)->id();
++  const SpaceId docs = model().AddSpace("Docs", kBlue)->id();
++  const std::string jar = ShareSession(mail, docs);
++  model().SetSpaceSession(off, jar);
++  model().SetSpaceIsolated(off, false);
++  const content::StoragePartitionConfig config = ConfigFor(jar);
++
++  EXPECT_EQ(mail, model().SpaceNamingJar(config));
++  EXPECT_EQ(mail, model().SpaceKeepingJar(config));
++  model().SetActiveSpace(docs);
++  EXPECT_EQ(docs, model().SpaceNamingJar(config));
++  EXPECT_EQ(docs, model().SpaceKeepingJar(config));
++  model().SetActiveSpace(home);
++  model().SetSpaceIsolated(mail, false);
++  model().SetSpaceIsolated(docs, false);
++  EXPECT_EQ(off, model().SpaceNamingJar(config));
++  EXPECT_FALSE(model().SpaceKeepingJar(config));
++}
++
+ }  // namespace
+ }  // namespace spaces
+-- 
+2.56.0
+

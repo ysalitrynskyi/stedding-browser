@@ -412,6 +412,30 @@ None recorded.
 | Date | Build | Platforms | `sy_join` | `sy_edit` | `sy_remove` | `sy_bulk` | `sy_copy` | `sy_cloud` | `sy_prompt` | `sy_share` | `sy_stop` | `sy_time` | Notes |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 
+## Spaces that share a session
+
+The live check of [sessions.md](sessions.md) S38–S46: one site, signed in once, in the Spaces of one session.
+
+### Before the run
+
+- A build and a fresh profile with four Spaces, Home, Mail, Docs and Third, and a page that sets a cookie.
+
+### The checks
+
+| Id | Do | Expect |
+|---|---|---|
+| SS1 | Choose "New session…" for Mail, in Edit Space, name it Work, and choose Work for Docs on its row in Settings | Both wear the mark, and its tooltip names the session and the other Space |
+| SS2 | Sign in on the page in Mail, and open the page in Docs, Third and Home | Docs is signed in, Third and Home are not |
+| SS3 | Quit and open Stedding | Mail and Docs are in Work, Docs is still signed in, and the essentials pinned in one show in both |
+| SS4 | Move Docs to Shared, answer the question, and open the page in Mail | Docs' page reloads signed out, Mail is still signed in |
+| SS5 | Delete Docs after moving it back, and read the question | It says Work stays and who keeps it, and Mail is still signed in |
+| SS6 | Move Mail to a new session | Settings lists Work with Delete Session…, and choosing Work again brings the sign-in back |
+
+### Runs
+
+| Date | Build | Result |
+|---|---|---|
+
 ## The tests beside the script
 
 The script is what a person sees. These browser tests drive the same paths through the window, so a sweep finds a regression before the next run (BACKLOG `S-173`):

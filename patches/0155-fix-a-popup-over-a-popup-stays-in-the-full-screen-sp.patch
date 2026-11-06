@@ -1,0 +1,105 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Fri, 6 Nov 2026 00:14:40 -0500
+Subject: fix: a popup over a popup stays in the full-screen space
+
+With a popup already over a full-screen window, the next one looked at the window
+in front, found the first popup, which is not in full screen, and opened as an
+ordinary window. macOS gave it a full-screen space of its own and slid to it, which
+is what a password manager's second window did. A popup now joins the space when
+any window in full screen is on the space on screen.
+
+Why: windows G8 (BACKLOG S-427). The owner saw Bitwarden's passkey window leave
+full screen on the Mac.
+Removable when: the sidebar's windows leave the series and macOS keeps a popup
+over a full-screen window by itself.
+---
+ .../views/frame/browser_native_widget_mac.mm  | 17 +++++---
+ .../popup_over_full_screen_browsertest.mm     | 43 +++++++++++++++++++
+ 2 files changed, 54 insertions(+), 6 deletions(-)
+
+diff --git a/chrome/browser/ui/views/frame/browser_native_widget_mac.mm b/chrome/browser/ui/views/frame/browser_native_widget_mac.mm
+index 374e667f1771d..b1d70891ec9e6 100644
+--- a/chrome/browser/ui/views/frame/browser_native_widget_mac.mm
++++ b/chrome/browser/ui/views/frame/browser_native_widget_mac.mm
+@@ -935,15 +935,20 @@ void BrowserNativeWidgetMac::OnWidgetInitDone() {
+   // Chrome's auxiliary windows do. An ordinary window is placed
+   // on a desktop space, and macOS left the full-screen space for the desktop
+   // to show it, the slide and all (the owner, 2026-10-20). Done before the
+-  // window is first shown, which makes it the last active one.
++  // window is first shown, which makes it the last active one. Any window in
++  // full screen on the space on screen counts, not only the one in front: that
++  // can be a first popup over it, and a popup opened from there took a
++  // full-screen space of its own, and then the desktop (BACKLOG S-427).
+   if (const BrowserWindowInterface* const browser = browser_view_->browser();
+       browser->GetType() == BrowserWindowInterface::TYPE_POPUP ||
+       browser->GetType() == BrowserWindowInterface::TYPE_APP_POPUP) {
+-    BrowserWindowInterface* const front =
+-        GetLastActiveBrowserWindowInterfaceWithAnyProfile();
+-    if (front && front != browser && front->GetWindow() &&
+-        front->GetWindow()->IsFullscreen()) {
+-      GetWidget()->SetCanAppearInExistingFullscreenSpaces(true);
++    for (BrowserWindowInterface* const each : GetAllBrowserWindowInterfaces()) {
++      ui::BaseWindow* const window = each->GetWindow();
++      if (each != browser && window && window->IsFullscreen() &&
++          window->GetNativeWindow().GetNativeNSWindow().onActiveSpace) {
++        GetWidget()->SetCanAppearInExistingFullscreenSpaces(true);
++        break;
++      }
+     }
+   }
+   // GlassFrameService is only available if glass frame is enabled.
+diff --git a/chrome/test/stedding/popup_over_full_screen_browsertest.mm b/chrome/test/stedding/popup_over_full_screen_browsertest.mm
+index 16417ea8312e8..0c97eb5bb848d 100644
+--- a/chrome/test/stedding/popup_over_full_screen_browsertest.mm
++++ b/chrome/test/stedding/popup_over_full_screen_browsertest.mm
+@@ -141,6 +141,49 @@ IN_PROC_BROWSER_TEST_F(PopupOverFullScreenTest,
+   EXPECT_TRUE(browser()->GetWindow()->IsFullscreen());
+ }
+ 
++// windows G8 (BACKLOG S-427): a popup opened with another popup in front, over
++// the full-screen window, joins the full-screen space too. It took a full-screen
++// space of its own, and macOS slid to it.
++IN_PROC_BROWSER_TEST_F(PopupOverFullScreenTest,
++                       ASecondPopupStaysOverAFullScreenWindow) {
++  ui::test::ScopedFakeNSWindowFullscreen fake_fullscreen;
++  ASSERT_TRUE(EnterFullScreen());
++  NSWindow* const full_screen = WindowOf(browser());
++  BrowserWindowInterface* const first = OpenAnExtensionsPopup();
++  ASSERT_TRUE(first);
++  ASSERT_TRUE(base::test::RunUntil([&] { return WindowOf(first).visible; }));
++  first->GetWindow()->Activate();
++  ASSERT_TRUE(base::test::RunUntil([&] {
++    return GetLastActiveBrowserWindowInterfaceWithAnyProfile() == first;
++  })) << "the first popup is not the window in front";
++
++  ASSERT_TRUE(content::ExecJs(
++      first->GetTabStripModel()->GetActiveWebContents(),
++      "chrome.windows.create({type: 'popup', url: 'popup.html',"
++      " width: 360, height: 280})"));
++  BrowserWindowInterface* second = nullptr;
++  ASSERT_TRUE(base::test::RunUntil([&] {
++    for (BrowserWindowInterface* const window :
++         GetAllBrowserWindowInterfaces()) {
++      if (window != browser() && window != first) {
++        second = window;
++      }
++    }
++    return second != nullptr;
++  })) << "the second popup never opened";
++  NSWindow* const window = WindowOf(second);
++  ASSERT_TRUE(base::test::RunUntil([&] { return window.visible; }))
++      << "the second popup never showed";
++  const NSWindowCollectionBehavior behavior = window.collectionBehavior;
++  EXPECT_TRUE(behavior & NSWindowCollectionBehaviorFullScreenAuxiliary)
++      << "the popup is not an auxiliary window of the full screen: "
++      << behavior;
++  EXPECT_FALSE(behavior & NSWindowCollectionBehaviorFullScreenPrimary);
++  EXPECT_TRUE(full_screen.onActiveSpace)
++      << "the full-screen window left the space in front";
++  EXPECT_TRUE(browser()->GetWindow()->IsFullscreen());
++}
++
+ // windows G8: beside a window not in full screen, a popup is an ordinary
+ // window, as Chromium's is.
+ IN_PROC_BROWSER_TEST_F(PopupOverFullScreenTest,

@@ -2,7 +2,7 @@
 
 What was built, newest first. Nothing here is needed to do a task: `AGENTS.md` carries what is true now, `BACKLOG.md` the order of work, `PLAN.md` the owner's decisions. This file was the "State of the project" section of `AGENTS.md` until 2026-09-30. This log starts at 2026-10-15. Closed work from before that is the table in [docs/history/archive.md](history/archive.md).
 
-## 2026-11-06 -- Sync through WebDAV or S3 storage, and what the real builds left
+## 2026-11-06 -- 0.4.0 beta 12: sync through WebDAV or S3 storage, and what the real builds left
 
 Patches 0161 to 0164. Sync can go through WebDAV or S3 storage the user sets up, beside the folder
 (S-426, ADR 0032, patch 0164): a bridge keeps a mirror in the profile and the service reads it as its
@@ -11,6 +11,14 @@ before any user saw them, all fixed with tests; the row names them. A press on a
 sends a long list to the row that comes forward (S-442), a little window keeps its size through a
 second restart (S-436, seen only on a real quit, since a browser test's quit writes the bounds), the
 DRM notice is shorter and shows beside another bar (S-437), and a rename gives the keys back (S-438).
+
+Checked on the final tree, the same on both machines: 1484 unit and 891 browser tests on the Mac and
+1472 and 840 on Windows, each on the release build and the DCHECK build, with no rerun on the last
+pass; AddressSanitizer on Windows with no report and no dangling pointer, where one test saw a
+`ListAccounts` request and passed alone (S-443); acceptance on an installed Windows copy and on a copy
+of the notarized Mac build; the update from beta 11 through a local feed on both; sync through Settings
+against a real WebDAV server on both and an S3 server on Windows. Not checked: a commercial WebDAV or
+S3 service, the row beside the camera in a private window, each density for the − buttons.
 
 ## 2026-11-06 -- After beta 11: private windows, the Space name, the − buttons, the lit circle
 

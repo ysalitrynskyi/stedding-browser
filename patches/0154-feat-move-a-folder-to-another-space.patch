@@ -1,0 +1,731 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Thu, 5 Nov 2026 22:42:42 -0500
+Subject: feat: move a folder to another Space
+
+Tabs could go to another Space and a folder could not: Move to Space takes a tab
+out of its folder, so a folder had to be rebuilt tab by tab in the Space it was
+wanted in. A folder's header now has Move to Space, one row per other Space, and
+a drop of the header on another Space's chip does the same. The folder goes
+whole, nested folders included. A nested folder comes out of the folders around
+it first, so none spans two Spaces. A folder of pins lands at the end of that
+Space's pinned run; any other lands at the top of the rows under the line, its
+tabs keeping what they are. The window follows it.
+
+Why: folders F47, F48 (BACKLOG S-433). The owner asked for it on 2026-11-05.
+Removable when: the sidebar's Spaces leave the series.
+---
+ .../ui/spaces/folder_commands_unittest.cc     | 121 ++++++++++++++++++
+ chrome/browser/ui/spaces/space_model.cc       |  62 ++++++++-
+ chrome/browser/ui/spaces/space_model.h        |  13 ++
+ chrome/browser/ui/tabs/tab_menu_model.cc      |   8 ++
+ chrome/browser/ui/tabs/tab_menu_model.h       |   8 ++
+ .../frame/vertical_tab_strip_region_view.cc   |  19 +++
+ .../frame/vertical_tab_strip_region_view.h    |   8 ++
+ .../ui/views/tabs/common/folder_view.cc       | 110 +++++++++++++++-
+ .../ui/views/tabs/common/folder_view.h        |  21 +++
+ .../test/stedding/folder_tabs_browsertest.cc  | 115 +++++++++++++++++
+ 10 files changed, 483 insertions(+), 2 deletions(-)
+
+diff --git a/chrome/browser/ui/spaces/folder_commands_unittest.cc b/chrome/browser/ui/spaces/folder_commands_unittest.cc
+index 0a9b27a3eab3f..603b1a843646f 100644
+--- a/chrome/browser/ui/spaces/folder_commands_unittest.cc
++++ b/chrome/browser/ui/spaces/folder_commands_unittest.cc
+@@ -329,6 +329,127 @@ TEST_F(FolderCommandsTest, APrivateWindowsFoldersCollapseToo) {
+   strip->CloseAllTabs();
+ }
+ 
++// folders F47 (the owner, 2026-11-05): a folder goes to another Space whole,
++// its nested folders with it, and its tabs keep their order. In that Space
++// already, nothing moves.
++TEST_F(FolderCommandsTest, MoveFolderToSpaceTakesItWhole) {
++  // The strip reads a, b, c, loose.
++  tabs::TabInterface* const loose = OpenTab(GURL("https://loose.test/"));
++  tabs::TabInterface* const c = OpenTab(GURL("https://c.test/"));
++  tabs::TabInterface* const b = OpenTab(GURL("https://b.test/"));
++  tabs::TabInterface* const a = OpenTab(GURL("https://a.test/"));
++  tabs::FolderTabCollection* const outer = tabs().AddToNewFolder({0, 1, 2});
++  ASSERT_TRUE(outer);
++  tabs::FolderTabCollection* const inner =
++      tabs().AddToNewFolder({tabs().GetIndexOfTab(c)}, outer);
++  ASSERT_TRUE(inner);
++  const SpaceId home = model().active_id();
++  const SpaceId work = model().AddSpace("Work", kBlue)->id();
++
++  model().MoveFolderToSpace(outer, work);
++
++  for (tabs::TabInterface* const tab : {a, b, c}) {
++    EXPECT_EQ(work, model().SpaceForTab(tab));
++  }
++  EXPECT_EQ(home, model().SpaceForTab(loose));
++  EXPECT_EQ(3u, outer->TabCountRecursive()) << "the folder lost a tab";
++  EXPECT_EQ(outer, inner->GetParentCollection());
++  EXPECT_EQ(inner, c->GetParentCollection());
++  EXPECT_LT(tabs().GetIndexOfTab(a), tabs().GetIndexOfTab(b));
++  EXPECT_LT(tabs().GetIndexOfTab(b), tabs().GetIndexOfTab(c));
++
++  const int at = tabs().GetIndexOfTab(a);
++  model().MoveFolderToSpace(outer, work);
++  EXPECT_EQ(at, tabs().GetIndexOfTab(a)) << "already there, and it moved";
++  EXPECT_EQ(work, model().SpaceForTab(a));
++}
++
++// folders F47, F37: a nested folder moved alone comes out of the folder around
++// it, which stays in its Space with its other tabs: no folder spans two Spaces.
++TEST_F(FolderCommandsTest, MoveFolderToSpaceBringsANestedFolderOut) {
++  // The strip reads a, b, c, loose.
++  OpenTab(GURL("https://loose.test/"));
++  tabs::TabInterface* const c = OpenTab(GURL("https://c.test/"));
++  tabs::TabInterface* const b = OpenTab(GURL("https://b.test/"));
++  tabs::TabInterface* const a = OpenTab(GURL("https://a.test/"));
++  tabs::FolderTabCollection* const outer = tabs().AddToNewFolder({0, 1, 2});
++  ASSERT_TRUE(outer);
++  tabs::FolderTabCollection* const inner =
++      tabs().AddToNewFolder({tabs().GetIndexOfTab(c)}, outer);
++  ASSERT_TRUE(inner);
++  const SpaceId home = model().active_id();
++  const SpaceId work = model().AddSpace("Work", kBlue)->id();
++
++  model().MoveFolderToSpace(inner, work);
++
++  EXPECT_EQ(work, model().SpaceForTab(c));
++  EXPECT_EQ(home, model().SpaceForTab(a));
++  EXPECT_EQ(home, model().SpaceForTab(b));
++  EXPECT_EQ(tabs::TabCollection::Type::UNPINNED,
++            inner->GetParentCollection()->type())
++      << "the folder is still in the other Space's folder";
++  EXPECT_EQ(inner, c->GetParentCollection());
++  EXPECT_EQ(2u, outer->TabCountRecursive());
++}
++
++// folders F47: a pinned folder lands at the end of that Space's pinned run and
++// stays pinned, and a plain one at the top of the rows under the line.
++TEST_F(FolderCommandsTest, MoveFolderToSpaceTakesItsPlaceThere) {
++  // The strip reads a, b, x, pin, rest.
++  tabs::TabInterface* const rest = OpenTab(GURL("https://rest.test/"));
++  tabs::TabInterface* const pin = OpenTab(GURL("https://pin.test/"));
++  tabs::TabInterface* const x = OpenTab(GURL("https://x.test/"));
++  tabs::TabInterface* const b = OpenTab(GURL("https://b.test/"));
++  tabs::TabInterface* const a = OpenTab(GURL("https://a.test/"));
++  const SpaceId work = model().AddSpace("Work", kBlue)->id();
++  model().SetSpaceForTab(pin, work);
++  model().SetSpaceForTab(rest, work);
++  model().SetSpacePinnedInPlace(pin, true);
++  tabs::FolderTabCollection* const pinned = tabs().AddToNewFolder({0, 1});
++  ASSERT_TRUE(pinned);
++  tabs::FolderTabCollection* const plain =
++      tabs().AddToNewFolder({tabs().GetIndexOfTab(x)});
++  ASSERT_TRUE(plain);
++  model().SetFolderSpacePinned(pinned, true);
++  ASSERT_TRUE(model().IsFolderSpacePinned(pinned));
++
++  model().MoveFolderToSpace(pinned, work);
++
++  EXPECT_TRUE(model().IsFolderSpacePinned(pinned)) << "the folder lost a pin";
++  EXPECT_LT(tabs().GetIndexOfTab(pin), tabs().GetIndexOfTab(a))
++      << "not at the end of the run";
++  EXPECT_LT(tabs().GetIndexOfTab(b), tabs().GetIndexOfTab(rest))
++      << "under the line";
++
++  model().MoveFolderToSpace(plain, work);
++
++  EXPECT_FALSE(model().IsSpacePinned(x));
++  EXPECT_LT(tabs().GetIndexOfTab(b), tabs().GetIndexOfTab(x)) << "in the run";
++  EXPECT_LT(tabs().GetIndexOfTab(x), tabs().GetIndexOfTab(rest))
++      << "not at the top of the rows under the line";
++}
++
++// folders F47: a folder of a pin and a loose tab is no pinned folder, and each
++// keeps what it is. Pinning the folder's way would have unpinned the pin.
++TEST_F(FolderCommandsTest, MoveFolderToSpaceKeepsAPinAmongLooseTabs) {
++  tabs::TabInterface* const b = OpenTab(GURL("https://b.test/"));
++  tabs::TabInterface* const a = OpenTab(GURL("https://a.test/"));
++  OpenTab(GURL("https://other.test/"));
++  const SpaceId work = model().AddSpace("Work", kBlue)->id();
++  tabs::FolderTabCollection* const folder = tabs().AddToNewFolder(
++      {tabs().GetIndexOfTab(a), tabs().GetIndexOfTab(b)});
++  ASSERT_TRUE(folder);
++  model().SetSpacePinnedInPlace(a, true);
++  ASSERT_FALSE(model().IsFolderSpacePinned(folder));
++
++  model().MoveFolderToSpace(folder, work);
++
++  EXPECT_TRUE(model().IsSpacePinned(a)) << "the pin was unpinned";
++  EXPECT_FALSE(model().IsSpacePinned(b));
++  EXPECT_EQ(work, model().SpaceForTab(a));
++  EXPECT_EQ(work, model().SpaceForTab(b));
++}
++
+ // folders F37 (BACKLOG S-139): Move to Space on a tab inside a folder takes
+ // the tab out of every folder it is in, to just after the outermost one, and
+ // files it in the other Space. The folder keeps its other tabs and stays in
+diff --git a/chrome/browser/ui/spaces/space_model.cc b/chrome/browser/ui/spaces/space_model.cc
+index 094be46a9fb5a..472c2f8a2e43c 100644
+--- a/chrome/browser/ui/spaces/space_model.cc
++++ b/chrome/browser/ui/spaces/space_model.cc
+@@ -2877,6 +2877,61 @@ void SpaceModel::MoveTabsToSpace(const std::vector<tabs::TabInterface*>& tabs,
+   }
+ }
+ 
++void SpaceModel::MoveFolderToSpace(tabs::FolderTabCollection* folder,
++                                   const SpaceId& id) {
++  if (!folder || !tab_strip_model_ || !GetSpace(id) ||
++      folder->TabCountRecursive() == 0) {
++    return;
++  }
++  // The folder's row in the unpinned block: itself, or the folder or group
++  // around it.
++  tabs::TabCollection* row = folder;
++  while (row->GetParentCollection() &&
++         row->GetParentCollection()->type() !=
++             tabs::TabCollection::Type::UNPINNED) {
++    row = row->GetParentCollection();
++  }
++  tabs::TabCollection* const block = row->GetParentCollection();
++  if (!block || std::ranges::all_of(folder->GetTabsRecursive(),
++                                    [&](const tabs::TabInterface* tab) {
++                                      return FindSpaceForTab(tab) == id;
++                                    })) {
++    return;
++  }
++  // folders F37: nested, it comes out first, whole, to just after that row,
++  // so the folder around it stays in its Space.
++  if (row != folder) {
++    const std::optional<size_t> index = block->GetIndexOfCollection(row);
++    if (!index ||
++        !tab_strip_model_->MoveFolderInto(folder, block, *index + 1)) {
++      return;
++    }
++  }
++  // The row on screen last. Filed in another Space it leaves the window to
++  // show something else, and with it first that was the next row of this
++  // folder, then the next: each woke as it went, a pin asleep too.
++  std::vector<tabs::TabInterface*> moving = folder->GetTabsRecursive();
++  tabs::TabInterface* const active = tab_strip_model_->GetActiveTab();
++  if (active) {
++    const std::vector<tabs::TabInterface*> shown = SplitPeers(active);
++    std::ranges::stable_partition(moving, [&](const tabs::TabInterface* tab) {
++      return !std::ranges::contains(shown, tab);
++    });
++  }
++  for (tabs::TabInterface* const tab : moving) {
++    SetSpaceForTab(tab, id);
++  }
++  // By row, not tab by tab: a folder's place is read among that Space's rows
++  // now that it is one of them. A folder with a loose tab keeps its pins, so
++  // this is no SetFolderSpacePinned, which would unpin them.
++  tab_strip_model_->MoveTopLevelFolder(
++      folder, std::min(SlotAtEndOfPinRun(folder), block->ChildCount() - 1));
++  // The row moved; the line and the run are drawn again.
++  for (tabs::TabInterface* const tab : moving) {
++    observers_.Notify(&Observer::OnTabSpaceChanged, tab);
++  }
++}
++
+ SpaceModel::LastRoute::LastRoute(tabs::TabHandle tab, SpaceId from, SpaceId to)
+     : tab(tab), from(from), to(to) {}
+ 
+@@ -3697,6 +3752,11 @@ void SpaceModel::SetFolderSpacePinned(tabs::FolderTabCollection* folder,
+   if (!CanPinFolder(folder)) {
+     return;
+   }
++  SetFolderSpacePinnedAt(folder, pinned, SlotAtEndOfPinRun(folder));
++}
++
++size_t SpaceModel::SlotAtEndOfPinRun(
++    const tabs::FolderTabCollection* folder) const {
+   // The end of the run, the folder aside: the first top-level row of the
+   // folder's Space that is no pin -- a loose tab, a split with a loose pane,
+   // a group, a folder with a loose tab -- is where a pinned folder goes
+@@ -3747,7 +3807,7 @@ void SpaceModel::SetFolderSpacePinned(tabs::FolderTabCollection* folder,
+       break;
+     }
+   }
+-  SetFolderSpacePinnedAt(folder, pinned, slot);
++  return slot;
+ }
+ 
+ void SpaceModel::SetFolderSpacePinnedAt(tabs::FolderTabCollection* folder,
+diff --git a/chrome/browser/ui/spaces/space_model.h b/chrome/browser/ui/spaces/space_model.h
+index 90838647b612e..e685eb048b5a7 100644
+--- a/chrome/browser/ui/spaces/space_model.h
++++ b/chrome/browser/ui/spaces/space_model.h
+@@ -461,6 +461,15 @@ class SpaceModel : public TabStripModelObserver,
+   void MoveTabsToSpace(const std::vector<tabs::TabInterface*>& tabs,
+                        const SpaceId& id);
+ 
++  // folders F47, F48 (the owner, 2026-11-05): what Move to Space on a folder's
++  // header does, and a drop of the header on a Space's chip. Every tab of
++  // `folder`, its nested folders' included, goes to `id` and the folder goes
++  // with them, whole, so it never spans two Spaces (F37): a nested folder
++  // comes out of the folders around it first. It lands at the end of that
++  // Space's pinned run when every tab in it is a pin, and otherwise at the top
++  // of the rows under the line. Its tabs keep their pins, homes and order.
++  void MoveFolderToSpace(tabs::FolderTabCollection* folder, const SpaceId& id);
++
+   // routing D2: moves `tab` to the Space its address is routed to, if any;
+   // an `external` open with no route lands in the default Space for links
+   // from other apps. `foreground` switches to that Space. Returns where the
+@@ -683,6 +692,10 @@ class SpaceModel : public TabStripModelObserver,
+   // pins H14: moves `tab` to the boundary of the Space-pinned run: its end
+   // for a pin, the first place past it for an unpinned tab.
+   void MoveToSpacePinBoundary(tabs::TabInterface* tab);
++  // The end of the pinned run of `folder`'s Space, among the unpinned block's
++  // own rows with the folder aside: where a pinned folder goes, and an
++  // unpinned one too, at the top of the rows under the line.
++  size_t SlotAtEndOfPinRun(const tabs::FolderTabCollection* folder) const;
+   // pins H14 (BACKLOG S-314): the strip index just past the pins `tab`'s Space
+   // shows at the top of the unpinned block, `tab` aside. Other Spaces' loose
+   // tabs among them do not end the run, and the end is never inside a split or
+diff --git a/chrome/browser/ui/tabs/tab_menu_model.cc b/chrome/browser/ui/tabs/tab_menu_model.cc
+index dff363c023698..c76c69fa38441 100644
+--- a/chrome/browser/ui/tabs/tab_menu_model.cc
++++ b/chrome/browser/ui/tabs/tab_menu_model.cc
+@@ -114,6 +114,14 @@ void MarkSpaceItem(ui::SimpleMenuModel& menu,
+ }
+ }  // namespace
+ 
++// static
++void TabMenuModel::MarkSpaceRow(ui::SimpleMenuModel& menu,
++                                size_t index,
++                                const std::u16string& name,
++                                const std::u16string& mark) {
++  MarkSpaceItem(menu, index, name, mark);
++}
++
+ DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(TabMenuModel, kAddANoteTabMenuItem);
+ DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(TabMenuModel, kSplitTabsMenuItem);
+ DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(TabMenuModel, kArrangeSplitTabsMenuItem);
+diff --git a/chrome/browser/ui/tabs/tab_menu_model.h b/chrome/browser/ui/tabs/tab_menu_model.h
+index 47631564b40cd..4be287e200cca 100644
+--- a/chrome/browser/ui/tabs/tab_menu_model.h
++++ b/chrome/browser/ui/tabs/tab_menu_model.h
+@@ -40,6 +40,14 @@ class TabMenuModelDelegate;
+ //   ExistingComparisonTableSubMenuModel
+ class TabMenuModel : public ui::SimpleMenuModel {
+  public:
++  // The mark on `menu`'s row `index`, of the Space called `name`: what `mark`
++  // says, empty for a Space that shares the profile's session. The rows of a
++  // folder's Move to Space (folders F47) read as a tab's do.
++  static void MarkSpaceRow(ui::SimpleMenuModel& menu,
++                           size_t index,
++                           const std::u16string& name,
++                           const std::u16string& mark);
++
+   DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kAddANoteTabMenuItem);
+   DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kSplitTabsMenuItem);
+   DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kArrangeSplitTabsMenuItem);
+diff --git a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+index 3daa807425ffb..06f6243a911c7 100644
+--- a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
++++ b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+@@ -2734,6 +2734,25 @@ TabDragTarget* VerticalTabStripRegionView::GetTabDragTargetInsideTabStrip(
+   return folder_drag_target_.get();
+ }
+ 
++std::optional<spaces::SpaceId> VerticalTabStripRegionView::SpaceChipAt(
++    const gfx::Point& screen_point) const {
++  return space_switcher_ ? space_switcher_->SpaceAtScreenPoint(screen_point)
++                         : std::nullopt;
++}
++
++bool VerticalTabStripRegionView::IsOnSpaceChips(
++    const gfx::Point& screen_point) const {
++  return space_switcher_ &&
++         space_switcher_->GetBoundsInScreen().Contains(screen_point);
++}
++
++void VerticalTabStripRegionView::LightSpaceChip(
++    std::optional<spaces::SpaceId> id) {
++  if (space_switcher_) {
++    space_switcher_->SetDropTarget(id);
++  }
++}
++
+ TabDragTarget* VerticalTabStripRegionView::GetTabDragTarget(
+     const gfx::Point& point_in_screen) {
+   // A tab dropped on a Space icon moves to that Space (on by default; see
+diff --git a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
+index 8e3471df5bb1f..5d6893b006744 100644
+--- a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
++++ b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
+@@ -235,6 +235,14 @@ class VerticalTabStripRegionView final
+   VerticalTabStripFocusSwipeController* focus_swipe_controller_for_testing() {
+     return focus_swipe_controller_.get();
+   }
++  // folders F48: a folder's header dragged to the row of Space chips. The
++  // Space a release at `screen_point` lands on, whether that point is on the
++  // row at all, and the chip lit for a drop, or none.
++  std::optional<spaces::SpaceId> SpaceChipAt(
++      const gfx::Point& screen_point) const;
++  bool IsOnSpaceChips(const gfx::Point& screen_point) const;
++  void LightSpaceChip(std::optional<spaces::SpaceId> id);
++
+   // The name that floats above a hovered Space chip (sidebar Y14).
+   views::Label* space_hover_pill_for_testing() { return space_hover_pill_; }
+ 
+diff --git a/chrome/browser/ui/views/tabs/common/folder_view.cc b/chrome/browser/ui/views/tabs/common/folder_view.cc
+index 5769348de9c2c..8323e537e99e5 100644
+--- a/chrome/browser/ui/views/tabs/common/folder_view.cc
++++ b/chrome/browser/ui/views/tabs/common/folder_view.cc
+@@ -26,7 +26,9 @@
+ #include "chrome/browser/ui/layout_constants.h"
+ #include "chrome/browser/ui/spaces/space_icon.h"
+ #include "chrome/browser/ui/spaces/space_model.h"
++#include "chrome/browser/ui/spaces/space_storage_partition.h"
+ #include "chrome/browser/ui/stedding_ui_metrics.h"
++#include "chrome/browser/ui/tabs/tab_menu_model.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "chrome/browser/ui/tabs/tab_style.h"
+ #include "chrome/browser/ui/views/stedding/glyph_ink.h"
+@@ -558,6 +560,7 @@ void FolderView::ResetCollectionNode() {
+   if (header_dragging_) {
+     header_dragging_ = false;
+     ShowDropIndicator(std::nullopt);
++    LightSpaceChip(std::nullopt);
+   }
+   data_changed_subscription_ = {};
+   collection_node_ = nullptr;
+@@ -967,7 +970,11 @@ void FolderView::ShowDropIndicator(const std::optional<DropPlace>& place) {
+ void FolderView::OnHeaderDragged(const gfx::Point& screen_point) {
+   header_dragging_ = true;
+   UpdateCloseOpenPinsButton();
+-  ShowDropIndicator(DropPlaceAt(screen_point));
++  // folders F48: on the row of chips the list shows no place. Another Space's
++  // chip is lit, and a release anywhere else on the row changes nothing.
++  LightSpaceChip(OtherSpaceAt(screen_point));
++  ShowDropIndicator(IsOnSpaceChips(screen_point) ? std::nullopt
++                                                 : DropPlaceAt(screen_point));
+ }
+ 
+ void FolderView::OnHeaderDragEnded(const gfx::Point& screen_point,
+@@ -975,9 +982,19 @@ void FolderView::OnHeaderDragEnded(const gfx::Point& screen_point,
+   header_dragging_ = false;
+   UpdateCloseOpenPinsButton();
+   ShowDropIndicator(std::nullopt);
++  LightSpaceChip(std::nullopt);
+   if (!drop) {
+     return;
+   }
++  if (IsOnSpaceChips(screen_point)) {
++    if (const std::optional<spaces::SpaceId> space =
++            OtherSpaceAt(screen_point)) {
++      base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
++          FROM_HERE, base::BindOnce(&FolderView::MoveToSpace,
++                                    weak_factory_.GetWeakPtr(), *space));
++    }
++    return;
++  }
+   const std::optional<DropPlace> place = DropPlaceAt(screen_point);
+   if (!place || !place->moves) {
+     return;
+@@ -1019,6 +1036,57 @@ void FolderView::PlaceAt(bool pinned, size_t slot) {
+   controller->SetFolderPinnedAt(f, pinned, slot);
+ }
+ 
++std::optional<spaces::SpaceId> FolderView::OtherSpaceAt(
++    const gfx::Point& screen_point) {
++  const auto* const region = NearestOfClass<VerticalTabStripRegionView>(this);
++  BrowserWindowInterface* const window = GetBrowserWindow();
++  const spaces::SpaceModel* const space_model =
++      window ? spaces::SpaceModel::From(window) : nullptr;
++  const tabs::FolderTabCollection* const f = folder();
++  if (!region || !space_model || !f || f->TabCountRecursive() == 0) {
++    return std::nullopt;
++  }
++  const std::optional<spaces::SpaceId> space = region->SpaceChipAt(screen_point);
++  return space != space_model->FindSpaceForTab(f->GetTabsRecursive().front())
++             ? space
++             : std::nullopt;
++}
++
++bool FolderView::IsOnSpaceChips(const gfx::Point& screen_point) {
++  const auto* const region = NearestOfClass<VerticalTabStripRegionView>(this);
++  return region && region->IsOnSpaceChips(screen_point);
++}
++
++void FolderView::LightSpaceChip(std::optional<spaces::SpaceId> space) {
++  auto* const region =
++      space ? NearestOfClass<VerticalTabStripRegionView>(this)
++            : views::AsViewClass<VerticalTabStripRegionView>(
++                  chip_lit_in_.view());
++  chip_lit_in_.SetView(space ? region : nullptr);
++  if (region) {
++    region->LightSpaceChip(space);
++  }
++}
++
++void FolderView::MoveToSpace(spaces::SpaceId space) {
++  tabs::FolderTabCollection* const f = folder();
++  BrowserWindowInterface* const window = GetBrowserWindow();
++  TabStripModel* const strip = window ? window->GetTabStripModel() : nullptr;
++  spaces::SpaceModel* const space_model =
++      window ? spaces::SpaceModel::From(window) : nullptr;
++  if (!f || !strip || !space_model) {
++    return;
++  }
++  // The window follows, as it does for a tab (menus M1, spaces B12), and a tab
++  // of the folder on screen stays there.
++  tabs::TabInterface* const active = strip->GetActiveTab();
++  tabs::TabInterface* const show =
++      std::ranges::contains(f->GetTabsRecursive(), active) ? active : nullptr;
++  // A nested folder's view can go with the move: nothing below uses `this`.
++  space_model->MoveFolderToSpace(f, space);
++  space_model->SetActiveSpace(space, show);
++}
++
+ void FolderView::MoveInto(tabs::TabCollection::Handle into,
+                           size_t child_index) {
+   tabs::FolderTabCollection* const f = folder();
+@@ -1417,6 +1485,34 @@ void FolderView::BuildMenuModel() {
+                                           ? u"Unpin Folder"
+                                           : u"Pin Folder");
+   }
++  // folders F47: to another Space, whole. One row per other Space, in switcher
++  // order, as on a tab's menu (menus M1); none with no other Space.
++  move_to_spaces_.clear();
++  BrowserWindowInterface* const window = GetBrowserWindow();
++  const spaces::SpaceModel* const space_model =
++      window ? spaces::SpaceModel::From(window) : nullptr;
++  if (space_model && f && f->TabCountRecursive() > 0) {
++    const std::optional<spaces::SpaceId> own =
++        space_model->FindSpaceForTab(f->GetTabsRecursive().front());
++    move_to_space_menu_ = std::make_unique<ui::SimpleMenuModel>(this);
++    for (const std::unique_ptr<spaces::Space>& space : space_model->spaces()) {
++      const int command =
++          kMoveToSpaceFirst + static_cast<int>(move_to_spaces_.size());
++      if (space->id() == own || command > kMoveToSpaceLast) {
++        continue;
++      }
++      const std::u16string name = space_model->DisplayName(space->id());
++      move_to_space_menu_->AddItem(command, name);
++      TabMenuModel::MarkSpaceRow(
++          *move_to_space_menu_, move_to_spaces_.size(), name,
++          spaces::IsolationMarkForSpace(space_model->registry(), space->id()));
++      move_to_spaces_.push_back(space->id());
++    }
++    if (!move_to_spaces_.empty()) {
++      menu_model_->AddSubMenu(kMoveToSpaceMenuCommand, u"Move to Space",
++                              move_to_space_menu_.get());
++    }
++  }
+   menu_model_->AddSeparator(ui::NORMAL_SEPARATOR);
+   menu_model_->AddItem(kMoveTabsOutCommand, u"Move Tabs Out of Folder");
+   // folders F46: what the - does, for a folder in the pinned run.
+@@ -1445,6 +1541,18 @@ bool FolderView::IsCommandIdEnabled(int command_id) const {
+ }
+ 
+ void FolderView::ExecuteCommand(int command_id, int event_flags) {
++  // folders F47: after the menu's own dispatch, as a drop is: the move lays
++  // the rows out again, and a nested folder's view can go with it.
++  if (command_id >= kMoveToSpaceFirst && command_id <= kMoveToSpaceLast) {
++    const size_t row = static_cast<size_t>(command_id - kMoveToSpaceFirst);
++    if (row < move_to_spaces_.size()) {
++      base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
++          FROM_HERE,
++          base::BindOnce(&FolderView::MoveToSpace, weak_factory_.GetWeakPtr(),
++                         move_to_spaces_[row]));
++    }
++    return;
++  }
+   TabStripCollectionController* const controller =
+       collection_node_ ? collection_node_->GetController() : nullptr;
+   switch (command_id) {
+diff --git a/chrome/browser/ui/views/tabs/common/folder_view.h b/chrome/browser/ui/views/tabs/common/folder_view.h
+index a02cc226033eb..438b619454760 100644
+--- a/chrome/browser/ui/views/tabs/common/folder_view.h
++++ b/chrome/browser/ui/views/tabs/common/folder_view.h
+@@ -10,11 +10,13 @@
+ #include <optional>
+ #include <set>
+ #include <string>
++#include <vector>
+ 
+ #include "base/callback_list.h"
+ #include "base/functional/callback.h"
+ #include "base/memory/raw_ptr.h"
+ #include "base/memory/weak_ptr.h"
++#include "chrome/browser/ui/spaces/space_id.h"
+ #include "components/tabs/public/tab_collection.h"
+ #include "third_party/skia/include/core/SkColor.h"
+ #include "ui/base/metadata/metadata_header_macros.h"
+@@ -80,6 +82,10 @@ class FolderView : public views::View,
+   static constexpr int kRemoveIconCommand = 9;
+   // folders F46: what the - on the header does, on a folder in the pinned run.
+   static constexpr int kCloseOpenPinsCommand = 10;
++  // folders F47: the row of Move to Space, and its rows, one per other Space.
++  static constexpr int kMoveToSpaceMenuCommand = 11;
++  static constexpr int kMoveToSpaceFirst = 100;
++  static constexpr int kMoveToSpaceLast = 199;
+ 
+   // folders F42: the name's field, empty, takes one character for the
+   // folder's icon -- typed, pasted or from the system's emoji picker, which
+@@ -262,6 +268,14 @@ class FolderView : public views::View,
+   void ShowDropIndicator(const std::optional<DropPlace>& place);
+   void PlaceAt(bool pinned, size_t slot);
+   void MoveInto(tabs::TabCollection::Handle into, size_t child_index);
++  // F48: the Space a release at `screen_point` takes the folder to: the chip
++  // there, when that is another Space's.
++  std::optional<spaces::SpaceId> OtherSpaceAt(const gfx::Point& screen_point);
++  bool IsOnSpaceChips(const gfx::Point& screen_point);
++  // Lights `space`'s chip, or puts out the one lit.
++  void LightSpaceChip(std::optional<spaces::SpaceId> space);
++  // F47, F48: the folder goes to `space`, and the window follows it.
++  void MoveToSpace(spaces::SpaceId space);
+   // F39: whether a row of this folder other than the header is drawn.
+   bool HasDrawnRows() const;
+   // The window the folder's tabs are in, or null.
+@@ -291,6 +305,9 @@ class FolderView : public views::View,
+   // into, lit while the pointer is on it. Tracked, not held: the header can
+   // go while the pointer rests on it.
+   views::ViewTracker drop_target_;
++  // folders F48: the sidebar whose chip is lit for a drop. Tracked: this view
++  // can have left it by the time the drag ends.
++  views::ViewTracker chip_lit_in_;
+   // The look last drawn (UpdateLook): the rows' text colour.
+   std::optional<SkColor> look_text_;
+   // folders F42: the icon the glyph was last drawn with, and whether the
+@@ -304,6 +321,10 @@ class FolderView : public views::View,
+   size_t look_draws_ = 0;
+   // folders F13: drawn at the rail's width.
+   bool rail_ = false;
++  // folders F47: the Spaces of the menu's rows, in their order. Before
++  // `menu_model_`, which points at the submenu.
++  std::vector<spaces::SpaceId> move_to_spaces_;
++  std::unique_ptr<ui::SimpleMenuModel> move_to_space_menu_;
+   std::unique_ptr<ui::SimpleMenuModel> menu_model_;
+   std::unique_ptr<views::MenuRunner> menu_runner_;
+   base::WeakPtrFactory<FolderView> weak_factory_{this};
+diff --git a/chrome/test/stedding/folder_tabs_browsertest.cc b/chrome/test/stedding/folder_tabs_browsertest.cc
+index f84b0b386af3f..2d80a0f022a4c 100644
+--- a/chrome/test/stedding/folder_tabs_browsertest.cc
++++ b/chrome/test/stedding/folder_tabs_browsertest.cc
+@@ -79,6 +79,7 @@
+ #include "chrome/browser/ui/views/frame/contents_web_view.h"
+ #include "chrome/browser/ui/views/frame/system_menu_model_delegate.h"
+ #include "chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h"
++#include "chrome/browser/ui/views/spaces/space_switcher_view.h"
+ #include "chrome/browser/ui/views/tabs/common/folder_view.h"
+ #include "chrome/browser/ui/views/tabs/common/stedding_tab_row_rules.h"
+ #include "chrome/browser/ui/views/tabs/common/tab_group_header_view.h"
+@@ -1865,6 +1866,120 @@ IN_PROC_BROWSER_TEST_F(FolderTabsTest, TheMinusClosesWhereCmdWCloses) {
+   EXPECT_EQ(loose, tab_strip_model()->GetActiveTab());
+ }
+ 
++// folders F47 (the owner, 2026-11-05): Move to Space on the header's menu has
++// a row for each other Space, in switcher order, and takes the folder there
++// whole, and the window with it. With one Space there is no row.
++IN_PROC_BROWSER_TEST_F(FolderTabsTest,
++                       MoveToSpaceOnTheHeaderMenuTakesTheFolder) {
++  ASSERT_TRUE(embedded_test_server()->Start());
++  CloseDownToOne();
++  tabs::TabInterface* const rest = tab_strip_model()->GetTabAtIndex(0);
++  tabs::TabInterface* const a = OpenLoaded("a.test");
++  tabs::TabInterface* const b = OpenLoaded("b.test");
++  tabs::FolderTabCollection* const folder =
++      tab_strip_model()->AddToNewFolder({IndexOf(a), IndexOf(b)});
++  ASSERT_TRUE(folder);
++  const auto row_of = [](ui::SimpleMenuModel* menu) {
++    return menu->GetIndexOfCommandId(FolderView::kMoveToSpaceMenuCommand);
++  };
++  EXPECT_FALSE(row_of(DrawnFolder(folder)->menu_model_for_testing()).has_value())
++      << "a row with nowhere to go";
++
++  spaces::SpaceModel* const model = spaces::SpaceModel::From(browser());
++  const spaces::SpaceId home = model->active_id();
++  const spaces::SpaceId work = model->AddSpace("Work", SK_ColorBLUE)->id();
++  model->AddSpace("Later", SK_ColorRED);
++  ui::SimpleMenuModel* const menu =
++      DrawnFolder(folder)->menu_model_for_testing();
++  const std::optional<size_t> row = row_of(menu);
++  ASSERT_TRUE(row.has_value()) << "no row with another Space to go to";
++  EXPECT_EQ(u"Move to Space", menu->GetLabelAt(*row));
++  ui::MenuModel* const rows = menu->GetSubmenuModelAt(*row);
++  ASSERT_TRUE(rows);
++  ASSERT_EQ(2u, rows->GetItemCount()) << "the folder's own Space is a row";
++  EXPECT_EQ(u"Work", rows->GetLabelAt(0));
++  EXPECT_EQ(u"Later", rows->GetLabelAt(1));
++
++  rows->ActivatedAt(0);
++  ASSERT_TRUE(
++      base::test::RunUntil([&]() { return model->active_id() == work; }));
++  EXPECT_TRUE(stedding::test::WaitForRowsToSettle(widget()));
++  EXPECT_EQ(work, model->SpaceForTab(a));
++  EXPECT_EQ(work, model->SpaceForTab(b));
++  EXPECT_EQ(home, model->SpaceForTab(rest));
++  EXPECT_EQ(folder, a->GetParentCollection()) << "the folder lost a tab";
++  EXPECT_EQ(folder, b->GetParentCollection());
++  FolderView* const there = DrawnFolder(folder);
++  ASSERT_TRUE(there) << "the folder is not drawn in its new Space";
++  EXPECT_TRUE(there->IsDrawn());
++  EXPECT_TRUE(DrawnRow(a));
++  EXPECT_EQ(b, tab_strip_model()->GetActiveTab())
++      << "the folder's tab on screen left the screen";
++}
++
++// folders F48 (the owner, 2026-11-05): a header dragged onto another Space's
++// chip lights it, and the release takes the folder there, whole, and the
++// window with it. On its own Space's chip nothing lights and nothing moves: the
++// release moved a folder to the end of its list.
++IN_PROC_BROWSER_TEST_F(FolderTabsTest, AHeaderDroppedOnAChipTakesTheFolderThere) {
++  ASSERT_TRUE(embedded_test_server()->Start());
++  CloseDownToOne();
++  tabs::TabInterface* const rest = tab_strip_model()->GetTabAtIndex(0);
++  tabs::TabInterface* const a = OpenLoaded("a.test");
++  tabs::TabInterface* const b = OpenLoaded("b.test");
++  tabs::TabInterface* const after = OpenLoaded("c.test");
++  // The folder made once every tab is open, as a tab opened from a folder's
++  // last tab joins it (F25).
++  tabs::FolderTabCollection* const folder =
++      tab_strip_model()->AddToNewFolder({IndexOf(a), IndexOf(b)});
++  ASSERT_TRUE(folder);
++  tab_strip_model()->ActivateTabAt(IndexOf(rest));
++  spaces::SpaceModel* const model = spaces::SpaceModel::From(browser());
++  const spaces::SpaceId home = model->active_id();
++  const spaces::SpaceId work = model->AddSpace("Work", SK_ColorBLUE)->id();
++  EXPECT_TRUE(stedding::test::WaitForRowsToSettle(widget()));
++  spaces::SpaceSwitcherView* const switcher =
++      stedding::test::FindDrawnSwitcher(widget()->GetRootView());
++  ASSERT_TRUE(switcher);
++  views::View* const home_chip = switcher->ChipForTesting(home);
++  views::View* const work_chip = switcher->ChipForTesting(work);
++  ASSERT_TRUE(home_chip && home_chip->IsDrawn());
++  ASSERT_TRUE(work_chip && work_chip->IsDrawn());
++  const gfx::Point on_home = home_chip->GetBoundsInScreen().CenterPoint();
++  const gfx::Point on_work = work_chip->GetBoundsInScreen().CenterPoint();
++
++  {
++    SCOPED_TRACE("on its own Space's chip");
++    const int at = IndexOf(a);
++    PressAndDragHeader(folder, on_home);
++    EXPECT_EQ(std::nullopt, switcher->drop_target_for_testing())
++        << "a chip that takes no drop is lit";
++    EXPECT_FALSE(RowDropBarShown(folder)) << "a place shown under the chips";
++    ReleaseAt(on_home);
++    EXPECT_EQ(home, model->active_id());
++    EXPECT_EQ(home, model->SpaceForTab(a));
++    EXPECT_EQ(at, IndexOf(a)) << "the release moved the folder along its list";
++  }
++  {
++    SCOPED_TRACE("on another Space's chip");
++    PressAndDragHeader(folder, on_work);
++    EXPECT_EQ(work, switcher->drop_target_for_testing())
++        << "the chip that would take the drop is not lit";
++    ReleaseAt(on_work);
++    EXPECT_EQ(std::nullopt, switcher->drop_target_for_testing())
++        << "the light stayed on after the release";
++    ASSERT_TRUE(
++        base::test::RunUntil([&]() { return model->active_id() == work; }));
++    EXPECT_EQ(work, model->SpaceForTab(a));
++    EXPECT_EQ(work, model->SpaceForTab(b));
++    EXPECT_EQ(home, model->SpaceForTab(rest));
++    EXPECT_EQ(home, model->SpaceForTab(after));
++    EXPECT_EQ(folder, a->GetParentCollection());
++    EXPECT_EQ(folder, b->GetParentCollection());
++    EXPECT_TRUE(DrawnFolder(folder)) << "the folder is not drawn in its Space";
++  }
++}
++
+ // folders F46: the same thing from the header's menu, where a folder of the
+ // run has it, in the rail too; disabled with nothing open; absent on a folder
+ // of plain rows.

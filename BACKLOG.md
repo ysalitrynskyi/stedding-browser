@@ -19,7 +19,7 @@ infrastructure, then features. A request in chat comes before this list. A spec 
 
 The plan of 2026-11-05. On 2026-11-05 morning GitHub had no open bug. Its five open issues then were one more request on a
 fixed bug (78, the folder's − button), three feature requests (77, 69, 60) and the pin bot's
-notice (70). The 139 rows here are mostly not bugs:
+notice (70). The 140 rows here are mostly not bugs:
 
 | What the rows are | Rows |
 |---|---|
@@ -27,7 +27,7 @@ notice (70). The 139 rows here are mostly not bugs:
 | Built, waiting on the owner's machine, a real profile or other hardware ("Checks still owed") | 24 |
 | Flaky tests and test tooling | 12 |
 | Product bugs not fixed yet (S-251, S-314, S-318, S-336, S-423, S-424, S-427, S-428) | 8 |
-| Fixed in the series, waiting for the Mac and a real build (S-429 to S-432) | 4 |
+| Fixed in the series, waiting for the Mac and a real build (S-429 to S-433) | 5 |
 | Infrastructure and the ports | 20 |
 | Features, and what waits on Google, Apple or the owner ("Next") | 51 |
 
@@ -41,7 +41,7 @@ To build, in this order:
 
 0. The bugs reported on beta 10 (GitHub issues 79 to 82): S-429 to S-432 are fixed in patches 0141
    to 0144, tested on Windows and not yet on the Mac. Then the owner's two with Bitwarden, S-427 and
-   S-428.
+   S-428, and moving a folder to another Space (S-433, patch 0154).
 1. The notice on sites that need DRM (S-421).
 2. The owner's three from 2026-11-05: a folder's − button, shown on hover (S-425, issue 78); the
    shield's and moon's lit circle, smaller and dimmer (S-423); a gap between a selected folder and
@@ -142,6 +142,7 @@ Crashes and broken privacy promises first, then what a user sees.
 | S-430 | Space ends a rename of a pin that is not on screen (GitHub issue 81) | `docs/features/tabs.md` R14 | Reported on beta 10, on the Mac: rename a pinned tab that is not the open one through its menu, and the first Space closes the field. The open tab's rename takes a space. Fixed in 0142: Space's release bubbled from the field to the row, which opened; a folder header toggled the same way (`SidebarClickTest.TheKeysOfARenameStayInItsField`). Owed: the Mac run. Fold into the owner once the Mac's series matches this one. |
 | S-431 | Pinned tabs from Arc lose their name when first opened (GitHub issue 80) | `docs/features/import.md`; `docs/features/pins.md` | Reported on beta 10: a name given in Arc shows until the pin's first load, and then the page's title replaces it for good. Fixed in 0143: Arc's `title` becomes the tab's own name (`ArcImportTest.ANameGivenInArcOutlivesThePage`). Patch 0153 keeps it on an archived row too. Public readers agree that `title` is the rename, so no name lives only in `savedTitle`. Owed: an import of a real Arc file. |
 | S-432 | An extension's settings pages open about:blank (GitHub issue 79) | `docs/features/` | Reported on beta 10, on the Mac, in German, with every extension: on `chrome://extensions`, the extension's site settings open a tab at about:blank, and Manage extension in the extensions menu does nothing. Site settings are fixed in 0144, for a Space with its own session: the tab a page opened was moved to the Space's jar before its page started, so it stayed empty (sessions S37, `ExtensionPagesTest.SiteSettingsOpenFromTheExtensionsPage`). Manage extension does not reproduce on Windows. Owed: both on the Mac, and whether the reporter's Space has its own session. Fold into the owner once the Mac's series matches this one. |
+| S-433 | A folder cannot move to another Space | `docs/features/folders.md` F47, F48 | The owner, 2026-11-05: no drag and no menu did it. Patch 0154: Move to Space on the header's menu and a drop of the header on another Space's chip. Owed: both on a real build with the real pointer on both platforms, with a pinned folder, a nested one and a Space with its own session; and a move between two computers (sidebar-file). |
 | S-428 | Bitwarden sometimes finds no logins for a site | Extensions | The owner, 2026-11-05: on some forms Bitwarden says it has no passwords for the site, and it usually comes right after restarting the browser. Not reproduced. To learn when it next happens: whether the toolbar popup is empty too or only the menu on the form; whether the tab is a pin, a peek, a split or in a Space with its own session; whether reloading the extension alone fixes it. A password manager reads the active tab's address through `chrome.tabs`, so a tab that woke from sleep or a page in a peek is the first suspect. |
 | S-427 | On the Mac, Bitwarden's passkey window leaves full screen | `docs/features/windows.md` G8 | The owner, 2026-11-05, on beta 10: with Stedding in macOS full screen, a passkey request opens Bitwarden's window, which goes full screen, then turns small on the desktop. The toolbar popup is fine. G8 fixed this on 2026-10-20, so this is a regression or a path its test misses: `PopupOverFullScreenTest` uses a fake full screen and a page's `window.open`, and reads only the window's flag. Bitwarden calls `chrome.windows.create` with `type: popup`, `focused`, a size and a position, from its service worker. Reproduce on the Mac in real full screen with a test extension making that call, then test that path. |
 | S-423 | The shield's and the moon's lit circle is too big | `docs/features/toolbar.md` | The owner, 2026-11-05, from a capture: on the address row the circle behind a lit shield or moon is too big for that place, and too bright. Make it smaller and a little dimmer. `stedding_blocker_button.cc`, `stedding_dark_pages_button.cc`. Built 2026-11-05 (patch 0132): 20 DIP in the 32 DIP row, where it was 26, and a dimmer fill. Seen on a release build of the Mac. Left: Windows, DCHECKs. |

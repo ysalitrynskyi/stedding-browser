@@ -216,6 +216,19 @@ pinned tab, land on that same tab. When a Space’s last tab closes, it shows th
 essential you used there last, or the first essential if you have not used one. With
 no essential, it opens a new tab.
 
+**Where is Air Traffic Control?**
+Stedding calls it routes. Settings → Stedding → **Sites routed to Spaces** lists every
+site that opens in a Space, and **Route sites here…** on a Space's menu goes straight
+to it. Typing "air traffic" in the command bar or in Settings' search finds it too.
+
+**Can several Spaces use the same profile?**
+Yes, that is how it starts: every Space shares one profile and one session until you
+give it an Independent session. Several Spaces sharing one separate session, apart from
+the others, is built and not released yet (`S-272` in [BACKLOG.md](../BACKLOG.md)).
+
+**Can one Space hold tabs from different profiles?**
+No, and it is not planned. A Space has one session. Arc did not do this either.
+
 **Can I be signed into the same site twice?**
 Yes. Right-click a Space chip and turn on **Independent session**. That Space keeps
 its own cookies and site data, so another Space can use a different account. The
@@ -283,6 +296,10 @@ On these sites a bar says so and offers the page in Safari on the Mac or Edge on
 Windows. "Don't show again" hides it for that site, and Settings › Stedding ›
 Pages and menus brings it back.
 Video that is not DRM-protected, such as YouTube, plays.
+
+**Is there a Safari mode for those sites?**
+No. Stedding is Chromium changed directly, with no wrapper around another engine, so it
+cannot show a page through Safari. The notice hands the page to that browser instead.
 
 **Can I switch Spaces with the mouse?**
 Yes. Over the sidebar or its icons, scroll sideways: a two-finger swipe on a

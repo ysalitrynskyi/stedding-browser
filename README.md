@@ -30,80 +30,108 @@ Homebrew: `brew install --cask ysalitrynskyi/stedding/stedding` · [Install guid
 
 ## What Arc never had
 
-1. **Open source, with no account.** Stedding is BSD-licensed and asks you to sign up for
-   nothing: download it and use it. Arc requires an account, and its code is closed.
-2. **Spaces with their own sign-ins, in one profile.** Give a Space an Independent session and
-   it keeps its own cookies and site data, so the same site can be signed in as work in one
-   Space and as you in another. Extensions, settings, history and saved passwords stay shared.
-   Arc keeps sign-ins apart only by giving a Space a whole separate profile.
-   [Spec](docs/features/sessions.md)
-3. **Dark pages.** One switch draws every website dark from its first frame: the moon by the
-   address row, or ⌥⇧⌘D (Ctrl+Alt+Shift+D). Keep some sites light, or darken only the ones you
-   list. [Spec](docs/features/dark-pages.md)
-4. **Apps from any page.** Add to Dock… on the Mac, Install page as app… on Windows: the page
-   gets a window and an icon of its own and keeps the session of the Space it was made in, so
-   it stays signed in as that Space is. Arc does not install web apps.
-   [Spec](docs/features/web-apps.md)
-5. **Site cleanup in one step.** Clear Site Cookies and Reload (⌥⇧⌘R, Ctrl+Alt+Shift+R) signs
-   you out of the site in front of you and nothing else; Close Duplicate Tabs is one command
-   away. [Spec](docs/features/commandbar.md)
-6. **Your sidebar on every computer.** Pick any folder your computers share (iCloud, Dropbox,
-   Syncthing and more), and each Stedding keeps its Spaces, pins, pinned folders and essentials there
-   with no network request of its own. Or use WebDAV or S3 storage you already have.
-   [Spec](docs/features/sidebar-file.md)
-7. **Links without trackers, and blocking if you want it.** `utm_` and similar parameters
-   come off the links you open; ad and tracker blocking is built in, off until you turn it
-   on. [Spec](docs/features/clean-links.md), [Spec](docs/features/blocker.md)
+| Feature | What it does |
+|---|---|
+| **Open source, no account** | BSD-licensed. Download it and use it. Arc needs an account, and its code is closed |
+| **[Two sign-ins, one profile](docs/features/sessions.md)** | A Space can keep its own cookies, so one site can be signed in as work here and as you there. Extensions, history and passwords stay shared |
+| **[Dark pages](docs/features/dark-pages.md)** | One switch draws every website dark from its first frame: the moon by the address row, or ⌥⇧⌘D (Ctrl+Alt+Shift+D) |
+| **[Apps from any page](docs/features/web-apps.md)** | A page gets a window and an icon of its own, and stays signed in as its Space is |
+| **[Your sidebar on every computer](docs/features/sidebar-file.md)** | Through a folder you already sync, or WebDAV or S3 storage you have. There is no Stedding server |
+| **[Site cleanup](docs/features/commandbar.md)** | ⌥⇧⌘R (Ctrl+Alt+Shift+R) signs you out of the site in front of you and nothing else. Close Duplicate Tabs is one command away |
+| **[Clean links](docs/features/clean-links.md) and [blocking](docs/features/blocker.md)** | `utm_` and similar come off the links you open. Ad and tracker blocking is built in, off until you turn it on |
 
 <p>
   <img src="docs/images/readme/dark-pages.png" width="49%" alt="A white website shown dark, the moon button by the address row lit">
   <img src="docs/images/readme/web-app.png" width="49%" alt="A page in a window of its own, without the sidebar">
 </p>
 
-## Everything you know from Arc
+## Moving from Arc
 
-- **The sidebar**: vertical tabs, essentials as cards, pinned tabs that remember their page,
-  nested folders (in the pinned tabs too), and ⌘S (Ctrl+S) to fold it to a rail of icons or
-  hide it. ⌘W (Ctrl+W) on a pinned tab sends it back to its page, asleep, in its place. While it is awake the close button is a minus that does the same, on screen or not. Once it is asleep the button is an x that asks before it removes the pin.
-- **Spaces** with their own colour and icon, or one colour for light and another for dark:
-  switch with the chips, ⌃1–⌃9 (Alt+1–Alt+9), a two-finger swipe, or the mouse's sideways
-  scroll over the sidebar. A Space can keep its own cookies, so one site can be signed into
-  twice.
-- **⌘T (Ctrl+T)**: a URL, a search, or an open or archived tab in any Space. ⇧⌘P
-  (Ctrl+Shift+P) lists the commands, each with its key.
-- **Split view**: drag a tab onto the page, and it opens beside it.
-- **Peek**: a link from a pinned tab that leaves its site opens on a card over the page, or in
-  a small window if you prefer; keep it as a tab or beside the pin. On a click, or only on a
-  held press, as you choose.
-- **The address row on top**, or **the address in the sidebar** with Back, Forward and Reload
-  at its top; the button at the field's start opens the **site panel**.
-- **History and Downloads in the sidebar**, the sidebar on the left or the right, and
-  **shortcuts you can change**.
-- **Little windows** for links from other apps, with **Open in Stedding** to keep the page as
-  a tab; sites **routed** to their Space, **sleeping tabs**, and an **archive** for idle tabs,
-  off until you choose.
-- **Local development tabs** wear a yellow and black dashed outline while on screen. At Comfortable density every local tab with a title shows its host and port.
-- **Copy the link** clean of trackers (⇧⌘C, Ctrl+Shift+C) or as Markdown, **screenshots** by
-  key, mute and picture in picture by key.
-- **Arc in one click**: Spaces, essentials, pins, folders, tabs, history and passwords, on the
-  Mac and on Windows.
-- **Arc's keyboard** on both platforms, and **updates** in the sidebar. The feed and the
-  download are checked against a signature. Stedding looks when you open it if the last look
-  was over an hour ago, and every six hours while it runs. A switch turns that off.
+The Browser Company says Arc stops working on December 22, 2026. With Arc installed, the first
+start offers **Move everything from Arc**: Spaces, essentials, pinned tabs, folders, open tabs,
+history and passwords, on the Mac and on Windows. It reads Arc's files on your disk and sends
+nothing anywhere. Running it again duplicates nothing.
+
+Everything is where you expect it, sometimes under another name:
+
+| In Arc | In Stedding | Where |
+|---|---|---|
+| Favorites | Essentials | Cards at the top of the sidebar |
+| Pinned tabs and folders | The same | Folders nest, among the pins too |
+| Spaces | Spaces | ⌃1–⌃9 (Alt+1–Alt+9), a two-finger swipe, or the chips |
+| Command bar | Command bar | ⌘T (Ctrl+T). ⇧⌘P (Ctrl+Shift+P) lists every command |
+| Split view | Split view | Drag a tab onto the page |
+| Peek | Peek | A pinned tab's link to another site opens over the page |
+| Little Arc | Little windows | Links from other apps. ⌘O keeps one as a tab |
+| Air Traffic Control | Routes | Settings → Stedding → Sites routed to Spaces, or **Route sites here…** on a Space's menu |
+| A profile for a Space | Independent session | Right-click a Space. Its sign-ins stay apart, in one profile |
+| Auto-archive | The archive | Off until you turn it on |
+| Hidden sidebar | Folding sidebar | ⌘S (Ctrl+S) |
+| Sync | Sidebar sync | Settings → Stedding → Sync and import |
+
+<details open>
+<summary><b>Questions people ask when they move</b></summary>
+
+**Can several Spaces use the same profile?** Yes, that is how it starts: every Space shares one
+profile until you give it an Independent session. Several Spaces sharing one separate session is
+built and not released yet (`S-272`).
+
+**Can one Space hold tabs from different profiles?** No, and it is not planned. A Space has one
+session. Arc did not do this either.
+
+**Why does Netflix not play, and is there a Safari mode?** Netflix, Disney+, Prime Video and
+Spotify's web player need Widevine, and that takes a licence from Google (`S-270`). Until then
+these sites show a notice with a button that opens the page in Safari or Edge. There is no Safari
+mode: Stedding is Chromium changed directly, with no wrapper around another engine.
+
+More in [the FAQ](docs/FAQ.md).
+
+</details>
+
+<details>
+<summary><b>Everything else you know from Arc</b></summary>
+
+- **The sidebar**: ⌘W (Ctrl+W) on a pinned tab sends it back to its page, asleep, in its place.
+  It folds to a rail of icons, sits on the left or the right, and holds History and Downloads.
+- **Spaces**: a colour and an icon each, or one colour for light and another for dark. The
+  mouse's sideways scroll over the sidebar switches them too.
+- **The address** on top, or in the sidebar with Back, Forward and Reload. The button at the
+  field's start opens the site panel.
+- **Peek** on a click, or only on a held press, on a card or in a small window.
+- **Sleeping tabs**, **shortcuts you can change**, and **updates** in the sidebar, checked
+  against a signature. A switch turns them off.
+- **Local development tabs** wear a yellow and black dashed outline.
+- **Copy the link** clean of trackers (⇧⌘C, Ctrl+Shift+C) or as Markdown, and **screenshots**,
+  mute and picture in picture by key.
 
 Each feature has a specification naming the test behind every behaviour:
 [docs/features/](docs/features/).
 
+</details>
+
+<details>
+<summary><b>Moving from another browser</b></summary>
+
+The same welcome step brings bookmarks, history and passwords from Chrome, Edge, Brave, Vivaldi,
+Opera and Dia (on a Mac, each browser's passwords need one keychain prompt; on Windows, passwords
+that Chrome seals with its own key cannot be read and are counted), and from the file Safari
+exports. Settings → Stedding → Sync and import → **Import from another browser** opens that step
+again any time. Passwords in that file are plain text, so they stay unticked until you ask for
+them. Chromium's own importer also lists the browsers it finds, including Firefox, and on the Mac
+Safari's bookmarks.
+
+</details>
+
 ## What Arc has that Stedding does not
 
-- **Boosts and Easels**: deferred ([ADR 0012](docs/decisions/0012-defer-boosts-and-easels.md)).
-- **The mini player** in the sidebar: planned; picture in picture by key until then (`S-95`).
-- **The Library panel and Live Folders**: later (`S-61`).
-- **Shared Spaces and share links**: there is no account or server, by design. Your own
-  computers keep the sidebar in step through a folder you choose; to give a Space to someone,
-  send it as a file.
-- **AI (Arc Max)**: never, by choice ([ADR 0020](docs/decisions/0020-no-bundled-model.md)).
-- **Phones** (Arc Search): desktop only.
+| In Arc | Here |
+|---|---|
+| Boosts and Easels | Deferred ([ADR 0012](docs/decisions/0012-defer-boosts-and-easels.md)) |
+| The mini player in the sidebar | Planned (`S-95`). Picture in picture by key until then |
+| The Library panel and Live Folders | Later (`S-61`) |
+| Shared Spaces and share links | No account or server, by design. Send a Space as a file |
+| AI (Arc Max) | Never, by choice ([ADR 0020](docs/decisions/0020-no-bundled-model.md)) |
+| Phones (Arc Search) | Desktop only |
 
 ## Download
 
@@ -147,21 +175,6 @@ can change them, and **Number keys for the rows and the Spaces** can put Spaces 
 | Dark pages on or off | ⌥⇧⌘D | Ctrl+Alt+Shift+D |
 | Copy the link, clean | ⇧⌘C | Ctrl+Shift+C |
 
-## Moving from Arc
-
-With Arc installed, the first start offers **Move everything from Arc**: Spaces with their
-colours and icons, essentials, pinned tabs, nested folders, open tabs, history and passwords.
-It reads Arc's files on your disk and sends nothing anywhere. On a Mac the passwords need one
-keychain prompt; on Windows none. Running it again does not duplicate anything.
-
-The same welcome step brings bookmarks, history and passwords from Chrome, Edge, Brave,
-Vivaldi, Opera and Dia (on a Mac, each browser's passwords need one keychain prompt; on Windows,
-passwords that Chrome seals with its own key cannot be read and are counted), and from the
-file Safari exports. Settings → Stedding → Sync and import → **Import from another browser**
-opens that step again any time. Passwords in that file
-are plain text, so they stay unticked until you ask for them. Chromium's own importer also
-lists the browsers it finds, including Firefox, and on the Mac Safari's bookmarks.
-
 ## Privacy
 
 - **No telemetry, no experiments, no account.** No usage metrics, crash reports or
@@ -181,6 +194,9 @@ else is a bug.
 Chromium stable, with a documented series of patches, so sites, extensions and DevTools
 behave as they do in Chrome.
 
+<details>
+<summary><b>What is in, and what is not yet</b></summary>
+
 | Part | In Stedding | |
 |---|---|---|
 | Engine | Chromium 157, stable channel | ✓ |
@@ -198,6 +214,8 @@ behave as they do in Chrome.
 | Intel Macs | Apple silicon only | Not supported |
 | Linux | After Windows ([ROADMAP](docs/ROADMAP.md), M9) | Not yet |
 
+</details>
+
 To hear when a release is out, use **Watch → Custom → Releases** at the top of this page.
 
 ## Status
@@ -213,6 +231,9 @@ milestones in [docs/ROADMAP.md](docs/ROADMAP.md), and every release's notes on t
 
 Stedding is a documented patch series on Chromium stable. `tooling/sync-chromium` will not
 start below 150 GB free. The first build takes a few hours.
+
+<details>
+<summary><b>The commands</b></summary>
 
 On a Mac (Apple silicon):
 
@@ -235,6 +256,8 @@ tooling\win\package-installer.ps1
 
 `build.ps1` stops after 15 minutes if you leave the budget unset. Prerequisites:
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+</details>
 
 ## Contributing
 

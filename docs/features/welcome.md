@@ -1,6 +1,6 @@
 # Feature: Welcome flow
 
-Status: **W1–W20 built.** Step 2 offers Chrome, Edge, Brave, Vivaldi and Dia when they are found (import I43, I32), a Safari export file (I41), Chromium's own importers -- Safari and Firefox on macOS, the old Edge, Internet Explorer and Firefox on Windows -- each with only the boxes it can fill (I44), and a bookmarks HTML file. Opera is not offered.
+Status: **W1–W20 built.** Step 2 offers Chrome, Edge, Brave, Vivaldi, Opera and Dia when they are found (import I43, I32), a Safari export file (I41), Chromium's own importers -- Safari and Firefox on macOS, the old Edge, Internet Explorer and Firefox on Windows -- each with only the boxes it can fill (I44), and a bookmarks HTML file. Opera is not offered.
 
 Owner docs: `docs/PRODUCT.md` (first run, import), `docs/PRIVACY.md` (the chooser).
 

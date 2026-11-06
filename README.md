@@ -154,7 +154,7 @@ It reads Arc's files on your disk and sends nothing anywhere. On a Mac the passw
 keychain prompt; on Windows none. Running it again does not duplicate anything.
 
 The same welcome step brings bookmarks, history and passwords from Chrome, Edge, Brave,
-Vivaldi and Dia (on a Mac, each browser's passwords need one keychain prompt; on Windows,
+Vivaldi, Opera and Dia (on a Mac, each browser's passwords need one keychain prompt; on Windows,
 passwords that Chrome seals with its own key cannot be read and are counted), and from the
 file Safari exports. Settings → Stedding → Sync and import → **Import from another browser**
 opens that step again any time. Passwords in that file
@@ -189,7 +189,7 @@ behave as they do in Chrome.
 | Google services | No sign-in, sync, telemetry or experiments. Chromium's component updates and network time stay ([PRIVACY.md](docs/PRIVACY.md)) | ✓ |
 | Ad and tracker blocking | Built in, from EasyList and EasyPrivacy; off until you turn it on | ✓ |
 | Sync | Your sidebar, through a folder your own sync app keeps; no account | Your folder |
-| Import | Arc (Mac and Windows), Chrome, Edge, Brave, Vivaldi, Dia, Safari's export file, Firefox. Opera is not offered | Most |
+| Import | Arc (Mac and Windows), Chrome, Edge, Brave, Vivaldi, Opera, Dia, Safari's export file, Firefox | Most |
 | Updates | Checked against a signature, in the background, with a switch to turn them off | ✓ |
 | Safe Browsing | Waits on a Google API key (`S-75`) | Not yet |
 | Netflix, Disney+, Prime Video, Spotify | Need Widevine, which needs a licence from Google first (`S-270`) | Not yet |

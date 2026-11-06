@@ -1,0 +1,361 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Thu, 5 Nov 2026 19:42:01 -0500
+Subject: fix: pass another Space's tab in the pinned run
+
+Every Space's tabs share the one strip, and a loose tab of Home can sit between
+Work's pins: Home's pin put in a split with one of Home's tabs brings that tab up
+to it, a split stays where it is, and the tab stays there when the split ends.
+Each walk along the run stopped at the first tab that was no pin, whichever
+Space it was in. In Work a new pin landed before Work's last pin, out of the
+order pinned, and could land in the middle of Home's split, which broke it. An
+unpin, and a link opened from a pin, stayed above Work's last pin, so that pin
+was drawn under the Clear line. A pinned folder went to the top of the run.
+
+The walks now go by the rows of the tab's own Space: another Space's loose tab
+does not end the run, and the end is never inside a split or a folder that has a
+loose tab, because that row ended the run before it.
+
+Why: pins H14 (BACKLOG S-314). The pin, the unpin, the link and the folder were
+each seen wrong through the model and the sidebar's rows.
+Removable when: the Space model and its pinned run leave the series.
+---
+ chrome/browser/ui/spaces/space_model.cc       | 105 +++++++++----
+ chrome/browser/ui/spaces/space_model.h        |   7 +-
+ .../test/stedding/pinned_run_browsertest.cc   | 141 ++++++++++++++++++
+ 3 files changed, 226 insertions(+), 27 deletions(-)
+
+diff --git a/chrome/browser/ui/spaces/space_model.cc b/chrome/browser/ui/spaces/space_model.cc
+index 83d2e2d8a3f38..094be46a9fb5a 100644
+--- a/chrome/browser/ui/spaces/space_model.cc
++++ b/chrome/browser/ui/spaces/space_model.cc
+@@ -3697,10 +3697,12 @@ void SpaceModel::SetFolderSpacePinned(tabs::FolderTabCollection* folder,
+   if (!CanPinFolder(folder)) {
+     return;
+   }
+-  // The end of the run, the folder aside: the first top-level row that is no
+-  // pin -- a loose tab, a split with a loose pane, a group, a folder with a
+-  // loose tab -- is where a pinned folder goes before, and an unpinned one
+-  // too, at the top of the rows under the line.
++  // The end of the run, the folder aside: the first top-level row of the
++  // folder's Space that is no pin -- a loose tab, a split with a loose pane,
++  // a group, a folder with a loose tab -- is where a pinned folder goes
++  // before, and an unpinned one too, at the top of the rows under the line.
++  // Another Space's row is no row here (pins H14, BACKLOG S-314): the run may
++  // go on after it.
+   const tabs::TabCollection* const top = folder->GetParentCollection();
+   const auto is_pin_row = [this](const tabs::Child& child) {
+     if (const auto* tab = std::get_if<tabs::ScopedTab>(&child)) {
+@@ -3719,17 +3721,31 @@ void SpaceModel::SetFolderSpacePinned(tabs::FolderTabCollection* folder,
+              return IsSpacePinned(tab);
+            });
+   };
++  const auto row_space = [this](const tabs::Child& child) {
++    if (const auto* tab = std::get_if<tabs::ScopedTab>(&child)) {
++      return FindSpaceForTab(tab->get());
++    }
++    const std::vector<tabs::TabInterface*> tabs =
++        std::get<std::unique_ptr<tabs::TabCollection>>(child)
++            ->GetTabsRecursive();
++    return tabs.empty() ? std::nullopt : FindSpaceForTab(tabs.front());
++  };
++  const std::optional<SpaceId> space =
++      FindSpaceForTab(folder->GetTabsRecursive().front());
+   size_t slot = 0;
++  size_t row = 0;
+   for (const tabs::Child& child : top->GetChildren()) {
+     if (const auto* collection =
+             std::get_if<std::unique_ptr<tabs::TabCollection>>(&child);
+         collection && collection->get() == folder) {
+       continue;
+     }
+-    if (!is_pin_row(child)) {
++    ++row;
++    if (is_pin_row(child)) {
++      slot = row;
++    } else if (row_space(child) == space) {
+       break;
+     }
+-    ++slot;
+   }
+   SetFolderSpacePinnedAt(folder, pinned, slot);
+ }
+@@ -3768,17 +3784,7 @@ void SpaceModel::MoveToSpacePinBoundary(tabs::TabInterface* tab) {
+   if (index == TabStripModel::kNoTab || tab->IsPinned()) {
+     return;
+   }
+-  // The end of the run of Space-pinned tabs at the top of the unpinned block,
+-  // `tab` counted in it wherever it is, so an unpin from the middle of the
+-  // run lands past the pins that stay.
+-  int end = tab_strip_model_->IndexOfFirstNonPinnedTab();
+-  while (end < tab_strip_model_->count()) {
+-    const tabs::TabInterface* const each = tab_strip_model_->GetTabAtIndex(end);
+-    if (each != tab && !IsSpacePinned(each)) {
+-      break;
+-    }
+-    ++end;
+-  }
++  const int end = EndOfSpacePinRun(tab);
+   // The index the tab ends up at once it has left its own place.
+   const int to = index < end ? end - 1 : end;
+   if (to != index) {
+@@ -3820,6 +3826,46 @@ const tabs::TabCollection* OutermostFolderOf(const tabs::TabInterface* tab) {
+ }
+ }  // namespace
+ 
++int SpaceModel::EndOfSpacePinRun(const tabs::TabInterface* tab) const {
++  // The end of the run of Space-pinned tabs at the top of the unpinned block,
++  // `tab` aside wherever it is, so an unpin from the middle of the run lands
++  // past the pins that stay. The run ends at the first loose tab of `tab`'s
++  // Space. Another Space's loose tab is no row here, and the pins may go on
++  // after it (pins H14, BACKLOG S-314): a split brings one up among them.
++  const std::optional<SpaceId> space = FindSpaceForTab(tab);
++  const int first = tab_strip_model_->IndexOfFirstNonPinnedTab();
++  int end = first;
++  for (int i = first; i < tab_strip_model_->count(); ++i) {
++    const tabs::TabInterface* const each = tab_strip_model_->GetTabAtIndex(i);
++    if (each == tab) {
++      continue;
++    }
++    if (IsSpacePinned(each)) {
++      end = i + 1;
++    } else if (FindSpaceForTab(each) == space) {
++      break;
++    }
++  }
++  if (end == first || end >= tab_strip_model_->count()) {
++    return end;
++  }
++  // A split or a folder is one row, which has a loose tab if it goes on past
++  // the last pin: the run ended before it. `tab`'s own folder is its place to
++  // leave, not a row to stay out of.
++  const tabs::TabInterface* const last = tab_strip_model_->GetTabAtIndex(end - 1);
++  const tabs::TabInterface* const next = tab_strip_model_->GetTabAtIndex(end);
++  if (const tabs::TabCollection* const folder = OutermostFolderOf(last);
++      folder && folder == OutermostFolderOf(next) &&
++      folder != OutermostFolderOf(tab)) {
++    return tab_strip_model_->GetIndexOfTab(folder->GetTabsRecursive().front());
++  }
++  if (last->IsSplit() && last->GetSplit() == next->GetSplit()) {
++    return tab_strip_model_->GetIndexOfTab(
++        tab_strip_model_->GetSplitData(*last->GetSplit())->ListTabs().front());
++  }
++  return end;
++}
++
+ bool SpaceModel::IsLooseTabInSpacePinRun(const tabs::TabInterface* tab) const {
+   if (!tab_strip_model_ || !tab || tab->IsPinned() || IsSpacePinned(tab) ||
+       tab->IsSplit()) {
+@@ -3848,17 +3894,24 @@ bool SpaceModel::IsLooseTabInSpacePinRun(const tabs::TabInterface* tab) const {
+     return false;
+   }
+   const int index = tab_strip_model_->GetIndexOfTab(tab);
+-  if (index == TabStripModel::kNoTab ||
+-      index + 1 >= tab_strip_model_->count()) {
++  if (index == TabStripModel::kNoTab) {
+     return false;
+   }
+-  const tabs::TabInterface* const next =
+-      tab_strip_model_->GetTabAtIndex(index + 1);
+-  // The run may begin with a pinned folder, whose first tab is the pin after
+-  // this one (GitHub issue 29): a link from an essential stayed above such a
+-  // run, and every pin and pinned folder was drawn under the line.
+-  return IsSpacePinned(next) &&
+-         (IsTopLevelRow(next) || OutermostFolderOf(next) != nullptr);
++  const std::optional<SpaceId> space = FindSpaceForTab(tab);
++  for (int i = index + 1; i < tab_strip_model_->count(); ++i) {
++    const tabs::TabInterface* const next = tab_strip_model_->GetTabAtIndex(i);
++    // Another Space's loose tab is no row here, and the pins may go on after
++    // it (pins H14, BACKLOG S-314).
++    if (!IsSpacePinned(next) && FindSpaceForTab(next) != space) {
++      continue;
++    }
++    // The run may begin with a pinned folder, whose first tab is the pin
++    // after this one (GitHub issue 29): a link from an essential stayed above
++    // such a run, and every pin and pinned folder was drawn under the line.
++    return IsSpacePinned(next) &&
++           (IsTopLevelRow(next) || OutermostFolderOf(next) != nullptr);
++  }
++  return false;
+ }
+ 
+ void SpaceModel::MoveOutOfSpacePinRun(tabs::TabHandle handle) {
+diff --git a/chrome/browser/ui/spaces/space_model.h b/chrome/browser/ui/spaces/space_model.h
+index e57231179057d..90838647b612e 100644
+--- a/chrome/browser/ui/spaces/space_model.h
++++ b/chrome/browser/ui/spaces/space_model.h
+@@ -683,9 +683,14 @@ class SpaceModel : public TabStripModelObserver,
+   // pins H14: moves `tab` to the boundary of the Space-pinned run: its end
+   // for a pin, the first place past it for an unpinned tab.
+   void MoveToSpacePinBoundary(tabs::TabInterface* tab);
++  // pins H14 (BACKLOG S-314): the strip index just past the pins `tab`'s Space
++  // shows at the top of the unpinned block, `tab` aside. Other Spaces' loose
++  // tabs among them do not end the run, and the end is never inside a split or
++  // a folder that has a loose tab.
++  int EndOfSpacePinRun(const tabs::TabInterface* tab) const;
+   // pins H14 (PLAN.md TAB-24, SPC-34): whether `tab` is a tab of the unpinned
+   // block's own level, not a pin of either tier, with a Space pin of that
+-  // level right after it: inside the run, or above it.
++  // level the next row of its Space: inside the run, or above it.
+   bool IsLooseTabInSpacePinRun(const tabs::TabInterface* tab) const;
+   // Moves the tab `handle` names out of the run to just after it, when it is
+   // still inside it and no drag is placing it. Posted from the insert, so it
+diff --git a/chrome/test/stedding/pinned_run_browsertest.cc b/chrome/test/stedding/pinned_run_browsertest.cc
+index 1d4242f3aa727..8ff34e5ac9674 100644
+--- a/chrome/test/stedding/pinned_run_browsertest.cc
++++ b/chrome/test/stedding/pinned_run_browsertest.cc
+@@ -33,6 +33,7 @@
+ #include "chrome/browser/ui/navigator/browser_navigator.h"
+ #include "chrome/browser/ui/navigator/browser_navigator_params.h"
+ #include "chrome/browser/ui/spaces/space.h"
++#include "chrome/browser/ui/spaces/space_commands.h"
+ #include "chrome/browser/ui/spaces/space_id.h"
+ #include "chrome/browser/ui/spaces/space_model.h"
+ #include "chrome/browser/ui/stedding/empty_space.h"
+@@ -602,6 +603,146 @@ IN_PROC_BROWSER_TEST_F(PinnedRunTest,
+   }
+ }
+ 
++// pins H14 (BACKLOG S-314): every Space's tabs share the one strip, so a loose
++// tab of Home can sit between Work's pins: Home's pin put in a split with one
++// of Home's tabs brings that tab up to it, and a split stays where it is. Work
++// shows neither, and the tabs stay there when the split ends. A change in Work
++// goes by Work's own rows: a new pin joins the end of Work's pins, a link from
++// a pin lands under the line, an unpin leaves the pins for the top of Work's
++// tabs, and a pinned folder joins after the pins. Each stopped at the first
++// tab that was no pin, Home's: a new pin landed before Work's last pin, and an
++// unpin or a link stayed above Work's last pin and took it under the line.
++IN_PROC_BROWSER_TEST_F(PinnedRunTest, APinChangePassesAnotherSpacesTabInTheRun) {
++  const spaces::SpaceId work = model().active_id();
++  tabs::TabInterface* const first = tabs().GetActiveTab();
++  ASSERT_TRUE(first);
++  model().SetSpacePinned(first, true);
++
++  spaces::Space* const home = model().AddSpace("Home", SK_ColorBLUE);
++  ASSERT_TRUE(home);
++  const spaces::SpaceId home_id = home->id();
++  model().SetActiveSpace(home_id);
++  tabs::TabInterface* const home_pin = AddBlankTab();
++  model().SetSpacePinned(home_pin, true);
++  tabs::TabInterface* const home_tab = AddBlankTab();
++
++  model().SetActiveSpace(work);
++  tabs::TabInterface* const second = AddBlankTab();
++  model().SetSpacePinned(second, true);
++  tabs::TabInterface* const loose = AddBlankTab();
++  tabs::TabInterface* const tail = AddBlankTab();
++  ASSERT_LT(Index(second), Index(home_tab));
++
++  model().SetActiveSpace(home_id);
++  tabs().ActivateTabAt(Index(home_pin));
++  tabs().AddToNewSplit({Index(home_tab)}, split_tabs::SplitTabVisualData(),
++                       split_tabs::SplitTabCreatedSource::kTabContextMenu);
++  ASSERT_TRUE(home_pin->IsSplit());
++  ASSERT_LT(Index(home_tab), Index(second)) << "the split brings the tab up";
++
++  // Home's tabs leave the split, in place, and Home's pin is unpinned: two
++  // loose tabs of Home between Work's first pin and the rest.
++  tabs().RemoveSplit(*home_pin->GetSplit());
++  tabs().ActivateTabAt(Index(home_pin));
++  spaces::ToggleSpacePinOnActiveTab(browser());
++  ASSERT_FALSE(model().IsSpacePinned(home_pin));
++  ASSERT_LT(Index(first), Index(home_pin));
++  ASSERT_LT(Index(home_tab), Index(second));
++
++  model().SetActiveSpace(work);
++  tabs().ActivateTabAt(Index(tail));
++  ASSERT_TRUE(IsAboveTheLine(first));
++  ASSERT_TRUE(IsAboveTheLine(second));
++  ASSERT_FALSE(IsAboveTheLine(loose));
++
++  {
++    SCOPED_TRACE("a new pin");
++    tabs().ActivateTabAt(Index(loose));
++    spaces::ToggleSpacePinOnActiveTab(browser());
++    ASSERT_TRUE(model().IsSpacePinned(loose));
++    EXPECT_EQ(Index(second) + 1, Index(loose)) << "pins keep the order pinned";
++    EXPECT_TRUE(IsAboveTheLine(second));
++    EXPECT_TRUE(IsAboveTheLine(loose));
++    EXPECT_FALSE(IsAboveTheLine(tail));
++  }
++  {
++    SCOPED_TRACE("a link from a pin");
++    tabs().ActivateTabAt(Index(first));
++    NavigateParams params(browser(), GURL("about:blank#child"),
++                          ui::PAGE_TRANSITION_LINK);
++    params.disposition = WindowOpenDisposition::NEW_BACKGROUND_TAB;
++    params.source_contents = first->GetContents();
++    Navigate(&params);
++    tabs::TabInterface* const opened =
++        tabs().GetTabForWebContents(params.navigated_or_inserted_contents);
++    ASSERT_TRUE(opened);
++    EXPECT_TRUE(base::test::RunUntil([&]() {
++      return Index(opened) == std::max(Index(second), Index(loose)) + 1;
++    })) << "the new tab stayed inside the pinned run";
++    EXPECT_TRUE(IsAboveTheLine(second)) << "a pin was drawn under the line";
++    EXPECT_TRUE(IsAboveTheLine(loose)) << "a pin was drawn under the line";
++    EXPECT_FALSE(IsAboveTheLine(opened));
++  }
++  {
++    SCOPED_TRACE("an unpin");
++    tabs().ActivateTabAt(Index(first));
++    spaces::ToggleSpacePinOnActiveTab(browser());
++    ASSERT_FALSE(model().IsSpacePinned(first));
++    EXPECT_EQ(std::max(Index(second), Index(loose)) + 1, Index(first))
++        << "an unpinned tab goes to the top of the tabs under the line";
++    EXPECT_TRUE(IsAboveTheLine(second)) << "a pin was drawn under the line";
++    EXPECT_TRUE(IsAboveTheLine(loose)) << "a pin was drawn under the line";
++    EXPECT_FALSE(IsAboveTheLine(first));
++  }
++  {
++    SCOPED_TRACE("a pinned folder");
++    tabs::TabInterface* const in_folder = AddBlankTab();
++    tabs::FolderTabCollection* const folder =
++        tabs().AddToNewFolder({Index(in_folder)});
++    ASSERT_TRUE(folder);
++    ASSERT_TRUE(model().CanPinFolder(folder));
++    model().SetFolderSpacePinned(folder, true);
++    EXPECT_EQ(std::max(Index(second), Index(loose)) + 1, Index(in_folder))
++        << "a new pin joins the end";
++    EXPECT_LT(Index(in_folder), Index(first));
++  }
++}
++
++// pins H14 (BACKLOG S-314): a pin that ends the walk inside a row of Home's, a
++// split with a loose pane, does not take a new pin into that row.
++IN_PROC_BROWSER_TEST_F(PinnedRunTest, ANewPinStaysOutOfAnotherSpacesSplit) {
++  const spaces::SpaceId work = model().active_id();
++  tabs::TabInterface* const first = tabs().GetActiveTab();
++  ASSERT_TRUE(first);
++  model().SetSpacePinned(first, true);
++
++  spaces::Space* const home = model().AddSpace("Home", SK_ColorBLUE);
++  ASSERT_TRUE(home);
++  const spaces::SpaceId home_id = home->id();
++  model().SetActiveSpace(home_id);
++  tabs::TabInterface* const home_pin = AddBlankTab();
++  model().SetSpacePinned(home_pin, true);
++  tabs::TabInterface* const home_tab = AddBlankTab();
++  tabs().ActivateTabAt(Index(home_pin));
++  tabs().AddToNewSplit({Index(home_tab)}, split_tabs::SplitTabVisualData(),
++                       split_tabs::SplitTabCreatedSource::kTabContextMenu);
++  ASSERT_TRUE(home_pin->IsSplit());
++
++  model().SetActiveSpace(work);
++  tabs::TabInterface* const loose = AddBlankTab();
++  AddBlankTab();
++  tabs().ActivateTabAt(Index(loose));
++  spaces::ToggleSpacePinOnActiveTab(browser());
++  ASSERT_TRUE(model().IsSpacePinned(loose));
++
++  EXPECT_FALSE(loose->IsSplit());
++  EXPECT_TRUE(home_pin->IsSplit());
++  EXPECT_EQ(home_pin->GetSplit(), home_tab->GetSplit());
++  EXPECT_EQ(Index(home_pin) + 1, Index(home_tab)) << "a split stays whole";
++  EXPECT_EQ(Index(first) + 1, Index(loose)) << "the end of Work's pins";
++  EXPECT_TRUE(IsAboveTheLine(loose));
++}
++
+ // pins H17: the collapse is the Space's, kept with its name and colour, so
+ // it is there after a restart; a Space that was not collapsed is not.
+ IN_PROC_BROWSER_TEST_F(PinnedRunTest, PRE_TheCollapseSurvivesARestart) {

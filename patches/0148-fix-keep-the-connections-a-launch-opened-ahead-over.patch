@@ -1,0 +1,787 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Thu, 5 Nov 2026 19:55:07 -0500
+Subject: fix: keep the connections a launch opened ahead over https
+
+A tab given on the command line connects ahead to its server, and its request
+leaves a little later. If the certificate verifier announced a change in between,
+the network service closed every idle socket of the profile and the tab opened a
+new connection, which a server with a short accept queue can refuse; a background
+tab then stays on the error. Patch 0077 stopped that for a verifier that has
+verified nothing. Https tabs have made it verify something, and so has any https
+page in a profile, so both still saw the flush, and http tabs in such a profile
+with them.
+
+The updates a launch sends change nothing the verifier answers. The profile's
+certificates are the ones the service was made with, and the network time agrees
+with the clock. So the same certificates again no longer reach the verifier, and
+a time within the uncertainty the factory accepts of the clock the verifier was
+going by rebuilds the verifier without telling the client. A real change still
+tells it: other certificates, a CRLSet, a root store, a time further off.
+
+The test server now tells connections by the client's port, since over TLS the
+socket it reads is not the one it accepted, serves only those opened ahead once
+told to, and waits for the client's second flight, which comes once it has
+verified the certificate. CRLSetDoesNotDowngrade verifies first, as
+CRLSetIsUpdatedIfNewer already did for 0077.
+
+Why: tabs R46 (BACKLOG S-251). Https tabs, and http tabs after a verified
+certificate, each failed on their server's second connection when an update came
+between the connection ahead and the request.
+Removable when: upstream stops telling clients of an update that changes nothing,
+or stops closing idle sockets for it.
+---
+ .../test/stedding/startup_load_browsertest.cc | 256 ++++++++++++++++--
+ .../cert_verifier/cert_verifier_service.cc    |  42 ++-
+ .../cert_verifier/cert_verifier_service.h     |  17 +-
+ .../cert_verifier_service_factory.cc          |  30 +-
+ .../cert_verifier_service_factory.h           |   3 +-
+ .../cert_verifier_service_factory_unittest.cc |  53 ++++
+ .../cert_verifier_service_unittest.cc         |  26 ++
+ 7 files changed, 379 insertions(+), 48 deletions(-)
+
+diff --git a/chrome/test/stedding/startup_load_browsertest.cc b/chrome/test/stedding/startup_load_browsertest.cc
+index e2c316cb5c34d..e1cdcc8bde95c 100644
+--- a/chrome/test/stedding/startup_load_browsertest.cc
++++ b/chrome/test/stedding/startup_load_browsertest.cc
+@@ -16,7 +16,9 @@
+ // them at the addresses the session saved, with a favicon of their own.
+ 
+ #include <memory>
++#include <cstdint>
+ #include <optional>
++#include <set>
+ #include <string>
+ #include <string_view>
+ #include <vector>
+@@ -25,6 +27,8 @@
+ #include "base/command_line.h"
+ #include "base/files/file_path.h"
+ #include "base/files/file_util.h"
++#include "base/functional/bind.h"
++#include "base/functional/callback.h"
+ #include "base/memory/raw_ptr.h"
+ #include "base/memory/weak_ptr.h"
+ #include "base/notreached.h"
+@@ -37,6 +41,7 @@
+ #include "base/test/test_future.h"
+ #include "base/thread_annotations.h"
+ #include "base/threading/thread_restrictions.h"
++#include "base/time/time.h"
+ #include "chrome/browser/favicon/favicon_service_factory.h"
+ #include "chrome/browser/net/profile_network_context_service.h"
+ #include "chrome/browser/net/profile_network_context_service_factory.h"
+@@ -72,6 +77,7 @@
+ #include "content/public/browser/navigation_handle.h"
+ #include "content/public/browser/navigation_throttle.h"
+ #include "content/public/browser/navigation_throttle_registry.h"
++#include "content/public/browser/network_service_instance.h"
+ #include "content/public/browser/render_frame_host.h"
+ #include "content/public/browser/storage_partition.h"
+ #include "content/public/browser/web_contents.h"
+@@ -79,14 +85,18 @@
+ #include "content/public/test/browser_test.h"
+ #include "content/public/test/browser_test_utils.h"
+ #include "content/public/test/test_navigation_throttle_inserter.h"
++#include "net/base/completion_once_callback.h"
+ #include "net/base/filename_util.h"
++#include "net/base/ip_endpoint.h"
+ #include "net/base/net_errors.h"
+ #include "net/dns/mock_host_resolver.h"
++#include "net/socket/socket_test_util.h"
+ #include "net/socket/stream_socket.h"
+ #include "net/test/embedded_test_server/embedded_test_server.h"
+ #include "net/test/embedded_test_server/embedded_test_server_connection_listener.h"
+ #include "net/test/embedded_test_server/http_request.h"
+ #include "net/test/embedded_test_server/http_response.h"
++#include "services/cert_verifier/public/mojom/cert_verifier_service_factory.mojom.h"
+ #include "services/network/public/cpp/network_switches.h"
+ #include "services/network/public/mojom/cert_verifier_service_updater.mojom.h"
+ #include "third_party/skia/include/core/SkBitmap.h"
+@@ -622,12 +632,69 @@ class CommandLineTabsConnectedAheadTest : public InProcessBrowserTest {
+   static constexpr std::string_view kHosts = "abcde";
+   static constexpr size_t kBackground = kHosts.size() - 1;
+ 
+-  // A server of one background tab: it serves its page only on the first
+-  // connection it accepts and hangs up on a request that comes on another.
++  // A TLS connection's socket, under its TLS. The client sends its second
++  // flight once it has verified the certificate, so the second read that
++  // brings bytes says the connection is done. The TLS layer reads by Read()
++  // alone when ReadIfReady() is refused.
++  class HandshakeSocket : public net::WrappedStreamSocket {
++   public:
++    HandshakeSocket(std::unique_ptr<net::StreamSocket> socket,
++                    base::OnceClosure on_handshake)
++        : net::WrappedStreamSocket(std::move(socket)),
++          on_handshake_(std::move(on_handshake)) {}
++
++    int Read(net::IOBuffer* buffer,
++             int length,
++             net::CompletionOnceCallback callback) override {
++      const int rv = net::WrappedStreamSocket::Read(
++          buffer, length,
++          base::BindOnce(&HandshakeSocket::OnRead, base::Unretained(this),
++                         std::move(callback)));
++      if (rv > 0) {
++        Count();
++      }
++      return rv;
++    }
++
++    int ReadIfReady(net::IOBuffer* buffer,
++                    int length,
++                    net::CompletionOnceCallback callback) override {
++      return net::ERR_READ_IF_READY_NOT_IMPLEMENTED;
++    }
++
++   private:
++    void OnRead(net::CompletionOnceCallback callback, int rv) {
++      if (rv > 0) {
++        Count();
++      }
++      std::move(callback).Run(rv);
++    }
++
++    void Count() {
++      if (++reads_ == 2) {
++        std::move(on_handshake_).Run();
++      }
++    }
++
++    base::OnceClosure on_handshake_;
++    int reads_ = 0;
++  };
++
++  // A server of one background tab: once told to, it hangs up on a request
++  // that comes on a connection opened since.
+   class OneConnectionServer
+       : public net::test_server::EmbeddedTestServerConnectionListener {
+    public:
+-    explicit OneConnectionServer(char host) : host_(host) {
++    OneConnectionServer(char host, bool https)
++        : host_(host),
++          https_(https),
++          server_(https ? net::EmbeddedTestServer::TYPE_HTTPS
++                        : net::EmbeddedTestServer::TYPE_HTTP) {
++      if (https) {
++        net::EmbeddedTestServer::ServerCertificateConfig certificate;
++        certificate.dns_names = {std::string(1, host) + ".test"};
++        server_.SetSSLConfig(certificate);
++      }
+       server_.SetConnectionListener(this);
+       server_.RegisterRequestHandler(base::BindRepeating(
+           &OneConnectionServer::Handle, base::Unretained(this)));
+@@ -645,29 +712,58 @@ class CommandLineTabsConnectedAheadTest : public InProcessBrowserTest {
+       return refused_;
+     }
+ 
++    // Every connection accepted so far is ready to carry a request.
++    bool ConnectionsAreReady() {
++      base::AutoLock lock(lock_);
++      return !https_ || handshakes_ == accepted_;
++    }
++
++    // From now on only the connections opened ahead serve the page.
++    void ServeOnlyTheConnectionsOpenedAhead() {
++      base::AutoLock lock(lock_);
++      only_opened_ahead_ = true;
++    }
++
+     // net::test_server::EmbeddedTestServerConnectionListener (on the
+     // server's thread, as Handle() is):
+     std::unique_ptr<net::StreamSocket> AcceptedSocket(
+         std::unique_ptr<net::StreamSocket> socket) override {
+       base::AutoLock lock(lock_);
+-      if (++accepted_ == 1) {
+-        first_ = socket.get();
++      ++accepted_;
++      if (!only_opened_ahead_) {
++        net::IPEndPoint peer;
++        CHECK_EQ(net::OK, socket->GetPeerAddress(&peer));
++        opened_ahead_.insert(peer.port());
+       }
+-      return socket;
++      if (!https_) {
++        return socket;
++      }
++      return std::make_unique<HandshakeSocket>(
++          std::move(socket), base::BindOnce(&OneConnectionServer::Handshake,
++                                            base::Unretained(this)));
+     }
+     void ReadFromSocket(const net::StreamSocket& socket, int rv) override {
+       base::AutoLock lock(lock_);
+-      last_read_ = &socket;
++      // The client's port tells the connection, over TLS too, whose socket
++      // is not the one accepted.
++      net::IPEndPoint peer;
++      last_read_port_ =
++          socket.GetPeerAddress(&peer) == net::OK ? peer.port() : 0;
+     }
+ 
+    private:
++    void Handshake() {
++      base::AutoLock lock(lock_);
++      ++handshakes_;
++    }
++
+     std::unique_ptr<net::test_server::HttpResponse> Handle(
+         const net::test_server::HttpRequest& request) {
+       if (request.relative_url != "/page") {
+         return nullptr;
+       }
+       base::AutoLock lock(lock_);
+-      if (last_read_ != first_) {
++      if (!opened_ahead_.contains(last_read_port_)) {
+         ++refused_;
+         // Closed without a byte: the request fails as one reset does.
+         return std::make_unique<net::test_server::RawHttpResponse>("", "");
+@@ -680,15 +776,15 @@ class CommandLineTabsConnectedAheadTest : public InProcessBrowserTest {
+     }
+ 
+     const char host_;
++    const bool https_;
+     net::EmbeddedTestServer server_;
+     base::Lock lock_;
+     int accepted_ GUARDED_BY(lock_) = 0;
++    int handshakes_ GUARDED_BY(lock_) = 0;
+     int refused_ GUARDED_BY(lock_) = 0;
+-    // Compared, never dereferenced.
+-    raw_ptr<const net::StreamSocket, DisableDanglingPtrDetection> first_
+-        GUARDED_BY(lock_) = nullptr;
+-    raw_ptr<const net::StreamSocket, DisableDanglingPtrDetection> last_read_
+-        GUARDED_BY(lock_) = nullptr;
++    bool only_opened_ahead_ GUARDED_BY(lock_) = false;
++    std::set<uint16_t> opened_ahead_ GUARDED_BY(lock_);
++    uint16_t last_read_port_ GUARDED_BY(lock_) = 0;
+   };
+ 
+   // Holds a background tab's navigation before its request (after the
+@@ -732,8 +828,14 @@ class CommandLineTabsConnectedAheadTest : public InProcessBrowserTest {
+   void SetUpCommandLine(base::CommandLine* command_line) override {
+     InProcessBrowserTest::SetUpCommandLine(command_line);
+     ASSERT_TRUE(embedded_test_server()->InitializeAndListen());
++    net::EmbeddedTestServer::ServerCertificateConfig certificate;
++    certificate.dns_names = {"a.test"};
++    https_server_.SetSSLConfig(certificate);
++    https_server_.ServeFilesFromSourceDirectory(GetChromeTestDataDir());
++    ASSERT_TRUE(https_server_.InitializeAndListen());
+     for (const char host : kHosts.substr(1)) {
+-      servers_.push_back(std::make_unique<OneConnectionServer>(host));
++      servers_.push_back(
++          std::make_unique<OneConnectionServer>(host, BackgroundTabsAreHttps()));
+       ASSERT_TRUE(servers_.back()->server().InitializeAndListen());
+     }
+     // As in CommandLineTabsTest.
+@@ -747,6 +849,7 @@ class CommandLineTabsConnectedAheadTest : public InProcessBrowserTest {
+   void SetUpInProcessBrowserTestFixture() override {
+     InProcessBrowserTest::SetUpInProcessBrowserTestFixture();
+     embedded_test_server()->StartAcceptingConnections();
++    https_server_.StartAcceptingConnections();
+     for (auto& server : servers_) {
+       server->server().StartAcceptingConnections();
+     }
+@@ -765,7 +868,8 @@ class CommandLineTabsConnectedAheadTest : public InProcessBrowserTest {
+ 
+   GURL Url(char host) {
+     if (host == kHosts[0]) {
+-      return embedded_test_server()->GetURL("a.test", "/title2.html");
++      return (SelectedTabIsHttps() ? https_server_ : *embedded_test_server())
++          .GetURL("a.test", "/title2.html");
+     }
+     return servers_[kHosts.find(host) - 1]->server().GetURL(
+         std::string(1, host) + ".test", "/page");
+@@ -799,6 +903,14 @@ class CommandLineTabsConnectedAheadTest : public InProcessBrowserTest {
+     return out;
+   }
+ 
++  virtual bool SelectedTabIsHttps() const { return false; }
++  virtual bool BackgroundTabsAreHttps() const { return false; }
++  virtual bool HoldsTheTabs() const { return true; }
++
++  // What is sent while the tabs are held.
++  enum class Update { kProfileCertificates, kNetworkTime };
++  void ExpectEveryTabLoadsOverTheConnectionsOpenedAhead(Update update);
++
+   std::vector<std::unique_ptr<OneConnectionServer>> servers_;
+   std::vector<base::WeakPtr<HoldThrottle>> held_;
+ 
+@@ -816,7 +928,8 @@ class CommandLineTabsConnectedAheadTest : public InProcessBrowserTest {
+     content::NavigationHandle& handle = registry.GetNavigationHandle();
+     const GURL& url = handle.GetURL();
+     if (!handle.IsInPrimaryMainFrame() || !url.SchemeIsHTTPOrHTTPS() ||
+-        url.host() == "a.test" || !url.host().ends_with(".test")) {
++        url.host() == "a.test" || !url.host().ends_with(".test") ||
++        !HoldsTheTabs()) {
+       return;
+     }
+     auto throttle = std::make_unique<HoldThrottle>(registry);
+@@ -824,14 +937,15 @@ class CommandLineTabsConnectedAheadTest : public InProcessBrowserTest {
+     registry.AddThrottle(std::move(throttle));
+   }
+ 
++  net::EmbeddedTestServer https_server_{net::EmbeddedTestServer::TYPE_HTTPS};
+   base::CallbackListSubscription creation_;
+   std::vector<std::unique_ptr<content::TestNavigationThrottleInserter>>
+       inserters_;
+   std::vector<std::unique_ptr<ErrorRecorder>> recorders_;
+ };
+ 
+-IN_PROC_BROWSER_TEST_F(CommandLineTabsConnectedAheadTest,
+-                       ATabLoadsOverTheConnectionItOpenedAhead) {
++void CommandLineTabsConnectedAheadTest::
++    ExpectEveryTabLoadsOverTheConnectionsOpenedAhead(Update update) {
+   ASSERT_EQ(static_cast<int>(kHosts.size()), tabs()->count()) << Describe();
+   // Each background tab is held before its request, and has connected ahead.
+   ASSERT_TRUE(base::test::RunUntil([&]() {
+@@ -839,25 +953,40 @@ IN_PROC_BROWSER_TEST_F(CommandLineTabsConnectedAheadTest,
+       return false;
+     }
+     for (auto& server : servers_) {
+-      if (server->accepted() == 0) {
++      if (server->accepted() == 0 || !server->ConnectionsAreReady()) {
+         return false;
+       }
+     }
+     return true;
+   })) << "held " << held_.size() << " of" << Describe();
++  for (auto& server : servers_) {
++    server->ServeOnlyTheConnectionsOpenedAhead();
++  }
+ 
+-  // The profile's certificate update, as the launch sends it, now. The
+-  // network service hears of a change before the update is reported done,
+-  // and has handled it once its interfaces are flushed.
++  // The update, as the launch sends it, now. The network service hears of a
++  // change before the update is reported done, and has handled it once its
++  // interfaces are flushed.
+   Profile* const profile = browser()->GetProfile();
+   content::StoragePartition* const partition =
+       profile->GetDefaultStoragePartition();
+-  base::test::TestFuture<void> updated;
+-  partition->GetCertVerifierServiceUpdater()->WaitUntilNextUpdateForTesting(
+-      updated.GetCallback());
+-  ProfileNetworkContextServiceFactory::GetForContext(profile)
+-      ->UpdateAdditionalCertificates();
+-  ASSERT_TRUE(updated.Wait());
++  switch (update) {
++    case Update::kProfileCertificates: {
++      base::test::TestFuture<void> updated;
++      partition->GetCertVerifierServiceUpdater()->WaitUntilNextUpdateForTesting(
++          updated.GetCallback());
++      ProfileNetworkContextServiceFactory::GetForContext(profile)
++          ->UpdateAdditionalCertificates();
++      ASSERT_TRUE(updated.Wait());
++      break;
++    }
++    case Update::kNetworkTime: {
++      const base::Time now = base::Time::Now();
++      content::GetCertVerifierServiceFactory()->UpdateNetworkTime(
++          now, base::TimeTicks::Now(), now, base::Seconds(1));
++      content::GetCertVerifierServiceFactoryRemoteForTesting().FlushForTesting();
++      break;
++    }
++  }
+   partition->FlushNetworkInterfaceForTesting();
+ 
+   for (base::WeakPtr<HoldThrottle>& throttle : held_) {
+@@ -884,4 +1013,75 @@ IN_PROC_BROWSER_TEST_F(CommandLineTabsConnectedAheadTest,
+   }
+ }
+ 
++IN_PROC_BROWSER_TEST_F(CommandLineTabsConnectedAheadTest,
++                       ATabLoadsOverTheConnectionItOpenedAhead) {
++  ExpectEveryTabLoadsOverTheConnectionsOpenedAhead(
++      Update::kProfileCertificates);
++}
++
++// tabs R46, BACKLOG S-251: https addresses, whose connections opened ahead the
++// verifier has verified, so it told the network service of each update, and
++// the service dropped them. Neither update changed what the verifier answers:
++// the profile's certificates were the same again, and the network time agreed
++// with the clock.
++class CommandLineHttpsTabsConnectedAheadTest
++    : public CommandLineTabsConnectedAheadTest {
++ protected:
++  bool SelectedTabIsHttps() const override { return true; }
++  bool BackgroundTabsAreHttps() const override { return true; }
++};
++
++IN_PROC_BROWSER_TEST_F(CommandLineHttpsTabsConnectedAheadTest,
++                       AnHttpsTabLoadsOverTheConnectionItOpenedAhead) {
++  ExpectEveryTabLoadsOverTheConnectionsOpenedAhead(
++      Update::kProfileCertificates);
++}
++
++IN_PROC_BROWSER_TEST_F(CommandLineHttpsTabsConnectedAheadTest,
++                       ANetworkTimeThatAgreesLeavesTheConnectionsOpen) {
++  ExpectEveryTabLoadsOverTheConnectionsOpenedAhead(Update::kNetworkTime);
++}
++
++// tabs R46, BACKLOG S-251: plain http tabs in a profile that has verified a
++// certificate, here the selected tab's.
++class CommandLineTabsAfterAVerifiedCertificateTest
++    : public CommandLineTabsConnectedAheadTest {
++ protected:
++  bool SelectedTabIsHttps() const override { return true; }
++};
++
++IN_PROC_BROWSER_TEST_F(CommandLineTabsAfterAVerifiedCertificateTest,
++                       ATabLoadsOverTheConnectionItOpenedAhead) {
++  ExpectEveryTabLoadsOverTheConnectionsOpenedAhead(
++      Update::kProfileCertificates);
++}
++
++// tabs R46, BACKLOG S-251: five https addresses at a launch as it comes,
++// nothing held and no update sent by the test.
++class CommandLineHttpsTabsTest : public CommandLineTabsConnectedAheadTest {
++ protected:
++  bool SelectedTabIsHttps() const override { return true; }
++  bool BackgroundTabsAreHttps() const override { return true; }
++  bool HoldsTheTabs() const override { return false; }
++};
++
++IN_PROC_BROWSER_TEST_F(CommandLineHttpsTabsTest, EveryAddressLoadsAtLaunch) {
++  ASSERT_EQ(static_cast<int>(kHosts.size()), tabs()->count()) << Describe();
++  for (const char host : kHosts.substr(1)) {
++    SCOPED_TRACE(host);
++    content::WebContents* const contents =
++        tabs()->GetWebContentsAt(static_cast<int>(kHosts.find(host)));
++    ASSERT_EQ(Url(host), contents->GetVisibleURL()) << Describe();
++    ASSERT_TRUE(base::test::RunUntil([&]() {
++      return !contents->IsLoading() &&
++             !contents->GetPrimaryMainFrame()->GetLastCommittedURL().is_empty();
++    })) << Describe();
++    EXPECT_FALSE(contents->GetPrimaryMainFrame()->IsErrorDocument())
++        << "it showed an error page, of" << Describe();
++    EXPECT_EQ(u"Page " + base::ASCIIToUTF16(std::string(1, host)),
++              contents->GetTitle())
++        << Describe();
++  }
++}
++
+ }  // namespace
+diff --git a/services/cert_verifier/cert_verifier_service.cc b/services/cert_verifier/cert_verifier_service.cc
+index 4dd6a61cebe70..190c485348d94 100644
+--- a/services/cert_verifier/cert_verifier_service.cc
++++ b/services/cert_verifier/cert_verifier_service.cc
+@@ -95,14 +95,16 @@ CertVerifierServiceImpl::CertVerifierServiceImpl(
+     mojo::PendingRemote<mojom::CertVerifierServiceClient> client,
+     scoped_refptr<CertNetFetcherURLLoader> cert_net_fetcher,
+     net::CertVerifyProc::InstanceParams instance_params,
+-    bool wait_for_update)
++    bool wait_for_update,
++    mojom::AdditionalCertificatesPtr initial_additional_certificates)
+     : instance_params_(std::move(instance_params)),
+       verifier_(std::move(verifier)),
+       service_receiver_(this, std::move(service_receiver)),
+       updater_receiver_(this, std::move(updater_receiver)),
+       client_(std::move(client)),
+       cert_net_fetcher_(std::move(cert_net_fetcher)),
+-      waiting_for_update_(wait_for_update) {
++      waiting_for_update_(wait_for_update),
++      additional_certificates_(std::move(initial_additional_certificates)) {
+   // base::Unretained is safe because |this| owns |receiver_|, so deleting
+   // |this| will prevent |receiver_| from calling this callback.
+   service_receiver_.set_disconnect_handler(
+@@ -148,13 +150,24 @@ void CertVerifierServiceImpl::EnableNetworkAccess(
+ 
+ void CertVerifierServiceImpl::UpdateAdditionalCertificates(
+     mojom::AdditionalCertificatesPtr additional_certificates) {
+-  UpdateCertVerifierInstanceParams(additional_certificates, &instance_params_);
+-  // TODO(hchao, mattm): figure out what to do if the CertVerifierServiceFactory
+-  // is destroyed before the CertVerifierService (or if this is not possible in
+-  // normal circumstances, add a DCHECK or CHECK here).
+-  verifier_->UpdateVerifyProcData(cert_net_fetcher_,
+-                                  service_factory_impl_->get_impl_params(),
+-                                  instance_params_);
++  // Stedding (BACKLOG S-251): the certificates the verifier already has leave
++  // its answers as they were, so nothing it let through needs dropping. Each
++  // launch sends the profile's, most often none, the same as at the service's
++  // creation; once the service had verified a certificate, the client closed
++  // every idle socket for it, and the connections https tabs had opened ahead
++  // were gone (OnCertVerifierChanged()).
++  if (!additional_certificates.Equals(additional_certificates_)) {
++    UpdateCertVerifierInstanceParams(additional_certificates,
++                                     &instance_params_);
++    // TODO(hchao, mattm): figure out what to do if the
++    // CertVerifierServiceFactory is destroyed before the CertVerifierService
++    // (or if this is not possible in normal circumstances, add a DCHECK or
++    // CHECK here).
++    verifier_->UpdateVerifyProcData(cert_net_fetcher_,
++                                    service_factory_impl_->get_impl_params(),
++                                    instance_params_);
++    additional_certificates_ = std::move(additional_certificates);
++  }
+   waiting_for_update_ = false;
+ 
+   // Empty queue if necessary
+@@ -195,9 +208,13 @@ void CertVerifierServiceImpl::SetCertVerifierServiceFactory(
+ }
+ 
+ void CertVerifierServiceImpl::UpdateVerifierData(
+-    const net::CertVerifyProc::ImplParams& impl_params) {
++    const net::CertVerifyProc::ImplParams& impl_params,
++    bool quiet) {
++  // The verifier tells its observers within this call.
++  quiet_update_ = quiet;
+   verifier_->UpdateVerifyProcData(cert_net_fetcher_, impl_params,
+                                   instance_params_);
++  quiet_update_ = false;
+ }
+ 
+ void CertVerifierServiceImpl::Verify(
+@@ -293,8 +310,9 @@ void CertVerifierServiceImpl::OnCertVerifierChanged() {
+   // a new connection at the same moment; a server with a short accept queue
+   // (Python's http.server: five) had some of them reset, a fresh connection
+   // reset before its response is not retried, and those tabs, in the
+-  // background, stayed on ERR_CONNECTION_RESET.
+-  if (!verified_any_) {
++  // background, stayed on ERR_CONNECTION_RESET. An update that changes no
++  // answer is not passed on either (`quiet_update_`).
++  if (!verified_any_ || quiet_update_) {
+     return;
+   }
+   client_->OnCertVerifierChanged();
+diff --git a/services/cert_verifier/cert_verifier_service.h b/services/cert_verifier/cert_verifier_service.h
+index e7d8ec2a010ad..8d1e54637f7f4 100644
+--- a/services/cert_verifier/cert_verifier_service.h
++++ b/services/cert_verifier/cert_verifier_service.h
+@@ -52,7 +52,8 @@ class CertVerifierServiceImpl : public mojom::CertVerifierService,
+       mojo::PendingRemote<mojom::CertVerifierServiceClient> client,
+       scoped_refptr<CertNetFetcherURLLoader> cert_net_fetcher,
+       net::CertVerifyProc::InstanceParams instance_params,
+-      bool wait_for_update);
++      bool wait_for_update,
++      mojom::AdditionalCertificatesPtr initial_additional_certificates = {});
+ 
+   // mojom::CertVerifierService implementation:
+   void Verify(const net::CertVerifier::RequestParams& params,
+@@ -87,8 +88,11 @@ class CertVerifierServiceImpl : public mojom::CertVerifierService,
+       base::WeakPtr<cert_verifier::CertVerifierServiceFactoryImpl>
+           service_factory_impl);
+ 
+-  // Update the wrapped verifier with CRLSet and ChromeRootStoreData.
+-  void UpdateVerifierData(const net::CertVerifyProc::ImplParams& impl_params);
++  // Update the wrapped verifier with CRLSet and ChromeRootStoreData. Stedding
++  // (BACKLOG S-251): with `quiet`, the client does not hear of it, because the
++  // update leaves the verifier's answers as they were.
++  void UpdateVerifierData(const net::CertVerifyProc::ImplParams& impl_params,
++                          bool quiet = false);
+ 
+  private:
+   struct QueuedCertVerifyRequest {
+@@ -128,6 +132,13 @@ class CertVerifierServiceImpl : public mojom::CertVerifierService,
+   // `verifier_`. Until then a change of the verifier is not passed on to the
+   // client (OnCertVerifierChanged()).
+   bool verified_any_ = false;
++  // Stedding (BACKLOG S-251): the certificates `verifier_` was last given. The
++  // same again changes nothing, so it does not reach the verifier or the
++  // client.
++  mojom::AdditionalCertificatesPtr additional_certificates_;
++  // Stedding (BACKLOG S-251): set during an update the client does not hear
++  // of (UpdateVerifierData()).
++  bool quiet_update_ = false;
+   bool enable_network_access_called_ = false;
+   std::vector<QueuedCertVerifyRequest> queued_requests_;
+   WaitUntilNextUpdateForTestingCallback update_complete_callback_;
+diff --git a/services/cert_verifier/cert_verifier_service_factory.cc b/services/cert_verifier/cert_verifier_service_factory.cc
+index dfba6079644f0..c8d27b933dfb4 100644
+--- a/services/cert_verifier/cert_verifier_service_factory.cc
++++ b/services/cert_verifier/cert_verifier_service_factory.cc
+@@ -129,7 +129,8 @@ internal::CertVerifierServiceImpl* GetNewCertVerifierImpl(
+       std::move(cert_verifier), std::move(service_receiver),
+       std::move(updater_receiver), std::move(client),
+       std::move(cert_net_fetcher), std::move(instance_params),
+-      creation_params->wait_for_update);
++      creation_params->wait_for_update,
++      std::move(creation_params->initial_additional_certificates));
+ }
+ 
+ #if BUILDFLAG(CHROME_ROOT_STORE_SUPPORTED)
+@@ -567,9 +568,30 @@ void CertVerifierServiceFactoryImpl::UpdateNetworkTime(
+   if (uncertainty > kMaxUncertaintyForNetworkTime) {
+     return;
+   }
++  // Stedding (BACKLOG S-251): a time that agrees with the clock the verifier
++  // was going by is no change its clients need to act on. A certificate's
++  // answer moves with time anyway, and an idle socket stays open as time
++  // passes, so the few seconds between the two are no reason to close it. The
++  // launch's own update came once a service had verified a certificate, and
++  // the client closed every idle socket for it: the connections https tabs
++  // had opened ahead, and any plain http ones. Agreeing means within what this
++  // update may be uncertain by at most. A time further off is passed on, as
++  // upstream passes on every update.
++  const base::Time now = base::Time::Now();
++  const base::TimeTicks ticks = base::TimeTicks::Now();
++  base::Time before = now;
++  base::TimeDelta unused;
++  if (proc_params_.time_tracker &&
++      !proc_params_.time_tracker->GetTime(now, ticks, &before, &unused)) {
++    before = now;
++  }
+   proc_params_.time_tracker.emplace(system_time, system_ticks, current_time,
+                                     uncertainty);
+-  UpdateVerifierServices();
++  base::Time after;
++  const bool agrees =
++      proc_params_.time_tracker->GetTime(now, ticks, &after, &unused) &&
++      (after - before).magnitude() <= kMaxUncertaintyForNetworkTime;
++  UpdateVerifierServices(/*quiet=*/agrees);
+ }
+ 
+ #if BUILDFLAG(CHROME_ROOT_STORE_OPTIONAL)
+@@ -605,9 +627,9 @@ void CertVerifierServiceFactoryImpl::InitializeRootStoreDataIfNecessary() {
+ #endif  // BUILDFLAG(CHROME_ROOT_STORE_SUPPORTED)
+ }
+ 
+-void CertVerifierServiceFactoryImpl::UpdateVerifierServices() {
++void CertVerifierServiceFactoryImpl::UpdateVerifierServices(bool quiet) {
+   for (internal::CertVerifierServiceImpl* service : verifier_services_) {
+-    service->UpdateVerifierData(proc_params_);
++    service->UpdateVerifierData(proc_params_, quiet);
+   }
+ }
+ 
+diff --git a/services/cert_verifier/cert_verifier_service_factory.h b/services/cert_verifier/cert_verifier_service_factory.h
+index 98fcb48fb309e..4738e21c361a2 100644
+--- a/services/cert_verifier/cert_verifier_service_factory.h
++++ b/services/cert_verifier/cert_verifier_service_factory.h
+@@ -113,7 +113,8 @@ class CertVerifierServiceFactoryImpl
+   void InitializeRootStoreDataIfNecessary();
+ 
+   // Update all the `verifier_services_` with the current data.
+-  void UpdateVerifierServices();
++  // Stedding (BACKLOG S-251): with `quiet`, their clients do not hear of it.
++  void UpdateVerifierServices(bool quiet = false);
+ 
+   void OnCRLSetParsed(scoped_refptr<net::CRLSet> parsed_crl_set);
+ 
+diff --git a/services/cert_verifier/cert_verifier_service_factory_unittest.cc b/services/cert_verifier/cert_verifier_service_factory_unittest.cc
+index e68ba7b33a3d1..0d701d337530b 100644
+--- a/services/cert_verifier/cert_verifier_service_factory_unittest.cc
++++ b/services/cert_verifier/cert_verifier_service_factory_unittest.cc
+@@ -1239,6 +1239,13 @@ TEST_F(CertVerifierServiceFactoryBuiltinVerifierTest, CRLSetDoesNotDowngrade) {
+   // No updates should have happened yet.
+   EXPECT_EQ(cv_service_client.changed_count_, 0u);
+ 
++  // Stedding (BACKLOG S-251): a change reaches the client once the service
++  // has verified a certificate, so this one is verified first.
++  {
++    auto [net_error, result] = Verify(cv_service_remote, ok_cert, "127.0.0.1");
++    EXPECT_THAT(net_error, IsOk());
++  }
++
+   // Send a CRLSet which blocks the root with no SPKI hash exception.
+   UpdateCRLSetWithTestFile(&cv_service_factory_impl,
+                            "crlset_by_root_subject_no_spki.raw");
+@@ -1934,6 +1941,52 @@ TEST(CertVerifierServiceFactoryTest, UpdateMtcConfigDisableFlag) {
+ }
+ #endif  // BUILDFLAG(CHROME_ROOT_STORE_SUPPORTED)
+ 
++// Stedding (BACKLOG S-251): a network time that agrees with the clock is not
++// passed on to a client that has verified a certificate, and one further off
++// is.
++TEST_F(CertVerifierServiceFactoryBuiltinVerifierTest,
++       AClientHearsOfANetworkTimeOnlyWhenItDisagrees) {
++  scoped_refptr<net::X509Certificate> test_root(net::ImportCertFromFile(
++      net::GetTestCertsDirectory(), "root_ca_cert.pem"));
++  ASSERT_TRUE(test_root);
++  net::ScopedTestRoot scoped_test_root(test_root);
++  scoped_refptr<net::X509Certificate> ok_cert(
++      net::ImportCertFromFile(net::GetTestCertsDirectory(), "ok_cert.pem"));
++  ASSERT_TRUE(ok_cert);
++
++  mojo::Remote<mojom::CertVerifierServiceFactory> cv_service_factory_remote;
++  CertVerifierServiceFactoryImpl cv_service_factory_impl(
++      cv_service_factory_remote.BindNewPipeAndPassReceiver());
++  EnableChromeRootStoreIfOptional(&cv_service_factory_impl);
++
++  mojo::Remote<mojom::CertVerifierService> cv_service_remote;
++  DummyCVServiceClient cv_service_client;
++  cv_service_factory_remote->GetNewCertVerifier(
++      cv_service_remote.BindNewPipeAndPassReceiver(),
++      /*updater=*/mojo::NullReceiver(),
++      cv_service_client.client_.BindNewPipeAndPassRemote(),
++      mojom::CertVerifierCreationParams::New());
++  cv_service_remote.FlushForTesting();
++  {
++    auto [net_error, result] = Verify(cv_service_remote, ok_cert, "127.0.0.1");
++    EXPECT_THAT(net_error, IsOk());
++  }
++
++  const base::Time now = base::Time::Now();
++  const base::TimeTicks ticks_now = base::TimeTicks::Now();
++  cv_service_factory_impl.UpdateNetworkTime(
++      now, ticks_now, now + base::Seconds(10), base::Seconds(1));
++  cv_service_factory_impl.UpdateNetworkTime(
++      now, ticks_now, now - base::Seconds(10), base::Seconds(1));
++  cv_service_client.client_.FlushForTesting();
++  EXPECT_EQ(cv_service_client.changed_count_, 0u);
++
++  cv_service_factory_impl.UpdateNetworkTime(now, ticks_now, now + base::Days(1),
++                                            base::Seconds(1));
++  cv_service_client.WaitForCertVerifierChange(1u);
++  EXPECT_EQ(cv_service_client.changed_count_, 1u);
++}
++
+ TEST_F(CertVerifierServiceFactoryBuiltinVerifierTest,
+        UpdateNetworkTime_Applied) {
+   auto [leaf, root] = net::CertBuilder::CreateSimpleChain2();
+diff --git a/services/cert_verifier/cert_verifier_service_unittest.cc b/services/cert_verifier/cert_verifier_service_unittest.cc
+index dec9ab9de69b8..a898f2afb107c 100644
+--- a/services/cert_verifier/cert_verifier_service_unittest.cc
++++ b/services/cert_verifier/cert_verifier_service_unittest.cc
+@@ -129,6 +129,7 @@ class DummyCertVerifier : public net::CertVerifierWithUpdatableProc {
+       const net::CertVerifyProc::ImplParams& impl_params,
+       const net::CertVerifyProc::InstanceParams& instance_params) override {
+     has_updated_proc_data_ = true;
++    ++proc_data_updates_;
+   }
+ 
+   void RespondToRequest(const net::CertVerifier::RequestParams& params) {
+@@ -152,6 +153,7 @@ class DummyCertVerifier : public net::CertVerifierWithUpdatableProc {
+   }
+ 
+   bool HasUpdatedProcData() { return has_updated_proc_data_; }
++  int proc_data_updates() const { return proc_data_updates_; }
+ 
+   bool WasRequestCancelled(const net::CertVerifier::RequestParams& params) {
+     return cancelled_requests_.find(params) != cancelled_requests_.end();
+@@ -183,6 +185,7 @@ class DummyCertVerifier : public net::CertVerifierWithUpdatableProc {
+   net::CertVerifier::Config config_;
+   raw_ptr<CertVerifier::Observer> observer_ = nullptr;
+   bool has_updated_proc_data_ = false;
++  int proc_data_updates_ = 0;
+ };
+ 
+ struct DummyCVServiceRequest : public mojom::CertVerifierRequest {
+@@ -508,6 +511,29 @@ TEST_F(CertVerifierServiceTest, ObserverIsRegistered) {
+   EXPECT_EQ(cv_service_client_changed_count(), 2u);
+ }
+ 
++// Stedding (BACKLOG S-251): certificates the verifier already has do not reach
++// it, so its client hears of nothing. Others do.
++TEST_F(CertVerifierServiceTest, TheSameCertificatesAgainChangeNothing) {
++  CreateImpl(/*wait_for_update=*/false);
++  const auto update = [&](mojom::AdditionalCertificatesPtr certificates) {
++    cv_service_updater_remote()->UpdateAdditionalCertificates(
++        std::move(certificates));
++    cv_service_updater_remote().FlushForTesting();
++  };
++  mojom::AdditionalCertificatesPtr none = mojom::AdditionalCertificates::New();
++  update(none.Clone());
++  EXPECT_EQ(1, dummy_cv()->proc_data_updates());
++  update(none.Clone());
++  EXPECT_EQ(1, dummy_cv()->proc_data_updates());
++
++  mojom::AdditionalCertificatesPtr some = none.Clone();
++  some->distrusted_spkis.push_back({1, 2, 3});
++  update(some.Clone());
++  EXPECT_EQ(2, dummy_cv()->proc_data_updates());
++  update(some.Clone());
++  EXPECT_EQ(2, dummy_cv()->proc_data_updates());
++}
++
+ TEST_F(CertVerifierServiceTest, TestSingleRequestQueued) {
+   CreateImpl(/*wait_for_update=*/true);
+   net::CertVerifier::RequestParams dummy_params(GetTestCert(), "example.com", 0,

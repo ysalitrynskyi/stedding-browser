@@ -1,0 +1,269 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Thu, 5 Nov 2026 20:40:54 -0500
+Subject: feat: ask a peek's permissions over the page
+
+A page in a peek over the page that asked for a permission got no prompt. The
+request manager comes with a tab's features, and a peek is no tab, so nothing took
+the request and the page was answered as if a prompt had been ignored. The peek now
+makes the manager itself, as the contextual tasks panel does for its page, and the
+page keeps it when it becomes a tab.
+
+The prompt hangs from the card's bar, under the site, since a peek has no address
+row of its own, and its title names the page's site. It goes and comes with the
+peek, whose tab another tab on screen hides. Closing the peek takes it along. Open
+as Tab takes the prompt down with the card and keeps the question, and the page
+asks it again in its tab, as a tab asks.
+
+Why: peek P20 (BACKLOG S-376). A permission asked for in a peek was lost, and the
+page's only way to get one was Open as Tab and asking again.
+Removable when: the peek over the page leaves the series.
+---
+ .../ui/views/bubble_anchor_util_views.cc      |  11 ++
+ chrome/browser/ui/views/peek/peek_overlay.cc  |  16 +++
+ .../stedding/peek_over_page_browsertest.cc    | 131 ++++++++++++++++++
+ 3 files changed, 158 insertions(+)
+
+diff --git a/chrome/browser/ui/views/bubble_anchor_util_views.cc b/chrome/browser/ui/views/bubble_anchor_util_views.cc
+index 3e40bc685c74a..41b296a24a288 100644
+--- a/chrome/browser/ui/views/bubble_anchor_util_views.cc
++++ b/chrome/browser/ui/views/bubble_anchor_util_views.cc
+@@ -18,6 +18,7 @@
+ #include "chrome/browser/ui/views/frame/top_container_view.h"
+ #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
+ #include "chrome/browser/ui/views/payments/payment_handler_web_flow_view_controller.h"
++#include "chrome/browser/ui/views/peek/peek_overlay.h"
+ #include "chrome/browser/ui/views/permissions/chip/permission_chip_view.h"
+ #include "chrome/browser/ui/views/permissions/chip/permission_dashboard_view.h"
+ #include "chrome/browser/ui/views/picture_in_picture/document_pip_host.h"
+@@ -154,6 +155,16 @@ AnchorConfiguration GetPermissionPromptBubbleAnchorConfiguration(
+     return GetPageInfoAnchorConfiguration(browser);
+   }
+ 
++  // Stedding (peek P20, BACKLOG S-376): a page in a peek over the page is in
++  // no tab yet, so it has no address bar of its own. Its prompt hangs from the
++  // card's bar, under the site the page is on.
++  if (const stedding::PeekOverlay* const peek =
++          stedding::PeekOverlay::ForPage(web_contents);
++      peek && peek->view()) {
++    return {views::BubbleAnchor(peek->view()->site()), std::nullopt,
++            views::BubbleBorder::TOP_LEFT};
++  }
++
+   // For for non-Browser hosted PiP windows anchor to the location icon.
+   auto* pip_host = DocumentPipHost::FromChildWebContents(web_contents);
+   if (pip_host && pip_host->GetWidget()) {
+diff --git a/chrome/browser/ui/views/peek/peek_overlay.cc b/chrome/browser/ui/views/peek/peek_overlay.cc
+index 987f1a0772e77..a61cf5738785b 100644
+--- a/chrome/browser/ui/views/peek/peek_overlay.cc
++++ b/chrome/browser/ui/views/peek/peek_overlay.cc
+@@ -36,6 +36,8 @@
+ #include "chrome/browser/ui/views/picture_in_picture/document_pip_dialog_manager_delegate.h"
+ #include "chrome/grit/generated_resources.h"
+ #include "components/javascript_dialogs/tab_modal_dialog_manager.h"
++#include "components/permissions/permission_recovery_success_rate_tracker.h"
++#include "components/permissions/permission_request_manager.h"
+ #include "components/prefs/pref_service.h"
+ #include "components/tabs/public/tab_interface.h"
+ #include "components/vector_icons/vector_icons.h"
+@@ -463,6 +465,12 @@ bool PeekOverlay::Show() {
+   // extensions -- whose delegate the peek is until it closes or becomes a
+   // tab, when the window's tab features take over.
+   TabHelpers::AttachTabHelpers(page_.get());
++  // P20 (BACKLOG S-376): these are the tab features' for a tab, and a peek is
++  // none. With no manager a permission the page asked for was answered as an
++  // ignored prompt. Kept as a tab, the page keeps them.
++  permissions::PermissionRequestManager::CreateForWebContents(page_.get());
++  permissions::PermissionRecoverySuccessRateTracker::CreateForWebContents(
++      page_.get());
+   page_->SetDelegate(this);
+   Observe(page_.get());
+ 
+@@ -579,6 +587,14 @@ bool PeekOverlay::Promote(bool split) {
+       javascript_dialogs::TabModalDialogManager::UserDataKey());
+   page->SetDelegate(nullptr);
+   Observe(nullptr);
++  // P20 (BACKLOG S-376): a prompt up hangs from the card, which goes now. The
++  // page out of sight takes it down and keeps the question, and the page on
++  // screen in its tab asks again there.
++  if (auto* const prompts =
++          permissions::PermissionRequestManager::FromWebContents(page.get());
++      prompts && prompts->IsRequestInProgress()) {
++    page->WasHidden();
++  }
+   view_->web_view()->SetWebContents(nullptr);
+   // The pinned tab takes input again before the page arrives beside it.
+   Destroy();
+diff --git a/chrome/test/stedding/peek_over_page_browsertest.cc b/chrome/test/stedding/peek_over_page_browsertest.cc
+index b24377f0669fb..4c9668831ad7e 100644
+--- a/chrome/test/stedding/peek_over_page_browsertest.cc
++++ b/chrome/test/stedding/peek_over_page_browsertest.cc
+@@ -10,6 +10,7 @@
+ #include <ios>
+ #include <memory>
+ #include <string>
++#include <variant>
+ 
+ #include "base/memory/raw_ptr.h"
+ #include "base/scoped_observation.h"
+@@ -34,9 +35,12 @@
+ #include "chrome/browser/ui/views/peek/peek_overlay.h"
+ #include "chrome/test/base/in_process_browser_test.h"
+ #include "chrome/test/base/ui_test_utils.h"
++#include "chrome/test/permissions/permission_request_manager_test_api.h"
+ #include "components/javascript_dialogs/app_modal_dialog_controller.h"
+ #include "components/javascript_dialogs/app_modal_dialog_queue.h"
+ #include "components/javascript_dialogs/app_modal_dialog_view.h"
++#include "components/permissions/permission_request_manager.h"
++#include "components/permissions/test/permission_request_observer.h"
+ #include "components/prefs/pref_service.h"
+ #include "components/tabs/public/tab_interface.h"
+ #include "components/input/native_web_keyboard_event.h"
+@@ -64,6 +68,7 @@
+ #include "ui/views/controls/label.h"
+ #include "ui/views/controls/webview/webview.h"
+ #include "ui/views/test/button_test_api.h"
++#include "ui/views/test/widget_test.h"
+ #include "ui/views/widget/any_widget_observer.h"
+ #include "ui/views/widget/widget.h"
+ #include "url/gurl.h"
+@@ -187,6 +192,28 @@ class PeekOverPageTest : public InProcessBrowserTest {
+     });
+   }
+ 
++  // Asks for notifications from `page`, with the user's activation, and
++  // waits for the prompt. window.answer holds the answer once it comes.
++  void AskForNotifications(content::WebContents* page) {
++    ASSERT_TRUE(permissions::PermissionRequestManager::FromWebContents(page))
++        << "no one to ask";
++    permissions::PermissionRequestObserver shown(page);
++    ASSERT_TRUE(content::ExecJs(
++        page,
++        "window.answer = 'none';"
++        "Notification.requestPermission().then(a => { window.answer = a; });"
++        "true;"));
++    shown.Wait();
++    EXPECT_TRUE(shown.request_shown()) << "no prompt came";
++  }
++
++  // The widget of the prompt `page` shows, or null.
++  views::Widget* PromptOf(content::WebContents* page) {
++    return test::PermissionRequestManagerTestApi(
++               permissions::PermissionRequestManager::FromWebContents(page))
++        .GetPromptWindow();
++  }
++
+   static void Press(views::Button* button) {
+     const gfx::Point centre = button->GetLocalBounds().CenterPoint();
+     views::test::ButtonTestApi(button).NotifyClick(ui::MouseEvent(
+@@ -442,6 +469,110 @@ IN_PROC_BROWSER_TEST_F(PeekOverPageTest, OpenAsTabMovesThePageAsItIs) {
+   EXPECT_FALSE(stedding::PeekOverPageSourceOf(page));
+ }
+ 
++// P20 (BACKLOG S-376): a page in a peek that asks for a permission gets the
++// prompt, over the peek, for the page's own site, and the answer reaches the
++// page. A peek's page had no one to ask: the request manager comes with a tab,
++// and the request was answered as if the prompt had been ignored.
++IN_PROC_BROWSER_TEST_F(PeekOverPageTest, APermissionIsAskedOverThePeek) {
++  ASSERT_NO_FATAL_FAILURE(OpenPin(Url("localhost", "/title3.html")));
++  tabs::TabInterface* const pin = tab();
++  ClickLink();
++  stedding::PeekOverlay* const peek = WaitForPeek(pin);
++  ASSERT_TRUE(peek);
++  content::WebContents* const page = peek->page();
++  ASSERT_NO_FATAL_FAILURE(AskForNotifications(page));
++  views::Widget* const prompt = PromptOf(page);
++  ASSERT_TRUE(prompt) << "no prompt came";
++  EXPECT_TRUE(prompt->IsVisible());
++  EXPECT_TRUE(peek->widget()->GetWindowBoundsInScreen().Contains(
++      prompt->GetWindowBoundsInScreen().origin()))
++      << "the prompt is not over the peek";
++  EXPECT_EQ(Url("localhost", "/").GetWithEmptyPath(),
++            permissions::PermissionRequestManager::FromWebContents(page)
++                ->GetRequestingOrigin());
++
++  permissions::PermissionRequestManager::FromWebContents(page)->Accept(
++      /*prompt_options=*/std::monostate());
++  EXPECT_TRUE(base::test::RunUntil([&]() {
++    return content::EvalJs(page, "window.answer").ExtractString() == "granted";
++  })) << "the page has no answer";
++  EXPECT_FALSE(PromptOf(page));
++}
++
++// P20 (BACKLOG S-376): the prompt goes and comes with the peek, whose tab
++// another tab on screen hides, and the question is still open when it is back.
++IN_PROC_BROWSER_TEST_F(PeekOverPageTest, APromptGoesAndComesWithItsTab) {
++  ASSERT_NO_FATAL_FAILURE(OpenPin(Url("localhost", "/title3.html")));
++  tabs::TabInterface* const pin = tab();
++  const int pin_index = tabs().active_index();
++  ClickLink();
++  stedding::PeekOverlay* const peek = WaitForPeek(pin);
++  ASSERT_TRUE(peek);
++  content::WebContents* const page = peek->page();
++  ASSERT_NO_FATAL_FAILURE(AskForNotifications(page));
++  ASSERT_TRUE(PromptOf(page));
++
++  const int other = pin_index == 0 ? 1 : 0;
++  ASSERT_GT(tabs().count(), other);
++  tabs().ActivateTabAt(other);
++  EXPECT_TRUE(base::test::RunUntil([&]() {
++    views::Widget* const prompt = PromptOf(page);
++    return !prompt || !prompt->IsVisible();
++  })) << "the prompt stayed over another tab";
++
++  tabs().ActivateTabAt(pin_index);
++  EXPECT_TRUE(base::test::RunUntil([&]() {
++    views::Widget* const prompt = PromptOf(page);
++    return prompt && prompt->IsVisible();
++  })) << "the prompt did not come back with its tab";
++}
++
++// P7, P20 (BACKLOG S-376): Open as Tab with the prompt up keeps the question:
++// the page asks it again in its tab, as a tab asks.
++IN_PROC_BROWSER_TEST_F(PeekOverPageTest, APromptFollowsThePageIntoATab) {
++  ASSERT_NO_FATAL_FAILURE(OpenPin(Url("localhost", "/title3.html")));
++  tabs::TabInterface* const pin = tab();
++  ClickLink();
++  stedding::PeekOverlay* const peek = WaitForPeek(pin);
++  ASSERT_TRUE(peek);
++  content::WebContents* const page = peek->page();
++  ASSERT_NO_FATAL_FAILURE(AskForNotifications(page));
++  ASSERT_TRUE(PromptOf(page));
++
++  // A tab's question may be a chip in the address row, not a bubble.
++  permissions::PermissionRequestObserver asked_again(page);
++  Press(peek->view()->open_as_tab_button());
++  ASSERT_TRUE(WaitForNoPeek(pin));
++  ASSERT_EQ(page, contents());
++  asked_again.Wait();
++  ASSERT_TRUE(asked_again.request_shown())
++      << "the page's question went with the peek";
++  permissions::PermissionRequestManager::FromWebContents(page)->Accept(
++      /*prompt_options=*/std::monostate());
++  EXPECT_TRUE(base::test::RunUntil([&]() {
++    return content::EvalJs(page, "window.answer").ExtractString() == "granted";
++  })) << "the page has no answer";
++}
++
++// P20 (BACKLOG S-376): a peek closed with the prompt up takes it along, and
++// the pin takes input again.
++IN_PROC_BROWSER_TEST_F(PeekOverPageTest, AClosedPeekTakesItsPromptWithIt) {
++  ASSERT_NO_FATAL_FAILURE(OpenPin(Url("localhost", "/title3.html")));
++  tabs::TabInterface* const pin = tab();
++  ClickLink();
++  stedding::PeekOverlay* const peek = WaitForPeek(pin);
++  ASSERT_TRUE(peek);
++  content::WebContents* const page = peek->page();
++  ASSERT_NO_FATAL_FAILURE(AskForNotifications(page));
++  views::Widget* const prompt = PromptOf(page);
++  ASSERT_TRUE(prompt);
++  views::test::WidgetDestroyedWaiter gone(prompt);
++
++  Press(peek->view()->close_button());
++  gone.Wait();
++  EXPECT_TRUE(WaitForNoPeek(pin));
++}
++
+ // P9, P20: a pin in its Space can take a split: the bar and the page menu
+ // offer it, and the page goes beside the pin. Cmd-O over another peek keeps
+ // that one as a tab.

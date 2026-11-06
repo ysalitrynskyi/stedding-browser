@@ -1,0 +1,304 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Thu, 5 Nov 2026 20:46:49 -0500
+Subject: feat: bring the layout of Arc's splits across
+
+An Arc split came in side by side and half and half, whatever it was in Arc. Its
+layout is in the file: splitView.layoutOrientation says side by side or stacked,
+and splitView.itemWidthFactors gives each pane's share, as a list of pane ids each
+followed by its share. A split nobody resized holds the first pane's alone, and a
+pane with no share has an equal part of what is left. Of three or four panes the
+first two make the split, and share what they hold between them. Numbers with no
+ids are read by the panes' order, as some readers take them. Anything else stays
+half and half.
+
+Why: import I7 (BACKLOG S-103). The shape was checked against several public
+readers of real files, so this no longer waits for a real file. One import of a
+real file is still owed.
+Removable when: the Arc importer leaves the series.
+---
+ .../browser/ui/spaces/arc_sidebar_importer.cc |  78 +++++++++++++-
+ .../browser/ui/spaces/arc_sidebar_importer.h  |   4 +
+ .../spaces/arc_sidebar_importer_unittest.cc   | 102 ++++++++++++++++++
+ 3 files changed, 181 insertions(+), 3 deletions(-)
+
+diff --git a/chrome/browser/ui/spaces/arc_sidebar_importer.cc b/chrome/browser/ui/spaces/arc_sidebar_importer.cc
+index 577faf158c9d8..46bbf0a0bc8c8 100644
+--- a/chrome/browser/ui/spaces/arc_sidebar_importer.cc
++++ b/chrome/browser/ui/spaces/arc_sidebar_importer.cc
+@@ -168,6 +168,9 @@ struct ArcItem {
+   std::u16string name;
+   GURL url;
+   std::string container_type;
++  // I7: how a split is laid out.
++  bool stacked = false;
++  double first_share = 0.5;
+   // folders F42: a list's icon, in the "stedding" dict a file Stedding wrote
+   // gives it (sidebar-file Sf2); Arc's own lists have none.
+   std::string icon;
+@@ -229,6 +232,54 @@ std::string FirstString(const base::Value& value) {
+   return std::string();
+ }
+ 
++// I7: how much of the first two panes of a split the first takes. Arc keeps
++// `itemWidthFactors`, a list of pane ids each followed by its share, the pane
++// a split nobody resized gives alone; a pane with no share has an equal share
++// of what is left. Numbers alone are read by the panes' order. Anything else,
++// or a share out of range, is half and half.
++double FirstPaneShare(const base::DictValue& split,
++                      const std::vector<std::string>& panes) {
++  constexpr double kHalf = 0.5;
++  const base::ListValue* const factors = split.FindList("itemWidthFactors");
++  if (!factors || panes.size() < 2) {
++    return kHalf;
++  }
++  std::map<std::string, double> shares;
++  for (size_t i = 0; i < factors->size(); ++i) {
++    const base::Value& value = (*factors)[i];
++    if (value.is_string() && i + 1 < factors->size() &&
++        (*factors)[i + 1].is_double()) {
++      shares[value.GetString()] = (*factors)[i + 1].GetDouble();
++      ++i;
++    } else if (value.is_double() && i < panes.size()) {
++      shares[panes[i]] = value.GetDouble();
++    } else {
++      return kHalf;
++    }
++  }
++  double known = 0;
++  size_t missing = 0;
++  for (const std::string& pane : panes) {
++    const auto it = shares.find(pane);
++    if (it == shares.end()) {
++      ++missing;
++    } else {
++      known += it->second;
++    }
++  }
++  const double rest = missing > 0 ? (1 - known) / missing : 0;
++  const auto share_of = [&](const std::string& pane) {
++    const auto it = shares.find(pane);
++    return it == shares.end() ? rest : it->second;
++  };
++  const double first = share_of(panes[0]);
++  const double second = share_of(panes[1]);
++  if (!(first > 0) || !(second > 0)) {
++    return kHalf;
++  }
++  return first / (first + second);
++}
++
+ std::optional<ArcItem> ParseItem(const base::DictValue& dict) {
+   ArcItem item;
+   item.id = StringAt(dict, "id");
+@@ -271,10 +322,16 @@ std::optional<ArcItem> ParseItem(const base::DictValue& dict) {
+     }
+     return item;
+   }
+-  // I7: a split's panes are its children, tabs like any other. What else
+-  // `splitView` holds, its layout among it, is not described anywhere public.
++  // I7: a split's panes are its children, tabs like any other, and `splitView`
++  // says how they are laid out.
+   if (data->contains("splitView")) {
+     item.kind = ArcItem::Kind::kSplit;
++    if (const base::DictValue* const split = data->FindDict("splitView")) {
++      const std::string* const orientation =
++          split->FindString("layoutOrientation");
++      item.stacked = orientation && *orientation == "vertical";
++      item.first_share = FirstPaneShare(*split, item.children);
++    }
+     return item;
+   }
+   if (const base::DictValue* container = data->FindDict("itemContainer")) {
+@@ -367,6 +424,8 @@ std::vector<Node> BuildChildren(const ArcItem& parent,
+       for (Node& pane : BuildChildren(child, walk, depth + 1)) {
+         if (pane.kind == Node::Kind::kTab) {
+           pane.split = child.id;
++          pane.split_stacked = child.stacked;
++          pane.split_first_share = child.first_share;
+           out.push_back(std::move(pane));
+         } else {
+           size_t tabs = 0;
+@@ -556,6 +615,8 @@ struct ApplyContext {
+   std::map<std::string, tabs::FolderId> made_folders;
+   // I7: the panes this import made of each of Arc's splits, in Arc's order.
+   std::map<std::string, std::vector<raw_ptr<tabs::TabInterface>>> panes;
++  // I7: how each of those splits is laid out.
++  std::map<std::string, split_tabs::SplitTabVisualData> split_looks;
+ };
+ 
+ // I3: a tab that shows its title and loads on its first activation, the way
+@@ -694,6 +755,12 @@ SpaceId SpaceOfFolder(ApplyContext& ctx,
+ void NotePane(ApplyContext& ctx, tabs::TabInterface* tab, const Node& node) {
+   if (!node.split.empty()) {
+     ctx.panes[node.split].emplace_back(tab);
++    ctx.split_looks.insert_or_assign(
++        node.split,
++        split_tabs::SplitTabVisualData(
++            node.split_stacked ? split_tabs::SplitTabLayout::kStacked
++                               : split_tabs::SplitTabLayout::kSideBySide,
++            node.split_first_share));
+   }
+ }
+ 
+@@ -712,11 +779,16 @@ void MakeSplits(ApplyContext& ctx) {
+     if (first == TabStripModel::kNoTab || second == TabStripModel::kNoTab) {
+       continue;
+     }
+-    ctx.tabs->AddToNewSplit({first, second}, split_tabs::SplitTabVisualData(),
++    const auto look = ctx.split_looks.find(arc_id);
++    ctx.tabs->AddToNewSplit({first, second},
++                            look != ctx.split_looks.end()
++                                ? look->second
++                                : split_tabs::SplitTabVisualData(),
+                             split_tabs::SplitTabCreatedSource::kToolbarButton);
+     ++ctx.result->splits;
+   }
+   ctx.panes.clear();
++  ctx.split_looks.clear();
+ }
+ 
+ // Inserts the tabs directly in Arc's list `node` into `space`, unloaded,
+diff --git a/chrome/browser/ui/spaces/arc_sidebar_importer.h b/chrome/browser/ui/spaces/arc_sidebar_importer.h
+index 5c3c2d237e714..c56e61808dbb3 100644
+--- a/chrome/browser/ui/spaces/arc_sidebar_importer.h
++++ b/chrome/browser/ui/spaces/arc_sidebar_importer.h
+@@ -49,6 +49,10 @@ struct ArcImportPlan {
+     // of its own: its panes are tabs in its place, so whatever takes tabs
+     // takes them, and the import makes the split once they are in.
+     std::string split;
++    // import I7: how that split is laid out: stacked, or side by side, and
++    // what share of its first two panes the first takes.
++    bool split_stacked = false;
++    double split_first_share = 0.5;
+     std::vector<Node> children;
+   };
+ 
+diff --git a/chrome/browser/ui/spaces/arc_sidebar_importer_unittest.cc b/chrome/browser/ui/spaces/arc_sidebar_importer_unittest.cc
+index 06566c5a98041..92dd7928c9d32 100644
+--- a/chrome/browser/ui/spaces/arc_sidebar_importer_unittest.cc
++++ b/chrome/browser/ui/spaces/arc_sidebar_importer_unittest.cc
+@@ -24,7 +24,9 @@
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "chrome/test/base/browser_with_test_window_test.h"
+ #include "components/prefs/pref_service.h"
++#include "components/split_tabs/split_tab_visual_data.h"
+ #include "components/tabs/public/folder_tab_collection.h"
++#include "components/tabs/public/split_tab_data.h"
+ #include "components/tabs/public/tab_collection.h"
+ #include "components/tabs/public/tab_interface.h"
+ #include "content/public/browser/web_contents.h"
+@@ -528,6 +530,71 @@ constexpr char kSplits[] = R"json({
+   ]}
+ })json";
+ 
++// A made-up sidebar with what a split holds besides its panes (import I7), in
++// the shape public readers of real files describe: `layoutOrientation`, and
++// `itemWidthFactors`, a list of pane ids each followed by its share. A split
++// nobody resized holds its first pane's share alone. The last split's factors
++// are numbers alone, as other readers take them.
++constexpr char kSplitLayouts[] = R"json({
++  "version": 1,
++  "sidebar": {"containers": [
++    {"global": {}},
++    {
++      "spaces": ["space-work", {"id": "space-work", "title": "Work",
++        "containerIDs": ["pinned", "work-pinned", "unpinned", "work-unpinned"]}],
++      "items": [
++        "work-pinned", {"id": "work-pinned", "parentID": null,
++          "childrenIds": [], "title": "",
++          "data": {"itemContainer": {"containerType": {"spaceItems": {}}}}},
++        "work-unpinned", {"id": "work-unpinned", "parentID": null,
++          "childrenIds": ["wide", "stacked", "plain", "three", "numbers"],
++          "title": "",
++          "data": {"itemContainer": {"containerType": {"spaceItems": {}}}}},
++        "wide", {"id": "wide", "parentID": "work-unpinned",
++          "childrenIds": ["w1", "w2"], "title": null,
++          "data": {"splitView": {"layoutOrientation": "horizontal",
++            "itemWidthFactors": ["w1", 0.25, "w2", 0.75]}}},
++        "w1", {"id": "w1", "childrenIds": [], "title": null,
++          "data": {"tab": {"savedURL": "https://w1.example/", "savedTitle": "W1"}}},
++        "w2", {"id": "w2", "childrenIds": [], "title": null,
++          "data": {"tab": {"savedURL": "https://w2.example/", "savedTitle": "W2"}}},
++        "stacked", {"id": "stacked", "parentID": "work-unpinned",
++          "childrenIds": ["s1", "s2"], "title": null,
++          "data": {"splitView": {"layoutOrientation": "vertical",
++            "itemWidthFactors": ["s1", 0.6]}}},
++        "s1", {"id": "s1", "childrenIds": [], "title": null,
++          "data": {"tab": {"savedURL": "https://s1.example/", "savedTitle": "S1"}}},
++        "s2", {"id": "s2", "childrenIds": [], "title": null,
++          "data": {"tab": {"savedURL": "https://s2.example/", "savedTitle": "S2"}}},
++        "plain", {"id": "plain", "parentID": "work-unpinned",
++          "childrenIds": ["p1", "p2"], "title": null,
++          "data": {"splitView": {"itemWidthFactors": ["p1", "half", 7]}}},
++        "p1", {"id": "p1", "childrenIds": [], "title": null,
++          "data": {"tab": {"savedURL": "https://p1.example/", "savedTitle": "P1"}}},
++        "p2", {"id": "p2", "childrenIds": [], "title": null,
++          "data": {"tab": {"savedURL": "https://p2.example/", "savedTitle": "P2"}}},
++        "three", {"id": "three", "parentID": "work-unpinned",
++          "childrenIds": ["t1", "t2", "t3"], "title": null,
++          "data": {"splitView": {"layoutOrientation": "horizontal",
++            "itemWidthFactors": ["t1", 0.2, "t2", 0.2, "t3", 0.6]}}},
++        "t1", {"id": "t1", "childrenIds": [], "title": null,
++          "data": {"tab": {"savedURL": "https://t1.example/", "savedTitle": "T1"}}},
++        "t2", {"id": "t2", "childrenIds": [], "title": null,
++          "data": {"tab": {"savedURL": "https://t2.example/", "savedTitle": "T2"}}},
++        "t3", {"id": "t3", "childrenIds": [], "title": null,
++          "data": {"tab": {"savedURL": "https://t3.example/", "savedTitle": "T3"}}},
++        "numbers", {"id": "numbers", "parentID": "work-unpinned",
++          "childrenIds": ["n1", "n2"], "title": null,
++          "data": {"splitView": {"itemWidthFactors": [0.7, 0.3]}}},
++        "n1", {"id": "n1", "childrenIds": [], "title": null,
++          "data": {"tab": {"savedURL": "https://n1.example/", "savedTitle": "N1"}}},
++        "n2", {"id": "n2", "childrenIds": [], "title": null,
++          "data": {"tab": {"savedURL": "https://n2.example/", "savedTitle": "N2"}}}
++      ]
++    }
++  ]}
++})json";
++
+ // A made-up StorableArchiveItems.json (import I7), in the shape public exporters
+ // read: an id, then its item. Arc's dates are seconds since 2001.
+ constexpr char kArchive[] = R"json({
+@@ -1099,6 +1166,41 @@ TEST_F(ArcSidebarImportWindowTest, ListsOfThePinnedSectionArePinnedFolders) {
+ // the tabs; in a folder. Of four panes the first two are the split and the
+ // others tabs after it; a split with one pane is that tab. A second import
+ // adds nothing.
++// import I7: a split keeps how Arc laid it out: side by side or stacked, and
++// the first pane's share. Of three panes the first two make the split, and
++// share what they hold between them. Factors that cannot be read make it half
++// and half.
++TEST_F(ArcSidebarImportWindowTest, ASplitKeepsItsLayout) {
++  const std::optional<ArcImportPlan> plan = ParseArcSidebar(kSplitLayouts);
++  ASSERT_TRUE(plan.has_value());
++  const ArcImportResult result =
++      ApplyArcImport(browser(), *plan, ArcImportOptions());
++  EXPECT_EQ(5u, result.splits);
++  const auto expect_split = [&](std::u16string_view first,
++                                split_tabs::SplitTabLayout layout,
++                                double ratio) {
++    SCOPED_TRACE(first);
++    for (int i = 0; i < tabs().count(); ++i) {
++      tabs::TabInterface* const tab = tabs().GetTabAtIndex(i);
++      if (tab->GetContents()->GetTitle() != first) {
++        continue;
++      }
++      ASSERT_TRUE(tab->IsSplit());
++      const split_tabs::SplitTabVisualData* const visual =
++          tabs().GetSplitData(*tab->GetSplit())->visual_data();
++      EXPECT_EQ(layout, visual->split_layout());
++      EXPECT_DOUBLE_EQ(ratio, visual->split_ratio());
++      return;
++    }
++    ADD_FAILURE() << "no such tab";
++  };
++  expect_split(u"W1", split_tabs::SplitTabLayout::kSideBySide, 0.25);
++  expect_split(u"S1", split_tabs::SplitTabLayout::kStacked, 0.6);
++  expect_split(u"P1", split_tabs::SplitTabLayout::kSideBySide, 0.5);
++  expect_split(u"T1", split_tabs::SplitTabLayout::kSideBySide, 0.5);
++  expect_split(u"N1", split_tabs::SplitTabLayout::kSideBySide, 0.7);
++}
++
+ TEST_F(ArcSidebarImportWindowTest, SplitsBecomeSplitRows) {
+   const std::optional<ArcImportPlan> plan = ParseArcSidebar(kSplits);
+   ASSERT_TRUE(plan.has_value());

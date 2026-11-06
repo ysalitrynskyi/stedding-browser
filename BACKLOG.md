@@ -26,6 +26,9 @@ infrastructure, then features. A request in chat comes before this list. A spec 
    circle too small (S-441, a comment on issue 78; the owner, 2026-11-06).
 4. The shield's and the moon's lit circle, a DIP wider after the owner's look (S-423).
 
+Then the owner's of 2026-11-06, not built yet: sync through WebDAV or S3 storage the user sets up,
+beside the folder (S-426, issue 77; ADR 0032).
+
 After them, what beta 11's list below did not reach, in its order.
 
 ### Beta 11's list
@@ -89,7 +92,7 @@ moves when the owner says so.
 
 Not this release: Widevine (S-270) and passkeys (S-239), waiting on Google and Apple; Safe
 Browsing (S-75, issue 60), skipped on the owner's word; Windows on ARM (S-404, issue 69), no
-hardware; Linux (S-216); the signed Windows installer (S-56); cloud sync (S-426, issue 77); a Space that
+hardware; Linux (S-216); the signed Windows installer (S-56); a Space that
 holds tabs from different sessions, which Arc never had.
 
 ### Left from beta 8
@@ -243,7 +246,7 @@ Rows the specs still leave open. M10 is in ROADMAP's order (ADR 0021).
 | Id | Item | Feature / spec | Notes |
 |---|---|---|---|
 | S-422 | Where someone from Arc looks | `docs/features/routing.md`; `docs/features/commandbar.md`; `docs/features/welcome.md` | The owner, 2026-11-05, after a comment on r/Stedding asked for Arc's Air Traffic Control, which Stedding has as routes. The features are there and people do not find them. Proposed: one list of routes in Settings, with "Route sites here…" on the Space menu (S-126); Arc's words as search terms in the command bar and Settings, which name no feature after Arc; and, after an Arc import, a page saying where each thing went and what did not come across. Arc keeps its routes in `StorableLinkRouting.json`; a rule naming a Space comes across (import I48), and a rule for a little window or the Space used last is left out and counted (I49). The site's `/arc/` page already has the map. Arc's Library, the tools a swipe left of the first Space shows, stays out (the owner). Built 2026-11-05, five commits on `stedding-work`, checked on the release build on the Mac (`docs/PROJECT-LOG.md`). Left: the patches, `mac-checks`, and Windows. |
-| S-426 | Sync through the user's own Google Drive (GitHub issue 77) | `docs/features/sidebar-file.md`; ADR 0029 | The owner's yes to the idea, 2026-11-05. Sync goes through a folder today, which needs an app such as iCloud Drive or Dropbox to carry it. The reporter wants no extra app: a button connects their own Google Drive and Stedding writes the sync file there itself, with no Stedding server or account and no subscription. Opt-in, off by default. Needs a Google Cloud OAuth client and Google's approval of it, which only the owner can get; Drive's `drive.file` scope reaches only files the app made. Other clouds later. Decision 18 and ADR 0029 change with it. |
+| S-426 | Sync through WebDAV or S3 storage the user sets up (GitHub issue 77) | `docs/features/sidebar-file.md` Sf43–Sf57; ADR 0032 | The owner's decision, 2026-11-06, for beta 12. An alternative to the folder, which stays as it is. One place per profile, so the three never clash, and a test that must pass before a join, so a wrong setup cannot start (Sf47, Sf48). Nothing ships with the browser: no provider, key or sign-in client, so sign-in to Google Drive, Dropbox and OneDrive is dropped. Google Drive has no WebDAV, so the case issue 77 names first stays a folder its own app keeps. Build: a bridge keeps a mirror of the place in the profile and the service reads it as its folder, so the merge, the file code and the ledger do not change. Tests: a fake server for each failing step in the browser tests, then real runs against a local WebDAV server and a local S3 server on both platforms. When it ships: `docs/PRIVACY.md`, `docs/PRODUCT.md`, `docs/VISION.md`, `docs/FAQ.md`, `README.md` and the site stop saying a folder is the only way, and steps for common services go in the FAQ, not the browser. |
 | S-421 | A notice on sites that need DRM | `docs/features/drm-notice.md` | The owner, 2026-11-05: the page is not blocked; a bar under it says Stedding cannot play protected video yet, with a button that opens the page in Safari on the Mac and Edge on Windows. Widevine itself is S-270. Built 2026-11-05 (patch 0131): seen on netflix.com and tv.apple.com on a release build of the Mac. Left: a real press that opens Safari, and all of its Windows code, which has not been compiled. |
 | S-404 | A Windows build for ARM (GitHub issue 69) | `docs/ROADMAP.md` | Asked 2026-11-02, on a Snapdragon machine. Chromium builds for `target_cpu = "arm64"` on Windows and the PC can cross-compile it, but there is no ARM machine to try it on, so a build would ship untried. The owner, 2026-11-03: if it takes little extra time, build it and publish it as a release of its own that installed copies never update to; otherwise later. Put off: it is a second full Chromium build on the PC beside the release's own, an installer for ARM, and an update feed of its own, since an ARM copy reading today's feed would replace itself with the x64 build. A release of its own must also not become GitHub's latest, which the site reads (ADR 0014). |
 | S-320 | Bookmarks pinned in the sidebar (GitHub issue 40) | `docs/features/pins.md`; `docs/features/sidebar.md` | Waits for the owner. Space pins and essentials already keep a page and cost nothing while asleep (H3). Answer that pins serve this and ask what is missing, or plan a bookmarks block. |

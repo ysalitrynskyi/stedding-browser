@@ -129,8 +129,8 @@ Acceptance criteria:
 
 Mobile, a built-in model, a sync service of Stedding's own, and paid add-ons are not on
 the path to 1.0. Any of them entering the roadmap takes an ADR and a revision of this
-file. Sync through a folder the user's own tool keeps is not a service (ADR 0029). ADR
-0020 keeps models out. The AI features Nook and Aura carry — a sidebar chat, a tab
+file. Sync through a folder the user's own tool keeps, or through WebDAV or S3 storage the
+user sets up, is not a service (ADR 0029, ADR 0032). ADR 0020 keeps models out. The AI features Nook and Aura carry — a sidebar chat, a tab
 organizer, an agent-control server, "Browse for Me" — are not taken (ADR 0021).
 
 ## Deferred, with the intent to return

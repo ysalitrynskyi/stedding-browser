@@ -1,6 +1,6 @@
 # 0029 — The sidebar syncs through a folder the user picks
 
-Status: Built in patch 0101 and released in 0.3.0 beta 16. The owner’s acceptance of this record is still open (`BACKLOG.md` `S-282`). Current behaviour, row by row: `docs/features/sidebar-file.md` Sf7–Sf42.
+Status: Built in patch 0101 and released in 0.3.0 beta 16. The owner’s acceptance of this record is still open (`BACKLOG.md` `S-282`). Current behaviour, row by row: `docs/features/sidebar-file.md` Sf7–Sf42. Amended by ADR 0032 (2026-11-06): WebDAV and S3 storage the user sets up are a second way to the same files. This record stays true of a folder.
 Date: 2026-10-25
 
 ## Context

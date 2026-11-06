@@ -68,7 +68,10 @@ still open is a BACKLOG row that names its id.
     and centred, 800, is the default (the owner, 2026-11-02).
 18. Sync has no account and no Stedding server. It goes through a folder the user picks,
     and it is off by default (2026-10-23, GitHub issue 20; `S-282`; ADR 0029;
-    `docs/features/sidebar-file.md` Sf7–Sf41).
+    `docs/features/sidebar-file.md` Sf7–Sf41). WebDAV or S3 storage the user sets up is an
+    alternative to the folder, never a replacement, and nothing for it ships with the
+    browser: no provider, key or sign-in client (the owner, 2026-11-06, GitHub issue 77;
+    `S-426`; ADR 0032; Sf43–Sf57).
 19. A peek shows over the page, inside the pinned tab's window, as Arc's does (the owner,
     2026-11-01, GitHub issue 62: "current behaviour must be possible to set up in settings
     too"). "Show a peek: In a small window" keeps the little window; over the page is the

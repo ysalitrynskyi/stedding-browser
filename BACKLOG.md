@@ -15,18 +15,29 @@ infrastructure, then features. A request in chat comes before this list. A spec 
 
 ## Open
 
-### The next release: 0.4.0 beta 11
+### The next release: 0.4.0 beta 12
+
+0.4.0 beta 11 went out on 2026-11-06. The owner calls the next one. First in it:
+
+1. A private window that ignores the settings hiding the address row (S-439, issue 83).
+2. The Space name's reorder during a layout, the one crash of beta 11's AddressSanitizer run (S-440).
+3. The − buttons on a folder and on a pin: the glyph off the centre of its hover circle, and the
+   circle too small (S-441, a comment on issue 78; the owner, 2026-11-06).
+
+After them, what beta 11's list below did not reach, in its order.
+
+### Beta 11's list
 
 The plan of 2026-11-05. On 2026-11-05 morning GitHub had no open bug. Its five open issues then were one more request on a
 fixed bug (78, the folder's − button), three feature requests (77, 69, 60) and the pin bot's
-notice (70). The 138 rows here are mostly not bugs:
+notice (70). The 139 rows here are mostly not bugs:
 
 | What the rows are | Rows |
 |---|---|
 | Fixed, waiting for a check on a real build (S-338 to S-351, S-353, S-323, S-393, S-394, S-399) | 19 |
 | Built, waiting on the owner's machine, a real profile or other hardware ("Checks still owed") | 24 |
 | Flaky tests and test tooling | 12 |
-| Product bugs not fixed yet (S-251, S-314, S-318, S-423, S-428, S-435 to S-440) | 11 |
+| Product bugs not fixed yet (S-251, S-314, S-318, S-423, S-428, S-435 to S-441) | 12 |
 | Fixed in the series, waiting for a real file or a second computer (S-427, S-431 to S-433) | 4 |
 | Infrastructure and the ports | 20 |
 | Features, and what waits on Google, Apple or the owner ("Next") | 48 |
@@ -143,6 +154,7 @@ Crashes and broken privacy promises first, then what a user sees.
 | S-433 | A folder cannot move to another Space | `docs/features/folders.md` F47, F48 | The owner, 2026-11-05: no drag and no menu did it. Patch 0154: Move to Space on the header's menu and a drop of the header on another Space's chip. Checked with the real pointer on 0.4.0 beta 11 on both platforms, light and dark, and on the Mac with a pinned folder, a nested one and a Space with its own session. Owed: a move between two computers (sidebar-file). |
 | S-439 | A private window ignores the settings that hide the address row (GitHub issue 83) | `docs/features/private.md`; `docs/features/toolbar.md` T8, T10, T50 | Reported on beta 10 with a capture: with the address in the sidebar, a private window shows it there and keeps the address row too. Cause, read in the code and not yet tried on a build: `AddressRow` is made by `SpaceModel`, a private window has no `SpaceModel` (private V3), so `AddressRow::From` is null and `BrowserView::IsToolbarVisible` never asks. T8, T10 and T50 all fail the same way, and T51's lent buttons with them. Give `AddressRow` an owner every normal and private window has, with a test in each of the three states. |
 | S-440 | The Space name's reorder during a layout stops the browser | `docs/features/spaces.md` | Found by the AddressSanitizer run of 0.4.0 beta 11, on Windows, in `CommandBarActionsTest.EveryRowRuns`: `Check failed: !iterating_` in `View::ReorderChildView`, a CHECK in every build. A closing tab relays out the window, Chromium's `RemoveNonAnimatingPendingDeleteViews` synthesizes a mouse move inside that layout, a Space chip under the pointer takes its first hover, and `VerticalTabStripRegionView::OnSpaceChipHovered` reorders its own child while its `Layout` walks them. It takes a pointer on a chip that has not been told so, and a floating name not yet the last child. Every part dates from 2026-09 and 2026-10 or from Chromium, so it is older than beta 11. The test passed six of six alone on the same build. Raise the name after the layout, with a test that hovers a chip during one. |
+| S-441 | The − buttons: the glyph off its circle's centre, and the circle too small | `docs/features/folders.md` F44; `docs/features/pins.md` H29 | A comment on GitHub issue 78, 2026-11-06, on beta 11, and the owner's yes for the next release: the − on a folder's header and on a pin sits off the centre of its hover background, and both buttons are noticeably smaller than a favicon or the browser's own icons. The glyph can stay its size; the button's circle should be at least a favicon's. `TabCloseButton` draws a 14 DIP icon in a box of 16 on the folder's header. Check both with a measure of the capture, light and dark, at each density. |
 | S-435 | A quit during a pin's Leave-site question is lost on the Mac | `docs/features/pins.md` H3 | Seen on the signed build of 0.4.0 beta 11: H3 says Leave goes on with a quit begun during the question. On the Mac, Leave slept the pin and the browser stayed open; the next quit worked. It does not wedge (S-340). |
 | S-436 | A little window comes back too big | `docs/features/little.md` | Seen on the signed build of 0.4.0 beta 11 on the Mac, twice: a little window opened at 1120×704 came back after a restart at 1400×914, taller than the main window and over it. |
 | S-437 | The DRM notice in a narrow window and beside another bar | `docs/features/drm-notice.md` Dn1 | Seen on Windows on 0.4.0 beta 11. In a window about 1030 wide the sentence is cut after "Stedding ca...", before what it means; a shorter sentence fits. The first-run bar on the same page hides it until that bar is closed. |

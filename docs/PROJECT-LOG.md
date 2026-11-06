@@ -2,6 +2,34 @@
 
 What was built, newest first. Nothing here is needed to do a task: `AGENTS.md` carries what is true now, `BACKLOG.md` the order of work, `PLAN.md` the owner's decisions. This file was the "State of the project" section of `AGENTS.md` until 2026-09-30. This log starts at 2026-10-15. Closed work from before that is the table in [docs/history/archive.md](history/archive.md).
 
+## 2026-11-06 -- 0.4.0 beta 11
+
+On Chromium 157.0.8103.39. The bugs reported on beta 10
+(GitHub issues 79 to 82), the notice on sites that need DRM, a folder's − on hover, one list of
+routes and a page after an Arc import, more of Arc in the import (pinned folders, splits, the
+archive, names), import from Opera, permission prompts in a peek, and moving a folder to another
+Space (S-433, the owner's last request).
+
+The owner's Bitwarden window on the Mac (S-427) came down to a popup opened with another popup in
+front of the full-screen window: G8 looked only at the window in front. A stand-in extension
+making Bitwarden's call in real full screen showed it, and shows it gone. Whether Bitwarden's own
+flow is that path is still to see. S-428, no logins until a restart, did not reproduce.
+
+The real-build pass found one bug the suites had not: an address typed on a Space's own page got
+no row until the Space was left (S-434, patch 0156). What else it found is S-435 to S-438.
+
+Three lessons about the machines. A browser sweep on the Mac beside a build, even one at nice 12,
+fails by the hundred ("CompleteShutdown took more than 30 seconds"), so the build is paused with
+SIGSTOP for the sweep. A win-asan build at 16 jobs took the PC with 32 GB to its commit limit and
+stopped it answering; 10 jobs hold. FindWordsTest passes on win-checks only with the launcher's
+limit raised while anything else runs.
+
+S-272, spaces that share a named session, is not in this release. Its docs and commits are on the
+`s272-wip` branch.
+
+Released with Windows' AddressSanitizer build still running: at 10 jobs it needed until the morning,
+so the two update feeds waited for it.
+
 ## 2026-11-05 -- Where someone from Arc looks (S-422, S-126)
 
 A comment on r/Stedding asked for Arc's Air Traffic Control, which Stedding has as routes. The

@@ -28,7 +28,11 @@ S-272, spaces that share a named session, is not in this release. Its docs and c
 `s272-wip` branch.
 
 Released with Windows' AddressSanitizer build still running: at 10 jobs it needed until the morning,
-so the two update feeds waited for it.
+so the two update feeds waited for it. It gave no memory error and no dangling pointer on 1432 unit
+tests and 792 browser tests. One test crashed on a CHECK in `View::ReorderChildView` (S-440), older
+code that a hover during a layout reaches; it passed six of six alone, and beta 10 has the same
+path, so the feeds went out. The first notes counted the serial leg's tests twice: the browser suite
+is 792 tests on Windows and 843 on the Mac, not 978 and 1015.
 
 ## 2026-11-05 -- Where someone from Arc looks (S-422, S-126)
 

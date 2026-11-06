@@ -1,6 +1,6 @@
 # 0032 — The sidebar can also sync through WebDAV or S3 storage the user sets up
 
-Status: Accepted (the owner, 2026-11-06). Amends ADR 0029, which stays true of a folder. Not built (`BACKLOG.md` S-426).
+Status: Accepted (the owner, 2026-11-06). Amends ADR 0029, which stays true of a folder. Built (`BACKLOG.md` S-426).
 Date: 2026-11-06
 
 ## Context

@@ -471,11 +471,12 @@ forked and embedded without copyleft. No other project in the table offers all t
   on a treadmill that has broken larger teams. The project started on 2026-08-30.
   Trusting it with daily browsing is still a bet on that work continuing.
 - **No sync service of our own.** Google Sync is not available to a Chromium fork
-  ([PRIVACY.md](PRIVACY.md)). The sidebar can sync through a folder the user picks,
-  off by default
-  ([ADR 0029](decisions/0029-sidebar-sync-through-a-folder.md)): Spaces, pins, pinned folders
-  and essentials. Stedding makes no network request for it. Open tabs, history and
-  passwords stay on each machine.
+  ([PRIVACY.md](PRIVACY.md)). The sidebar can sync through a folder the user picks
+  ([ADR 0029](decisions/0029-sidebar-sync-through-a-folder.md)), for which Stedding makes
+  no network request, or through WebDAV or S3 storage the user sets up
+  ([ADR 0032](decisions/0032-sidebar-sync-through-webdav-or-s3.md)), for which it talks
+  only to the address they typed. Both are off by default and carry Spaces, pins, pinned
+  folders and essentials. Open tabs, history and passwords stay on each machine.
 - **One maintainer.** Brave has a company. Zen has a large community. The BSD licence
   means anyone can pick the work up. A licence is not a maintainer.
 

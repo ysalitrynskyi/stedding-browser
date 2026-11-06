@@ -2,6 +2,16 @@
 
 What was built, newest first. Nothing here is needed to do a task: `AGENTS.md` carries what is true now, `BACKLOG.md` the order of work, `PLAN.md` the owner's decisions. This file was the "State of the project" section of `AGENTS.md` until 2026-09-30. This log starts at 2026-10-15. Closed work from before that is the table in [docs/history/archive.md](history/archive.md).
 
+## 2026-11-06 -- Sync through WebDAV or S3 storage, and what the real builds left
+
+Patches 0161 to 0164. Sync can go through WebDAV or S3 storage the user sets up, beside the folder
+(S-426, ADR 0032, patch 0164): a bridge keeps a mirror in the profile and the service reads it as its
+folder, so the merge and the ledger did not change. A separate read of the patch found nine faults
+before any user saw them, all fixed with tests; the row names them. A press on a folder's − no longer
+sends a long list to the row that comes forward (S-442), a little window keeps its size through a
+second restart (S-436, seen only on a real quit, since a browser test's quit writes the bounds), the
+DRM notice is shorter and shows beside another bar (S-437), and a rename gives the keys back (S-438).
+
 ## 2026-11-06 -- After beta 11: private windows, the Space name, the − buttons, the lit circle
 
 Patches 0157 to 0160, on Windows alone: the owner had the Mac. A private or Guest window has no Space

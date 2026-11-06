@@ -231,9 +231,36 @@ folder** keeps your Spaces, pins, pinned folders and essentials the same on your
 computers, through a folder you choose: one your own sync app keeps (iCloud,
 Dropbox, Syncthing and the like) or a shared drive. A folder in your home that no
 known sync app keeps gets a note that nothing seems to sync it. The file still
-works there; your tool has to move it. Stedding has no server and sends nothing.
-Open tabs, history, passwords and sign-ins are not in the file. You can also export
-a Space (**Export Space…**) and import that file on the other computer.
+works there; your tool has to move it. Through a folder, Stedding sends nothing.
+There is no Stedding server. Open tabs, history, passwords and sign-ins are not in
+the file. You can also export a Space (**Export Space…**) and import that file on
+the other computer.
+
+**Can I sync with no sync app?**
+Yes, if you have WebDAV or S3 storage. **Sync through WebDAV** and **Sync through S3
+storage** sit under the folder row. You type where it is and your own sign-in, and
+Stedding tests the place before anything starts. A profile uses one place at a time,
+and **Stop syncing** comes first if you want another. The same files are stored as
+plain text, so use storage you trust. A place anyone can read with no sign-in is
+refused. Stedding reads it when a window comes to the front, at most every 30
+seconds, and every 60 seconds while one is in front, never in the background.
+
+For WebDAV, type the folder's address and your user name and password. Many services
+want an app password made for this. Nextcloud's address looks like
+`https://your.host/remote.php/dav/files/your-name/`. Stedding signs in with a user
+name and password (Basic) over `https`; a server that only offers Digest is refused.
+On your own network, `http` works for a private address, and Stedding says what then
+travels unencrypted.
+
+For S3, type the endpoint, the region, the bucket, your access key ID and secret
+access key, and a path inside the bucket if you want one. Make the bucket first:
+Stedding never creates one. Give the key the right to list the bucket, and to read,
+write and delete under `Stedding Sidebar/`. Endpoints look like
+`https://s3.eu-west-1.amazonaws.com` on AWS, with its region, or
+`https://<account>.r2.cloudflarestorage.com` on Cloudflare R2, whose region is `auto`.
+
+Google Drive has no WebDAV, and Stedding has no sign-in to Google Drive, Dropbox or
+OneDrive. For those, use a folder their own app keeps.
 
 **Do my extensions work?**
 Yes. It is Chromium. Extensions install from the Chrome Web Store. ⌘E (Ctrl+Alt+E

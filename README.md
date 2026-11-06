@@ -48,8 +48,9 @@ Homebrew: `brew install --cask ysalitrynskyi/stedding/stedding` · [Install guid
    you out of the site in front of you and nothing else; Close Duplicate Tabs is one command
    away. [Spec](docs/features/commandbar.md)
 6. **Your sidebar on every computer.** Pick any folder your computers share (iCloud, Dropbox,
-   Syncthing and more). Each Stedding keeps its Spaces, pins, pinned folders and essentials there, and
-   makes no network request of its own. [Spec](docs/features/sidebar-file.md)
+   Syncthing and more), and each Stedding keeps its Spaces, pins, pinned folders and essentials there
+   with no network request of its own. Or use WebDAV or S3 storage you already have.
+   [Spec](docs/features/sidebar-file.md)
 7. **Links without trackers, and blocking if you want it.** `utm_` and similar parameters
    come off the links you open; ad and tracker blocking is built in, off until you turn it
    on. [Spec](docs/features/clean-links.md), [Spec](docs/features/blocker.md)
@@ -188,7 +189,7 @@ behave as they do in Chrome.
 | DevTools | Chromium's own | ✓ |
 | Google services | No sign-in, sync, telemetry or experiments. Chromium's component updates and network time stay ([PRIVACY.md](docs/PRIVACY.md)) | ✓ |
 | Ad and tracker blocking | Built in, from EasyList and EasyPrivacy; off until you turn it on | ✓ |
-| Sync | Your sidebar, through a folder your own sync app keeps; no account | Your folder |
+| Sync | Your sidebar, through a folder your own sync app keeps, or WebDAV or S3 storage you set up; no account | Your folder or storage |
 | Import | Arc (Mac and Windows), Chrome, Edge, Brave, Vivaldi, Opera, Dia, Safari's export file, Firefox | Most |
 | Updates | Checked against a signature, in the background, with a switch to turn them off | ✓ |
 | Safe Browsing | Waits on a Google API key (`S-75`) | Not yet |

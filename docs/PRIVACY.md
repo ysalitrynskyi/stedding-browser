@@ -14,8 +14,8 @@ on this list is a release blocker
 This is how the browser is built to behave, as a best effort. A build can have
 bugs. Stedding comes as is, without warranty, under its BSD-3-Clause licence
 ([LICENSE](../LICENSE)). Sites you visit, extensions you install, the search
-engine you pick, and services such as GitHub, Google's update servers or a
-sync tool you choose are run by others, under their own terms. Using them is
+engine you pick, and services such as GitHub, Google's update servers, or a
+sync tool or storage you choose are run by others, under their own terms. Using them is
 your choice.
 
 ## Principles
@@ -282,6 +282,24 @@ profile, each computer also keeps a record of the merged sidebar, the last ten
 batches for Undo, and five backups (Sf7–Sf41, [ADR 0029](decisions/0029-sidebar-sync-through-a-folder.md)).
 **Stop syncing** leaves the sidebar as it is. This computer's file in the
 folder is removed only if that box is ticked.
+
+A profile can sync through a WebDAV folder or an S3 bucket the user sets up in
+place of a folder, also off by default (Sf43–Sf57, [ADR 0032](decisions/0032-sidebar-sync-through-webdav-or-s3.md)).
+Nothing for it ships with the browser: no provider, address, key or sign-in
+client. Then, and only then, Stedding makes network requests for sync, to the
+address the user typed and nowhere else: when a window comes to the front, at
+most every 30 seconds; every 60 seconds while one is in front; on **Sync now**;
+and when the synced sidebar changes. Never in the background. With sync off, or
+through a folder, it makes none. The requests go from the browser process, with
+no cookies and no referrer, and no page, extension or DevTools sees them. They
+carry the same files as a folder, as plain text: the join sheet says so, and the
+user's storage holds them under its own terms. An address must be `https`;
+`http` is taken only for a loopback or private-network address, and Stedding
+says the password and the sidebar then travel unencrypted. A place anyone can
+read with no sign-in is refused. The password or keys stay in the profile,
+encrypted with the system's key store, and are never in a sync file, a backup,
+an export or a log. **Stop syncing** forgets them, and a copy of the profile on
+another computer cannot read them.
 
 ## WebRTC
 

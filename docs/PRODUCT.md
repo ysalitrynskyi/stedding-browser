@@ -151,6 +151,12 @@ a `+` (`features/sidebar.md` Y44). The Library is not this foot (§9).
   account, no server, no network request; the user's own sync tool or a shared drive
   moves the files (`features/sidebar-file.md` Sf7–Sf42, ADR 0029, `S-282`). Rows still
   open are marked in that spec. The owner's acceptance of ADR 0029 is still open.
+- **Sync through WebDAV or S3 storage** **[1.0]** — the same files, in place of a folder,
+  on a WebDAV folder or S3 bucket the user already has. One place per profile. The user
+  types an address and their own sign-in, and a test must pass before the join. Nothing
+  ships with the browser, and there is no sign-in to Google Drive, Dropbox or OneDrive.
+  Stedding makes requests for this only when the user sets it up
+  (`features/sidebar-file.md` Sf43–Sf57, ADR 0032, `S-426`).
 - **Copy URL, and copy as Markdown** **[1.0]** — `⇧⌘C` and `⌥⇧⌘C`, with tracking
   parameters removed, and a Copy Link button at the address field's right end.
   Option-click (Alt-click on Windows) copies the Markdown link. The button is on by
@@ -390,8 +396,9 @@ no spec row yet).
   are per window (G1). A ghost row in the other windows is not built (G2, `S-94`).
 - **Arc Sync** **[1.0, as sync through a folder]** — cross-device sync of Spaces, pinned
   tabs and order. `ROADMAP.md` puts sync services out of scope and `PRIVACY.md` runs
-  no accounts, so the answer is the folder in §1 (ADR 0029). A Space still travels as
-  a file. Open tabs, history and passwords do not travel.
+  no accounts, so the answer is the folder in §1 (ADR 0029), or the user's own WebDAV
+  or S3 storage (ADR 0032). A Space still travels as a file. Open tabs, history and
+  passwords do not travel.
 - **Recovery Card** **[not applicable]** — recovery for an Arc account we do not have.
 - **Arc account / sign-in** **[not applicable]** — Stedding ships no account.
 
@@ -492,8 +499,9 @@ Three areas collide with a documented out-of-scope item:
 
 1. **AI (§8)** — closed by ADR 0020: no bundled model, no Space intern.
 2. **Sync (§10)** — no Stedding account or server. The sidebar travels through a
-   folder the user's own sync tool keeps (ADR 0029), or as a file. Open tabs, history
-   and passwords stay on each computer.
+   folder the user's own sync tool keeps (ADR 0029), through WebDAV or S3 storage the
+   user sets up (ADR 0032), or as a file. Open tabs, history and passwords stay on
+   each computer.
 3. **Hosted sharing (§2, §6)** — Share Space, Share Quote, the Boost gallery.
 
 So "full parity" means parity with the local, offline capabilities of Arc, with the

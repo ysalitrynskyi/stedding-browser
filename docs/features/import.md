@@ -1,6 +1,6 @@
 # Feature: Import
 
-Status: **I1–I4, I6–I16, I18, I20–I23 and I26–I27 built. I28–I32 and I34–I45 built** on welcome step 2. **I46 to I49 built** (S-394, S-422). **I24 partial** (BACKLOG S-129). **I25 partial** (BACKLOG S-51). **I5 planned** (BACKLOG S-103). **I17 and I19 withdrawn. I33 a gap.** Settings and the command bar open welcome step 2 for every browser but Arc, which has its own row (I45). Opera is not offered (I43).
+Status: **I1–I4, I6–I16, I18, I20–I23 and I26–I27 built. I28–I32 and I34–I45 built** on welcome step 2. **I46 to I49 built** (S-394, S-422). **I24 partial** (BACKLOG S-129). **I25 partial** (BACKLOG S-51). **I5 planned** (BACKLOG S-103). **I17 and I19 withdrawn. I33 a gap.** Settings and the command bar open welcome step 2 for every browser but Arc, which has its own row (I45).
 
 An Arc user gets their sidebar back: Spaces with icon and colour, essentials, pinned tabs, folders with nesting, and the other tabs, read from Arc’s `StorableSidebar.json`, summarised before anything is applied, and inserted unloaded.
 

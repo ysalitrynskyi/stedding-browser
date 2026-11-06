@@ -436,8 +436,8 @@ no spec row yet).
   passwords, and the file Safari exports, on both platforms (**[M10]**, I28–I32,
   I34–I42, `S-101`). Dia's sidebar is not imported (I33). Chromium's own importer
   offers Safari and Firefox on macOS, and Firefox, Internet Explorer and the old Edge
-  on Windows (`features/welcome.md` W3). Chrome, Brave, the new Edge, Vivaldi and
-  Chromium are not offered (`PLAN.md` decision 8).
+  on Windows (`features/welcome.md` W3). Chrome, Edge, Brave, Vivaldi and Opera come in
+  as Dia does (I43).
 - **Progressive Web Apps** — Arc does not install them and points users to Favorites.
   No tier is decided. Any page can become an app of its own, on Chromium's web apps:
   "Add to Dock…" on the Mac (the File menu, the app menu, the command bar), with a

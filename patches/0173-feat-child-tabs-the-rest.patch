@@ -1,0 +1,1109 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Sat, 7 Nov 2026 00:27:19 -0500
+Subject: feat: child tabs, the rest
+
+With "Show tabs under the tab that opened them" on: Back at a child's first
+page shows its parent and closes the child, which Shift-Cmd-T brings back.
+Close Other Tabs keeps the children of the tab it is asked on. A parent's
+children fold away under it, from the tab menu or the command bar, and the
+row counts them; a press on the count, Unfold Child Tabs or closing the parent
+shows them again. What is on screen keeps its row, as under a collapsed folder,
+and the fold survives a restart.
+
+Why: the rest of S-92 (tabs R60).
+
+Removable when: child tabs go.
+---
+ chrome/app/stedding_strings.grdp              |   9 +
+ ...me_render_widget_host_view_mac_delegate.mm |   5 +-
+ chrome/browser/ui/browser_commands.cc         |  15 +-
+ chrome/browser/ui/spaces/space_model.cc       |   9 +
+ chrome/browser/ui/stedding/BUILD.gn           |   4 +
+ chrome/browser/ui/stedding/menu_rules.cc      |   4 +
+ chrome/browser/ui/stedding/tab_menu_verbs.cc  |  25 ++
+ chrome/browser/ui/stedding/tab_parents.cc     | 189 ++++++++++++++++
+ chrome/browser/ui/stedding/tab_parents.h      |  36 +++
+ chrome/browser/ui/tabs/tab_menu_model.cc      |  10 +
+ chrome/browser/ui/tabs/tab_strip_model.cc     |  15 ++
+ .../ui/views/commandbar/command_bar_view.cc   |  18 ++
+ .../spaces/space_tab_visibility_controller.cc |   2 +
+ .../browser/ui/views/tabs/common/tab_view.cc  |  37 +++
+ .../browser/ui/views/tabs/common/tab_view.h   |   9 +
+ .../tabs/common/tab_view_vertical_layout.cc   |  11 +
+ .../test/stedding/child_tabs_browsertest.cc   | 214 ++++++++++++++++++
+ .../tabs/public/tab_context_menu_command.h    |   4 +
+ 18 files changed, 613 insertions(+), 3 deletions(-)
+
+diff --git a/chrome/app/stedding_strings.grdp b/chrome/app/stedding_strings.grdp
+index 9d0d2deec56df..1a4617a1ac485 100644
+--- a/chrome/app/stedding_strings.grdp
++++ b/chrome/app/stedding_strings.grdp
+@@ -285,6 +285,15 @@
+   </message>
+ 
+   <!-- Separators in the sidebar (docs/features/sidebar.md Y45). -->
++  <message name="IDS_STEDDING_FOLD_CHILD_TABS" desc="In Title Case: Item of a sidebar row's menu that hides the tabs opened from that tab under it.">
++    Fold Child Tabs
++  </message>
++  <message name="IDS_STEDDING_UNFOLD_CHILD_TABS" desc="In Title Case: Item of a sidebar row's menu that shows the tabs folded away under that tab.">
++    Unfold Child Tabs
++  </message>
++  <message name="IDS_STEDDING_FOLDED_CHILD_TABS" desc="What a screen reader says of the count on a sidebar row whose child tabs are folded away; pressing the count shows them.">
++    {NUM_TABS, plural, =1 {1 tab folded under this one} other {# tabs folded under this one}}
++  </message>
+   <message name="IDS_STEDDING_ADD_SEPARATOR" desc="In Title Case: Item of a sidebar row's context menu that draws a thin line above the row, to group the rows above it apart from the rows below without a folder.">
+     Add Separator Above
+   </message>
+diff --git a/chrome/browser/renderer_host/chrome_render_widget_host_view_mac_delegate.mm b/chrome/browser/renderer_host/chrome_render_widget_host_view_mac_delegate.mm
+index c72e8fe07d9c6..7e8021cf65c32 100644
+--- a/chrome/browser/renderer_host/chrome_render_widget_host_view_mac_delegate.mm
++++ b/chrome/browser/renderer_host/chrome_render_widget_host_view_mac_delegate.mm
+@@ -14,6 +14,7 @@
+ #import "chrome/browser/renderer_host/chrome_render_widget_host_view_mac_history_swiper.h"
+ #include "chrome/browser/renderer_host/chrome_render_widget_host_view_mac_history_swiping_control.h"
+ #include "chrome/browser/ui/browser_commands.h"
++#include "chrome/browser/ui/stedding/tab_parents.h"
+ #include "chrome/browser/ui/tabs/inactive_window_mouse_event_controller.h"
+ #include "chrome/browser/ui/tabs/public/tab_features.h"
+ #include "chrome/common/url_constants.h"
+@@ -179,7 +180,9 @@
+   if (direction == history_swiper::kForwards) {
+     return chrome::CanGoForward(webContents);
+   } else {
+-    return chrome::CanGoBack(webContents);
++    // Stedding (tabs R60): a swipe never closes a child tab, as Back may.
++    return chrome::CanGoBack(webContents) &&
++           !stedding::ParentBackReturnsTo(webContents);
+   }
+ }
+ 
+diff --git a/chrome/browser/ui/browser_commands.cc b/chrome/browser/ui/browser_commands.cc
+index e56515ff99fb0..88421fef9c9a0 100644
+--- a/chrome/browser/ui/browser_commands.cc
++++ b/chrome/browser/ui/browser_commands.cc
+@@ -118,6 +118,7 @@
+ #include "chrome/browser/ui/stedding/pin_lifecycle.h"
+ #include "chrome/browser/ui/stedding/little_window.h"
+ #include "chrome/browser/ui/stedding/tab_numbers.h"
++#include "chrome/browser/ui/stedding/tab_parents.h"
+ #include "chrome/browser/ui/tab_contents/core_tab_helper.h"
+ #include "chrome/browser/ui/tab_dialogs.h"
+ #include "chrome/browser/ui/tabs/back_to_opener/back_to_opener_controller.h"
+@@ -1034,7 +1035,9 @@ bool CanGoBack(content::WebContents* web_contents) {
+   return web_contents &&
+          (web_contents->GetController().CanGoBack() ||
+           back_to_opener::BackToOpenerController::CanGoBackToOpener(
+-              web_contents));
++              web_contents) ||
++          // Stedding (tabs R60): a child at its first page.
++          stedding::ParentBackReturnsTo(web_contents));
+ }
+ 
+ bool ShouldEnableBackButton(const BrowserWindowInterface* browser) {
+@@ -1054,7 +1057,9 @@ bool ShouldEnableBackButton(content::WebContents* web_contents) {
+ 
+   // If no regular back navigation, check for back-to-opener.
+   return back_to_opener::BackToOpenerController::CanGoBackToOpener(
+-      web_contents);
++             web_contents) ||
++         // Stedding (tabs R60): a child at its first page.
++         stedding::ParentBackReturnsTo(web_contents);
+ }
+ 
+ enum class BackNavigationMenuIPHTrigger : int {
+@@ -1128,6 +1133,12 @@ void GoBack(content::WebContents* web_contents) {
+     return;
+   }
+ 
++  // Stedding (tabs R60, BACKLOG S-92): a child at its first page closes and
++  // shows its parent.
++  if (stedding::CloseBackToParent(web_contents)) {
++    return;
++  }
++
+   // If no regular back navigation, try back-to-opener.
+   back_to_opener::BackToOpenerController::GoBackToOpener(web_contents);
+ }
+diff --git a/chrome/browser/ui/spaces/space_model.cc b/chrome/browser/ui/spaces/space_model.cc
+index 4373933cfb8c1..d00b901e57443 100644
+--- a/chrome/browser/ui/spaces/space_model.cc
++++ b/chrome/browser/ui/spaces/space_model.cc
+@@ -3312,6 +3312,15 @@ bool SpaceModel::HidesTab(const tabs::TabInterface* tab) const {
+   if (stedding::IsEmptySpaceStandIn(tab)) {
+     return true;
+   }
++  // tabs R60 (BACKLOG S-92): a child folded away under its parent, while that
++  // parent is on this list.
++  if (tab && tab_strip_model_ &&
++      stedding::FoldedAway(*tab_strip_model_, tab,
++                           [this](const tabs::TabInterface* parent) {
++                             return IsTabInActiveSpace(parent);
++                           })) {
++    return true;
++  }
+   // pins H17: a pin of the active Space's collapsed run. An essential sits
+   // above every Space and is never one (B6).
+   if (!tab || tab->IsPinned() || !IsSpacePinned(tab) ||
+diff --git a/chrome/browser/ui/stedding/BUILD.gn b/chrome/browser/ui/stedding/BUILD.gn
+index 118447acbd3ba..4a4f11301ef0e 100644
+--- a/chrome/browser/ui/stedding/BUILD.gn
++++ b/chrome/browser/ui/stedding/BUILD.gn
+@@ -397,11 +397,13 @@ source_set("tab_parents") {
+   public = [ "tab_parents.h" ]
+   sources = [ "tab_parents.cc" ]
+   deps = [
++    ":prefs",
+     "//base",
+     "//chrome/browser/profiles:profile",
+     "//chrome/browser/sessions",
+     "//chrome/browser/ui/browser_window",
+     "//chrome/browser/ui/tabs:tab_strip",
++    "//components/prefs",
+     "//components/sessions",
+     "//components/tabs:public",
+     "//content/public/browser",
+@@ -634,8 +636,10 @@ source_set("tab_menu_verbs") {
+     ":pin_home",
+     ":pin_home_dialog",
+     ":pin_lifecycle",
++    ":prefs",
+     ":sleep_tabs",
+     ":tab_names",
++    ":tab_parents",
+     "//base",
+     "//chrome/browser/profiles:profile",
+     "//chrome/browser/ui/browser_window",
+diff --git a/chrome/browser/ui/stedding/menu_rules.cc b/chrome/browser/ui/stedding/menu_rules.cc
+index 51d408ab818b8..f80b77e30c9f0 100644
+--- a/chrome/browser/ui/stedding/menu_rules.cc
++++ b/chrome/browser/ui/stedding/menu_rules.cc
+@@ -69,6 +69,10 @@ bool IsTabMenuCommandVisible(TabRowKind kind, int command_id) {
+     case TabStripModel::CommandSteddingRemoveSeparator:
+       // sidebar Y45: the essentials are a grid, not rows.
+       return kind != TabRowKind::kEssential;
++    case TabStripModel::CommandSteddingFoldChildTabs:
++    case TabStripModel::CommandSteddingUnfoldChildTabs:
++      // tabs R60: a pin takes no children.
++      return kind == TabRowKind::kPlain;
+     case TabStripModel::CommandMoveTabToNewFolder:
+     case TabStripModel::CommandSteddingMoveToSpaceMenu:
+     case TabStripModel::CommandSteddingRouteToSpaceMenu:
+diff --git a/chrome/browser/ui/stedding/tab_menu_verbs.cc b/chrome/browser/ui/stedding/tab_menu_verbs.cc
+index de949a95834a9..0c7141d8d46a1 100644
+--- a/chrome/browser/ui/stedding/tab_menu_verbs.cc
++++ b/chrome/browser/ui/stedding/tab_menu_verbs.cc
+@@ -21,6 +21,8 @@
+ #include "chrome/browser/ui/stedding/pin_home_dialog.h"
+ #include "chrome/browser/ui/stedding/pin_lifecycle.h"
+ #include "chrome/browser/ui/stedding/sleep_tabs.h"
++#include "chrome/browser/ui/stedding/stedding_prefs.h"
++#include "chrome/browser/ui/stedding/tab_parents.h"
+ #include "chrome/browser/ui/stedding/tab_separators.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model_delegate.h"
+@@ -89,6 +91,8 @@ bool IsTabMenuVerb(const TabStripModel& tabs, int command_id) {
+     case TabStripModel::CommandSteddingRenameTab:
+     case TabStripModel::CommandSteddingAddSeparator:
+     case TabStripModel::CommandSteddingRemoveSeparator:
++    case TabStripModel::CommandSteddingFoldChildTabs:
++    case TabStripModel::CommandSteddingUnfoldChildTabs:
+     case TabStripModel::CommandSteddingSleepTab:
+     case TabStripModel::CommandSteddingSleepOthersInSpace:
+     case TabStripModel::CommandSteddingResetToHome:
+@@ -163,6 +167,10 @@ bool IsTabMenuVerbEnabled(const TabStripModel& tabs,
+       return parent && parent->type() == tabs::TabCollection::Type::UNPINNED &&
+              HasSeparatorAbove(tab->GetContents());
+     }
++    case TabStripModel::CommandSteddingFoldChildTabs:
++    case TabStripModel::CommandSteddingUnfoldChildTabs:
++      // tabs R60.
++      return space_model && HasChildTabs(tabs, tab);
+     case TabStripModel::CommandSteddingSleepTab:
+       return !TabsToSleep(WindowOf(tabs), tab, SleepScope::kThisTab).empty();
+     case TabStripModel::CommandSteddingSleepOthersInSpace:
+@@ -273,6 +281,12 @@ void ExecuteTabMenuVerb(TabStripModel& tabs, int index, int command_id) {
+           window, tab,
+           command_id == TabStripModel::CommandSteddingAddSeparator);
+       return;
++    case TabStripModel::CommandSteddingFoldChildTabs:
++    case TabStripModel::CommandSteddingUnfoldChildTabs:
++      // tabs R60: under the row the menu was opened on.
++      SetChildrenFolded(
++          tab, command_id == TabStripModel::CommandSteddingFoldChildTabs);
++      return;
+     case TabStripModel::CommandCopyURL:
+     case TabStripModel::CommandSteddingCopyMarkdownLink:
+       CopyLink(window, tab->GetContents(),
+@@ -306,6 +320,17 @@ bool IsTabMenuRowVisible(const TabStripModel& tabs, int index, int command_id) {
+       return false;
+     }
+   }
++  // tabs R60: a row with children shows the one of the pair that applies.
++  if (command_id == TabStripModel::CommandSteddingFoldChildTabs ||
++      command_id == TabStripModel::CommandSteddingUnfoldChildTabs) {
++    if (!tab || !SpacesOf(tabs) || !tabs.profile() ||
++        !tabs.profile()->GetPrefs()->GetBoolean(prefs::kNestChildTabs) ||
++        !HasChildTabs(tabs, tab) ||
++        ChildrenFolded(tab->GetContents()) !=
++            (command_id == TabStripModel::CommandSteddingUnfoldChildTabs)) {
++      return false;
++    }
++  }
+   TabRowKind kind = TabRowKind::kPlain;
+   if (tab && tab->IsPinned()) {
+     kind = TabRowKind::kEssential;
+diff --git a/chrome/browser/ui/stedding/tab_parents.cc b/chrome/browser/ui/stedding/tab_parents.cc
+index f3ac0ef90363a..60fc6f6ccbbc1 100644
+--- a/chrome/browser/ui/stedding/tab_parents.cc
++++ b/chrome/browser/ui/stedding/tab_parents.cc
+@@ -22,7 +22,11 @@
+ #include "chrome/browser/sessions/stedding_session_rebuild.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
++#include "chrome/browser/ui/spaces/space_model.h"
++#include "chrome/browser/ui/stedding/stedding_prefs.h"
++#include "chrome/browser/ui/tabs/tab_enums.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "components/prefs/pref_service.h"
+ #include "components/sessions/content/session_tab_helper.h"
+ #include "components/sessions/core/session_service_commands.h"
+ #include "components/tabs/public/tab_interface.h"
+@@ -44,8 +48,10 @@ class TabParentData : public content::WebContentsUserData<TabParentData> {
+ 
+   const std::string& token() const { return token_; }
+   const std::string& parent() const { return parent_; }
++  bool children_folded() const { return children_folded_; }
+   void set_token(std::string token) { token_ = std::move(token); }
+   void set_parent(std::string parent) { parent_ = std::move(parent); }
++  void set_children_folded(bool folded) { children_folded_ = folded; }
+ 
+  private:
+   friend class content::WebContentsUserData<TabParentData>;
+@@ -54,6 +60,8 @@ class TabParentData : public content::WebContentsUserData<TabParentData> {
+ 
+   std::string token_;
+   std::string parent_;
++  // R60: this tab's children are folded away under it.
++  bool children_folded_ = false;
+ 
+   WEB_CONTENTS_USER_DATA_KEY_DECL();
+ };
+@@ -64,6 +72,59 @@ TabParentData& DataFor(content::WebContents* contents) {
+   return *TabParentData::GetOrCreateForWebContents(contents);
+ }
+ 
++// Whether "Show tabs under the tab that opened them" is on for `model`'s
++// profile.
++// R56: a pin is no one's child and folds nothing, whatever it was before it
++// was pinned, and the link stays for when it is unpinned.
++bool IsPin(const tabs::TabInterface* tab) {
++  if (tab->IsPinned()) {
++    return true;
++  }
++  BrowserWindowInterface* const window =
++      const_cast<tabs::TabInterface*>(tab)->GetBrowserWindowInterface();
++  const spaces::SpaceModel* const model =
++      window ? spaces::SpaceModel::From(window) : nullptr;
++  return model && model->IsSpacePinned(tab);
++}
++
++bool NestsChildren(const TabStripModel& model) {
++  const Profile* const profile = model.profile();
++  return profile &&
++         profile->GetPrefs()->GetBoolean(prefs::kNestChildTabs);
++}
++
++// The tab of `model` that `contents` was opened from, or null.
++tabs::TabInterface* ParentInStrip(const TabStripModel& model,
++                                  const content::WebContents* contents) {
++  const std::string parent = TabParentToken(contents);
++  if (parent.empty()) {
++    return nullptr;
++  }
++  for (int i = 0; i < model.count(); ++i) {
++    tabs::TabInterface* const tab = model.GetTabAtIndex(i);
++    if (tab->GetContents() != contents &&
++        TabToken(tab->GetContents()) == parent) {
++      return tab;
++    }
++  }
++  return nullptr;
++}
++
++// Whether `ancestor` is above `tab` in the tree, within `model`. A tree read
++// from a session may hold a loop, so the walk stops after every row.
++bool DescendsFrom(const TabStripModel& model,
++                  const tabs::TabInterface* tab,
++                  const tabs::TabInterface* ancestor) {
++  const tabs::TabInterface* step = tab;
++  for (int depth = 0; step && depth < model.count(); ++depth) {
++    step = ParentInStrip(model, step->GetContents());
++    if (step == ancestor) {
++      return step != nullptr;
++    }
++  }
++  return false;
++}
++
+ // The windows told that a tab of theirs has a new parent (R59).
+ base::RepeatingClosureList& ParentsChangedCallbacks() {
+   static base::NoDestructor<base::RepeatingClosureList> callbacks;
+@@ -126,6 +187,10 @@ void AppendRebuildCommands(BrowserWindowInterface* browser,
+       commands->push_back(sessions::CreateAddTabExtraDataCommand(
+           tab_id, kSessionTabParentKey, parent));
+     }
++    if (ChildrenFolded(contents)) {
++      commands->push_back(sessions::CreateAddTabExtraDataCommand(
++          tab_id, kSessionChildrenFoldedKey, "1"));
++    }
+   }
+ }
+ 
+@@ -278,6 +343,126 @@ void ReparentChildrenOf(BrowserWindowInterface* browser,
+   }
+ }
+ 
++tabs::TabInterface* ParentBackReturnsTo(content::WebContents* contents) {
++  tabs::TabInterface* const tab =
++      contents ? tabs::TabInterface::MaybeGetFromContents(contents) : nullptr;
++  BrowserWindowInterface* const window =
++      tab ? tab->GetBrowserWindowInterface() : nullptr;
++  const TabStripModel* const strip =
++      window ? window->GetTabStripModel() : nullptr;
++  if (!strip || !NestsChildren(*strip) || tab->IsSplit() || IsPin(tab) ||
++      contents->GetController().CanGoBack()) {
++    return nullptr;
++  }
++  return ParentInStrip(*strip, contents);
++}
++
++bool CloseBackToParent(content::WebContents* contents) {
++  tabs::TabInterface* const parent = ParentBackReturnsTo(contents);
++  if (!parent) {
++    return false;
++  }
++  TabStripModel* const strip =
++      parent->GetBrowserWindowInterface()->GetTabStripModel();
++  strip->ActivateTabAt(strip->GetIndexOfTab(parent));
++  strip->CloseWebContentsAt(strip->GetIndexOfWebContents(contents),
++                            TabCloseTypes::CLOSE_USER_GESTURE |
++                                TabCloseTypes::CLOSE_CREATE_HISTORICAL_TAB);
++  return true;
++}
++
++bool ClosingOthersKeeps(const TabStripModel& model,
++                        const tabs::TabInterface* invoked,
++                        const tabs::TabInterface* tab) {
++  if (TabParentToken(tab->GetContents()).empty() || !NestsChildren(model)) {
++    return false;
++  }
++  if (DescendsFrom(model, tab, invoked)) {
++    return true;
++  }
++  if (!model.IsTabSelected(model.GetIndexOfTab(invoked))) {
++    return false;
++  }
++  for (int i = 0; i < model.count(); ++i) {
++    if (model.IsTabSelected(i) &&
++        DescendsFrom(model, tab, model.GetTabAtIndex(i))) {
++      return true;
++    }
++  }
++  return false;
++}
++
++bool HasChildTabs(const TabStripModel& model, const tabs::TabInterface* tab) {
++  const std::string token = tab ? TabToken(tab->GetContents()) : std::string();
++  if (token.empty() || IsPin(tab)) {
++    return false;
++  }
++  for (int i = 0; i < model.count(); ++i) {
++    if (TabParentToken(model.GetWebContentsAt(i)) == token) {
++      return true;
++    }
++  }
++  return false;
++}
++
++bool ChildrenFolded(const content::WebContents* contents) {
++  const TabParentData* const data =
++      contents ? TabParentData::FromWebContents(contents) : nullptr;
++  return data && data->children_folded();
++}
++
++void SetChildrenFolded(tabs::TabInterface* parent, bool folded) {
++  content::WebContents* const contents =
++      parent ? parent->GetContents() : nullptr;
++  if (!contents || ChildrenFolded(contents) == folded) {
++    return;
++  }
++  DataFor(contents).set_children_folded(folded);
++  Write(parent->GetBrowserWindowInterface(), contents,
++        kSessionChildrenFoldedKey, folded ? "1" : std::string());
++  ParentsChangedCallbacks().Notify();
++}
++
++bool FoldedAway(
++    const TabStripModel& model,
++    const tabs::TabInterface* tab,
++    base::FunctionRef<bool(const tabs::TabInterface*)> parent_shown) {
++  if (!tab || TabParentToken(tab->GetContents()).empty() ||
++      !NestsChildren(model) || IsPin(tab)) {
++    return false;
++  }
++  const tabs::TabInterface* const active = model.GetActiveTab();
++  if (tab == active ||
++      (active && tab->IsSplit() && tab->GetSplit() == active->GetSplit())) {
++    return false;
++  }
++  const tabs::TabInterface* step = tab;
++  for (int depth = 0; depth < model.count(); ++depth) {
++    step = ParentInStrip(model, step->GetContents());
++    if (!step) {
++      return false;
++    }
++    if (ChildrenFolded(step->GetContents()) && !IsPin(step) &&
++        parent_shown(step)) {
++      return true;
++    }
++  }
++  return false;
++}
++
++int FoldedChildCount(const TabStripModel& model,
++                     const tabs::TabInterface* tab) {
++  if (!tab || !ChildrenFolded(tab->GetContents()) || !NestsChildren(model) ||
++      IsPin(tab)) {
++    return 0;
++  }
++  int count = 0;
++  for (int i = 0; i < model.count(); ++i) {
++    count += DescendsFrom(model, model.GetTabAtIndex(i), tab);
++  }
++  return count;
++}
++
+ base::CallbackListSubscription AddTabParentsChangedCallback(
+     base::RepeatingClosure callback) {
+   return ParentsChangedCallbacks().Add(std::move(callback));
+@@ -292,6 +477,7 @@ void CarryTabParent(content::WebContents* from, content::WebContents* to) {
+   TabParentData& data = DataFor(to);
+   data.set_token(token);
+   data.set_parent(parent);
++  data.set_children_folded(ChildrenFolded(from));
+ }
+ 
+ void RestoreTabParentFromExtraData(
+@@ -315,6 +501,9 @@ void RestoreTabParentFromExtraData(
+   if (has_parent) {
+     data.set_parent(parent->second);
+   }
++  // R60: "1" while folded; a later unfold writes it empty.
++  const auto folded = extra_data.find(kSessionChildrenFoldedKey);
++  data.set_children_folded(folded != extra_data.end() && folded->second == "1");
+ }
+ 
+ void RegisterTabParentSessionRebuild() {
+diff --git a/chrome/browser/ui/stedding/tab_parents.h b/chrome/browser/ui/stedding/tab_parents.h
+index b2adfc82df3ad..11309636d1f73 100644
+--- a/chrome/browser/ui/stedding/tab_parents.h
++++ b/chrome/browser/ui/stedding/tab_parents.h
+@@ -11,6 +11,7 @@
+ #include <vector>
+ 
+ #include "base/callback_list.h"
++#include "base/functional/function_ref.h"
+ 
+ class BrowserWindowInterface;
+ class TabStripModel;
+@@ -32,6 +33,7 @@ namespace stedding {
+ // extra data, so the tree survives a restart.
+ inline constexpr char kSessionTabTokenKey[] = "stedding.tab_token";
+ inline constexpr char kSessionTabParentKey[] = "stedding.parent";
++inline constexpr char kSessionChildrenFoldedKey[] = "stedding.children_folded";
+ 
+ // The deepest a row nests, folders and children together (R57).
+ inline constexpr int kMaxNestDepth = 5;
+@@ -79,6 +81,40 @@ void SetTabParent(BrowserWindowInterface* browser,
+ void ReparentChildrenOf(BrowserWindowInterface* browser,
+                         const content::WebContents* closed);
+ 
++// R60 (BACKLOG S-92), all with "Show tabs under the tab that opened them" on.
++// The tab Back goes to from `contents`, a child at its first page outside a
++// split: its parent, when that is in the same window; null otherwise.
++tabs::TabInterface* ParentBackReturnsTo(content::WebContents* contents);
++
++// R60: Back at a child's first page shows its parent and closes the child, as
++// a close the user made, so that Undo and Shift-Cmd-T bring it back. False
++// when `contents` has no parent to go back to.
++bool CloseBackToParent(content::WebContents* contents);
++
++// R60: whether Close Other Tabs on `invoked` keeps `tab`: a tab descended from
++// `invoked` or, with `invoked` selected, from a selected tab.
++bool ClosingOthersKeeps(const TabStripModel& model,
++                        const tabs::TabInterface* invoked,
++                        const tabs::TabInterface* tab);
++
++// R60: a parent's children fold away with it. Whether `tab` has a child in
++// this window; whether `contents`' children are folded; folds or unfolds
++// `parent`'s, which stays until it is undone, across a restart too.
++bool HasChildTabs(const TabStripModel& model, const tabs::TabInterface* tab);
++bool ChildrenFolded(const content::WebContents* contents);
++void SetChildrenFolded(tabs::TabInterface* parent, bool folded);
++
++// R60: whether `tab` is folded away: a parent above it in this window has its
++// children folded and `parent_shown` says that parent is on this list. What
++// is on screen keeps its row, as under a collapsed folder (folders F3).
++bool FoldedAway(const TabStripModel& model,
++                const tabs::TabInterface* tab,
++                base::FunctionRef<bool(const tabs::TabInterface*)> parent_shown);
++
++// R60: how many tabs are folded under `tab`, for the count on its row; 0 when
++// its children are not folded.
++int FoldedChildCount(const TabStripModel& model, const tabs::TabInterface* tab);
++
+ // R59: `callback` runs whenever ReparentChildrenOf has given a tab in a
+ // window other than the parent's a new parent, so that window lays its rows
+ // out again; it is told nothing of its own strip's change.
+diff --git a/chrome/browser/ui/tabs/tab_menu_model.cc b/chrome/browser/ui/tabs/tab_menu_model.cc
+index c76c69fa38441..d97d5694fe2a5 100644
+--- a/chrome/browser/ui/tabs/tab_menu_model.cc
++++ b/chrome/browser/ui/tabs/tab_menu_model.cc
+@@ -284,6 +284,11 @@ void TabMenuModel::BuildStedding(int index) {
+                       IDS_STEDDING_ADD_SEPARATOR);
+   AddItemWithStringId(TabStripModel::CommandSteddingRemoveSeparator,
+                       IDS_STEDDING_REMOVE_SEPARATOR);
++  // tabs R60: a row with children folds them away, or shows them again.
++  AddItemWithStringId(TabStripModel::CommandSteddingFoldChildTabs,
++                      IDS_STEDDING_FOLD_CHILD_TABS);
++  AddItemWithStringId(TabStripModel::CommandSteddingUnfoldChildTabs,
++                      IDS_STEDDING_UNFOLD_CHILD_TABS);
+   // A split row arranges its panes; any other row can start a split (M7,
+   // splits J1).
+   if (tab_strip_->GetSplitForTab(index).has_value()) {
+@@ -826,6 +831,11 @@ void TabMenuModel::Build(int index) {
+                         IDS_STEDDING_ADD_SEPARATOR);
+     AddItemWithStringId(TabStripModel::CommandSteddingRemoveSeparator,
+                         IDS_STEDDING_REMOVE_SEPARATOR);
++    // tabs R60: a row with children folds them away, or shows them again.
++    AddItemWithStringId(TabStripModel::CommandSteddingFoldChildTabs,
++                        IDS_STEDDING_FOLD_CHILD_TABS);
++    AddItemWithStringId(TabStripModel::CommandSteddingUnfoldChildTabs,
++                        IDS_STEDDING_UNFOLD_CHILD_TABS);
+   }
+ 
+   if (features::IsMenuSimplificationEnabled()) {
+diff --git a/chrome/browser/ui/tabs/tab_strip_model.cc b/chrome/browser/ui/tabs/tab_strip_model.cc
+index 12b432afaccf1..7b96b28008a59 100644
+--- a/chrome/browser/ui/tabs/tab_strip_model.cc
++++ b/chrome/browser/ui/tabs/tab_strip_model.cc
+@@ -2985,6 +2985,8 @@ bool TabStripModel::IsContextMenuCommandEnabled(
+     case CommandSteddingRenameTab:
+     case CommandSteddingAddSeparator:
+     case CommandSteddingRemoveSeparator:
++    case CommandSteddingFoldChildTabs:
++    case CommandSteddingUnfoldChildTabs:
+     case CommandSteddingMoveToSpaceMenu:
+     case CommandSteddingMoveToSpaceFirst:
+     case CommandSteddingMoveToSpaceLast:
+@@ -3405,6 +3407,8 @@ void TabStripModel::ExecuteContextMenuCommand(int context_index,
+     case CommandSteddingRenameTab:
+     case CommandSteddingAddSeparator:
+     case CommandSteddingRemoveSeparator:
++    case CommandSteddingFoldChildTabs:
++    case CommandSteddingUnfoldChildTabs:
+     case CommandSteddingMoveToSpaceMenu:
+     case CommandSteddingMoveToSpaceFirst:
+     case CommandSteddingMoveToSpaceLast:
+@@ -4082,6 +4086,11 @@ bool TabStripModel::HasIndicesClosedByCommand(int index,
+     if (IsTabHidden(i)) {
+       continue;
+     }
++    // Stedding (tabs R60): Close Other Tabs keeps a tab's children.
++    if (id == CommandCloseOtherTabs &&
++        stedding::ClosingOthersKeeps(*this, invoked_tab, GetTabAtIndex(i))) {
++      continue;
++    }
+     // Skip tabs that are not part of the focused group.
+     if (focused_group.has_value() && GetTabGroupForTab(i) != focused_group) {
+       continue;
+@@ -4132,6 +4141,12 @@ std::vector<tabs::TabInterface*> TabStripModel::GetTabsClosedByCommand(
+       continue;
+     }
+ 
++    // Stedding (tabs R60): Close Other Tabs keeps a tab's children.
++    if (id == CommandCloseOtherTabs &&
++        stedding::ClosingOthersKeeps(*this, invoked_tab, tab)) {
++      continue;
++    }
++
+     // If the tab that the context menu command is invoked on is not selected
+     // and also in a split, also exclude tabs from that split from being closed.
+     // We don't have to worry about the case when a split is selected, because
+diff --git a/chrome/browser/ui/views/commandbar/command_bar_view.cc b/chrome/browser/ui/views/commandbar/command_bar_view.cc
+index cf738cf1f8ff1..6fe6bc9f62085 100644
+--- a/chrome/browser/ui/views/commandbar/command_bar_view.cc
++++ b/chrome/browser/ui/views/commandbar/command_bar_view.cc
+@@ -69,6 +69,7 @@
+ #include "chrome/browser/ui/stedding/sleep_tabs.h"
+ #include "chrome/browser/ui/stedding/stedding_command_ids.h"
+ #include "chrome/browser/ui/stedding/stedding_prefs.h"
++#include "chrome/browser/ui/stedding/tab_parents.h"
+ #include "chrome/browser/ui/stedding/tab_names.h"
+ #include "chrome/browser/ui/tab_ui_helper.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+@@ -893,6 +894,23 @@ void CommandBarView::BuildActions() {
+                                 }
+                               },
+                               base::Unretained(tabs))});
++      // tabs R60: a row with children folds them away.
++      if (prefs->GetBoolean(stedding::prefs::kNestChildTabs) &&
++          stedding::HasChildTabs(*tabs, active)) {
++        actions_.push_back(
++            {stedding::ChildrenFolded(active->GetContents())
++                 ? u"Unfold Child Tabs"
++                 : u"Fold Child Tabs",
++             std::u16string(),
++             base::BindRepeating(
++                 [](TabStripModel* strip) {
++                   if (tabs::TabInterface* const tab = strip->GetActiveTab()) {
++                     stedding::SetChildrenFolded(
++                         tab, !stedding::ChildrenFolded(tab->GetContents()));
++                   }
++                 },
++                 base::Unretained(tabs))});
++      }
+       if (!stedding::TabsToSleep(browser_, active, SleepScope::kThisTab)
+                .empty()) {
+         actions_.push_back(
+diff --git a/chrome/browser/ui/views/spaces/space_tab_visibility_controller.cc b/chrome/browser/ui/views/spaces/space_tab_visibility_controller.cc
+index 3557dd4628e30..fe33528f8ca88 100644
+--- a/chrome/browser/ui/views/spaces/space_tab_visibility_controller.cc
++++ b/chrome/browser/ui/views/spaces/space_tab_visibility_controller.cc
+@@ -441,6 +441,8 @@ void SpaceTabVisibilityController::UpdateSubtree(views::View& parent) {
+         const auto indent = nest_indents_.find(tab);
+         tab_view->SetSteddingNestIndent(
+             indent == nest_indents_.end() ? 0 : indent->second);
++        tab_view->SetSteddingFoldedChildren(
++            stedding::FoldedChildCount(*tab_strip_model_, tab));
+       }
+       continue;
+     }
+diff --git a/chrome/browser/ui/views/tabs/common/tab_view.cc b/chrome/browser/ui/views/tabs/common/tab_view.cc
+index 54981a6e949bc..3fd942f095673 100644
+--- a/chrome/browser/ui/views/tabs/common/tab_view.cc
++++ b/chrome/browser/ui/views/tabs/common/tab_view.cc
+@@ -37,6 +37,7 @@
+ #include "chrome/browser/ui/stedding/pin_lifecycle.h"
+ #include "chrome/browser/ui/stedding/stedding_prefs.h"
+ #include "chrome/browser/ui/stedding/tab_names.h"
++#include "chrome/browser/ui/stedding/tab_parents.h"
+ #include "chrome/browser/ui/stedding/tab_separators.h"
+ #include "chrome/browser/ui/stedding/tidy_names.h"
+ #include "chrome/browser/ui/stedding_ui_metrics.h"
+@@ -491,6 +492,15 @@ TabView::TabView(TabCollectionNode* collection_node)
+   slash->SetSubpixelRenderingEnabled(false);
+   drift_slash_ = AddChildView(std::move(slash));
+ 
++  // Stedding (tabs R60): how many tabs are folded away under this row, in the
++  // vertical layout's own column, so the title makes room for it.
++  auto fold = std::make_unique<views::Label>();
++  fold->SetVisible(false);
++  fold->SetHorizontalAlignment(gfx::ALIGN_CENTER);
++  fold->SetSkipSubpixelRenderingOpacityCheck(true);
++  fold->SetSubpixelRenderingEnabled(false);
++  fold_badge_ = AddChildView(std::move(fold));
++
+   title_->SetProperty(views::kElementIdentifierKey, kVerticalTabTitleElementId);
+   SetProperty(views::kElementIdentifierKey, kTabElementId);
+   // Layout manager must be set after child views are created because the
+@@ -926,6 +936,13 @@ void TabView::OnMouseReleased(const ui::MouseEvent& event) {
+     // Stedding (pins H5): a plain click selects. Reset is Option-click on
+     // the favicon, or the essentials card's hover badge. The rail has no
+     // badge; Option-click still resets.
++    // Stedding (tabs R60): the count of a folded row unfolds it.
++    if (fold_badge_ && fold_badge_->GetVisible() &&
++        fold_badge_->bounds().Contains(event.location())) {
++      stedding::SetChildrenFolded(
++          const_cast<tabs::TabInterface*>(GetTabInterface()), false);
++      return;
++    }
+     const bool on_favicon = icon_ && icon_->bounds().Contains(event.location());
+     const bool reset = on_favicon && !pinned_ && event.IsAltDown();
+     const bool on_reset_badge =
+@@ -1353,6 +1370,9 @@ void TabView::OnThemeChanged() {
+   if (!stedding::SameFont(title_->font_list(), font)) {
+     title_->SetFontList(font);
+   }
++  if (fold_badge_ && !stedding::SameFont(fold_badge_->font_list(), font)) {
++    fold_badge_->SetFontList(font);
++  }
+   if (drift_slash_ && !stedding::SameFont(drift_slash_->font_list(), font)) {
+     drift_slash_->SetFontList(font);
+   }
+@@ -1959,6 +1979,9 @@ void TabView::UpdateColors() {
+         slept ? stedding::SleptTitleColor(colors.foreground_color)
+               : colors.foreground_color));
+   }
++  if (fold_badge_) {
++    fold_badge_->SetEnabledColor(SkColorSetA(colors.foreground_color, 0xB3));
++  }
+   if (reset_badge_) {
+     reset_badge_->SetEnabledColor(colors.foreground_color);
+     reset_badge_->SetBackground(views::CreateRoundedRectBackground(
+@@ -2209,6 +2232,20 @@ void TabView::SetSteddingNestIndent(int indent) {
+   SchedulePaint();
+ }
+ 
++void TabView::SetSteddingFoldedChildren(int count) {
++  if (!fold_badge_ || stedding_folded_children_ == count) {
++    return;
++  }
++  stedding_folded_children_ = count;
++  if (count > 0) {
++    fold_badge_->SetText(u"+" + base::NumberToString16(count));
++    fold_badge_->GetViewAccessibility().SetName(
++        l10n_util::GetPluralStringFUTF16(IDS_STEDDING_FOLDED_CHILD_TABS, count));
++  }
++  InvalidateLayout();
++  SchedulePaint();
++}
++
+ int TabView::SteddingNestIndent() const {
+   if (orientation_ != TabStripOrientation::kVertical || pinned_ || split_ ||
+       IsRailRow(width())) {
+diff --git a/chrome/browser/ui/views/tabs/common/tab_view.h b/chrome/browser/ui/views/tabs/common/tab_view.h
+index 534739673c0fc..4238dce070759 100644
+--- a/chrome/browser/ui/views/tabs/common/tab_view.h
++++ b/chrome/browser/ui/views/tabs/common/tab_view.h
+@@ -130,6 +130,11 @@ class TabView : public views::View,
+   void SetSteddingNestIndent(int indent);
+   int SteddingNestIndent() const;
+ 
++  // Stedding (tabs R60): how many tabs are folded away under this row, shown
++  // as a count on it, which a press unfolds; 0 hides the count.
++  void SetSteddingFoldedChildren(int count);
++  views::Label* fold_badge_for_testing() { return fold_badge_; }
++
+   GlowHoverController* GetHoverControllerForTesting() {
+     return hover_controller_.get();
+   }
+@@ -344,6 +349,8 @@ class TabView : public views::View,
+   // Stedding (pins H12): Arc's slash between the favicon and the title of a
+   // Space-pinned row away from its home; the vertical layout places it.
+   raw_ptr<views::Label> drift_slash_ = nullptr;
++  // tabs R60: "+3" on a row whose children are folded away.
++  raw_ptr<views::Label> fold_badge_ = nullptr;
+   // Stedding (local tabs Lt5): a local row's host and port under its title;
+   // made the first time the row is local, so an ordinary row carries nothing
+   // (PLAN.md TAB-40). The vertical layout places it.
+@@ -377,6 +384,8 @@ class TabView : public views::View,
+   void EndPressDrag();
+   // tabs R57: the indent under the tab that opened this one, in DIP.
+   int stedding_nest_indent_ = 0;
++  // tabs R60: how many tabs are folded away under this row.
++  int stedding_folded_children_ = 0;
+   bool should_fill_background_tab_color_ = false;
+   // Stedding (local tabs Lt1): the sidebar marks this row as local.
+   bool local_ = false;
+diff --git a/chrome/browser/ui/views/tabs/common/tab_view_vertical_layout.cc b/chrome/browser/ui/views/tabs/common/tab_view_vertical_layout.cc
+index 2b3e999808551..161ac6821ba5e 100644
+--- a/chrome/browser/ui/views/tabs/common/tab_view_vertical_layout.cc
++++ b/chrome/browser/ui/views/tabs/common/tab_view_vertical_layout.cc
+@@ -34,6 +34,8 @@ constexpr int kHorizontalInset = 8;
+ constexpr int kDefaultPadding = 4;
+ // Stedding (pins H12): the drift slash's column.
+ constexpr int kSlashWidth = 6;
++// Stedding (tabs R60): room for "+99".
++constexpr int kFoldBadgeWidth = 26;
+ }  // namespace
+ 
+ TabViewVerticalLayout::TabViewVerticalLayout() = default;
+@@ -52,6 +54,9 @@ void TabViewVerticalLayout::OnInstalled(views::View* host) {
+                      /*align_leading=*/false,
+                      /*expand=*/false,
+                      /*decorate_on_collapse=*/true),
++      TabChildConfig(TabView().fold_badge_, kFoldBadgeWidth, kDefaultPadding,
++                     /*align_leading=*/false,
++                     /*expand=*/false),
+       TabChildConfig(TabView().icon_, IconDesignWidth(), kHorizontalInset,
+                      /*align_leading=*/true,
+                      /*expand=*/false),
+@@ -349,6 +354,12 @@ bool TabViewVerticalLayout::IsChildVisible(const views::View* child_view,
+     return TabView().active_ || hovered_or_focused;
+   }
+ 
++  if (child_view == TabView().fold_badge_) {
++    // Stedding (tabs R60): on a row with a title.
++    return TabView().stedding_folded_children_ > 0 && !RowState(width).narrow &&
++           !RowState(width).pinned;
++  }
++
+   if (child_view == TabView().drift_slash_) {
+     // Stedding (pins H12): Arc's slash on a drifted row with a title, while
+     // the user asks for the mark (H28).
+diff --git a/chrome/test/stedding/child_tabs_browsertest.cc b/chrome/test/stedding/child_tabs_browsertest.cc
+index 1bdbeae57cbd8..53f1b097a9f78 100644
+--- a/chrome/test/stedding/child_tabs_browsertest.cc
++++ b/chrome/test/stedding/child_tabs_browsertest.cc
+@@ -16,16 +16,21 @@
+ #include "base/run_loop.h"
+ #include "base/test/run_until.h"
+ #include "base/test/test_future.h"
++#include "chrome/app/chrome_command_ids.h"
+ #include "chrome/browser/prefs/session_startup_pref.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/sessions/session_service.h"
+ #include "chrome/browser/sessions/session_service_factory.h"
+ #include "chrome/browser/sessions/session_service_test_helper.h"
+ #include "chrome/browser/ui/browser_commands.h"
++#include "chrome/browser/ui/browser_tabstrip.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+ #include "chrome/browser/ui/navigator/browser_navigator.h"
+ #include "chrome/browser/ui/navigator/browser_navigator_params.h"
+ #include "chrome/browser/ui/stedding/stedding_prefs.h"
++#include "chrome/browser/ui/stedding/tab_menu_verbs.h"
++#include "chrome/browser/ui/spaces/space_model.h"
+ #include "chrome/browser/ui/stedding/tab_parents.h"
+ #include "chrome/browser/ui/tabs/split_tab_metrics.h"
+ #include "chrome/browser/ui/tabs/tab_enums.h"
+@@ -48,6 +53,8 @@
+ #include "components/split_tabs/split_tab_visual_data.h"
+ #include "components/tabs/public/tab_interface.h"
+ #include "content/public/browser/web_contents.h"
++#include "content/public/test/test_navigation_observer.h"
++#include "ui/views/controls/label.h"
+ #include "content/public/test/browser_test.h"
+ #include "content/public/test/browser_test_utils.h"
+ #include "content/public/test/test_navigation_observer.h"
+@@ -369,6 +376,213 @@ IN_PROC_BROWSER_TEST_F(ChildTabsTest, TheSettingTurnsItOff) {
+   EXPECT_EQ(14, Indent(child));
+ }
+ 
++// R60 (BACKLOG S-92): Back goes through a child's pages as ever, and at its
++// first page shows its parent and closes the child, which Shift-Cmd-T brings
++// back. With the setting off a first page is the end of Back, as it was.
++IN_PROC_BROWSER_TEST_F(ChildTabsTest, BackAtAChildsFirstPageReturnsToItsParent) {
++  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), Url("a.test")));
++  tabs::TabInterface* const page = tabs()->GetActiveTab();
++  tabs::TabInterface* const child = OpenLinkFrom(page, "b.test");
++  ASSERT_TRUE(child);
++  tabs()->ActivateTabAt(tabs()->GetIndexOfTab(child));
++  EXPECT_TRUE(chrome::IsCommandEnabled(browser(), IDC_BACK))
++      << "Back is greyed on a child at its first page";
++  content::WebContents* const contents = child->GetContents();
++  ASSERT_TRUE(ui_test_utils::NavigateToURL(
++      browser(), embedded_test_server()->GetURL("b.test", "/title2.html")));
++  const int count = tabs()->count();
++  {
++    content::TestNavigationObserver back(contents);
++    ASSERT_TRUE(chrome::ExecuteCommand(browser(), IDC_BACK));
++    back.Wait();
++  }
++  EXPECT_EQ(count, tabs()->count());
++  EXPECT_EQ(Url("b.test"), contents->GetLastCommittedURL());
++
++  ASSERT_TRUE(chrome::ExecuteCommand(browser(), IDC_BACK));
++  ASSERT_TRUE(base::test::RunUntil(
++      [&]() { return tabs()->count() == count - 1; }))
++      << "the child stayed";
++  EXPECT_EQ(page, tabs()->GetActiveTab());
++
++  ASSERT_TRUE(chrome::ExecuteCommand(browser(), IDC_RESTORE_TAB));
++  ASSERT_TRUE(
++      base::test::RunUntil([&]() { return tabs()->count() == count; }))
++      << "Shift-Cmd-T did not bring it back";
++  browser()->GetProfile()->GetPrefs()->SetBoolean(
++      stedding::prefs::kNestChildTabs, false);
++  EXPECT_FALSE(chrome::CanGoBack(browser()->tab_strip_model()
++                                     ->GetActiveTab()
++                                     ->GetContents()))
++      << "with the setting off Back still closed a tab";
++}
++
++// R56, R60: a pin is no one's child, whatever it was before it was pinned.
++// Back on it stays, as Cmd-W does not close it either (pins H3), a fold leaves
++// its row, and a parent pinned after its fold offers no way back, so its
++// children come out.
++IN_PROC_BROWSER_TEST_F(ChildTabsTest, APinIsNoOnesChildForBackOrAFold) {
++  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), Url("a.test")));
++  tabs::TabInterface* const page = tabs()->GetActiveTab();
++  tabs::TabInterface* const child = OpenLinkFrom(page, "b.test");
++  ASSERT_TRUE(child);
++  spaces::SpaceModel* const model = spaces::SpaceModel::From(browser());
++  ASSERT_TRUE(model);
++  const auto shown = [](const tabs::TabInterface*) { return true; };
++
++  stedding::SetChildrenFolded(page, true);
++  ASSERT_TRUE(stedding::FoldedAway(*tabs(), child, shown));
++  ASSERT_EQ(1, stedding::FoldedChildCount(*tabs(), page));
++  EXPECT_EQ(page, stedding::ParentBackReturnsTo(child->GetContents()));
++
++  model->SetSpacePinned(child, true);
++  EXPECT_FALSE(stedding::FoldedAway(*tabs(), child, shown))
++      << "a fold took a pin's row";
++  EXPECT_EQ(nullptr, stedding::ParentBackReturnsTo(child->GetContents()))
++      << "Back closes a pin";
++  model->SetSpacePinned(child, false);
++  ASSERT_TRUE(stedding::FoldedAway(*tabs(), child, shown));
++
++  // The parent becomes an essential: no count, no menu row, so no fold.
++  tabs()->SetTabPinned(tabs()->GetIndexOfTab(page), true);
++  EXPECT_FALSE(stedding::FoldedAway(*tabs(), child, shown))
++      << "a parent with no way to unfold kept its children folded";
++  EXPECT_EQ(0, stedding::FoldedChildCount(*tabs(), page));
++  EXPECT_FALSE(stedding::HasChildTabs(*tabs(), page));
++}
++
++// R60: Close Other Tabs keeps the children of the tab it is asked on, and
++// theirs, and closes the rest.
++IN_PROC_BROWSER_TEST_F(ChildTabsTest, CloseOtherTabsKeepsATabsChildren) {
++  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), Url("a.test")));
++  tabs::TabInterface* const page = tabs()->GetActiveTab();
++  tabs::TabInterface* const child = OpenLinkFrom(page, "b.test");
++  ASSERT_TRUE(child);
++  tabs::TabInterface* const grandchild = OpenLinkFrom(child, "c.test");
++  ASSERT_TRUE(grandchild);
++  chrome::AddTabAt(browser(), Url("d.test"), /*index=*/-1,
++                   /*foreground=*/false);
++  ASSERT_EQ(4, tabs()->count());
++
++  tabs()->ExecuteContextMenuCommand(tabs()->GetIndexOfTab(page),
++                                    TabStripModel::CommandCloseOtherTabs);
++  ASSERT_TRUE(base::test::RunUntil([&]() { return tabs()->count() == 3; }))
++      << tabs()->count() << " tabs left";
++  EXPECT_NE(TabStripModel::kNoTab, tabs()->GetIndexOfTab(child));
++  EXPECT_NE(TabStripModel::kNoTab, tabs()->GetIndexOfTab(grandchild));
++
++  tabs()->ExecuteContextMenuCommand(tabs()->GetIndexOfTab(child),
++                                    TabStripModel::CommandCloseOtherTabs);
++  ASSERT_TRUE(base::test::RunUntil([&]() { return tabs()->count() == 2; }))
++      << "the parent stayed: only what is under the tab is kept";
++  EXPECT_NE(TabStripModel::kNoTab, tabs()->GetIndexOfTab(grandchild));
++}
++
++// R60: a parent's children fold away under it, the row counting them. What is
++// on screen keeps its row, and a press on the count, or a closed parent, shows
++// them again.
++IN_PROC_BROWSER_TEST_F(ChildTabsTest, AParentsChildrenFoldAwayWithIt) {
++  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), Url("a.test")));
++  tabs::TabInterface* const page = tabs()->GetActiveTab();
++  tabs::TabInterface* const child = OpenLinkFrom(page, "b.test");
++  ASSERT_TRUE(child);
++  tabs::TabInterface* const grandchild = OpenLinkFrom(child, "c.test");
++  ASSERT_TRUE(grandchild);
++  chrome::AddTabAt(browser(), Url("d.test"), /*index=*/-1,
++                   /*foreground=*/false);
++  tabs::TabInterface* const other = tabs()->GetTabAtIndex(tabs()->count() - 1);
++  const auto index = [&](tabs::TabInterface* tab) {
++    return tabs()->GetIndexOfTab(tab);
++  };
++  const auto hidden = [&](tabs::TabInterface* tab) {
++    return tabs()->IsTabHidden(index(tab));
++  };
++  constexpr int kFold = TabStripModel::CommandSteddingFoldChildTabs;
++  constexpr int kUnfold = TabStripModel::CommandSteddingUnfoldChildTabs;
++  tabs()->ActivateTabAt(index(page));
++  ASSERT_TRUE(stedding::IsTabMenuRowVisible(*tabs(), index(page), kFold));
++  EXPECT_FALSE(stedding::IsTabMenuRowVisible(*tabs(), index(page), kUnfold));
++  EXPECT_FALSE(stedding::IsTabMenuRowVisible(*tabs(), index(other), kFold))
++      << "a row with no children has nothing to fold";
++
++  stedding::ExecuteTabMenuVerb(*tabs(), index(page), kFold);
++  EXPECT_TRUE(hidden(child));
++  EXPECT_TRUE(hidden(grandchild));
++  EXPECT_FALSE(hidden(other));
++  EXPECT_FALSE(DrawnRow(child)) << "the child still has a row";
++  TabView* row = DrawnRow(page);
++  ASSERT_TRUE(row);
++  EXPECT_TRUE(row->fold_badge_for_testing()->GetVisible());
++  EXPECT_EQ(u"+2", row->fold_badge_for_testing()->GetText());
++  EXPECT_TRUE(stedding::IsTabMenuRowVisible(*tabs(), index(page), kUnfold));
++  EXPECT_FALSE(stedding::IsTabMenuRowVisible(*tabs(), index(page), kFold));
++
++  {
++    SCOPED_TRACE("what is on screen keeps its row");
++    tabs()->ActivateTabAt(index(child));
++    EXPECT_FALSE(hidden(child));
++    EXPECT_TRUE(hidden(grandchild));
++    tabs()->ActivateTabAt(index(page));
++    EXPECT_TRUE(hidden(child));
++  }
++  {
++    SCOPED_TRACE("a press on the count unfolds");
++    row = DrawnRow(page);
++    ASSERT_TRUE(row);
++    stedding::test::ClickLeftMouse(
++        widget(), row->fold_badge_for_testing()->GetBoundsInScreen().CenterPoint());
++    EXPECT_TRUE(base::test::RunUntil(
++        [&]() { return !stedding::ChildrenFolded(page->GetContents()); }));
++    EXPECT_FALSE(hidden(child));
++    EXPECT_FALSE(hidden(grandchild));
++    EXPECT_EQ(page, tabs()->GetActiveTab());
++  }
++  {
++    SCOPED_TRACE("a closed parent's children come up");
++    stedding::ExecuteTabMenuVerb(*tabs(), index(page), kFold);
++    ASSERT_TRUE(hidden(child));
++    tabs()->CloseWebContentsAt(index(page), TabCloseTypes::CLOSE_NONE);
++    EXPECT_FALSE(hidden(child));
++    EXPECT_FALSE(hidden(grandchild));
++  }
++}
++
++// R60: the fold is in what a restart reads.
++IN_PROC_BROWSER_TEST_F(ChildTabsTest, PRE_TheFoldComesBackAfterARestart) {
++  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), Url("a.test")));
++  tabs::TabInterface* const page = tabs()->GetActiveTab();
++  ASSERT_TRUE(OpenLinkFrom(page, "b.test"));
++  stedding::SetChildrenFolded(page, true);
++  base::RunLoop().RunUntilIdle();
++}
++
++IN_PROC_BROWSER_TEST_F(ChildTabsTest, TheFoldComesBackAfterARestart) {
++  TabStripModel* strip = nullptr;
++  tabs::TabInterface* page = nullptr;
++  ASSERT_TRUE(base::test::RunUntil([&]() {
++    for (BrowserWindowInterface* const window :
++         GetAllBrowserWindowInterfaces()) {
++      TabStripModel* const tabs = window->GetTabStripModel();
++      for (int i = 0; i < tabs->count(); ++i) {
++        if (stedding::ChildrenFolded(tabs->GetWebContentsAt(i))) {
++          strip = tabs;
++          page = tabs->GetTabAtIndex(i);
++        }
++      }
++    }
++    return page != nullptr;
++  })) << "the fold did not come back";
++  strip->ActivateTabAt(strip->GetIndexOfTab(page));
++  bool child_hidden = false;
++  for (int i = 0; i < strip->count(); ++i) {
++    child_hidden |=
++        stedding::TabParentToken(strip->GetWebContentsAt(i)) ==
++            stedding::TabToken(page->GetContents()) &&
++        strip->IsTabHidden(i);
++  }
++  EXPECT_TRUE(child_hidden);
++}
++
+ // R58: the tree is in what a restart reads: the session's pending commands
+ // written, the file moved aside as the last session and read back as session
+ // restore reads it, each tab's extra data naming its token and its parent's.
+diff --git a/components/tabs/public/tab_context_menu_command.h b/components/tabs/public/tab_context_menu_command.h
+index 85be26931ec7c..b73c7bcdbe7d2 100644
+--- a/components/tabs/public/tab_context_menu_command.h
++++ b/components/tabs/public/tab_context_menu_command.h
+@@ -65,6 +65,10 @@ enum TabContextMenuCommand {
+   // (docs/features/sidebar.md Y45, GitHub issue 19).
+   CommandSteddingAddSeparator,
+   CommandSteddingRemoveSeparator,
++  // Stedding: a parent's children fold away with it (docs/features/tabs.md
++  // R60).
++  CommandSteddingFoldChildTabs,
++  CommandSteddingUnfoldChildTabs,
+   // Stedding (docs/features/menus.md M1): "Move to Space", a row per other
+   // Space in switcher order; the collection controller resolves the index
+   // and moves the selection. Room for 99 rows: Spaces are not capped, and

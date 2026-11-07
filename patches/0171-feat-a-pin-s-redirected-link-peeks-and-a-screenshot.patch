@@ -1,0 +1,255 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Fri, 6 Nov 2026 23:46:31 -0500
+Subject: feat: a pin's redirected link peeks, and a screenshot takes the peek
+
+A link from a pin that the server sends to another site stayed in the pin,
+because the throttle judged only the link. It now judges each redirect by the
+same rules and opens the peek at the destination, so the address that
+redirected is not asked twice. A sign-in stays in the pin, including whatever
+the steps after a sign-in page lead to.
+
+The screenshot keys captured the pin under a peek over the page. They take
+the peek on top.
+
+Why: S-93 (peek P22, P23; PLAN.md CMD-29, WIN-18).
+
+Removable when: peeks go.
+---
+ .../browser/ui/stedding/screenshot/BUILD.gn   |  1 +
+ .../stedding/screenshot/screenshot_capture.cc |  8 +++-
+ .../ui/views/peek/peek_navigation_throttle.cc | 19 ++++++++
+ .../ui/views/peek/peek_navigation_throttle.h  |  6 +++
+ chrome/test/stedding/peek_browsertest.cc      | 46 +++++++++++++++++++
+ .../stedding/peek_over_page_browsertest.cc    | 46 +++++++++++++++++++
+ 6 files changed, 125 insertions(+), 1 deletion(-)
+
+diff --git a/chrome/browser/ui/stedding/screenshot/BUILD.gn b/chrome/browser/ui/stedding/screenshot/BUILD.gn
+index 1799bde07399c..d7f6cb1d47884 100644
+--- a/chrome/browser/ui/stedding/screenshot/BUILD.gn
++++ b/chrome/browser/ui/stedding/screenshot/BUILD.gn
+@@ -35,6 +35,7 @@ source_set("screenshot") {
+     "//chrome/browser/download",
+     "//chrome/browser/image_editor",
+     "//chrome/browser/profiles:profile",
++    "//chrome/browser/ui/stedding:little_window",
+     "//chrome/browser/ui/tabs:tab_strip",
+     "//chrome/browser/ui/toasts",
+     "//chrome/browser/ui/toasts/api:toasts",
+diff --git a/chrome/browser/ui/stedding/screenshot/screenshot_capture.cc b/chrome/browser/ui/stedding/screenshot/screenshot_capture.cc
+index 1fce77c32bc4a..650322cba2c87 100644
+--- a/chrome/browser/ui/stedding/screenshot/screenshot_capture.cc
++++ b/chrome/browser/ui/stedding/screenshot/screenshot_capture.cc
+@@ -35,6 +35,7 @@
+ #include "chrome/browser/image_editor/screenshot_flow.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/stedding/peek.h"
+ #include "chrome/browser/ui/stedding/screenshot/screenshot_codec.h"
+ #include "chrome/browser/ui/stedding/screenshot/screenshot_file.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+@@ -717,7 +718,12 @@ void CaptureScreenshot(BrowserWindowInterface* browser, CaptureMode mode) {
+   }
+   TabStripModel* const tabs = browser->GetTabStripModel();
+   tabs::TabInterface* const tab = tabs ? tabs->GetActiveTab() : nullptr;
+-  content::WebContents* const contents = tab ? tab->GetContents() : nullptr;
++  // peek P23 (BACKLOG S-93): a peek over the page is the page on top, and the
++  // one the keys are pressed on. A peek in a window of its own is that
++  // window's tab.
++  content::WebContents* const peek = PeekOverPageOfActiveTab(browser);
++  content::WebContents* const contents =
++      peek ? peek : (tab ? tab->GetContents() : nullptr);
+   if (!contents) {
+     return;
+   }
+diff --git a/chrome/browser/ui/views/peek/peek_navigation_throttle.cc b/chrome/browser/ui/views/peek/peek_navigation_throttle.cc
+index d9dbec25d447c..793d585170ab5 100644
+--- a/chrome/browser/ui/views/peek/peek_navigation_throttle.cc
++++ b/chrome/browser/ui/views/peek/peek_navigation_throttle.cc
+@@ -289,6 +289,25 @@ PeekNavigationThrottle::~PeekNavigationThrottle() = default;
+ 
+ content::NavigationThrottle::ThrottleCheckResult
+ PeekNavigationThrottle::WillStartRequest() {
++  return PeekIfLeavingThePin();
++}
++
++// P22 (BACKLOG S-93, PLAN.md CMD-29): where a server sends the link is judged
++// as the link is, and the peek starts there, so the address that redirected
++// is not asked twice. P16: a sign-in that began in the pin ends in the pin,
++// wherever the steps after it lead.
++content::NavigationThrottle::ThrottleCheckResult
++PeekNavigationThrottle::WillRedirectRequest() {
++  for (const GURL& step : navigation_handle()->GetRedirectChain()) {
++    if (IsSignInAddress(step)) {
++      return PROCEED;
++    }
++  }
++  return PeekIfLeavingThePin();
++}
++
++content::NavigationThrottle::ThrottleCheckResult
++PeekNavigationThrottle::PeekIfLeavingThePin() {
+   content::NavigationHandle* const handle = navigation_handle();
+   tabs::TabInterface* const tab =
+       tabs::TabInterface::MaybeGetFromContents(handle->GetWebContents());
+diff --git a/chrome/browser/ui/views/peek/peek_navigation_throttle.h b/chrome/browser/ui/views/peek/peek_navigation_throttle.h
+index b8dd18c68a3f1..f66337925da9f 100644
+--- a/chrome/browser/ui/views/peek/peek_navigation_throttle.h
++++ b/chrome/browser/ui/views/peek/peek_navigation_throttle.h
+@@ -104,7 +104,13 @@ class PeekNavigationThrottle : public content::NavigationThrottle {
+ 
+   // content::NavigationThrottle:
+   ThrottleCheckResult WillStartRequest() override;
++  ThrottleCheckResult WillRedirectRequest() override;
+   const char* GetNameForLogging() override;
++
++ private:
++  // Opens a peek for where the navigation stands, and stops it, when that
++  // leaves the pin (P1, P15, P16, P22).
++  ThrottleCheckResult PeekIfLeavingThePin();
+ };
+ 
+ }  // namespace stedding
+diff --git a/chrome/test/stedding/peek_browsertest.cc b/chrome/test/stedding/peek_browsertest.cc
+index 8c1c1485f4358..6c2f9bfe790e3 100644
+--- a/chrome/test/stedding/peek_browsertest.cc
++++ b/chrome/test/stedding/peek_browsertest.cc
+@@ -440,6 +440,52 @@ IN_PROC_BROWSER_TEST_F(PeekTest, ALinkWaitsForThePeeksLeaveSiteAnswer) {
+ 
+ // P2, P4, P11: a link on the pin's own site, or a script's click with no
+ // gesture from the user, goes on in the pinned tab.
++// P22 (BACKLOG S-93, PLAN.md CMD-29): a link the server sends to another site
++// opens a peek there, and the pin stays where it was.
++IN_PROC_BROWSER_TEST_F(PeekTest, AServerRedirectToAnotherSiteOpensAPeek) {
++  const GURL to = Url("b.test", "/title3.html");
++  ASSERT_NO_FATAL_FAILURE(
++      OpenPin(Url("a.test", "/server-redirect?" + to.spec())));
++  ClickLink();
++  BrowserWindowInterface* const peek = WaitForPeek();
++  ASSERT_TRUE(peek) << "the redirect stayed in the pin";
++  content::WebContents* const page =
++      peek->GetTabStripModel()->GetActiveWebContents();
++  ASSERT_TRUE(content::WaitForLoadStop(page));
++  EXPECT_EQ(to, page->GetLastCommittedURL());
++  EXPECT_EQ(Url("a.test", "/title1.html"), contents()->GetLastCommittedURL());
++  EXPECT_EQ(1, Requests()) << "the page was asked for twice";
++}
++
++// P22, P16: a redirect on the pin's own site stays, and so does one to a
++// sign-in page and whatever a sign-in sends the link to next.
++IN_PROC_BROWSER_TEST_F(PeekTest, ASignInOrSameSiteRedirectStaysInThePin) {
++  {
++    SCOPED_TRACE("the pin's own site");
++    const GURL to = Url("a.test", "/title3.html");
++    ASSERT_NO_FATAL_FAILURE(
++        OpenPin(Url("a.test", "/server-redirect?" + to.spec())));
++    content::TestNavigationObserver done(contents());
++    ClickLink();
++    done.Wait();
++    EXPECT_EQ(to, contents()->GetLastCommittedURL());
++    EXPECT_FALSE(stedding::PeekOver(browser()));
++  }
++  {
++    SCOPED_TRACE("through a sign-in page to another site");
++    const GURL to = Url("b.test", "/title3.html");
++    const GURL sign_in =
++        Url("accounts.c.test", "/server-redirect?" + to.spec());
++    ASSERT_NO_FATAL_FAILURE(
++        OpenPin(Url("a.test", "/server-redirect?" + sign_in.spec())));
++    content::TestNavigationObserver done(contents());
++    ClickLink();
++    done.Wait();
++    EXPECT_EQ(to, contents()->GetLastCommittedURL());
++    EXPECT_FALSE(stedding::PeekOver(browser()));
++  }
++}
++
+ IN_PROC_BROWSER_TEST_F(PeekTest, ASameSiteLinkOrAScriptsClickStaysInThePin) {
+   {
+     SCOPED_TRACE("the pin's own site");
+diff --git a/chrome/test/stedding/peek_over_page_browsertest.cc b/chrome/test/stedding/peek_over_page_browsertest.cc
+index 4c9668831ad7e..dc592736da481 100644
+--- a/chrome/test/stedding/peek_over_page_browsertest.cc
++++ b/chrome/test/stedding/peek_over_page_browsertest.cc
+@@ -11,13 +11,18 @@
+ #include <memory>
+ #include <string>
+ #include <variant>
++#include <vector>
+ 
+ #include "base/memory/raw_ptr.h"
+ #include "base/scoped_observation.h"
+ #include "base/strings/stringprintf.h"
+ #include "base/run_loop.h"
+ #include "base/test/bind.h"
++#include "base/files/file_enumerator.h"
++#include "base/files/file_path.h"
++#include "base/files/scoped_temp_dir.h"
+ #include "base/test/run_until.h"
++#include "base/threading/thread_restrictions.h"
+ #include "chrome/app/chrome_command_ids.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/renderer_context_menu/render_view_context_menu_test_util.h"
+@@ -27,7 +32,9 @@
+ #include "chrome/browser/ui/spaces/space_model.h"
+ #include "chrome/browser/ui/stedding/little_window.h"
+ #include "chrome/browser/ui/stedding/peek.h"
++#include "chrome/browser/ui/stedding/screenshot/screenshot_capture.h"
+ #include "chrome/browser/ui/stedding/stedding_command_ids.h"
++#include "chrome/common/pref_names.h"
+ #include "chrome/browser/ui/stedding/stedding_prefs.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "chrome/browser/ui/views/frame/browser_view.h"
+@@ -124,6 +131,20 @@ class CloseAsItShows : public aura::WindowObserver {
+ 
+ class PeekOverPageTest : public InProcessBrowserTest {
+  protected:
++  // The PNG files a capture left in `folder`.
++  static std::vector<base::FilePath> PngsIn(const base::FilePath& folder) {
++    base::ScopedAllowBlockingForTesting allow_blocking;
++    std::vector<base::FilePath> found;
++    base::FileEnumerator files(folder, /*recursive=*/false,
++                               base::FileEnumerator::FILES,
++                               FILE_PATH_LITERAL("*.png"));
++    for (base::FilePath path = files.Next(); !path.empty();
++         path = files.Next()) {
++      found.push_back(path);
++    }
++    return found;
++  }
++
+   void SetUpOnMainThread() override {
+     InProcessBrowserTest::SetUpOnMainThread();
+     host_resolver()->AddRule("*", "127.0.0.1");
+@@ -250,6 +271,31 @@ IN_PROC_BROWSER_TEST_F(PeekOverPageTest,
+   EXPECT_EQ(pin, tab());
+ }
+ 
++// P23 (BACKLOG S-93, PLAN.md WIN-18): the screenshot keys take the peek on
++// top, not the pin under it.
++IN_PROC_BROWSER_TEST_F(PeekOverPageTest, AScreenshotTakesThePeekNotThePin) {
++  base::ScopedAllowBlockingForTesting allow_blocking;
++  base::ScopedTempDir downloads;
++  ASSERT_TRUE(downloads.CreateUniqueTempDir());
++  browser()->GetProfile()->GetPrefs()->SetFilePath(
++      prefs::kDownloadDefaultDirectory, downloads.GetPath());
++  ASSERT_NO_FATAL_FAILURE(OpenPin(Url("b.test", "/title3.html")));
++  tabs::TabInterface* const pin = tab();
++  ClickLink();
++  ASSERT_TRUE(WaitForPeek(pin));
++  content::WebContents* const page =
++      stedding::PeekOverPageOfActiveTab(browser());
++  ASSERT_TRUE(page);
++  ASSERT_TRUE(content::WaitForLoadStop(page));
++  stedding::CaptureScreenshot(browser(), stedding::CaptureMode::kVisible);
++  ASSERT_TRUE(base::test::RunUntil(
++      [&]() { return !PngsIn(downloads.GetPath()).empty(); }))
++      << "no capture was written";
++  const std::string name =
++      PngsIn(downloads.GetPath()).front().BaseName().AsUTF8Unsafe();
++  EXPECT_NE(std::string::npos, name.find("b.test")) << name;
++}
++
+ // tabs R67: the same on the peek's first show: it ended on a widget that had
+ // gone, and a peek that had.
+ IN_PROC_BROWSER_TEST_F(PeekOverPageTest,

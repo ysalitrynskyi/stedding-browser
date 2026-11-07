@@ -55,7 +55,7 @@ On Windows every chord below is the Mac's with ⌘ read as Ctrl and ⌥⌘ as Ct
 | K40 | "Sort Open Tabs by Routes" (routing D16), listed only with a tab to move, and "Where Everything from Arc Went" (import I47) are rows. Neither has a chord. Not in a private window (K15). | unit: `CommandBarViewTest.TheSortRowFollowsTheRoutes`, `CommandBarViewTest.TheFromArcRowOpensThePage` | built |
 | K41 | A screen reader hears the bar as a dialog named "Command bar". | unit: `CommandBarViewTest.TheBarIsADialogToAScreenReader` | built |
 | K42 | Enter in an empty bar opens the New Tab page, or the page an extension puts there, and the bar closes. A row chosen with an arrow key runs as it did. ⌘L's bar is not this: it holds the address. | unit: `CommandBarViewTest.EnterInAnEmptyBarOpensANewTab` | built |
-| K43 | A search also lists what is open in the profile's other windows, after this window's rows and within K2's four, marked "In Another Window", found by name or page title (BACKLOG S-94). Not with an "@Space" filter (K19) or with Hide Other Spaces on. Enter on such a row closes the bar and asks where to show the tab (windows G11). | browser: `CommandBarActionsTest.ATabInAnotherWindowAsksWhereToShowIt` | built |
+| K43 | A search also lists what is open in the profile's other windows, after this window's rows and within K2's four, marked "In Another Window", found by name or page title (BACKLOG S-94). Not with an "@Space" filter (K19) or with Hide Other Spaces on. Enter on such a row closes the bar and asks where to show the tab (windows G12). | browser: `CommandBarActionsTest.ATabInAnotherWindowAsksWhereToShowIt` | built |
 
 ## Notes
 

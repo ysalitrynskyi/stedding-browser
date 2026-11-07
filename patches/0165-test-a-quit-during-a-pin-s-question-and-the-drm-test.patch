@@ -1,0 +1,110 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Fri, 6 Nov 2026 23:50:51 -0500
+Subject: test: a quit during a pin's question, and the DRM test with sign-in
+ off
+
+The browser test that counts requests ran with the test suite's pretended
+OAuth client, so browser sign-in was allowed and the profile could ask
+accounts.google.com which accounts it holds, on its own time. On a slow
+build that landed in the middle of the count. It now runs as a Stedding
+build does. A fresh profile of the real build sent no such request in 75
+seconds.
+
+A quit begun while a pin's page asks "Leave site?" had a test only for a
+window close. The quit's own path waits for the same answer.
+
+Why: BACKLOG S-443 and S-435; docs/features/pins.md H3, privacy Q12.
+
+Removable when: never as a test.
+---
+ .../test/stedding/drm_notice_browsertest.cc   |  6 +++
+ .../stedding/sidebar_click_browsertest.cc     | 51 +++++++++++++++++++
+ 2 files changed, 57 insertions(+)
+
+diff --git a/chrome/test/stedding/drm_notice_browsertest.cc b/chrome/test/stedding/drm_notice_browsertest.cc
+index 07104fbe99f8f..0cda8a3af4d12 100644
+--- a/chrome/test/stedding/drm_notice_browsertest.cc
++++ b/chrome/test/stedding/drm_notice_browsertest.cc
+@@ -147,6 +147,12 @@ class DrmNoticeTest : public InProcessBrowserTest {
+   void SetUpCommandLine(base::CommandLine* command_line) override {
+     InProcessBrowserTest::SetUpCommandLine(command_line);
+     mock_cert_verifier_.SetUpCommandLine(command_line);
++    // Browser sign-in is not allowed, as in a Stedding build. The test suite
++    // pretends an OAuth client exists (ChromeTestSuite), so without this the
++    // profile may ask accounts.google.com which accounts it holds, on its own
++    // time, and on a slow build that lands in the middle of a test that counts
++    // requests (BACKLOG S-443).
++    command_line->AppendSwitchASCII("allow-browser-signin", "false");
+   }
+ 
+   void SetUpInProcessBrowserTestFixture() override {
+diff --git a/chrome/test/stedding/sidebar_click_browsertest.cc b/chrome/test/stedding/sidebar_click_browsertest.cc
+index 40cdb6c993b6c..7407b7631651b 100644
+--- a/chrome/test/stedding/sidebar_click_browsertest.cc
++++ b/chrome/test/stedding/sidebar_click_browsertest.cc
+@@ -41,6 +41,8 @@
+ #include "chrome/app/chrome_command_ids.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/ui/animation/browser_animation_controller.h"
++#include "chrome/browser/lifetime/application_lifetime_desktop.h"
++#include "chrome/browser/lifetime/browser_shutdown.h"
+ #include "chrome/browser/ui/browser_commands.h"
+ #include "chrome/browser/ui/browser_tabstrip.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+@@ -2888,6 +2890,55 @@ IN_PROC_BROWSER_TEST_F(SidebarClickTest,
+   }
+ }
+ 
++// pins H3 (BACKLOG S-435): a quit begun while a pin's page asks "Leave site?"
++// waits for the same answer, as a window close does. Stay keeps the browser
++// and the pin; Leave goes on with the quit. Leave put the pin to sleep and left
++// the browser open, the quit forgotten.
++IN_PROC_BROWSER_TEST_F(SidebarClickTest,
++                       AQuitWhileAPinAsksLeaveSiteTakesTheAnswer) {
++  const GURL asks =
++      embedded_test_server()->GetURL("home.test", "/beforeunload.html");
++  spaces::SpaceModel* const model = spaces::SpaceModel::From(browser());
++  ASSERT_TRUE(model);
++  TabStripModel* const tabs = tab_strip_model();
++  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), asks));
++  ASSERT_EQ(1, tabs->count());
++  tabs::TabInterface* const pin = tabs->GetActiveTab();
++  model->SetSpacePinned(pin, true);
++  content::WebContents* const page = pin->GetContents();
++  content::PrepContentsForBeforeUnloadTest(page);
++  BrowserWindowInterface* const window = browser();
++
++  {
++    SCOPED_TRACE("Stay keeps the browser and the pin");
++    chrome::ExecuteCommand(window, IDC_CLOSE_TAB);  // Cmd-W
++    javascript_dialogs::AppModalDialogController* const dialog =
++        ui_test_utils::WaitForAppModalDialog();
++    ASSERT_TRUE(dialog);
++    chrome::CloseAllBrowsersAndQuit();
++    ASSERT_TRUE(browser_shutdown::IsTryingToQuit());
++    dialog->view()->CancelAppModalDialog();  // Stay.
++    ASSERT_TRUE(base::test::RunUntil(
++        [&]() { return !browser_shutdown::IsTryingToQuit(); }))
++        << "Stay did not cancel the quit";
++    EXPECT_EQ(page, pin->GetContents()) << "Stay unloaded the pin";
++    EXPECT_FALSE(page->WasDiscarded());
++    EXPECT_TRUE(model->IsSpacePinned(pin));
++  }
++
++  {
++    SCOPED_TRACE("Leave goes on with the quit");
++    chrome::ExecuteCommand(window, IDC_CLOSE_TAB);  // Cmd-W
++    javascript_dialogs::AppModalDialogController* const dialog =
++        ui_test_utils::WaitForAppModalDialog();
++    ASSERT_TRUE(dialog);
++    chrome::CloseAllBrowsersAndQuit();
++    ASSERT_TRUE(browser_shutdown::IsTryingToQuit());
++    dialog->view()->AcceptAppModalDialog();  // Leave.
++    ui_test_utils::WaitForBrowserToClose(window);
++  }
++}
++
+ // The tab menu fits each kind of row, its Edit Pinned Address opens over the
+ // window, and the range a Shift-click selects, which the menu counts and
+ // Cmd-W closes, holds only the rows shown.

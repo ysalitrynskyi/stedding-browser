@@ -1,0 +1,111 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Fri, 6 Nov 2026 23:50:54 -0500
+Subject: mac signing: the entitlements Touch ID passkeys need
+
+Chromium's own passkey store on the Mac wants a keychain access group of
+the signing team, which needs a provisioning profile embedded in the app.
+The entitlements join the app's when the build knows its team. The signer
+embeds the profile tooling/sign-release hands it, and leaves those
+entitlements out when it embeds none, since macOS will not start an app
+that claims them without one: a --development signature keeps working.
+
+Why: BACKLOG S-239; docs/decisions/0033-passkeys-and-the-signing-team.md.
+
+Removable when: never as a feature.
+---
+ chrome/BUILD.gn                                 |  5 +++++
+ chrome/app/app-entitlements-stedding.plist      | 14 ++++++++++++++
+ chrome/installer/mac/signing/chromium_config.py |  6 +++++-
+ chrome/installer/mac/signing/modification.py    | 13 ++++++++++++-
+ 4 files changed, 36 insertions(+), 2 deletions(-)
+ create mode 100644 chrome/app/app-entitlements-stedding.plist
+
+diff --git a/chrome/BUILD.gn b/chrome/BUILD.gn
+index 678fa6ade8e1a..81458a489954d 100644
+--- a/chrome/BUILD.gn
++++ b/chrome/BUILD.gn
+@@ -788,6 +788,11 @@ if (is_win) {
+       # certificate and will not necessarily work in any other build.
+       entitlements_templates += [ "app/app-entitlements-chrome.plist" ]
+     }
++    if (!is_chrome_branded && chrome_mac_team_id != "") {
++      # Stedding (BACKLOG S-239): what Touch ID passkeys need. The signer drops
++      # these when it embeds no provisioning profile.
++      entitlements_templates += [ "app/app-entitlements-stedding.plist" ]
++    }
+     output_name = "$target_gen_dir/app-entitlements.plist"
+     substitutions = [
+       "CHROMIUM_BUNDLE_ID=$chrome_mac_bundle_id",
+diff --git a/chrome/app/app-entitlements-stedding.plist b/chrome/app/app-entitlements-stedding.plist
+new file mode 100644
+index 0000000000000..d4382ff25b19c
+--- /dev/null
++++ b/chrome/app/app-entitlements-stedding.plist
+@@ -0,0 +1,14 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
++<plist version="1.0">
++<dict>
++	<key>com.apple.application-identifier</key>
++	<string>${CHROMIUM_TEAM_ID}.${CHROMIUM_BUNDLE_ID}</string>
++	<key>keychain-access-groups</key>
++	<array>
++		<string>${CHROMIUM_TEAM_ID}.${CHROMIUM_BUNDLE_ID}.secure-payment-confirmation</string>
++		<string>${CHROMIUM_TEAM_ID}.${CHROMIUM_BUNDLE_ID}.unexportable-keys</string>
++		<string>${CHROMIUM_TEAM_ID}.${CHROMIUM_BUNDLE_ID}.webauthn</string>
++	</array>
++</dict>
++</plist>
+diff --git a/chrome/installer/mac/signing/chromium_config.py b/chrome/installer/mac/signing/chromium_config.py
+index 933690858aac8..b117ff4e1463e 100644
+--- a/chrome/installer/mac/signing/chromium_config.py
++++ b/chrome/installer/mac/signing/chromium_config.py
+@@ -2,6 +2,8 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
++import os
++
+ from signing.build_props_config import BuildPropsCodeSignConfig
+ 
+ 
+@@ -14,4 +16,6 @@ class ChromiumCodeSignConfig(BuildPropsCodeSignConfig):
+ 
+     @property
+     def provisioning_profile_basename(self):
+-        return None
++        # Stedding (BACKLOG S-239): tooling/sign-release puts the profile in the
++        # packaging directory and names it here.
++        return os.environ.get('STEDDING_PROVISION_PROFILE_BASENAME') or None
+diff --git a/chrome/installer/mac/signing/modification.py b/chrome/installer/mac/signing/modification.py
+index 8090cd08decac..31f5e78a0e0ea 100644
+--- a/chrome/installer/mac/signing/modification.py
++++ b/chrome/installer/mac/signing/modification.py
+@@ -263,7 +263,12 @@ def _process_entitlements(paths, dist, config):
+             os.path.join(packaging_dir, entitlements_name), entitlements_file
+         )
+ 
+-        if dist.channel_customize or config.inject_get_task_allow_entitlement:
++        no_profile = not config.provisioning_profile_basename
++        if (
++            dist.channel_customize
++            or config.inject_get_task_allow_entitlement
++            or no_profile
++        ):
+             with commands.PlistContext(
+                 entitlements_file, rewrite=True
+             ) as entitlements:
+@@ -274,6 +279,12 @@ def _process_entitlements(paths, dist, config):
+                     )
+                 if config.inject_get_task_allow_entitlement:
+                     entitlements[_ENT_GET_TASK_ALLOW] = True
++                # Stedding (BACKLOG S-239): macOS will not start an app that
++                # claims these unless a provisioning profile grants them, so
++                # a --development signature, which embeds none, leaves them out.
++                if no_profile:
++                    entitlements.pop(_ENT_APP_ID, None)
++                    entitlements.pop('keychain-access-groups', None)
+ 
+ 
+ def customize_distribution(paths, dist, config):

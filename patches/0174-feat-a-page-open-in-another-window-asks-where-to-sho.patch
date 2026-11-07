@@ -1,0 +1,505 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Sat, 7 Nov 2026 00:49:13 -0500
+Subject: feat: a page open in another window asks where to show it
+
+A search in the command bar now also lists what is open in the profile's other
+windows, and choosing one asks: Show Here moves the page into this window, in
+the Space on screen, and Go to Window shows it where it is. Chromium's "Switch
+to tab" for a page in another window asks the same, instead of a jump.
+
+Why: the first part of S-94 (windows G12, commandbar K43). Ghost pins are the
+rest.
+
+Removable when: windows stop holding tabs of their own.
+---
+ chrome/app/stedding_strings.grdp              |   9 ++
+ .../browser/ui/navigator/browser_navigator.cc |  15 ++
+ chrome/browser/ui/spaces/space_model.h        |   6 +-
+ .../ui/views/commandbar/command_bar_view.cc   |  44 +++++-
+ chrome/browser/ui/views/spaces/BUILD.gn       |   1 +
+ .../browser/ui/views/spaces/space_dialogs.cc  |  92 ++++++++++++
+ .../browser/ui/views/spaces/space_dialogs.h   |  10 ++
+ .../test/stedding/command_bar_browsertest.cc  | 141 ++++++++++++++++++
+ 8 files changed, 314 insertions(+), 4 deletions(-)
+
+diff --git a/chrome/app/stedding_strings.grdp b/chrome/app/stedding_strings.grdp
+index 1a4617a1ac485..752fa89ad4cae 100644
+--- a/chrome/app/stedding_strings.grdp
++++ b/chrome/app/stedding_strings.grdp
+@@ -285,6 +285,15 @@
+   </message>
+ 
+   <!-- Separators in the sidebar (docs/features/sidebar.md Y45). -->
++  <message name="IDS_STEDDING_TAB_ELSEWHERE_TITLE" desc="Title of the question shown when the user chooses a tab that is open in another window of the browser.">
++    This page is open in another window
++  </message>
++  <message name="IDS_STEDDING_TAB_ELSEWHERE_SHOW_HERE" desc="In Title Case: Button that moves a page open in another window into this window.">
++    Show Here
++  </message>
++  <message name="IDS_STEDDING_TAB_ELSEWHERE_GO_TO_WINDOW" desc="In Title Case: Button that brings forward the other window a page is open in.">
++    Go to Window
++  </message>
+   <message name="IDS_STEDDING_FOLD_CHILD_TABS" desc="In Title Case: Item of a sidebar row's menu that hides the tabs opened from that tab under it.">
+     Fold Child Tabs
+   </message>
+diff --git a/chrome/browser/ui/navigator/browser_navigator.cc b/chrome/browser/ui/navigator/browser_navigator.cc
+index 28096ab8e0994..e7066cb98b489 100644
+--- a/chrome/browser/ui/navigator/browser_navigator.cc
++++ b/chrome/browser/ui/navigator/browser_navigator.cc
+@@ -50,6 +50,7 @@
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "chrome/browser/ui/tabs/tab_strip_user_gesture_details.h"
+ #include "chrome/browser/ui/views/peek/peek_navigation_throttle.h"
++#include "chrome/browser/ui/views/spaces/space_dialogs.h"
+ #include "chrome/browser/ui/web_applications/app_browser_controller.h"
+ #include "chrome/browser/ui/web_applications/navigation_capturing_process.h"
+ #include "chrome/browser/ui/web_applications/web_app_launch_navigation_handle_user_data.h"
+@@ -881,6 +882,20 @@ base::WeakPtr<content::NavigationHandle> NavigateImpl(
+     return nullptr;
+   }
+ 
++  // Stedding (windows G12, BACKLOG S-94): "Switch to tab" for a page open in
++  // another window asks where to show it, as the command bar does, instead of
++  // a jump the user did not see coming.
++  if (params->disposition == WindowOpenDisposition::SWITCH_TO_TAB &&
++      singleton_index != -1 && source_browser &&
++      source_browser != params->browser &&
++      source_browser->GetType() == BrowserWindowInterface::TYPE_NORMAL &&
++      params->browser->GetType() == BrowserWindowInterface::TYPE_NORMAL) {
++    spaces::AskWhereToShowTab(
++        source_browser,
++        params->browser->GetTabStripModel()->GetTabAtIndex(singleton_index));
++    return nullptr;
++  }
++
+   // Trying to open a background tab when in a non-tabbed app browser results in
+   // focusing a regular browser window and opening a tab in the background
+   // of that window. Change the disposition to NEW_FOREGROUND_TAB so that
+diff --git a/chrome/browser/ui/spaces/space_model.h b/chrome/browser/ui/spaces/space_model.h
+index d61b3617970b5..faad1177b313d 100644
+--- a/chrome/browser/ui/spaces/space_model.h
++++ b/chrome/browser/ui/spaces/space_model.h
+@@ -561,6 +561,9 @@ class SpaceModel : public TabStripModelObserver,
+   // drop across the Clear line has already put it there (pins H14, BACKLOG
+   // S-271).
+   void SetSpacePinnedInPlace(tabs::TabInterface* tab, bool pinned);
++  // pins H14: moves `tab` to the boundary of the Space-pinned run: its end
++  // for a pin, the first place past it for an unpinned tab.
++  void MoveToSpacePinBoundary(tabs::TabInterface* tab);
+ 
+   // folders F38, pins H14 (the owner, 2026-10-20): a folder in the pinned
+   // run, as in Arc. A top-level folder whose tabs are all Space-pinned is a
+@@ -690,9 +693,6 @@ class SpaceModel : public TabStripModelObserver,
+   std::vector<std::pair<tabs::TabInterface*, SpaceId>> TabsRoutesWouldMove();
+   void SetSpaceForOneTab(tabs::TabInterface* tab, const SpaceId& id);
+   void SetSpacePinnedOnOneTab(tabs::TabInterface* tab, bool pinned, bool move);
+-  // pins H14: moves `tab` to the boundary of the Space-pinned run: its end
+-  // for a pin, the first place past it for an unpinned tab.
+-  void MoveToSpacePinBoundary(tabs::TabInterface* tab);
+   // The end of the pinned run of `folder`'s Space, among the unpinned block's
+   // own rows with the folder aside: where a pinned folder goes, and an
+   // unpinned one too, at the top of the rows under the line.
+diff --git a/chrome/browser/ui/views/commandbar/command_bar_view.cc b/chrome/browser/ui/views/commandbar/command_bar_view.cc
+index 6fe6bc9f62085..35e89db646ff7 100644
+--- a/chrome/browser/ui/views/commandbar/command_bar_view.cc
++++ b/chrome/browser/ui/views/commandbar/command_bar_view.cc
+@@ -70,6 +70,7 @@
+ #include "chrome/browser/ui/stedding/stedding_command_ids.h"
+ #include "chrome/browser/ui/stedding/stedding_prefs.h"
+ #include "chrome/browser/ui/stedding/tab_parents.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+ #include "chrome/browser/ui/stedding/tab_names.h"
+ #include "chrome/browser/ui/tab_ui_helper.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+@@ -2097,6 +2098,39 @@ void CommandBarView::UpdateResults(const std::u16string& query,
+     }
+   }
+ 
++  // K43, windows G12 (BACKLOG S-94): a search also finds what is open in the
++  // profile's other windows, after this window's rows; choosing one asks
++  // where to show it. Hide Other Spaces keeps their names off screen, and an
++  // "@Space" search is about this window's Spaces.
++  if (!title_query.empty() && !parsed.space_prefix && !coat) {
++    ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
++        [&](BrowserWindowInterface* window) {
++          if (window == browser_ ||
++              window->GetProfile() != browser_->GetProfile() ||
++              window->GetType() != BrowserWindowInterface::TYPE_NORMAL) {
++            return true;
++          }
++          TabStripModel* const others = window->GetTabStripModel();
++          for (int i = 0; i < others->count() && tab_rows < kMaxTabResults;
++               ++i) {
++            tabs::TabInterface* const tab = others->GetTabAtIndex(i);
++            std::u16string title = stedding::TabName(tab->GetContents());
++            if (title.empty()) {
++              title = tab->GetTitle();
++            }
++            if (!Matches(title, title_query)) {
++              continue;
++            }
++            rows_.push_back({.kind = RowKind::kTab,
++                             .title = std::move(title),
++                             .detail = u"In Another Window",
++                             .tab = tab->GetHandle()});
++            ++tab_rows;
++          }
++          return true;
++        });
++  }
++
+   // The archive (A10): closed tabs whose title matches, after the open ones
+   // and before the suggestions, so a closed tab is never below the clip.
+   if (!title_query.empty() || parsed.space_prefix) {
+@@ -2850,7 +2884,15 @@ void CommandBarView::RunRow(size_t index) {
+ void CommandBarView::GoToTab(const tabs::TabHandle& handle) {
+   TabStripModel* const strip = browser_->GetTabStripModel();
+   tabs::TabInterface* const tab = handle.Get();
+-  if (!tab || strip->GetIndexOfTab(tab) == TabStripModel::kNoTab) {
++  if (!tab) {
++    return;
++  }
++  // K43, windows G12 (BACKLOG S-94): a tab of another window. The bar goes
++  // first, so the question takes the focus from the page.
++  if (strip->GetIndexOfTab(tab) == TabStripModel::kNoTab) {
++    BrowserWindowInterface* const window = browser_;
++    Close();
++    spaces::AskWhereToShowTab(window, tab);
+     return;
+   }
+   // Switching to a tab in another Space has to make that Space active, or
+diff --git a/chrome/browser/ui/views/spaces/BUILD.gn b/chrome/browser/ui/views/spaces/BUILD.gn
+index 148275311a33d..99ed633bb4bef 100644
+--- a/chrome/browser/ui/views/spaces/BUILD.gn
++++ b/chrome/browser/ui/views/spaces/BUILD.gn
+@@ -41,6 +41,7 @@ source_set("spaces") {
+     # routing D4, sessions S33: the switches for their notices.
+     "//chrome/browser/ui/stedding:empty_space",
+     "//chrome/browser/ui/stedding:prefs",
++    "//chrome/browser/ui/stedding:tab_names",
+     "//chrome/browser/ui/stedding:tab_parents",
+     "//chrome/browser/tab_list",
+     "//components/prefs",
+diff --git a/chrome/browser/ui/views/spaces/space_dialogs.cc b/chrome/browser/ui/views/spaces/space_dialogs.cc
+index 92726e5e258e8..df52bbc3e98d2 100644
+--- a/chrome/browser/ui/views/spaces/space_dialogs.cc
++++ b/chrome/browser/ui/views/spaces/space_dialogs.cc
+@@ -16,17 +16,23 @@
+ #include "base/strings/strcat.h"
+ #include "base/strings/utf_string_conversions.h"
+ #include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/ui/browser_commands.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/spaces/app_jar.h"
+ #include "chrome/browser/ui/spaces/isolation_mark.h"
+ #include "chrome/browser/ui/spaces/space.h"
+ #include "chrome/browser/ui/spaces/space_model.h"
+ #include "chrome/browser/ui/spaces/space_registry.h"
++#include "chrome/browser/ui/stedding/tab_names.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "chrome/browser/web_applications/web_app_provider.h"
+ #include "chrome/browser/web_applications/web_app_registrar.h"
+ #include "chrome/common/stedding/web_apps.h"
++#include "chrome/grit/generated_resources.h"
+ #include "components/constrained_window/constrained_window_views.h"
++#include "components/tabs/public/tab_interface.h"
+ #include "ui/base/base_window.h"
++#include "ui/base/l10n/l10n_util.h"
+ #include "ui/base/interaction/element_identifier.h"
+ #include "ui/base/models/dialog_model.h"
+ #include "ui/base/models/dialog_model_field.h"
+@@ -85,6 +91,92 @@ void ConfirmInWindow(BrowserWindowInterface* window,
+       base_window->GetNativeWindow());
+ }
+ 
++namespace {
++
++// windows G12: Show Here. The page keeps what it has; a Space with its own
++// session takes it in as any tab from another window (sessions S9).
++void ShowTabHere(BrowserWindowInterface* here, tabs::TabHandle handle) {
++  tabs::TabInterface* const tab = handle.Get();
++  BrowserWindowInterface* const there =
++      tab ? tab->GetBrowserWindowInterface() : nullptr;
++  if (!there || there == here) {
++    return;
++  }
++  chrome::MoveTabsToExistingWindow(
++      there, here, {there->GetTabStripModel()->GetIndexOfTab(tab)});
++  SpaceModel* const model = SpaceModel::From(here);
++  if (model && !tab->IsPinned()) {
++    model->MoveTabsToSpace({tab}, model->active_id());
++    // A Space pin keeps its place above the Clear line (pins H14).
++    if (model->IsSpacePinned(tab)) {
++      model->MoveToSpacePinBoundary(tab);
++    }
++  }
++  TabStripModel* const strip = here->GetTabStripModel();
++  if (const int index = strip->GetIndexOfTab(tab);
++      index != TabStripModel::kNoTab) {
++    strip->ActivateTabAt(index);
++  }
++}
++
++// windows G12: Go to Window. A tab of a Space that window is not showing
++// brings that Space with it, as the bar's own row does in this window.
++void ShowTabWhereItIs(tabs::TabHandle handle) {
++  tabs::TabInterface* const tab = handle.Get();
++  BrowserWindowInterface* const there =
++      tab ? tab->GetBrowserWindowInterface() : nullptr;
++  if (!there) {
++    return;
++  }
++  SpaceModel* const model = SpaceModel::From(there);
++  if (model && !tab->IsPinned()) {
++    model->SetActiveSpace(model->SpaceForTab(tab), tab);
++  }
++  TabStripModel* const strip = there->GetTabStripModel();
++  strip->ActivateTabAt(strip->GetIndexOfTab(tab));
++  there->GetWindow()->Activate();
++}
++
++}  // namespace
++
++void AskWhereToShowTab(BrowserWindowInterface* window,
++                       tabs::TabInterface* tab) {
++  ui::BaseWindow* const base_window = window ? window->GetWindow() : nullptr;
++  if (!base_window || !tab) {
++    return;
++  }
++  const tabs::TabHandle handle = tab->GetHandle();
++  std::u16string name = stedding::TabName(tab->GetContents());
++  if (name.empty()) {
++    name = tab->GetTitle();
++  }
++  ui::DialogModel::Builder builder;
++  ui::DialogModel* const dialog = builder.model();
++  constrained_window::ShowBrowserModal(
++      builder.SetInternalName("SteddingTabElsewhereDialog")
++          .SetTitle(
++              l10n_util::GetStringUTF16(IDS_STEDDING_TAB_ELSEWHERE_TITLE))
++          .AddParagraph(ui::DialogModelLabel(std::move(name)))
++          .AddOkButton(base::BindOnce(&ShowTabHere, window, handle),
++                       ui::DialogModel::Button::Params().SetLabel(
++                           l10n_util::GetStringUTF16(
++                               IDS_STEDDING_TAB_ELSEWHERE_SHOW_HERE)))
++          .AddCancelButton(base::DoNothing())
++          .AddExtraButton(
++              base::BindRepeating(
++                  [](ui::DialogModel* dialog, tabs::TabHandle handle,
++                     const ui::Event&) {
++                    ShowTabWhereItIs(handle);
++                    dialog->host()->Close();
++                  },
++                  base::Unretained(dialog), handle),
++              ui::DialogModel::Button::Params().SetLabel(
++                  l10n_util::GetStringUTF16(
++                      IDS_STEDDING_TAB_ELSEWHERE_GO_TO_WINDOW)))
++          .Build(),
++      base_window->GetNativeWindow());
++}
++
+ void SetSpaceIsolatedAfterAsking(BrowserWindowInterface* window,
+                                  const SpaceId& id,
+                                  bool isolated) {
+diff --git a/chrome/browser/ui/views/spaces/space_dialogs.h b/chrome/browser/ui/views/spaces/space_dialogs.h
+index 670ab19f5a172..2b271fe85036b 100644
+--- a/chrome/browser/ui/views/spaces/space_dialogs.h
++++ b/chrome/browser/ui/views/spaces/space_dialogs.h
+@@ -12,6 +12,10 @@
+ 
+ class BrowserWindowInterface;
+ 
++namespace tabs {
++class TabInterface;
++}  // namespace tabs
++
+ namespace spaces {
+ 
+ // A question over `window` before something that cannot be undone: `title`
+@@ -22,6 +26,12 @@ void ConfirmInWindow(BrowserWindowInterface* window,
+                      std::u16string action,
+                      base::OnceClosure on_confirmed);
+ 
++// windows G12 (BACKLOG S-94): `tab` lives in another window of the profile and
++// the user chose it in `window`. Asks where to show it: Show Here moves the
++// page into `window`, in the Space on screen, and Go to Window shows it where
++// it is, in that window's Space for it. Cancel leaves both as they are.
++void AskWhereToShowTab(BrowserWindowInterface* window, tabs::TabInterface* tab);
++
+ // PLAN.md SPC-9: turns the independent session of Space `id` on or off from
+ // `window`. When open pages would reload for it, the user is asked first,
+ // told how many.
+diff --git a/chrome/test/stedding/command_bar_browsertest.cc b/chrome/test/stedding/command_bar_browsertest.cc
+index 61198d732328d..851cda0abd19d 100644
+--- a/chrome/test/stedding/command_bar_browsertest.cc
++++ b/chrome/test/stedding/command_bar_browsertest.cc
+@@ -37,6 +37,7 @@
+ #include "chrome/browser/ui/browser_tabstrip.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
++#include "chrome/browser/ui/navigator/browser_navigator.h"
+ #include "chrome/browser/ui/spaces/space.h"
+ #include "chrome/browser/ui/spaces/space_model.h"
+ #include "chrome/browser/ui/stedding/bookmarks_to_pins_dialog.h"
+@@ -105,6 +106,7 @@
+ #include "ui/views/controls/label.h"
+ #include "ui/views/controls/scroll_view.h"
+ #include "ui/views/controls/textfield/textfield.h"
++#include "ui/views/test/button_test_api.h"
+ #include "ui/views/test/views_test_utils.h"
+ #include "ui/views/test/widget_test.h"
+ #include "ui/views/widget/any_widget_observer.h"
+@@ -252,6 +254,30 @@ class CommandBarActionsTest : public CommandBarTest {
+     bar->ContentsChanged(bar->field_for_testing(), text);
+   }
+ 
++  // K43, windows G12: a tab of `other`, found from this window's bar by the
++  // title `title`, and the question choosing it asks.
++  views::Widget* ChooseTabOfAnotherWindow(const std::u16string& title) {
++    views::NamedWidgetShownWaiter shown(views::test::AnyWidgetTestPasskey{},
++                                        "SteddingTabElsewhereDialog");
++    stedding::CommandBarView* const bar = OpenBar();
++    EXPECT_TRUE(bar);
++    Type(bar, title);
++    size_t row = 0;
++    while (row < bar->row_count_for_testing() &&
++           !(bar->row_title_for_testing(row) == title &&
++             bar->row_detail_for_testing(row) == u"In Another Window")) {
++      ++row;
++    }
++    EXPECT_LT(row, bar->row_count_for_testing())
++        << "the bar does not list the tab";
++    for (size_t i = 0; i < row; ++i) {
++      Press(bar, ui::VKEY_DOWN);
++    }
++    EXPECT_EQ(row, bar->selected_row_for_testing());
++    Press(bar, ui::VKEY_RETURN);
++    return shown.WaitIfNeededAndGet();
++  }
++
+   static std::vector<std::u16string> Titles(stedding::CommandBarView* bar) {
+     std::vector<std::u16string> titles;
+     for (size_t i = 0; i < bar->row_count_for_testing(); ++i) {
+@@ -841,6 +867,121 @@ IN_PROC_BROWSER_TEST_F(CommandBarActionsTest,
+ // The bar's keys in a real window (commandbar K2-K8, K14). The tabs are
+ // data: pages, which history does not keep, so the rows for a query are the
+ // typed text, the tabs and the archived tabs, and nothing else.
++// K43, windows G12 (BACKLOG S-94): a search finds a tab of another window, and
++// choosing it asks. Show Here moves the page into this window, and Go to
++// Window shows it there; Cancel leaves both alone.
++IN_PROC_BROWSER_TEST_F(CommandBarActionsTest,
++                       ATabInAnotherWindowAsksWhereToShowIt) {
++  BrowserWindowInterface* const other = CreateBrowser(browser()->GetProfile());
++  ASSERT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
++      other, embedded_test_server()->GetURL("/title2.html"),
++      WindowOpenDisposition::NEW_FOREGROUND_TAB,
++      ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
++  TabStripModel* const there = other->GetTabStripModel();
++  tabs::TabInterface* const tab = there->GetActiveTab();
++  there->ActivateTabAt(0);
++  const std::u16string title = tab->GetTitle();
++  const int here_before = browser()->GetTabStripModel()->count();
++  browser()->GetWindow()->Activate();
++
++  {
++    SCOPED_TRACE("Cancel");
++    views::Widget* const question = ChooseTabOfAnotherWindow(title);
++    ASSERT_TRUE(question);
++    views::test::WidgetDestroyedWaiter closed(question);
++    question->widget_delegate()->AsDialogDelegate()->CancelDialog();
++    closed.Wait();
++    EXPECT_NE(TabStripModel::kNoTab, there->GetIndexOfTab(tab));
++    EXPECT_NE(tab, there->GetActiveTab());
++  }
++  {
++    SCOPED_TRACE("Go to Window");
++    views::Widget* const question = ChooseTabOfAnotherWindow(title);
++    ASSERT_TRUE(question);
++    auto* const button = views::AsViewClass<views::Button>(
++        question->widget_delegate()->AsDialogDelegate()->GetExtraView());
++    ASSERT_TRUE(button);
++    views::test::WidgetDestroyedWaiter closed(question);
++    // Later than a dialog's guard against a click meant for what was there
++    // before it showed.
++    views::test::ButtonTestApi(button).NotifyClick(ui::MouseEvent(
++        ui::EventType::kMousePressed, gfx::Point(), gfx::Point(),
++        base::TimeTicks::Now() + base::Seconds(2), ui::EF_LEFT_MOUSE_BUTTON,
++        ui::EF_LEFT_MOUSE_BUTTON));
++    closed.Wait();
++    EXPECT_EQ(tab, there->GetActiveTab());
++    EXPECT_EQ(here_before, browser()->GetTabStripModel()->count());
++  }
++  there->ActivateTabAt(0);
++  browser()->GetWindow()->Activate();
++  {
++    SCOPED_TRACE("Show Here");
++    views::Widget* const question = ChooseTabOfAnotherWindow(title);
++    ASSERT_TRUE(question);
++    views::test::WidgetDestroyedWaiter closed(question);
++    question->widget_delegate()->AsDialogDelegate()->AcceptDialog();
++    closed.Wait();
++    EXPECT_EQ(TabStripModel::kNoTab, there->GetIndexOfTab(tab));
++    EXPECT_EQ(tab, browser()->GetTabStripModel()->GetActiveTab());
++    EXPECT_EQ(spaces::SpaceModel::From(browser())->active_id(),
++              spaces::SpaceModel::From(browser())->SpaceForTab(tab));
++  }
++}
++
++// windows G12, pins H14: Show Here on a Space pin keeps it above the Clear
++// line. It was left at the strip's end, a pin under the loose tabs.
++IN_PROC_BROWSER_TEST_F(CommandBarActionsTest, ShowHereKeepsAPinInTheRun) {
++  BrowserWindowInterface* const other = CreateBrowser(browser()->GetProfile());
++  ASSERT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
++      other, embedded_test_server()->GetURL("/title2.html"),
++      WindowOpenDisposition::NEW_FOREGROUND_TAB,
++      ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
++  TabStripModel* const there = other->GetTabStripModel();
++  tabs::TabInterface* const pin = there->GetActiveTab();
++  spaces::SpaceModel* const from = spaces::SpaceModel::From(other);
++  from->SetSpacePinned(pin, true);
++  ASSERT_TRUE(from->IsSpacePinned(pin));
++  there->ActivateTabAt(there->GetIndexOfTab(pin) == 0 ? 1 : 0);
++  const std::u16string title = pin->GetTitle();
++  TabStripModel* const here = browser()->GetTabStripModel();
++  browser()->GetWindow()->Activate();
++
++  views::Widget* const question = ChooseTabOfAnotherWindow(title);
++  ASSERT_TRUE(question);
++  views::test::WidgetDestroyedWaiter closed(question);
++  question->widget_delegate()->AsDialogDelegate()->AcceptDialog();
++  closed.Wait();
++  ASSERT_EQ(pin, here->GetActiveTab());
++  spaces::SpaceModel* const to = spaces::SpaceModel::From(browser());
++  EXPECT_TRUE(to->IsSpacePinned(pin));
++  EXPECT_EQ(0, here->GetIndexOfTab(pin)) << "a pin under the loose tabs";
++}
++
++// windows G12: Chromium's "Switch to tab" for a page in another window asks
++// the same question, and moves nothing until it is answered.
++IN_PROC_BROWSER_TEST_F(CommandBarActionsTest,
++                       SwitchToTabAsksForAPageInAnotherWindow) {
++  BrowserWindowInterface* const other = CreateBrowser(browser()->GetProfile());
++  const GURL page = embedded_test_server()->GetURL("/title2.html");
++  ASSERT_TRUE(ui_test_utils::NavigateToURL(other, page));
++  tabs::TabInterface* const tab = other->GetTabStripModel()->GetActiveTab();
++  chrome::AddTabAt(other, GURL("about:blank"), /*index=*/-1,
++                   /*foreground=*/true);
++  views::NamedWidgetShownWaiter shown(views::test::AnyWidgetTestPasskey{},
++                                      "SteddingTabElsewhereDialog");
++  NavigateParams params(browser(), page, ui::PAGE_TRANSITION_LINK);
++  params.disposition = WindowOpenDisposition::SWITCH_TO_TAB;
++  Navigate(&params);
++  views::Widget* const question = shown.WaitIfNeededAndGet();
++  ASSERT_TRUE(question);
++  EXPECT_NE(tab, other->GetTabStripModel()->GetActiveTab())
++      << "it jumped before the answer";
++  views::test::WidgetDestroyedWaiter closed(question);
++  question->widget_delegate()->AsDialogDelegate()->AcceptDialog();
++  closed.Wait();
++  EXPECT_EQ(tab, browser()->GetTabStripModel()->GetActiveTab());
++}
++
+ class CommandBarKeysTest : public CommandBarActionsTest {
+  protected:
+   // A tab titled `title`, on screen.

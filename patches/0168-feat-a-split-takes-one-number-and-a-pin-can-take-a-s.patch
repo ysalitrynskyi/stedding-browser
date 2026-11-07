@@ -1,0 +1,362 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Sat, 7 Nov 2026 00:21:47 -0500
+Subject: feat: a split takes one number, and a pin can take a split
+
+A split is one row, so Cmd-1 to Cmd-9 and the badges count it once: the
+number shows on its first pane and the key goes to the pane used last, as
+Ctrl-Tab does. A tab that joins a Space pin in a split stays in the pinned run
+and is pinned too, so the row is never half a pin, and a drop on a pin's page
+now makes that split.
+
+Why: BACKLOG S-102; docs/features/splits.md J2, J3, J5, J13.
+
+Removable when: never as a feature.
+---
+ chrome/browser/ui/browser_commands.cc         | 28 ++++++++++++-
+ chrome/browser/ui/spaces/space_model.cc       | 22 ++++++++++
+ chrome/browser/ui/spaces/space_model.h        |  1 +
+ .../ui/spaces/space_model_window_unittest.cc  | 27 ++++++++++++
+ chrome/browser/ui/stedding/tab_numbers.cc     | 10 +++++
+ chrome/browser/ui/stedding/tab_numbers.h      |  3 +-
+ .../ui/stedding/tab_numbers_unittest.cc       | 41 +++++++++++++++++++
+ .../ui/views/spaces/page_split_drag_target.cc |  1 -
+ .../ui/views/spaces/split_drop_rules.cc       |  4 +-
+ .../ui/views/spaces/split_drop_rules.h        |  1 -
+ .../views/spaces/split_drop_rules_unittest.cc |  1 -
+ .../test/stedding/pinned_run_browsertest.cc   |  7 +++-
+ 12 files changed, 136 insertions(+), 10 deletions(-)
+
+diff --git a/chrome/browser/ui/browser_commands.cc b/chrome/browser/ui/browser_commands.cc
+index 71df193146ad8..b6ee7bc4be348 100644
+--- a/chrome/browser/ui/browser_commands.cc
++++ b/chrome/browser/ui/browser_commands.cc
+@@ -5,6 +5,7 @@
+ #include "chrome/browser/ui/browser_commands.h"
+ 
+ #include <algorithm>
++#include <limits>
+ #include <memory>
+ #include <numeric>
+ #include <optional>
+@@ -1626,6 +1627,27 @@ void MoveTabPrevious(BrowserWindowInterface* browser) {
+ // shows that number. The badges and the keys read one list,
+ // stedding::NumberedTabs: the tabs the user can see, in sidebar order, kept
+ // to a focused group's tabs and the pinned ones while a group is focused.
++namespace {
++
++// splits J2: a key that names a split goes to the pane used last, as Ctrl-Tab
++// does.
++tabs::TabInterface* PaneForNumberKey(BrowserWindowInterface* browser,
++                                     tabs::TabInterface* tab) {
++  spaces::SpaceModel* const spaces = spaces::SpaceModel::From(browser);
++  if (spaces && tab->IsSplit()) {
++    for (tabs::TabInterface* const recent :
++         spaces->RecentTabs(spaces->active_id(),
++                            std::numeric_limits<size_t>::max())) {
++      if (recent->GetSplit() == tab->GetSplit()) {
++        return recent;
++      }
++    }
++  }
++  return tab;
++}
++
++}  // namespace
++
+ void SelectNumberedTab(BrowserWindowInterface* browser,
+                        int index,
+                        TabStripUserGestureDetails gesture_detail) {
+@@ -1636,7 +1658,8 @@ void SelectNumberedTab(BrowserWindowInterface* browser,
+     return;
+   }
+   base::RecordAction(UserMetricsAction("SelectNumberedTab"));
+-  model->ActivateTab(numbered[index], gesture_detail);
++  model->ActivateTab(PaneForNumberKey(browser, numbered[index]),
++                     gesture_detail);
+ }
+ 
+ void SelectLastTab(BrowserWindowInterface* browser,
+@@ -1648,7 +1671,8 @@ void SelectLastTab(BrowserWindowInterface* browser,
+     return;
+   }
+   base::RecordAction(UserMetricsAction("SelectLastTab"));
+-  model->ActivateTab(numbered.back(), gesture_detail);
++  model->ActivateTab(PaneForNumberKey(browser, numbered.back()),
++                     gesture_detail);
+ }
+ 
+ void DuplicateTab(BrowserWindowInterface* browser) {
+diff --git a/chrome/browser/ui/spaces/space_model.cc b/chrome/browser/ui/spaces/space_model.cc
+index 472c2f8a2e43c..4373933cfb8c1 100644
+--- a/chrome/browser/ui/spaces/space_model.cc
++++ b/chrome/browser/ui/spaces/space_model.cc
+@@ -3691,6 +3691,28 @@ void SpaceModel::SetSpacePinned(tabs::TabInterface* tab, bool pinned) {
+   }
+ }
+ 
++void SpaceModel::OnSplitTabChanged(const SplitTabChange& change) {
++  // splits J5: a tab that joins a Space pin in a split stays in the pinned run
++  // with it, pinned too, since a split is one row (J1).
++  if ((change.type != SplitTabChange::Type::kAdded &&
++       change.type != SplitTabChange::Type::kContentsChanged) ||
++      !tab_strip_model_ ||
++      !tab_strip_model_->ContainsSplit(change.split_id)) {
++    return;
++  }
++  const std::vector<tabs::TabInterface*> panes =
++      tab_strip_model_->GetSplitData(change.split_id)->ListTabs();
++  if (std::ranges::any_of(panes, [this](const tabs::TabInterface* pane) {
++        return IsSpacePinned(pane);
++      })) {
++    for (tabs::TabInterface* const pane : panes) {
++      if (!IsSpacePinned(pane) && !pane->IsPinned()) {
++        SetSpacePinnedOnOneTab(pane, /*pinned=*/true, /*move=*/false);
++      }
++    }
++  }
++}
++
+ void SpaceModel::SetSpacePinnedInPlace(tabs::TabInterface* tab, bool pinned) {
+   if (!tab) {
+     return;
+diff --git a/chrome/browser/ui/spaces/space_model.h b/chrome/browser/ui/spaces/space_model.h
+index e685eb048b5a7..d61b3617970b5 100644
+--- a/chrome/browser/ui/spaces/space_model.h
++++ b/chrome/browser/ui/spaces/space_model.h
+@@ -647,6 +647,7 @@ class SpaceModel : public TabStripModelObserver,
+   // were.
+   void HoldRecency(bool hold) { hold_recency_ = hold; }
+ 
++  void OnSplitTabChanged(const SplitTabChange& change) override;
+   void OnTabStripModelChanged(
+       TabStripModel* tab_strip_model,
+       const TabStripModelChange& change,
+diff --git a/chrome/browser/ui/spaces/space_model_window_unittest.cc b/chrome/browser/ui/spaces/space_model_window_unittest.cc
+index 3942aa48e9fba..46aba8c7bf959 100644
+--- a/chrome/browser/ui/spaces/space_model_window_unittest.cc
++++ b/chrome/browser/ui/spaces/space_model_window_unittest.cc
+@@ -1345,6 +1345,33 @@ TEST_F(SpaceWindowTest, RecentTabsCountASplitOnce) {
+   EXPECT_EQ(a, recent[1]);
+ }
+ 
++// splits J5: a tab that joins a Space pin in a split stays in the pinned run,
++// pinned too, since a split is one row (J1). One pane pinned and one not left
++// the row half a pin.
++TEST_F(SpaceWindowTest, ATabThatJoinsAPinInASplitIsPinned) {
++  tabs::TabInterface* const pin = OpenTab();
++  tabs::TabInterface* const loose = OpenTab();
++  model().SetSpacePinned(pin, true);
++  ASSERT_TRUE(model().IsSpacePinned(pin));
++  ASSERT_FALSE(model().IsSpacePinned(loose));
++  tabs().ActivateTabAt(tabs().GetIndexOfTab(pin));
++  tabs().AddToNewSplit({tabs().GetIndexOfTab(loose)},
++                       split_tabs::SplitTabVisualData(),
++                       split_tabs::SplitTabCreatedSource::kToolbarButton);
++  ASSERT_TRUE(pin->IsSplit());
++  EXPECT_TRUE(model().IsSpacePinned(pin));
++  EXPECT_TRUE(model().IsSpacePinned(loose)) << "half a pin";
++  EXPECT_EQ(pin->GetSplit(), loose->GetSplit());
++
++  // A tab swapped into the split is pinned too.
++  tabs::TabInterface* const swapped = OpenTab();
++  tabs().ActivateTabAt(tabs().GetIndexOfTab(loose));
++  tabs().UpdateTabInSplit(loose, tabs().GetIndexOfTab(swapped),
++                          TabStripModel::SplitUpdateType::kSwap);
++  ASSERT_EQ(pin->GetSplit(), swapped->GetSplit());
++  EXPECT_TRUE(model().IsSpacePinned(swapped)) << "a swap left half a pin";
++}
++
+ // splits J9, tabs R36: closing the pane on screen, alone, leaves the other
+ // pane on screen, whatever row was used before. A split is one row that
+ // goes whole for every other close, and the Space showed the row used
+diff --git a/chrome/browser/ui/stedding/tab_numbers.cc b/chrome/browser/ui/stedding/tab_numbers.cc
+index 3b71c291d2db9..7e8c1665a70a3 100644
+--- a/chrome/browser/ui/stedding/tab_numbers.cc
++++ b/chrome/browser/ui/stedding/tab_numbers.cc
+@@ -4,10 +4,12 @@
+ 
+ #include "chrome/browser/ui/stedding/tab_numbers.h"
+ 
++#include <algorithm>
+ #include <optional>
+ 
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model_selection_state.h"
++#include "components/split_tabs/split_tab_id.h"
+ #include "components/tab_groups/tab_group_id.h"
+ #include "components/tabs/public/tab_interface.h"
+ 
+@@ -24,6 +26,7 @@ std::vector<tabs::TabInterface*> NumberedTabs(TabStripModel* tabs) {
+   const std::optional<tab_groups::TabGroupId> focused_group =
+       tabs->GetFocusedGroup();
+   std::vector<tabs::TabInterface*> visible;
++  std::vector<split_tabs::SplitTabId> splits_seen;
+   for (int i = 0; i < tabs->count(); ++i) {
+     if (tabs->IsTabHidden(i)) {
+       continue;
+@@ -34,6 +37,13 @@ std::vector<tabs::TabInterface*> NumberedTabs(TabStripModel* tabs) {
+             tab, focused_group)) {
+       continue;
+     }
++    // splits J2: a split is one row, and takes one number.
++    if (const std::optional<split_tabs::SplitTabId> split = tab->GetSplit()) {
++      if (std::ranges::contains(splits_seen, *split)) {
++        continue;
++      }
++      splits_seen.push_back(*split);
++    }
+     visible.push_back(tab);
+   }
+   // ⌘9 is the last visible row. With more than nine rows, badges 1–8 are the
+diff --git a/chrome/browser/ui/stedding/tab_numbers.h b/chrome/browser/ui/stedding/tab_numbers.h
+index db99361c09dd0..3955d6dfb896c 100644
+--- a/chrome/browser/ui/stedding/tab_numbers.h
++++ b/chrome/browser/ui/stedding/tab_numbers.h
+@@ -20,7 +20,8 @@ namespace stedding {
+ // group is focused, the tabs outside it but the pinned ones; at most nine,
+ // the ninth the last of them (docs/features/tabs.md R10, R11, R19). The
+ // number keys and the badges both read this list. Essentials come first
+-// because the strip keeps them first.
++// because the strip keeps them first. A split is one row and takes one number,
++// its first pane here (splits J2).
+ std::vector<tabs::TabInterface*> NumberedTabs(TabStripModel* tabs);
+ 
+ }  // namespace stedding
+diff --git a/chrome/browser/ui/stedding/tab_numbers_unittest.cc b/chrome/browser/ui/stedding/tab_numbers_unittest.cc
+index 4d437f9c96e8a..02933e90f2433 100644
+--- a/chrome/browser/ui/stedding/tab_numbers_unittest.cc
++++ b/chrome/browser/ui/stedding/tab_numbers_unittest.cc
+@@ -8,9 +8,12 @@
+ #include <vector>
+ 
+ #include "chrome/browser/ui/browser.h"
++#include "chrome/browser/ui/browser_commands.h"
+ #include "chrome/browser/ui/spaces/space_model.h"
++#include "chrome/browser/ui/tabs/split_tab_metrics.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "chrome/test/base/browser_with_test_window_test.h"
++#include "components/split_tabs/split_tab_visual_data.h"
+ #include "components/tabs/public/tab_interface.h"
+ #include "testing/gtest/include/gtest/gtest.h"
+ #include "url/gurl.h"
+@@ -65,5 +68,43 @@ TEST_F(TabNumbersTest, NumbersFollowTheVisibleRowsAndStopAtNine) {
+   EXPECT_TRUE(NumberedTabs(nullptr).empty());
+ }
+ 
++// splits J2, tabs R10, R19: a split is one row and takes one number, which
++// goes to the pane used last. Each pane took a number of its own, so the rows
++// under a split were numbered one too high.
++TEST_F(TabNumbersTest, ASplitTakesOneNumber) {
++  AddTab(browser(), GURL("https://example.com/a"));
++  tabs::TabInterface* const after = tabs().GetActiveTab();
++  AddTab(browser(), GURL("https://example.com/b"));
++  tabs::TabInterface* const left = tabs().GetActiveTab();
++  AddTab(browser(), GURL("https://example.com/c"));
++  tabs::TabInterface* const right = tabs().GetActiveTab();
++  AddTab(browser(), GURL("https://example.com/d"));
++  tabs::TabInterface* const other = tabs().GetActiveTab();
++  tabs().ActivateTabAt(tabs().GetIndexOfTab(right));
++  tabs().AddToNewSplit({tabs().GetIndexOfTab(left)},
++                       split_tabs::SplitTabVisualData(),
++                       split_tabs::SplitTabCreatedSource::kToolbarButton);
++  ASSERT_TRUE(left->IsSplit());
++  ASSERT_TRUE(right->IsSplit());
++
++  const std::vector<tabs::TabInterface*> numbered = NumberedTabs(&tabs());
++  ASSERT_EQ(3u, numbered.size()) << "each pane took a number of its own";
++  EXPECT_NE(numbered.end(), std::ranges::find(numbered, after));
++  EXPECT_NE(numbered.end(), std::ranges::find(numbered, other));
++
++  // The key goes to the pane used last, whichever pane shows the number.
++  const auto split_key = static_cast<int>(
++      std::ranges::find_if(numbered, [](tabs::TabInterface* tab) {
++        return tab->IsSplit();
++      }) -
++      numbered.begin());
++  for (tabs::TabInterface* const pane : {left, right}) {
++    tabs().ActivateTabAt(tabs().GetIndexOfTab(pane));
++    tabs().ActivateTabAt(tabs().GetIndexOfTab(other));
++    chrome::SelectNumberedTab(browser(), split_key);
++    EXPECT_EQ(pane, tabs().GetActiveTab());
++  }
++}
++
+ }  // namespace
+ }  // namespace stedding
+diff --git a/chrome/browser/ui/views/spaces/page_split_drag_target.cc b/chrome/browser/ui/views/spaces/page_split_drag_target.cc
+index 990e67b83f179..a10c690f163cc 100644
+--- a/chrome/browser/ui/views/spaces/page_split_drag_target.cc
++++ b/chrome/browser/ui/views/spaces/page_split_drag_target.cc
+@@ -211,7 +211,6 @@ TabDragContext* PageSplitDragTarget::OnTabDragUpdated(
+   if (!candidate.page_missing) {
+     candidate.page_is_dragged = page == dragged;
+     candidate.page_essential = page->IsPinned();
+-    candidate.page_space_pin = model_->IsSpacePinned(page);
+     candidate.page_split = page->IsSplit();
+     candidate.page_browser_page =
+         page->GetContents() &&
+diff --git a/chrome/browser/ui/views/spaces/split_drop_rules.cc b/chrome/browser/ui/views/spaces/split_drop_rules.cc
+index 22068d57752d8..3734bab32a2ee 100644
+--- a/chrome/browser/ui/views/spaces/split_drop_rules.cc
++++ b/chrome/browser/ui/views/spaces/split_drop_rules.cc
+@@ -18,8 +18,8 @@ bool PageTakesSplitDrop(const SplitDropCandidate& candidate) {
+     return false;
+   }
+   return !candidate.page_missing && !candidate.page_is_dragged &&
+-         !candidate.page_essential && !candidate.page_space_pin &&
+-         !candidate.page_split && !candidate.page_browser_page;
++         !candidate.page_essential && !candidate.page_split &&
++         !candidate.page_browser_page;
+ }
+ 
+ }  // namespace stedding
+diff --git a/chrome/browser/ui/views/spaces/split_drop_rules.h b/chrome/browser/ui/views/spaces/split_drop_rules.h
+index 82c5fd2c28cda..85f223f87303f 100644
+--- a/chrome/browser/ui/views/spaces/split_drop_rules.h
++++ b/chrome/browser/ui/views/spaces/split_drop_rules.h
+@@ -40,7 +40,6 @@ struct SplitDropCandidate {
+   bool page_missing = false;
+   bool page_is_dragged = false;
+   bool page_essential = false;
+-  bool page_space_pin = false;
+   bool page_split = false;
+   // A browser page (chrome://) other than the New Tab page, which Chromium's
+   // own split drop refuses too.
+diff --git a/chrome/browser/ui/views/spaces/split_drop_rules_unittest.cc b/chrome/browser/ui/views/spaces/split_drop_rules_unittest.cc
+index 28449d84f8681..80752ec63ae5a 100644
+--- a/chrome/browser/ui/views/spaces/split_drop_rules_unittest.cc
++++ b/chrome/browser/ui/views/spaces/split_drop_rules_unittest.cc
+@@ -61,7 +61,6 @@ TEST(SplitDropRulesTest, WhichDragsThePageTakes) {
+       {"the row onto its own page",
+        {.dragged_tabs = 1, .page_is_dragged = true}},
+       {"onto an essential", {.dragged_tabs = 1, .page_essential = true}},
+-      {"onto a Space pin", {.dragged_tabs = 1, .page_space_pin = true}},
+       {"onto a split", {.dragged_tabs = 1, .page_split = true}},
+       {"onto a browser page", {.dragged_tabs = 1, .page_browser_page = true}},
+   };
+diff --git a/chrome/test/stedding/pinned_run_browsertest.cc b/chrome/test/stedding/pinned_run_browsertest.cc
+index 0fee838d70f32..efeb96d57e086 100644
+--- a/chrome/test/stedding/pinned_run_browsertest.cc
++++ b/chrome/test/stedding/pinned_run_browsertest.cc
+@@ -729,7 +729,8 @@ IN_PROC_BROWSER_TEST_F(PinnedRunTest, APinChangePassesAnotherSpacesTabInTheRun)
+ }
+ 
+ // pins H14 (BACKLOG S-314): a pin that ends the walk inside a row of Home's, a
+-// split with a loose pane, does not take a new pin into that row.
++// split, does not take a new pin into that row. The split's second pane is a
++// pin too (splits J5), so the new pin joins the end of the run past it.
+ IN_PROC_BROWSER_TEST_F(PinnedRunTest, ANewPinStaysOutOfAnotherSpacesSplit) {
+   const spaces::SpaceId work = model().active_id();
+   tabs::TabInterface* const first = tabs().GetActiveTab();
+@@ -759,7 +760,9 @@ IN_PROC_BROWSER_TEST_F(PinnedRunTest, ANewPinStaysOutOfAnotherSpacesSplit) {
+   EXPECT_TRUE(home_pin->IsSplit());
+   EXPECT_EQ(home_pin->GetSplit(), home_tab->GetSplit());
+   EXPECT_EQ(Index(home_pin) + 1, Index(home_tab)) << "a split stays whole";
+-  EXPECT_EQ(Index(first) + 1, Index(loose)) << "the end of Work's pins";
++  EXPECT_LT(Index(first), Index(loose)) << "the end of Work's pins";
++  EXPECT_TRUE(Index(loose) < Index(home_pin) || Index(loose) > Index(home_tab))
++      << "inside Home's split";
+   EXPECT_TRUE(IsAboveTheLine(loose));
+ }
+ 

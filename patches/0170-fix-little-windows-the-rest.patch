@@ -1,0 +1,452 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Fri, 6 Nov 2026 23:42:42 -0500
+Subject: fix: little windows, the rest
+
+A little window closed by hand now goes on the list Shift-Cmd-T reads and
+comes back little. A popup was never recorded, so the keys brought back
+whatever had been closed before it. A rule whose Space is gone no longer holds
+a link back from a little window; it routes nothing (routing D14).
+
+In a window with tabs and no Spaces, Option-Cmd-Left and Right and Cmd-D did
+nothing, because Spaces took those keys from Chromium. They step through the
+tabs and make a bookmark there, as Chromium's did.
+
+Why: the rest of S-157 (little E13, shortcuts Z24, PLAN.md CMD-18).
+
+Removable when: little windows or private windows stop being separate kinds of
+window.
+---
+ chrome/browser/ui/browser_commands.cc         |  9 ++++
+ chrome/browser/ui/browser_live_tab_context.cc | 13 ++++++
+ chrome/browser/ui/spaces/space_commands.cc    | 33 ++++++++++++--
+ .../ui/spaces/space_commands_unittest.cc      | 10 +++++
+ chrome/browser/ui/stedding/little_window.cc   | 32 ++++++++++++-
+ chrome/browser/ui/stedding/little_window.h    | 12 +++++
+ .../ui/stedding/little_window_unittest.cc     | 23 ++++++++++
+ chrome/browser/ui/unload_controller.cc        |  5 +++
+ .../stedding/little_window_browsertest.cc     | 45 +++++++++++++++++++
+ .../test/stedding/private_coat_browsertest.cc | 35 +++++++++++++++
+ 10 files changed, 212 insertions(+), 5 deletions(-)
+
+diff --git a/chrome/browser/ui/browser_commands.cc b/chrome/browser/ui/browser_commands.cc
+index b6ee7bc4be348..e56515ff99fb0 100644
+--- a/chrome/browser/ui/browser_commands.cc
++++ b/chrome/browser/ui/browser_commands.cc
+@@ -116,6 +116,7 @@
+ #include "chrome/browser/ui/stedding/address_row.h"
+ #include "chrome/browser/ui/stedding/copy_link.h"
+ #include "chrome/browser/ui/stedding/pin_lifecycle.h"
++#include "chrome/browser/ui/stedding/little_window.h"
+ #include "chrome/browser/ui/stedding/tab_numbers.h"
+ #include "chrome/browser/ui/tab_contents/core_tab_helper.h"
+ #include "chrome/browser/ui/tab_dialogs.h"
+@@ -1494,6 +1495,14 @@ void CloseTab(BrowserWindowInterface* browser) {
+     return;
+   }
+ 
++  // Stedding (little E13): Cmd-W closes a little window as a window, or the
++  // strip is empty before the window closes and nothing records it for
++  // Shift-Cmd-T.
++  if (stedding::RecordsClosedLittleWindow(browser)) {
++    browser->GetWindow()->Close();
++    return;
++  }
++
+   // If the selection model consists of only the indices of a single split tab,
+   // decide if just the active tab in the split is closed instead of all tabs in
+   // the split.
+diff --git a/chrome/browser/ui/browser_live_tab_context.cc b/chrome/browser/ui/browser_live_tab_context.cc
+index cd8d8713f945b..73c2ae1f5a3d0 100644
+--- a/chrome/browser/ui/browser_live_tab_context.cc
++++ b/chrome/browser/ui/browser_live_tab_context.cc
+@@ -22,6 +22,7 @@
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/sessions/session_service_utils.h"
+ #include "chrome/browser/sessions/tab_restore_service_factory.h"
++#include "chrome/browser/ui/stedding/little_window.h"
+ #include "chrome/browser/tab_group_sync/tab_group_sync_service_factory.h"
+ #include "chrome/browser/ui/archive/archived_tabs.h"
+ #include "chrome/browser/ui/browser.h"
+@@ -215,6 +216,8 @@ std::map<std::string, std::string> BrowserLiveTabContext::GetExtraDataForTab(
+ std::map<std::string, std::string>
+ BrowserLiveTabContext::GetExtraDataForWindow() const {
+   std::map<std::string, std::string> data;
++  // Stedding little E13 (BACKLOG S-157).
++  stedding::AddLittleWindowExtraData(&browser_.get(), &data);
+ 
+   auto* controller =
+       tabs::VerticalTabStripStateController::From(&browser_.get());
+@@ -515,6 +518,16 @@ sessions::LiveTabContext* BrowserLiveTabContext::Create(
+     const std::string& workspace,
+     const std::string& user_title,
+     const std::map<std::string, std::string>& extra_data) {
++  // Stedding little E13 (BACKLOG S-157): a closed little window comes back as
++  // it was; with a policy against it, as the plain window below.
++  if (type == sessions::SessionWindow::TYPE_POPUP &&
++      stedding::IsLittleWindowSession(extra_data)) {
++    if (BrowserWindowInterface* const little =
++            stedding::ReopenClosedLittleWindow(profile, bounds)) {
++      return BrowserLiveTabContext::From(little);
++    }
++  }
++
+   std::unique_ptr<BrowserWindowCreateParams> create_params;
+   if (ShouldCreateAppWindowForAppName(profile, app_name)) {
+     // Only trusted app popup windows should ever be restored.
+diff --git a/chrome/browser/ui/spaces/space_commands.cc b/chrome/browser/ui/spaces/space_commands.cc
+index f3b12c911615e..7fbaec5d7392e 100644
+--- a/chrome/browser/ui/spaces/space_commands.cc
++++ b/chrome/browser/ui/spaces/space_commands.cc
+@@ -89,6 +89,17 @@ void ActivateSpaceAt(BrowserWindowInterface* browser, size_t index) {
+ void SwitchSpace(BrowserWindowInterface* browser, bool forward) {
+   if (SpaceModel* const model = ModelForCommands(browser)) {
+     model->SwitchToNeighbour(forward);
++    return;
++  }
++  // shortcuts Z24 (BACKLOG S-157): these keys are Chromium's for the next and
++  // the previous tab, so a window with tabs and no Spaces gives them back.
++  if (browser &&
++      browser->GetType() == BrowserWindowInterface::Type::TYPE_NORMAL) {
++    if (forward) {
++      chrome::SelectNextTab(browser);
++    } else {
++      chrome::SelectPreviousTab(browser);
++    }
+   }
+ }
+ 
+@@ -137,6 +148,15 @@ void ClearActiveSpace(BrowserWindowInterface* browser) {
+ 
+ void ToggleSpacePinOnActiveTab(BrowserWindowInterface* browser) {
+   SpaceModel* const model = ModelForCommands(browser);
++  // shortcuts Z24 (BACKLOG S-157): this key is Chromium's for a bookmark, so
++  // a window with tabs and no Spaces gives it back.
++  if (!model && browser &&
++      browser->GetType() == BrowserWindowInterface::Type::TYPE_NORMAL) {
++    if (chrome::CanBookmarkCurrentTab(browser)) {
++      chrome::BookmarkCurrentTab(browser);
++    }
++    return;
++  }
+   tabs::TabInterface* const tab = ActiveTab(browser);
+   // An essentials tab sits above every Space; the second pin tier is not for
+   // it (B28), the way folders refuse it too.
+@@ -202,10 +222,8 @@ void SpaceCommandState::Refresh() {
+     setter_.Run(IDC_STEDDING_SPACE_1 + n - 1,
+                 supported && static_cast<size_t>(n) <= count);
+   }
+-  for (int command :
+-       {IDC_STEDDING_SPACE_NEXT, IDC_STEDDING_SPACE_PREVIOUS,
+-        IDC_STEDDING_TOGGLE_SPACE_PIN, IDC_STEDDING_MOVE_TAB_TO_NEXT_SPACE,
+-        IDC_STEDDING_MOVE_TAB_TO_PREVIOUS_SPACE}) {
++  for (int command : {IDC_STEDDING_MOVE_TAB_TO_NEXT_SPACE,
++                      IDC_STEDDING_MOVE_TAB_TO_PREVIOUS_SPACE}) {
+     setter_.Run(command, supported);
+   }
+   // Clear works in a private window too, which has no Spaces: it closes the
+@@ -214,6 +232,13 @@ void SpaceCommandState::Refresh() {
+   const bool tabbed = browser_ && browser_->GetType() ==
+                                       BrowserWindowInterface::Type::TYPE_NORMAL;
+   setter_.Run(IDC_STEDDING_CLEAR_SPACE, supported || tabbed);
++  // shortcuts Z24 (BACKLOG S-157): the keys Spaces took from Chromium do
++  // Chromium's work in a window with tabs and no Spaces; SwitchSpace and
++  // ToggleSpacePinOnActiveTab take both kinds.
++  for (int command : {IDC_STEDDING_SPACE_NEXT, IDC_STEDDING_SPACE_PREVIOUS,
++                      IDC_STEDDING_TOGGLE_SPACE_PIN}) {
++    setter_.Run(command, supported || tabbed);
++  }
+   // folders F30: so does the folders chord; a private window's folders are
+   // all of its folders (ToggleAllFolders takes both kinds). Popup and app
+   // windows have none.
+diff --git a/chrome/browser/ui/spaces/space_commands_unittest.cc b/chrome/browser/ui/spaces/space_commands_unittest.cc
+index 94fea7f32d1f8..f72c887e545a0 100644
+--- a/chrome/browser/ui/spaces/space_commands_unittest.cc
++++ b/chrome/browser/ui/spaces/space_commands_unittest.cc
+@@ -97,6 +97,16 @@ TEST_F(SpaceCommandTest, SpaceCommandsAreDisabledInPopupAndPrivateWindows) {
+   EXPECT_FALSE(SupportsSpaceCommands(private_window.get()));
+   EXPECT_FALSE(chrome::BrowserCommandController::From(private_window.get())
+                    ->IsCommandEnabled(IDC_STEDDING_SPACE_1));
++  EXPECT_FALSE(chrome::BrowserCommandController::From(private_window.get())
++                   ->IsCommandEnabled(IDC_STEDDING_MOVE_TAB_TO_NEXT_SPACE));
++  // shortcuts Z24: the keys taken from Chromium do its work there, and not
++  // in a popup, which has one tab.
++  EXPECT_TRUE(chrome::BrowserCommandController::From(private_window.get())
++                  ->IsCommandEnabled(IDC_STEDDING_SPACE_NEXT));
++  EXPECT_TRUE(chrome::BrowserCommandController::From(private_window.get())
++                  ->IsCommandEnabled(IDC_STEDDING_TOGGLE_SPACE_PIN));
++  EXPECT_FALSE(chrome::BrowserCommandController::From(popup.get())
++                   ->IsCommandEnabled(IDC_STEDDING_SPACE_NEXT));
+   // folders F30: a private window's folders are every folder it has, so
+   // the folders chord works there.
+   EXPECT_TRUE(chrome::BrowserCommandController::From(private_window.get())
+diff --git a/chrome/browser/ui/stedding/little_window.cc b/chrome/browser/ui/stedding/little_window.cc
+index f42ba28dca181..6370f35cfa8f2 100644
+--- a/chrome/browser/ui/stedding/little_window.cc
++++ b/chrome/browser/ui/stedding/little_window.cc
+@@ -28,6 +28,7 @@
+ #include "chrome/browser/ui/navigator/browser_navigator.h"
+ #include "chrome/browser/ui/navigator/browser_navigator_params.h"
+ #include "chrome/browser/ui/spaces/space_model.h"
++#include "chrome/browser/ui/spaces/space_registry.h"
+ #include "chrome/browser/ui/spaces/space_router.h"
+ #include "chrome/browser/ui/stedding/little_mark.h"
+ #include "chrome/browser/ui/stedding/peek.h"
+@@ -105,7 +106,20 @@ bool ShouldOpenLittle(const PrefService* prefs, const GURL& url) {
+   if (!prefs->GetBoolean(prefs::kLittleEnabled)) {
+     return false;
+   }
+-  return !spaces::RouteFor(spaces::ReadRoutes(prefs), url).has_value();
++  const std::optional<std::string> space =
++      spaces::RouteFor(spaces::ReadRoutes(prefs), url);
++  if (!space) {
++    return true;
++  }
++  // routing D14 (BACKLOG S-157): a rule whose Space is gone routes nothing,
++  // so it holds no link back from a little window. An empty registry says
++  // nothing yet: a window's Spaces are written to it when they change.
++  const std::vector<spaces::RegistryEntry> entries =
++      spaces::SpaceRegistry::FromValue(prefs->GetList(prefs::kSpaceRegistry));
++  return !entries.empty() &&
++         std::ranges::none_of(entries, [&](const spaces::RegistryEntry& entry) {
++           return entry.id.ToString() == *space;
++         });
+ }
+ 
+ void MarkLittleWindow(BrowserWindowInterface* window) {
+@@ -125,6 +139,22 @@ bool IsLittleWindowSession(
+   return it != extra_data.end() && it->second == "1";
+ }
+ 
++bool RecordsClosedLittleWindow(const BrowserWindowInterface* window) {
++  return IsLittleWindow(window) && !IsPeekWindow(window);
++}
++
++void AddLittleWindowExtraData(const BrowserWindowInterface* window,
++                              std::map<std::string, std::string>* extra_data) {
++  if (IsLittleWindow(window)) {
++    (*extra_data)[kSessionLittleWindowKey] = "1";
++  }
++}
++
++BrowserWindowInterface* ReopenClosedLittleWindow(Profile* profile,
++                                                 const gfx::Rect& bounds) {
++  return CreateLittleWindow(profile, bounds, /*keep_out_of_session=*/false);
++}
++
+ void KeepLittleWindowInSession(BrowserWindowInterface* window) {
+   if (!IsLittleWindow(window)) {
+     return;
+diff --git a/chrome/browser/ui/stedding/little_window.h b/chrome/browser/ui/stedding/little_window.h
+index 6958e1ca4d563..58e2cced3e328 100644
+--- a/chrome/browser/ui/stedding/little_window.h
++++ b/chrome/browser/ui/stedding/little_window.h
+@@ -96,6 +96,18 @@ bool IsLittleWindowSession(
+     const std::map<std::string, std::string>& extra_data);
+ void KeepLittleWindowInSession(BrowserWindowInterface* window);
+ 
++// E13 (BACKLOG S-157): a little window closed by hand goes on the list ⇧⌘T
++// reads, so it comes back little. `RecordsClosedLittleWindow` says whether
++// closing `window` should record it: a peek, which is left out of the session
++// too (peek P17), does not. `AddLittleWindowExtraData` adds the mark to what
++// is saved for `window`; `ReopenClosedLittleWindow` makes the window again
++// from what was saved, and is null when `profile` may not open one now.
++bool RecordsClosedLittleWindow(const BrowserWindowInterface* window);
++void AddLittleWindowExtraData(const BrowserWindowInterface* window,
++                              std::map<std::string, std::string>* extra_data);
++BrowserWindowInterface* ReopenClosedLittleWindow(Profile* profile,
++                                                 const gfx::Rect& bounds);
++
+ // The last-active normal window of `profile`, the one a promotion targets;
+ // null when there is none.
+ BrowserWindowInterface* LastActiveNormalWindow(Profile* profile);
+diff --git a/chrome/browser/ui/stedding/little_window_unittest.cc b/chrome/browser/ui/stedding/little_window_unittest.cc
+index 5be3fc63a1aaa..9948871cf6c0e 100644
+--- a/chrome/browser/ui/stedding/little_window_unittest.cc
++++ b/chrome/browser/ui/stedding/little_window_unittest.cc
+@@ -5,10 +5,13 @@
+ #include "chrome/browser/ui/stedding/little_window.h"
+ 
+ #include <memory>
++#include <utility>
+ 
++#include "base/values.h"
+ #include "chrome/browser/ui/browser.h"
+ #include "chrome/browser/ui/browser_commands.h"
+ #include "chrome/browser/ui/spaces/space_model.h"
++#include "chrome/browser/ui/spaces/space_registry.h"
+ #include "chrome/browser/ui/spaces/space_router.h"
+ #include "chrome/browser/ui/stedding/stedding_command_ids.h"
+ #include "chrome/browser/ui/stedding/stedding_prefs.h"
+@@ -70,6 +73,26 @@ TEST_F(LittleWindowTest, MatchingRouteSkipsIt) {
+   EXPECT_TRUE(ShouldOpenLittle(prefs, GURL("https://other.example/")));
+ }
+ 
++// routing D14 (BACKLOG S-157): a rule whose Space is gone routes nothing, so
++// the link opens little.
++TEST_F(LittleWindowTest, ARouteToASpaceThatIsGoneDoesNotHoldItBack) {
++  PrefService* const prefs = profile()->GetPrefs();
++  spaces::AddRoute(prefs, spaces::SiteRouteFor(GURL("https://example.com/"),
++                                               "a-space-that-is-gone"));
++  ASSERT_TRUE(spaces::RouteFor(spaces::ReadRoutes(prefs),
++                               GURL("https://example.com/x")));
++  base::ListValue registry;
++  base::DictValue entry;
++  entry.Set("id", model().active_id().ToString());
++  entry.Set("name", "Home");
++  registry.Append(std::move(entry));
++  prefs->SetList(prefs::kSpaceRegistry, std::move(registry));
++  ASSERT_FALSE(
++      spaces::SpaceRegistry::FromValue(prefs->GetList(prefs::kSpaceRegistry))
++          .empty());
++  EXPECT_TRUE(ShouldOpenLittle(prefs, GURL("https://example.com/x")));
++}
++
+ TEST_F(LittleWindowTest, SettingOffOpensATab) {
+   PrefService* const prefs = profile()->GetPrefs();
+   prefs->SetBoolean(prefs::kLittleEnabled, false);
+diff --git a/chrome/browser/ui/unload_controller.cc b/chrome/browser/ui/unload_controller.cc
+index 6d62226c80d82..8c465b3755c1a 100644
+--- a/chrome/browser/ui/unload_controller.cc
++++ b/chrome/browser/ui/unload_controller.cc
+@@ -30,6 +30,7 @@
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+ #include "chrome/browser/ui/browser_window/public/desktop_browser_window_capabilities.h"
+ #include "chrome/browser/ui/chrome_pages.h"
++#include "chrome/browser/ui/stedding/little_window.h"
+ #include "chrome/browser/ui/stedding/pin_unload_request.h"
+ #include "chrome/browser/ui/tabs/tab_enums.h"
+ #include "chrome/browser/ui/tabs/tab_group_model.h"
+@@ -206,6 +207,10 @@ void UnloadController::OnWindowClosing() {
+       (browser_type == BrowserWindowInterface::Type::TYPE_APP) ||
+       (browser_type == BrowserWindowInterface::Type::TYPE_APP_POPUP);
+ #endif
++  // Stedding little E13 (BACKLOG S-157): ⇧⌘T brings a little window back. A
++  // promoted one has given its page away and has no tab left to record.
++  notify_restore_service |= stedding::RecordsClosedLittleWindow(browser_) &&
++                            browser_->GetTabStripModel()->count();
+ 
+   if (tab_restore_service && notify_restore_service) {
+     // Stedding (docs/features/archive.md A13): the tabs of a window the next
+diff --git a/chrome/test/stedding/little_window_browsertest.cc b/chrome/test/stedding/little_window_browsertest.cc
+index d03f320901af9..561be96aae825 100644
+--- a/chrome/test/stedding/little_window_browsertest.cc
++++ b/chrome/test/stedding/little_window_browsertest.cc
+@@ -777,6 +777,51 @@ class LittleWindowRestoreTest : public InProcessBrowserTest {
+   }
+ };
+ 
++// little E13 (BACKLOG S-157): ⇧⌘T after a little window is closed. A popup
++// was never recorded, so the keys brought back whatever was closed before it.
++IN_PROC_BROWSER_TEST_F(LittleWindowRestoreTest,
++                       AClosedLittleWindowComesBackLittle) {
++  BrowserWindowInterface* const little = stedding::OpenLittleWindow(
++      browser()->GetProfile(), embedded_test_server()->GetURL("/title1.html"),
++      browser(), /*untrusted_launch=*/false);
++  ASSERT_TRUE(little);
++  ASSERT_TRUE(content::WaitForLoadStop(
++      little->GetTabStripModel()->GetActiveWebContents()));
++  PrefService* const prefs = browser()->GetProfile()->GetPrefs();
++  const gfx::Size size = little->GetWindow()->GetBounds().size();
++  prefs->SetInteger(stedding::prefs::kLittleWidth, size.width());
++  prefs->SetInteger(stedding::prefs::kLittleHeight, size.height());
++  ASSERT_TRUE(chrome::ExecuteCommand(little, IDC_STEDDING_LITTLE_CLOSE));
++  ASSERT_TRUE(base::test::RunUntil(
++      [&]() { return GetAllBrowserWindowInterfaces().size() == 1u; }));
++  EXPECT_TRUE(chrome::ExecuteCommand(browser(), IDC_RESTORE_TAB));
++  ASSERT_NO_FATAL_FAILURE(ExpectALittleWindowCameBack());
++  EXPECT_EQ(1, browser()->GetTabStripModel()->count())
++      << "its page came back as a tab as well";
++}
++
++// little E13: Cmd-W is the way most people close one. The strip was empty by
++// the time the window closed, so nothing recorded it, and Shift-Cmd-T brought
++// back whatever closed before.
++IN_PROC_BROWSER_TEST_F(LittleWindowRestoreTest,
++                       ACmdWClosedLittleWindowComesBackLittle) {
++  BrowserWindowInterface* const little = stedding::OpenLittleWindow(
++      browser()->GetProfile(), embedded_test_server()->GetURL("/title1.html"),
++      browser(), /*untrusted_launch=*/false);
++  ASSERT_TRUE(little);
++  ASSERT_TRUE(content::WaitForLoadStop(
++      little->GetTabStripModel()->GetActiveWebContents()));
++  PrefService* const prefs = browser()->GetProfile()->GetPrefs();
++  const gfx::Size size = little->GetWindow()->GetBounds().size();
++  prefs->SetInteger(stedding::prefs::kLittleWidth, size.width());
++  prefs->SetInteger(stedding::prefs::kLittleHeight, size.height());
++  ASSERT_TRUE(chrome::ExecuteCommand(little, IDC_CLOSE_TAB));
++  ASSERT_TRUE(base::test::RunUntil(
++      [&]() { return GetAllBrowserWindowInterfaces().size() == 1; }));
++  EXPECT_TRUE(chrome::ExecuteCommand(browser(), IDC_RESTORE_TAB));
++  ASSERT_NO_FATAL_FAILURE(ExpectALittleWindowCameBack());
++}
++
+ IN_PROC_BROWSER_TEST_F(LittleWindowRestoreTest,
+                        PRE_PRE_ALittleWindowComesBackLittle) {
+   BrowserWindowInterface* const little = stedding::OpenLittleWindow(
+diff --git a/chrome/test/stedding/private_coat_browsertest.cc b/chrome/test/stedding/private_coat_browsertest.cc
+index 3d04ed771cf0a..fc26b8e3a48cd 100644
+--- a/chrome/test/stedding/private_coat_browsertest.cc
++++ b/chrome/test/stedding/private_coat_browsertest.cc
+@@ -14,19 +14,27 @@
+ #include <string>
+ 
+ #include "base/test/run_until.h"
++#include "chrome/app/chrome_command_ids.h"
++#include "chrome/browser/bookmarks/bookmark_model_factory.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/themes/theme_service.h"
+ #include "chrome/browser/themes/theme_service_factory.h"
++#include "chrome/browser/ui/browser_commands.h"
++#include "chrome/browser/ui/browser_tabstrip.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/spaces/space_model.h"
++#include "chrome/browser/ui/stedding/stedding_command_ids.h"
+ #include "chrome/browser/ui/color/chrome_color_id.h"
+ #include "chrome/browser/ui/color/stedding_color_mixer.h"
+ #include "chrome/browser/ui/stedding/theme/page_theme_color_controller.h"
+ #include "chrome/browser/ui/stedding/theme/page_top_color.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "chrome/browser/ui/views/frame/browser_view.h"
+ #include "chrome/test/base/in_process_browser_test.h"
+ #include "chrome/test/base/ui_test_utils.h"
+ #include "chrome/test/stedding/sidebar_test_util.h"
++#include "components/bookmarks/browser/bookmark_model.h"
++#include "components/bookmarks/test/bookmark_test_helpers.h"
+ #include "content/public/test/browser_test.h"
+ #include "third_party/skia/include/core/SkColor.h"
+ #include "ui/color/color_id.h"
+@@ -81,6 +89,33 @@ class PrivateCoatTest : public InProcessBrowserTest {
+   }
+ };
+ 
++// shortcuts Z24 (BACKLOG S-157, PLAN.md CMD-18): ⌥⌘← and ⌥⌘→ and ⌘D were
++// Chromium's before Spaces took them, and they did nothing in a window that
++// has none. There they do Chromium's work again.
++IN_PROC_BROWSER_TEST_F(PrivateCoatTest, TheKeysSpacesTookWorkWithNoSpaces) {
++  BrowserWindowInterface* const window = CreateIncognitoBrowser();
++  ASSERT_TRUE(window);
++  ASSERT_FALSE(spaces::SpaceModel::From(window));
++  const GURL page("data:text/html,<title>Page</title>");
++  ASSERT_TRUE(ui_test_utils::NavigateToURL(window, page));
++  chrome::AddTabAt(window, GURL("about:blank"), /*index=*/-1,
++                   /*foreground=*/true);
++  TabStripModel* const tabs = window->GetTabStripModel();
++  ASSERT_EQ(2, tabs->count());
++  tabs->ActivateTabAt(0);
++  EXPECT_TRUE(chrome::ExecuteCommand(window, IDC_STEDDING_SPACE_NEXT));
++  EXPECT_EQ(1, tabs->active_index()) << "the next-Space keys moved no tab";
++  EXPECT_TRUE(chrome::ExecuteCommand(window, IDC_STEDDING_SPACE_PREVIOUS));
++  EXPECT_EQ(0, tabs->active_index()) << "the previous-Space keys moved no tab";
++
++  bookmarks::BookmarkModel* const bookmarks =
++      BookmarkModelFactory::GetForBrowserContext(window->GetProfile());
++  bookmarks::test::WaitForBookmarkModelToLoad(bookmarks);
++  ASSERT_FALSE(bookmarks->IsBookmarked(page));
++  EXPECT_TRUE(chrome::ExecuteCommand(window, IDC_STEDDING_TOGGLE_SPACE_PIN));
++  EXPECT_TRUE(bookmarks->IsBookmarked(page)) << "the pin key bookmarked nothing";
++}
++
+ // Only an incognito window is graphite and says Private. Its address row,
+ // and a Guest window's, take the page's colour (private V9, PLAN.md WIN-6):
+ // the Space model owns that colour, and a private window has none, so the

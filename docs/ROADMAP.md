@@ -89,9 +89,8 @@ Still open:
   (S-88, Bk20–Bk23). Lists are fetched at run time, never built in.
 - A web app that binds the same chord gets the first press, and Stedding the second
   (S-90).
-- Back on a child tab, at its first page, returns to the opener and closes the child
-  (S-92, R60).
-- "Show here / Go to window" for a page open in another window (S-94).
+- A pin shown in every window, a ghost row with "Show here / Go to window" (S-94). The
+  question itself is in, for a page found from another window (windows G11).
 - The mini player (S-95, Mp1–Mp4). Picture in picture by key is released (S-122, Mp5).
 - A Space's two-colour gradient, and the command bar's selected row in the Space's colour,
   are not built. An emoji and a colour, including one each for light and dark, are released

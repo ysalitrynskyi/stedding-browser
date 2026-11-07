@@ -166,9 +166,9 @@ a `+` (`features/sidebar.md` Y44). The Library is not this foot (§9).
 - **Child tabs** **[M10]** — a link opened in a new tab opens just below the page it
   came from. A setting, off by default, draws it indented under that page; a closed
   parent's children move up; the tree survives a restart (`features/tabs.md` R56–R59,
-  settings T26). Not built: Back on a child at its first page returning to the parent
-  and closing the child, a parent's children folding away with it, and Close Other Tabs
-  keeping a tab's children (R60, `S-92`).
+  settings T26). Back at a child's first page returns to the parent and closes the
+  child, a parent's children fold away with it, and Close Other Tabs keeps a tab's
+  children (R60).
 - **Undo after closing tabs** **[M10]** — after a close, a toast with Undo that reopens
   those tabs in their Space and folder. Off by default; a setting turns it on. The
   setting has no command-bar row (`features/tabs.md` R25–R28, R30).
@@ -316,9 +316,9 @@ a `+` (`features/sidebar.md` Y44). The Library is not this foot (§9).
 - **Incognito Window** **[1.0]** — Chromium's private window, in colours of its own,
   with nothing reaching the sidebar's model, the session or the archive
   (`features/private.md`).
-- **A page already open in another window** **[M10]** — not built. A pin is a tab of
-  one window. There is no ghost row in the other windows, and no "Show here / Go to
-  window" (`features/windows.md` G2, `S-94`).
+- **A page already open in another window** **[M10]** — a page found from another
+  window asks: Show Here or Go to Window (`features/windows.md` G11). A pin is still a
+  tab of one window, with no ghost row in the other windows (G2, `S-94`).
 
 ## 6. Boosts — [deferred]
 

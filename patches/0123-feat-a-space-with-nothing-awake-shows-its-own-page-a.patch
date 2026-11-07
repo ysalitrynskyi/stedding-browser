@@ -40,16 +40,18 @@ Removable when: never as a feature.
  .../stedding_space/stedding_space.html        |  29 ++
  .../browser/sessions/session_common_utils.cc  |   5 +-
  chrome/browser/ui/spaces/BUILD.gn             |   1 +
- chrome/browser/ui/spaces/space_model.cc       |   6 +
- .../ui/spaces/space_model_window_unittest.cc  |  56 ++--
+ chrome/browser/ui/spaces/space_model.cc       |  32 +++
+ chrome/browser/ui/spaces/space_model.h        |   8 +
+ .../ui/spaces/space_model_window_unittest.cc  | 125 +++++++--
  chrome/browser/ui/stedding/BUILD.gn           |  32 +++
  chrome/browser/ui/stedding/download_flight.cc |  76 +++++
  chrome/browser/ui/stedding/download_flight.h  |  68 +++++
  .../ui/stedding/download_flight_unittest.cc   |  92 +++++++
  chrome/browser/ui/stedding/empty_space.cc     | 151 ++++++++++
  chrome/browser/ui/stedding/empty_space.h      |  41 +++
- chrome/browser/ui/stedding/pin_lifecycle.cc   |   6 +-
- chrome/browser/ui/stedding/sleep_tabs.cc      |  15 +-
+ chrome/browser/ui/stedding/pin_lifecycle.cc   |  12 +-
+ chrome/browser/ui/stedding/sleep_tabs.cc      |  33 ++-
+ chrome/browser/ui/stedding/sleep_tabs.h       |   7 +
  .../chrome_location_bar_model_delegate.cc     |   5 +-
  chrome/browser/ui/views/download/BUILD.gn     |   5 +
  .../bubble/download_toolbar_ui_controller.cc  |  78 +++++-
@@ -66,7 +68,7 @@ Removable when: never as a feature.
  chrome/test/stedding/downloads_browsertest.cc | 101 +++++++
  .../test/stedding/pinned_run_browsertest.cc   |  79 ++++++
  tools/gritsettings/resource_ids.spec          |   5 +
- 34 files changed, 1962 insertions(+), 39 deletions(-)
+ 36 files changed, 2096 insertions(+), 39 deletions(-)
  create mode 100644 chrome/browser/resources/stedding_space/BUILD.gn
  create mode 100644 chrome/browser/resources/stedding_space/app.css
  create mode 100644 chrome/browser/resources/stedding_space/app.ts
@@ -689,7 +691,7 @@ index baafd0ca16f50..75b03d5c10a8f 100644
      "//components/prefs",
      "//chrome/browser/sessions",
 diff --git a/chrome/browser/ui/spaces/space_model.cc b/chrome/browser/ui/spaces/space_model.cc
-index 748b28fd0a00a..0ceccdb1f147a 100644
+index 748b28fd0a00a..f110c89020047 100644
 --- a/chrome/browser/ui/spaces/space_model.cc
 +++ b/chrome/browser/ui/spaces/space_model.cc
 @@ -46,6 +46,7 @@
@@ -700,7 +702,54 @@ index 748b28fd0a00a..0ceccdb1f147a 100644
  #include "chrome/browser/ui/stedding/address_row.h"
  #include "chrome/browser/ui/stedding/sidebar_density.h"
  #include "chrome/browser/ui/stedding/sleep_tabs.h"
-@@ -3082,6 +3083,11 @@ bool SpaceModel::HidesTab(const tabs::TabInterface* tab) const {
+@@ -285,6 +286,18 @@ std::optional<tabs::TabInterface*> RowAfterSleepIn(
+   }
+   return model->RowToShowAfter(doomed, /*awake_only=*/true);
+ }
++
++// tabs R33 (GitHub issue 85): stedding::SetOnPutAway's target. Each row asks
++// its own window: Sleep Other Tabs Everywhere takes rows of every window.
++void ForgetUsesOfRows(const std::vector<tabs::TabInterface*>& rows) {
++  for (tabs::TabInterface* const row : rows) {
++    if (SpaceModel* const model =
++            row ? SpaceModel::From(row->GetBrowserWindowInterface())
++                : nullptr) {
++      model->ForgetUses({row});
++    }
++  }
++}
+ }  // namespace
+ 
+ // SpaceId has no default constructor by design — an id that names nothing is
+@@ -453,6 +466,7 @@ SpaceModel::SpaceModel(BrowserWindowInterface& browser) : SpaceModel() {
+   // tabs R5, R33 (BACKLOG S-112): Sleep Tab on the row on screen shows the
+   // row a close would. The strip asks TabToShowAsTabsLeave() itself.
+   stedding::SetRowAfterSleep(&RowAfterSleepIn);
++  stedding::SetOnPutAway(&ForgetUsesOfRows);
+ 
+   // Membership is decided on insertion (B1). The window's features are built
+   // before its first tab, so this normally observes an empty strip; any tab
+@@ -1680,6 +1694,19 @@ void SpaceModel::AddOpenedInBackground(tabs::TabInterface* tab) {
+   }
+ }
+ 
++void SpaceModel::ForgetUses(const std::vector<tabs::TabInterface*>& rows) {
++  const auto put_away = [&rows](const tabs::TabHandle& handle) {
++    return std::ranges::any_of(rows, [&handle](tabs::TabInterface* row) {
++      return row && row->GetHandle() == handle;
++    });
++  };
++  for (auto& [id, history] : history_) {
++    std::erase_if(history, put_away);
++  }
++  std::erase_if(last_active_,
++                [&put_away](const auto& entry) { return put_away(entry.second); });
++}
++
+ std::vector<tabs::TabInterface*> SpaceModel::RecentTabs(const SpaceId& id,
+                                                         size_t limit) const {
+   std::vector<tabs::TabInterface*> out;
+@@ -3082,6 +3109,11 @@ bool SpaceModel::HidesTab(const tabs::TabInterface* tab) const {
    if (!IsTabInActiveSpace(tab)) {
      return true;
    }
@@ -712,8 +761,27 @@ index 748b28fd0a00a..0ceccdb1f147a 100644
    // pins H17: a pin of the active Space's collapsed run. An essential sits
    // above every Space and is never one (B6).
    if (!tab || tab->IsPinned() || !IsSpacePinned(tab) ||
+diff --git a/chrome/browser/ui/spaces/space_model.h b/chrome/browser/ui/spaces/space_model.h
+index fcdc2e7fd6d51..cbcfb0b72234b 100644
+--- a/chrome/browser/ui/spaces/space_model.h
++++ b/chrome/browser/ui/spaces/space_model.h
+@@ -286,6 +286,14 @@ class SpaceModel : public TabStripModelObserver,
+   std::vector<tabs::TabInterface*> RecentTabs(const SpaceId& id,
+                                               size_t limit = 5) const;
+ 
++  // tabs R33 (GitHub issue 85): `rows` were put away by the user -- a pin
++  // closed by Cmd-W, its - or a middle click (pins H3), a row put to sleep
++  // by Sleep Tab (tabs R5) -- and leave every Space's history, as a closed
++  // tab does: a later close, a Space switch or a Ctrl-Tab tap no longer
++  // shows one and wakes it. Using one again puts it back. A row that sleeps
++  // on its own keeps its place.
++  void ForgetUses(const std::vector<tabs::TabInterface*>& rows);
++
+   // tabs R33-R35 (BACKLOG S-112): the row to show when the row on screen
+   // goes, with `leaving` (a close, a move to another window, a sleep): the
+   // active Space's row or essential used most recently (X1's history, so the
 diff --git a/chrome/browser/ui/spaces/space_model_window_unittest.cc b/chrome/browser/ui/spaces/space_model_window_unittest.cc
-index 0844b2ecc56cf..1481d4cdfd05d 100644
+index 0844b2ecc56cf..cb0cb3a947b6e 100644
 --- a/chrome/browser/ui/spaces/space_model_window_unittest.cc
 +++ b/chrome/browser/ui/spaces/space_model_window_unittest.cc
 @@ -41,6 +41,7 @@
@@ -724,7 +792,83 @@ index 0844b2ecc56cf..1481d4cdfd05d 100644
  #include "chrome/browser/ui/stedding/pin_lifecycle.h"
  #include "chrome/browser/ui/stedding/sleep_tabs.h"
  #include "chrome/browser/ui/stedding/stedding_prefs.h"
-@@ -1007,36 +1008,37 @@ TEST_F(SpaceWindowTest, ASleepPassesOverRowsAsleep) {
+@@ -985,6 +986,75 @@ TEST_F(SpaceWindowTest, ASleepOnScreenShowsTheRowUsedBefore) {
+   }
+ }
+ 
++// tabs R33, pins H3, tabs R5 (GitHub issue 85): a row the user put away
++// leaves the Space's history. An essential, a pin and a tab used in that
++// order; the pin's close button, then Cmd-W on the tab, showed the pin, and
++// it woke. The essential used before them is shown, and the pin sleeps on.
++// A row used again counts again, and one asleep on its own keeps its place.
++TEST_F(SpaceWindowTest, ARowPutAwayIsNotTheRowACloseShows) {
++  AppendRow(tabs(), profile(), true);
++  tabs::TabInterface* const essential = AppendRow(tabs(), profile());
++  tabs().SetTabPinned(tabs().GetIndexOfTab(essential), true);
++  ASSERT_TRUE(essential->IsPinned());
++  tabs::TabInterface* const pin = AppendRow(tabs(), profile());
++  model().SetSpacePinned(pin, true);
++  tabs::TabInterface* const other = AppendRow(tabs(), profile());
++
++  {
++    SCOPED_TRACE("the pin's close button, then Cmd-W");
++    tabs::TabInterface* const row = AppendRow(tabs(), profile());
++    for (tabs::TabInterface* const tab : {other, essential, pin, row}) {
++      Use(tabs(), tab);
++    }
++    ASSERT_TRUE(stedding::SleepInsteadOfClosingRow(browser(), pin));
++    task_environment()->RunUntilIdle();
++    ASSERT_TRUE(pin->GetContents()->WasDiscarded());
++    ASSERT_EQ(row, tabs().GetActiveTab());
++    chrome::ExecuteCommand(browser(), IDC_CLOSE_TAB);
++    task_environment()->RunUntilIdle();
++    EXPECT_EQ(essential, tabs().GetActiveTab()) << "the closed pin came back";
++    EXPECT_TRUE(pin->GetContents()->WasDiscarded()) << "the pin woke";
++  }
++  {
++    SCOPED_TRACE("Sleep Tab, then Cmd-W");
++    tabs::TabInterface* const slept = AppendRow(tabs(), profile());
++    tabs::TabInterface* const row = AppendRow(tabs(), profile());
++    for (tabs::TabInterface* const tab : {other, essential, slept, row}) {
++      Use(tabs(), tab);
++    }
++    stedding::SleepTabs(browser(), slept, stedding::SleepScope::kThisTab);
++    ASSERT_TRUE(slept->GetContents()->WasDiscarded());
++    ASSERT_EQ(row, tabs().GetActiveTab());
++    chrome::ExecuteCommand(browser(), IDC_CLOSE_TAB);
++    task_environment()->RunUntilIdle();
++    EXPECT_EQ(essential, tabs().GetActiveTab())
++        << "the row put to sleep came back";
++    EXPECT_TRUE(slept->GetContents()->WasDiscarded()) << "the row woke";
++  }
++  {
++    SCOPED_TRACE("a row put away and used again counts again");
++    Use(tabs(), pin);
++    tabs::TabInterface* const row = AppendRow(tabs(), profile());
++    Use(tabs(), row);
++    chrome::ExecuteCommand(browser(), IDC_CLOSE_TAB);
++    task_environment()->RunUntilIdle();
++    EXPECT_EQ(pin, tabs().GetActiveTab());
++  }
++  {
++    SCOPED_TRACE("a row asleep on its own keeps its place");
++    tabs::TabInterface* const dozed = AppendRow(tabs(), profile());
++    tabs::TabInterface* const row = AppendRow(tabs(), profile());
++    for (tabs::TabInterface* const tab : {essential, dozed, row}) {
++      Use(tabs(), tab);
++    }
++    stedding::SleepTabList({dozed});
++    ASSERT_TRUE(dozed->GetContents()->WasDiscarded());
++    chrome::ExecuteCommand(browser(), IDC_CLOSE_TAB);
++    task_environment()->RunUntilIdle();
++    EXPECT_EQ(dozed, tabs().GetActiveTab());
++  }
++}
++
+ // tabs R5, pins H3, H11 (GitHub issue 72; the owner, 2026-11-02): a sleep
+ // shows a row that is awake. With the pins put to sleep one by one, the row
+ // used before each was often the one just slept, and it woke: two pins took
+@@ -1007,36 +1077,37 @@ TEST_F(SpaceWindowTest, ASleepPassesOverRowsAsleep) {
      EXPECT_EQ(c, tabs().GetActiveTab()) << "not a: used before b, but asleep";
      EXPECT_TRUE(a->GetContents()->WasDiscarded()) << "a woke";
      chrome::ExecuteCommand(browser(), IDC_CLOSE_TAB);
@@ -779,7 +923,7 @@ index 0844b2ecc56cf..1481d4cdfd05d 100644
      EXPECT_NE(page, tabs().GetActiveTab());
    }
  }
-@@ -1879,20 +1881,24 @@ TEST_F(SpaceWindowTest, CloseOnPinnedTabSleepsIt) {
+@@ -1879,20 +1950,24 @@ TEST_F(SpaceWindowTest, CloseOnPinnedTabSleepsIt) {
    EXPECT_FALSE(stedding::SleepInsteadOfClose(browser()));
  }
  
@@ -1355,7 +1499,7 @@ index 0000000000000..d6ccaf6420d35
 +
 +#endif  // CHROME_BROWSER_UI_STEDDING_EMPTY_SPACE_H_
 diff --git a/chrome/browser/ui/stedding/pin_lifecycle.cc b/chrome/browser/ui/stedding/pin_lifecycle.cc
-index 1b626d38755b7..583976ef17729 100644
+index 1b626d38755b7..54a84c9625545 100644
 --- a/chrome/browser/ui/stedding/pin_lifecycle.cc
 +++ b/chrome/browser/ui/stedding/pin_lifecycle.cc
 @@ -19,6 +19,7 @@
@@ -1366,7 +1510,7 @@ index 1b626d38755b7..583976ef17729 100644
  #include "chrome/browser/ui/stedding/pin_unload_request.h"
  #include "chrome/browser/ui/stedding/sleep_tabs.h"
  #include "chrome/browser/ui/stedding/stedding_prefs.h"
-@@ -265,8 +266,9 @@ void UnloadPinsAtHome(BrowserWindowInterface* browser,
+@@ -265,10 +266,17 @@ void UnloadPinsAtHome(BrowserWindowInterface* browser,
                            TabStripUserGestureDetails(
                                TabStripUserGestureDetails::GestureType::kOther));
      } else {
@@ -1377,9 +1521,17 @@ index 1b626d38755b7..583976ef17729 100644
 +      ShowEmptySpace(browser);
      }
    }
++  // tabs R33 (GitHub issue 85): a pin closed is put away, and leaves the
++  // Space's history. Left in it, a close of the next row showed the pin
++  // again, woken, rather than the row used before it.
++  if (spaces::SpaceModel* const model = spaces::SpaceModel::From(browser)) {
++    model->ForgetUses(doomed);
++  }
    // Whatever the pins were doing -- sound, a call, a device, form input --
+   // they let go now (the owner, 2026-10-20); a page that could ask "Leave
+   // site?" has been asked.
 diff --git a/chrome/browser/ui/stedding/sleep_tabs.cc b/chrome/browser/ui/stedding/sleep_tabs.cc
-index 420fd208f365a..7c18ec5ca914c 100644
+index 420fd208f365a..1455af3bdbc22 100644
 --- a/chrome/browser/ui/stedding/sleep_tabs.cc
 +++ b/chrome/browser/ui/stedding/sleep_tabs.cc
 @@ -15,6 +15,7 @@
@@ -1390,7 +1542,16 @@ index 420fd208f365a..7c18ec5ca914c 100644
  #include "chrome/browser/ui/tabs/tab_strip_model.h"
  #include "chrome/browser/ui/tabs/tab_strip_model_delegate.h"
  #include "chrome/common/webui_url_constants.h"
-@@ -203,13 +204,13 @@ void ActivateANeighbour(BrowserWindowInterface* browser,
+@@ -35,6 +36,8 @@ namespace {
+ 
+ // Set by spaces::SpaceModel (SetRowAfterSleep).
+ RowAfterSleep g_row_after_sleep = nullptr;
++// Set by spaces::SpaceModel (SetOnPutAway).
++PutAway g_on_put_away = nullptr;
+ 
+ TabStripModel* StripOf(tabs::TabInterface* tab) {
+   BrowserWindowInterface* const browser = tab->GetBrowserWindowInterface();
+@@ -203,13 +206,13 @@ void ActivateANeighbour(BrowserWindowInterface* browser,
                              : std::nullopt) {
      if (*row) {
        tabs->ActivateTabAt(tabs->GetIndexOfTab(*row));
@@ -1411,6 +1572,54 @@ index 420fd208f365a..7c18ec5ca914c 100644
      }
      return;
    }
+@@ -309,6 +312,18 @@ void SleepTabs(BrowserWindowInterface* browser,
+     return;
+   }
+   ActivateANeighbour(browser, doomed);
++  // tabs R33 (GitHub issue 85): what the user puts to sleep leaves its
++  // Space's history, as a closed tab does. Left in it, a close of another
++  // row showed it again, and it woke. A row the gate keeps awake (R6) stays.
++  if (g_on_put_away) {
++    std::vector<tabs::TabInterface*> sleeping;
++    for (tabs::TabInterface* const each : doomed) {
++      if (MaySleep(each, /*may_be_on_screen=*/false)) {
++        sleeping.push_back(each);
++      }
++    }
++    g_on_put_away(sleeping);
++  }
+   SleepTabList(doomed);
+ }
+ 
+@@ -316,6 +331,10 @@ void SetRowAfterSleep(RowAfterSleep row_after_sleep) {
+   g_row_after_sleep = row_after_sleep;
+ }
+ 
++void SetOnPutAway(PutAway on_put_away) {
++  g_on_put_away = on_put_away;
++}
++
+ void SleepTabList(const std::vector<tabs::TabInterface*>& tabs) {
+   for (tabs::TabInterface* const tab : tabs) {
+     if (!MaySleep(tab, /*may_be_on_screen=*/false)) {
+diff --git a/chrome/browser/ui/stedding/sleep_tabs.h b/chrome/browser/ui/stedding/sleep_tabs.h
+index 798da93953dc5..128b1d46c010c 100644
+--- a/chrome/browser/ui/stedding/sleep_tabs.h
++++ b/chrome/browser/ui/stedding/sleep_tabs.h
+@@ -77,6 +77,13 @@ using RowAfterSleep = std::optional<tabs::TabInterface*> (*)(
+     const std::vector<tabs::TabInterface*>& doomed);
+ void SetRowAfterSleep(RowAfterSleep row_after_sleep);
+ 
++// tabs R33 (GitHub issue 85): the rows a Sleep verb puts to sleep are put
++// away by the user, and leave their Spaces' histories, so a later close does
++// not show one and wake it. spaces::SpaceModel forgets them; it sets this as
++// it sets SetRowAfterSleep().
++using PutAway = void (*)(const std::vector<tabs::TabInterface*>& rows);
++void SetOnPutAway(PutAway on_put_away);
++
+ // Discards, through the tab lifecycle unit with the external (user-requested)
+ // reason, each listed tab that is awake and not TabIsInUse(). The verbs above,
+ // the Space timer (R6) and the idle sweep all sleep through here.
 diff --git a/chrome/browser/ui/toolbar/chrome_location_bar_model_delegate.cc b/chrome/browser/ui/toolbar/chrome_location_bar_model_delegate.cc
 index 3d3190a734cc0..57c6de5ecc19a 100644
 --- a/chrome/browser/ui/toolbar/chrome_location_bar_model_delegate.cc

@@ -2,6 +2,28 @@
 
 What was built, newest first. Nothing here is needed to do a task: `AGENTS.md` carries what is true now, `BACKLOG.md` the order of work, `PLAN.md` the owner's decisions. This file was the "State of the project" section of `AGENTS.md` until 2026-09-30. This log starts at 2026-10-15. Closed work from before that is the table in [docs/history/archive.md](history/archive.md).
 
+## 2026-11-07 -- After beta 13: issues 85, 86 and 88, and the issue labels
+
+Issue 85: a pin closed with its − was put to sleep but stayed in the Space's history, so the next
+close showed it again and woke it, rather than the essential used before (tabs R33). Issue 72's fix
+had covered a sleep, not a close after one. A row the user puts away, a pin closed or a row put to
+sleep by Sleep Tab, now leaves the history; one asleep by the timers keeps its place. Folded into
+0123, which owns issue 72's rule. Issue 86: Copy Link over a peek copied the pin under it. The
+window's copies take the peek's page while it is open, and the peek's bar has its own Copy Link
+(copy-link L8), folded into 0119 and its test into 0171. Issue 88: ⌘Q quitting at once was the
+Stedding menu's Warn Before Quitting alone; Settings has the same switch now (settings T60, patch
+0175). Issue 87, a Space's own essentials on a shared session, is S-445, for later.
+
+Evidence, on the Mac's release build: 152 unit tests and 59 browser tests around these rows pass,
+and the two new tests fail with their fix taken out, the way the issues describe. On a test copy,
+the peek's bar shows the link first and Settings shows the switch; the app menu holds Warn Before
+Quitting (⌘Q). Not run yet: the Windows build and the full suites.
+
+The issues have labels throughout: a kind, an area, a platform where it is one platform's, and a
+status (`PLAN.md` decision 16). New: `crash`, `regression`, `good first issue`, seven areas,
+`platform: linux`, and `status: later`, `in progress` and `fixed on main`; `done` became
+`status: released` and its verify twin `status: verify`.
+
 ## 2026-11-07 -- 0.4.0 beta 13: Touch ID passkeys, split view's last rows, child tabs, another window
 
 Patches 0165 to 0174, one night, two tracks. The Mac held the items that needed it, the PC the rest,

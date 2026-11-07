@@ -67,6 +67,7 @@ Over the sidebar, or over its icons, scroll sideways. With a wheel, and with a s
 | Copy the link, without its tracking parameters | ⇧⌘C | Ctrl+Shift+C |
 | Copy the link as Markdown | ⌥⇧⌘C | Ctrl+Alt+Shift+C |
 | Copy the link with the mouse: the Copy Link button at the right end of the address field, before the star. Option-click (Alt-click) copies Markdown | click | click |
+| While a peek is open, both copies take the peek's page; its bar has a Copy Link button too | ⇧⌘C | Ctrl+Shift+C |
 | Clear the site's cookies and reload. Site storage, cache, history and passwords stay. In a Space with its own session, only that Space's cookies go | ⌥⇧⌘R | Ctrl+Alt+Shift+R |
 | Screenshot the page as shown | ⇧⌘2 | Ctrl+Shift+2 |
 | Screenshot a region you drag out | ⌥⇧⌘2 | Ctrl+Alt+Shift+2 |
@@ -109,6 +110,7 @@ The tab-group chords are not bound. Those rows are absent from the short tab men
 
 - **macOS:** Once a second desktop exists, ⌃1–⌃9 are Mission Control's Switch to Desktop, and macOS takes them first. Turn them off under System Settings → Keyboard → Keyboard Shortcuts → Mission Control, or choose other number keys under Jump to Space. The Spaces menu in the menu bar keeps the commands reachable.
 - **macOS:** Muting a tab is ⌃M. ⌘M still minimizes the window.
+- **macOS:** ⌘Q quits once it is held, as in Chrome. Settings → Stedding → Pages and menus → **Hold ⌘Q to quit**, or the Stedding menu's **Warn Before Quitting (⌘Q)**, makes it quit at once.
 - **macOS:** A clipboard manager that owns ⇧⌘C system-wide (Maccy does by default) takes it before the browser does. The File menu row still copies the link.
 - **macOS:** While Arc is running it takes ⌥⌘N from every app for its Little Arc window, so that chord opens Arc. ⌃⌘N, the menu's chord, still splits. **New Split View with Current Tab** on a tab's right-click menu does too.
 - **Windows:** A tap of Alt on its own still focuses the app menu, as in Chromium. The digit goes with the key held.

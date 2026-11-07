@@ -59,8 +59,13 @@ still open is a BACKLOG row that names its id.
 16. An issue a user files on GitHub is a suggestion unless it reports a bug (2026-10-21).
     Bugs are fixed. A requested feature is built only once the owner has said yes. Nothing
     is said or closed on GitHub (`AGENTS.md`, red lines). Labels are kept to the owner's
-    replies when the owner asks (2026-10-23): an area, a platform, and a status
-    (`status: needs decision`, `status: planned`, `done`).
+    replies when the owner asks (2026-10-23; the set widened 2026-11-07). Each issue has a
+    kind (`bug`, `enhancement`, `question`, with `crash` or `regression` beside a bug),
+    an `area: …`, a `platform: …` where it is one platform's, and a status:
+    `status: needs decision`, `status: planned`, `status: later` (in the backlog, not
+    planned now), `status: in progress`, `status: fixed on main` (ships in the next
+    release), `status: released`, and `status: verify` (released, waiting for the
+    reporter). `upstream` is the pin's own workflow's.
 17. The address does not jump when the field takes focus (2026-10-23, GitHub issue 14;
     `S-275`; `docs/features/toolbar.md` T18). The field is the whole row in every state
     (the owner, 2026-10-24; toolbar T34). Its width is a setting: full width, or a field

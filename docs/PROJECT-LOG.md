@@ -17,7 +17,8 @@ Stedding menu's Warn Before Quitting alone; Settings has the same switch now (se
 Evidence, on the Mac's release build: 152 unit tests and 59 browser tests around these rows pass,
 and the two new tests fail with their fix taken out, the way the issues describe. On a test copy,
 the peek's bar shows the link first and Settings shows the switch; the app menu holds Warn Before
-Quitting (⌘Q). Not run yet: the Windows build and the full suites.
+Quitting (⌘Q). On Windows, win-release on the same tree: the same unit tests and 61 browser tests
+pass. Not run yet: the full suites, the checks builds and ASan.
 
 The issues have labels throughout: a kind, an area, a platform where it is one platform's, and a
 status (`PLAN.md` decision 16). New: `crash`, `regression`, `good first issue`, seven areas,

@@ -18,12 +18,13 @@ Removable when: child tabs go.
  chrome/app/stedding_strings.grdp              |   9 +
  ...me_render_widget_host_view_mac_delegate.mm |   5 +-
  chrome/browser/ui/browser_commands.cc         |  15 +-
+ .../browser_web_contents_delegate.cc          |   2 +
  chrome/browser/ui/spaces/space_model.cc       |   9 +
  chrome/browser/ui/stedding/BUILD.gn           |   4 +
  chrome/browser/ui/stedding/menu_rules.cc      |   4 +
  chrome/browser/ui/stedding/tab_menu_verbs.cc  |  25 ++
- chrome/browser/ui/stedding/tab_parents.cc     | 189 ++++++++++++++++
- chrome/browser/ui/stedding/tab_parents.h      |  36 +++
+ chrome/browser/ui/stedding/tab_parents.cc     | 215 ++++++++++++++++
+ chrome/browser/ui/stedding/tab_parents.h      |  42 ++++
  chrome/browser/ui/tabs/tab_menu_model.cc      |  10 +
  chrome/browser/ui/tabs/tab_strip_model.cc     |  15 ++
  .../ui/views/commandbar/command_bar_view.cc   |  18 ++
@@ -31,9 +32,9 @@ Removable when: child tabs go.
  .../browser/ui/views/tabs/common/tab_view.cc  |  37 +++
  .../browser/ui/views/tabs/common/tab_view.h   |   9 +
  .../tabs/common/tab_view_vertical_layout.cc   |  11 +
- .../test/stedding/child_tabs_browsertest.cc   | 214 ++++++++++++++++++
+ .../test/stedding/child_tabs_browsertest.cc   | 238 ++++++++++++++++++
  .../tabs/public/tab_context_menu_command.h    |   4 +
- 18 files changed, 613 insertions(+), 3 deletions(-)
+ 19 files changed, 671 insertions(+), 3 deletions(-)
 
 diff --git a/chrome/app/stedding_strings.grdp b/chrome/app/stedding_strings.grdp
 index 9d0d2deec56df..1a4617a1ac485 100644
@@ -125,6 +126,26 @@ index e56515ff99fb0..88421fef9c9a0 100644
    // If no regular back navigation, try back-to-opener.
    back_to_opener::BackToOpenerController::GoBackToOpener(web_contents);
  }
+diff --git a/chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.cc b/chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.cc
+index cb71b54028e3a..b407c5ed9e26f 100644
+--- a/chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.cc
++++ b/chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.cc
+@@ -48,6 +48,7 @@
+ #include "chrome/browser/ui/stedding/little_window.h"
+ #include "chrome/browser/ui/stedding/stedding_command_ids.h"
+ #include "chrome/browser/ui/stedding/stedding_prefs.h"
++#include "chrome/browser/ui/stedding/tab_parents.h"
+ #include "chrome/browser/ui/tab_dialogs.h"
+ #include "chrome/browser/ui/tab_modal_confirm_dialog.h"
+ #include "chrome/browser/ui/tabs/tab_enums.h"
+@@ -693,6 +694,7 @@ content::WebContents* BrowserWebContentsDelegate::AddNewContents(
+   new_contents =
+       spaces::PlaceOpenedContents(&*browser_, source, std::move(new_contents),
+                                   target_url, disposition);
++  stedding::NoteOpenedFrom(new_contents.get(), source);
+   FullscreenController* fullscreen_controller =
+       exclusive_access_manager_->fullscreen_controller();
+ #if BUILDFLAG(IS_MAC)
 diff --git a/chrome/browser/ui/spaces/space_model.cc b/chrome/browser/ui/spaces/space_model.cc
 index 4373933cfb8c1..d00b901e57443 100644
 --- a/chrome/browser/ui/spaces/space_model.cc
@@ -254,10 +275,18 @@ index de949a95834a9..0c7141d8d46a1 100644
    if (tab && tab->IsPinned()) {
      kind = TabRowKind::kEssential;
 diff --git a/chrome/browser/ui/stedding/tab_parents.cc b/chrome/browser/ui/stedding/tab_parents.cc
-index f3ac0ef90363a..60fc6f6ccbbc1 100644
+index f3ac0ef90363a..c2e98abc54195 100644
 --- a/chrome/browser/ui/stedding/tab_parents.cc
 +++ b/chrome/browser/ui/stedding/tab_parents.cc
-@@ -22,7 +22,11 @@
+@@ -13,6 +13,7 @@
+ 
+ #include "base/functional/bind.h"
+ #include "base/location.h"
++#include "base/memory/weak_ptr.h"
+ #include "base/no_destructor.h"
+ #include "base/task/single_thread_task_runner.h"
+ #include "base/uuid.h"
+@@ -22,7 +23,11 @@
  #include "chrome/browser/sessions/stedding_session_rebuild.h"
  #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
  #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
@@ -269,7 +298,7 @@ index f3ac0ef90363a..60fc6f6ccbbc1 100644
  #include "components/sessions/content/session_tab_helper.h"
  #include "components/sessions/core/session_service_commands.h"
  #include "components/tabs/public/tab_interface.h"
-@@ -44,8 +48,10 @@ class TabParentData : public content::WebContentsUserData<TabParentData> {
+@@ -44,8 +49,18 @@ class TabParentData : public content::WebContentsUserData<TabParentData> {
  
    const std::string& token() const { return token_; }
    const std::string& parent() const { return parent_; }
@@ -277,24 +306,33 @@ index f3ac0ef90363a..60fc6f6ccbbc1 100644
    void set_token(std::string token) { token_ = std::move(token); }
    void set_parent(std::string parent) { parent_ = std::move(parent); }
 +  void set_children_folded(bool folded) { children_folded_ = folded; }
++  void set_opened_from(content::WebContents* source) {
++    opened_from_ = source->GetWeakPtr();
++  }
++  content::WebContents* TakeOpenedFrom() {
++    content::WebContents* const source = opened_from_.get();
++    opened_from_ = nullptr;
++    return source;
++  }
  
   private:
    friend class content::WebContentsUserData<TabParentData>;
-@@ -54,6 +60,8 @@ class TabParentData : public content::WebContentsUserData<TabParentData> {
+@@ -54,6 +69,11 @@ class TabParentData : public content::WebContentsUserData<TabParentData> {
  
    std::string token_;
    std::string parent_;
 +  // R60: this tab's children are folded away under it.
 +  bool children_folded_ = false;
++  // R56: the page a link that opens its own tab came from, until the tab is
++  // in a strip.
++  base::WeakPtr<content::WebContents> opened_from_;
  
    WEB_CONTENTS_USER_DATA_KEY_DECL();
  };
-@@ -64,6 +72,59 @@ TabParentData& DataFor(content::WebContents* contents) {
+@@ -64,6 +84,59 @@ TabParentData& DataFor(content::WebContents* contents) {
    return *TabParentData::GetOrCreateForWebContents(contents);
  }
  
-+// Whether "Show tabs under the tab that opened them" is on for `model`'s
-+// profile.
 +// R56: a pin is no one's child and folds nothing, whatever it was before it
 +// was pinned, and the link stays for when it is unpinned.
 +bool IsPin(const tabs::TabInterface* tab) {
@@ -308,6 +346,8 @@ index f3ac0ef90363a..60fc6f6ccbbc1 100644
 +  return model && model->IsSpacePinned(tab);
 +}
 +
++// Whether "Show tabs under the tab that opened them" is on for `model`'s
++// profile.
 +bool NestsChildren(const TabStripModel& model) {
 +  const Profile* const profile = model.profile();
 +  return profile &&
@@ -349,7 +389,7 @@ index f3ac0ef90363a..60fc6f6ccbbc1 100644
  // The windows told that a tab of theirs has a new parent (R59).
  base::RepeatingClosureList& ParentsChangedCallbacks() {
    static base::NoDestructor<base::RepeatingClosureList> callbacks;
-@@ -126,6 +187,10 @@ void AppendRebuildCommands(BrowserWindowInterface* browser,
+@@ -126,6 +199,10 @@ void AppendRebuildCommands(BrowserWindowInterface* browser,
        commands->push_back(sessions::CreateAddTabExtraDataCommand(
            tab_id, kSessionTabParentKey, parent));
      }
@@ -360,7 +400,35 @@ index f3ac0ef90363a..60fc6f6ccbbc1 100644
    }
  }
  
-@@ -278,6 +343,126 @@ void ReparentChildrenOf(BrowserWindowInterface* browser,
+@@ -168,6 +245,13 @@ void SetTabToken(tabs::TabInterface* tab, const std::string& token) {
+       FROM_HERE, base::BindOnce(&WriteToken, tab->GetHandle()));
+ }
+ 
++void NoteOpenedFrom(content::WebContents* contents,
++                    content::WebContents* source) {
++  if (contents && source && !contents->GetOpener()) {
++    DataFor(contents).set_opened_from(source);
++  }
++}
++
+ tabs::TabInterface* ParentOfNewTab(const TabStripModel& model, int index) {
+   if (index < 0 || index >= model.count() || model.IsTabPinned(index)) {
+     return nullptr;
+@@ -208,6 +292,13 @@ tabs::TabInterface* ParentOfNewTab(const TabStripModel& model, int index) {
+                                               ui::PAGE_TRANSITION_LINK)) {
+       parent = model.GetOpenerOfTabAt(index);
+     }
++    // A link that opens its own tab has no opener and has not started to load
++    // yet: the delegate said which page it came from (NoteOpenedFrom).
++    if (content::WebContents* const source = DataFor(contents).TakeOpenedFrom();
++        !parent && source) {
++      const int at = model.GetIndexOfWebContents(source);
++      parent = at == TabStripModel::kNoTab ? nullptr : model.GetTabAtIndex(at);
++    }
+   }
+   if (!parent || parent == tab || parent->IsPinned()) {
+     return nullptr;
+@@ -278,6 +369,126 @@ void ReparentChildrenOf(BrowserWindowInterface* browser,
    }
  }
  
@@ -487,7 +555,7 @@ index f3ac0ef90363a..60fc6f6ccbbc1 100644
  base::CallbackListSubscription AddTabParentsChangedCallback(
      base::RepeatingClosure callback) {
    return ParentsChangedCallbacks().Add(std::move(callback));
-@@ -292,6 +477,7 @@ void CarryTabParent(content::WebContents* from, content::WebContents* to) {
+@@ -292,6 +503,7 @@ void CarryTabParent(content::WebContents* from, content::WebContents* to) {
    TabParentData& data = DataFor(to);
    data.set_token(token);
    data.set_parent(parent);
@@ -495,7 +563,7 @@ index f3ac0ef90363a..60fc6f6ccbbc1 100644
  }
  
  void RestoreTabParentFromExtraData(
-@@ -315,6 +501,9 @@ void RestoreTabParentFromExtraData(
+@@ -315,6 +527,9 @@ void RestoreTabParentFromExtraData(
    if (has_parent) {
      data.set_parent(parent->second);
    }
@@ -506,7 +574,7 @@ index f3ac0ef90363a..60fc6f6ccbbc1 100644
  
  void RegisterTabParentSessionRebuild() {
 diff --git a/chrome/browser/ui/stedding/tab_parents.h b/chrome/browser/ui/stedding/tab_parents.h
-index b2adfc82df3ad..11309636d1f73 100644
+index b2adfc82df3ad..6126c327af65b 100644
 --- a/chrome/browser/ui/stedding/tab_parents.h
 +++ b/chrome/browser/ui/stedding/tab_parents.h
 @@ -11,6 +11,7 @@
@@ -525,7 +593,20 @@ index b2adfc82df3ad..11309636d1f73 100644
  
  // The deepest a row nests, folders and children together (R57).
  inline constexpr int kMaxNestDepth = 5;
-@@ -79,6 +81,40 @@ void SetTabParent(BrowserWindowInterface* browser,
+@@ -64,6 +66,12 @@ std::string TabParentToken(const content::WebContents* contents);
+ // never an essential's or for an essential.
+ tabs::TabInterface* ParentOfNewTab(const TabStripModel& model, int index);
+ 
++// R56: `contents`, on its way into a strip, was opened by `source` with no
++// opener: a link that opens its own tab, target=_blank. ParentOfNewTab reads
++// this once.
++void NoteOpenedFrom(content::WebContents* contents,
++                    content::WebContents* source);
++
+ // Makes `child` a child of `parent`, giving `parent` a token when it has none,
+ // and writes both to the session.
+ void SetTabParent(BrowserWindowInterface* browser,
+@@ -79,6 +87,40 @@ void SetTabParent(BrowserWindowInterface* browser,
  void ReparentChildrenOf(BrowserWindowInterface* browser,
                          const content::WebContents* closed);
  
@@ -844,7 +925,7 @@ index 2b3e999808551..161ac6821ba5e 100644
      // Stedding (pins H12): Arc's slash on a drifted row with a title, while
      // the user asks for the mark (H28).
 diff --git a/chrome/test/stedding/child_tabs_browsertest.cc b/chrome/test/stedding/child_tabs_browsertest.cc
-index 1bdbeae57cbd8..53f1b097a9f78 100644
+index 1bdbeae57cbd8..2b848d46faf8c 100644
 --- a/chrome/test/stedding/child_tabs_browsertest.cc
 +++ b/chrome/test/stedding/child_tabs_browsertest.cc
 @@ -16,16 +16,21 @@
@@ -878,7 +959,7 @@ index 1bdbeae57cbd8..53f1b097a9f78 100644
  #include "content/public/test/browser_test.h"
  #include "content/public/test/browser_test_utils.h"
  #include "content/public/test/test_navigation_observer.h"
-@@ -369,6 +376,213 @@ IN_PROC_BROWSER_TEST_F(ChildTabsTest, TheSettingTurnsItOff) {
+@@ -369,6 +376,237 @@ IN_PROC_BROWSER_TEST_F(ChildTabsTest, TheSettingTurnsItOff) {
    EXPECT_EQ(14, Indent(child));
  }
  
@@ -921,6 +1002,30 @@ index 1bdbeae57cbd8..53f1b097a9f78 100644
 +                                     ->GetActiveTab()
 +                                     ->GetContents()))
 +      << "with the setting off Back still closed a tab";
++}
++
++// R56: a link that opens its own tab, target=_blank, is its page's child, the
++// commonest new tab there is. It comes to the front, where Chromium gives it
++// no opener, so it stayed at the left and Back left it open.
++IN_PROC_BROWSER_TEST_F(ChildTabsTest, ALinkThatOpensItsOwnTabIsAChild) {
++  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), Url("a.test")));
++  tabs::TabInterface* const page = tabs()->GetActiveTab();
++  const int count = tabs()->count();
++  ASSERT_TRUE(content::ExecJs(
++      page->GetContents(),
++      content::JsReplace("const a = document.createElement('a');"
++                         "a.href = $1; a.target = '_blank';"
++                         "document.body.append(a); a.click();",
++                         Url("b.test"))));
++  ASSERT_TRUE(
++      base::test::RunUntil([&]() { return tabs()->count() == count + 1; }));
++  tabs::TabInterface* const child = tabs()->GetActiveTab();
++  ASSERT_NE(page, child);
++  ASSERT_TRUE(content::WaitForLoadStop(child->GetContents()));
++  EXPECT_FALSE(stedding::TabParentToken(child->GetContents()).empty())
++      << "no one's child";
++  EXPECT_GT(Indent(child), Indent(page));
++  EXPECT_EQ(page, stedding::ParentBackReturnsTo(child->GetContents()));
 +}
 +
 +// R56, R60: a pin is no one's child, whatever it was before it was pinned.

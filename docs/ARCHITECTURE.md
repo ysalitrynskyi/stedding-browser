@@ -502,9 +502,12 @@ macOS builds that ship are signed with a Developer ID, notarized and stapled.
 That has been true since beta 10 (2026-10-01). `tooling/sign-release` runs
 Chromium's signer (`chrome/installer/mac/signing`). After stapling, `spctl`
 must answer `accepted, source=Notarized Developer ID`, or the script fails.
-The identity and the notary profile are `STEDDING_SIGN_IDENTITY` and
-`STEDDING_NOTARY_ARGS`, from the operator's environment, never from this
-repository.
+The identity, the notary profile and the App ID's provisioning profile are
+`STEDDING_SIGN_IDENTITY`, `STEDDING_NOTARY_ARGS` and
+`STEDDING_PROVISION_PROFILE`, from the operator's environment, never from this
+repository. The profile is what lets Touch ID passkeys work
+([ADR 0033](decisions/0033-passkeys-and-the-signing-team.md)), and it names the
+certificate, so a new certificate needs a new profile.
 
 Patch 0051 is what makes that signer work with a Developer ID on current
 macOS. Upstream assessed the app with Gatekeeper before notarizing it, which

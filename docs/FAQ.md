@@ -297,6 +297,12 @@ Windows. "Don't show again" hides it for that site, and Settings â€º Stedding â€
 Pages and menus brings it back.
 Video that is not DRM-protected, such as YouTube, plays.
 
+**Do passkeys work?**
+On the Mac, a site can save a passkey on that Mac, and Touch ID or your password
+guards it. It stays on that Mac and in that Stedding profile. A passkey in a password
+manager's extension works as it does anywhere. Passkeys in Apple Passwords need
+Apple's permission, which has been asked for.
+
 **Is there a Safari mode for those sites?**
 No. Stedding is Chromium changed directly, with no wrapper around another engine, so it
 cannot show a page through Safari. The notice hands the page to that browser instead.

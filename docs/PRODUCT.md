@@ -281,8 +281,9 @@ a `+` (`features/sidebar.md` Y44). The Library is not this foot (§9).
 - **A split is a tab** **[1.0]** — one sidebar row, and one unit for pin, sleep, move
   to a Space and rename (`features/splits.md` J1, J4).
 - **Persistence** **[1.0]** — returning to the row, and a restart, bring the split back
-  (J1). What `⌘W` does on a split is still to be decided (J3; `S-102`). Whether a
-  Space pin that joins a split leaves the pinned run is the same open item (J5).
+  (J1). `⌘W` closes the pane on screen and leaves the other a tab of its own, and on
+  a pinned split it sleeps both (J3). A Space pin that joins a split stays in the
+  pinned run, and the split with it (J5).
 
 ## 5. Transient windows
 

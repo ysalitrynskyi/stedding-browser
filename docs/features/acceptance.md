@@ -416,6 +416,25 @@ None recorded.
 | Date | Build | Platforms | `sy_join` | `sy_edit` | `sy_remove` | `sy_bulk` | `sy_copy` | `sy_cloud` | `sy_prompt` | `sy_share` | `sy_stop` | `sy_time` | Notes |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 
+## Passkeys on the Mac
+
+Spec: [passkeys.md](passkeys.md). On the signed build, not a test copy, with a fresh profile and `--use-mock-keychain`, on a page at `http://localhost`.
+
+### The checks
+
+| Id | Do | Expect |
+|---|---|---|
+| `ps_signed` | `tooling/sign-release release`, then `codesign -d --entitlements -` on the app. Then `--development`. | `embedded.provisionprofile` in `Contents`, the team's three keychain groups, the app starts. A `--development` signature has none of them and starts too. |
+| `ps_available` | In the page, `await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()`. | `true`. The release before this change answers `false`. |
+| `ps_dialog` | Call `navigator.credentials.create` with a resident key. Then **Save another way**. | "Create a passkey for localhost", saved on this device only. The list reads Use a phone or tablet, Your Stedding profile, USB security key. No Chrome, no Google. |
+| `ps_touch` | Continue, and touch Touch ID. Sign in with the passkey. Delete it in Settings. | The passkey works on webauthn.io and is gone after the delete. |
+
+### Runs
+
+| Date | Build | Result |
+|---|---|---|
+| 2026-11-07 | Notarized build of the 0.4.0 beta 13 work, Mac | `ps_signed`'s release half, `ps_available` (`true`, and `false` on the released beta 12) and `ps_dialog`, which found "Your Chrome profile" and the fix for it. `ps_touch` needs the owner's finger: not run. |
+
 ## The tests beside the script
 
 The script is what a person sees. These browser tests drive the same paths through the window, so a sweep finds a regression before the next run (BACKLOG `S-173`):

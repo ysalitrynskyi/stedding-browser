@@ -17,11 +17,14 @@ infrastructure, then features. A request in chat comes before this list. A spec 
 
 ### The next release
 
-0.4.0 beta 12 went out on 2026-11-06, and what it brought is in `docs/release-notes/`. The owner
-calls the next one, and nothing here hurries it.
+0.4.0 beta 13 went out on 2026-11-07 with every item of the plan below but ghost pins (S-94's
+second slice), and what it brought is in `docs/release-notes/`. What each item left is in its row:
+a real passkey with a finger and Apple Passwords (S-239), the Mac's look at S-157, S-93 and S-127
+(done on Windows), and the child rows' favicons after their parent is pinned (S-92). The owner calls
+the next release, and nothing here hurries it.
 
-The plan of 2026-11-06: the work that needs no one else, in this order. An item is done as
-`PLAN.md` says: a test seen red first, its spec row, and a check on a real build.
+The plan of 2026-11-06, kept as it was: the work that needs no one else, in this order. An item is
+done as `PLAN.md` says: a test seen red first, its spec row, and a check on a real build.
 
 Bugs first:
 
@@ -311,7 +314,7 @@ Rows the specs still leave open. M10 is in ROADMAP's order (ADR 0021).
 | S-61 | Keep-pile still planned | `docs/features/library.md`; `docs/features/player.md`; `docs/features/clipboard.md`; `docs/features/share-coat.md`; `docs/features/focus.md`; `docs/features/new-tab.md` | Shipped from patches 0047–0048, and cut in patch 0055 where the rows were withdrawn. Sf2, export of every Space, is built. Still planned: Library (Lb1–Lb7), the mini player (S-95), clipboard Cf3, share-coat Sc2, focus Fc3, new-tab N6–N8. |
 | S-90 | A second press in a web app reaches the browser | `docs/features/shortcuts.md` | In a web app that binds the same chord, the first press goes to the page and a second within a second goes to Stedding, with a hint the first time. Not built. |
 | S-96 | The sidebar on the right, what is left | `docs/features/sidebar.md` Y34–Y43 | Built in patch 0091, released in 0.3.0 beta 16. Left: Y42's Windows browser test (the caption buttons), Chromium's side panel where its own setting puts it, and the window gradient, the hover shadow and the glass frame, which do not mirror. The `sr_*` checks in `docs/features/acceptance.md` are not recorded. |
-| S-92 | Child tabs, the rest | `docs/features/tabs.md` R60 | Built 2026-11-07 (`feat: child tabs, the rest`), all with the setting on: Back at a child's first page closes it and shows its parent, Close Other Tabs keeps a tab's children, and a parent's children fold away under it, with a count on its row. Seen on the Windows release build with the real pointer and keyboard, dark and light: Alt+Left closed a child and showed its parent, Fold Child Tabs on the menu left the parent with +2, and a press on the count brought the rows back. Owed: the same on the Mac, where ⌘[ is Back. The Mac's two-finger swipe back does not close a child. |
+| S-92 | Child tabs, the rest | `docs/features/tabs.md` R60 | Built 2026-11-07 (`feat: child tabs, the rest`), all with the setting on: Back at a child's first page closes it and shows its parent, Close Other Tabs keeps a tab's children, and a parent's children fold away under it, with a count on its row. Seen on the Windows release build with the real pointer and keyboard, dark and light: Alt+Left closed a child and showed its parent, Fold Child Tabs on the menu left the parent with +2, and a press on the count brought the rows back. Owed: the same on the Mac, where ⌘[ is Back. The Mac's two-finger swipe back does not close a child. Seen on the Mac too on 2026-11-07, with a plain click on a `target=_blank` link, Back, the fold and its count, light and dark. Left: when a parent is pinned, its children move to the left and their favicons stay clipped on that side (seen on the Mac; nothing else is wrong with the row). |
 | S-94 | A page open in another window | `docs/features/windows.md` G2, G12; `docs/features/commandbar.md` K43 | The first part is built, 2026-11-07 (`feat: a page open in another window asks where to show it`): a search in the bar lists the profile's other windows' tabs, and choosing one, or Chromium's "Switch to this tab" for a page in another window, asks: Show Here, Go to Window or Cancel. Seen on the Windows release build with the real pointer and keyboard: each of the three, from the bar and from the address field; Show Here took the first window's only tab, and that window closed. Left: ghost pins (G2), rows for another window's pins. A pin is a tab of one window today, so that needs its spec and an ADR before code. Chromium's tab search still jumps. Owed: the Mac. |
 | S-100 | Dark pages, the owner's row and the live captures | `docs/features/dark-pages.md` | The on/off switch, per-site exceptions, the moon, ⌥⇧⌘D and Settings are patch 0072. Left: Dk24's app-menu row, the owner's call, and the live captures the spec names (`dk_media`, `dk_print`). A follow-the-window mode waits on the owner. |
 | S-88 | Ad and tracker blocking, the later slices | `docs/features/blocker.md`; ADR 0030 | Phase 1 is patch 0098, off by default, released in 0.3.0 beta 16 (Bk1–Bk5, Bk7–Bk13). ADR 0030 is Proposed. Left: Bk6's live check, then element hiding, the blocked-page card, optional lists and a count (Bk20–Bk23). |

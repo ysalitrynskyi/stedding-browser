@@ -2,6 +2,44 @@
 
 What was built, newest first. Nothing here is needed to do a task: `AGENTS.md` carries what is true now, `BACKLOG.md` the order of work, `PLAN.md` the owner's decisions. This file was the "State of the project" section of `AGENTS.md` until 2026-09-30. This log starts at 2026-10-15. Closed work from before that is the table in [docs/history/archive.md](history/archive.md).
 
+## 2026-11-07 -- 0.4.0 beta 13: Touch ID passkeys, split view's last rows, child tabs, another window
+
+Patches 0165 to 0174, one night, two tracks. The Mac held the items that needed it, the PC the rest,
+and the trees were matched by hash at each merge.
+
+Passkeys (S-239, ADR 0033): the owner made the App ID and a Developer ID profile, and asked Apple for
+the browser entitlement. The team id, three keychain groups and the profile go into a signed build,
+and a page sees a platform authenticator where released beta 12 sees none. A look at the real dialog
+found "Your Chrome profile", literal text the product-name rewrite does not reach. Real keychain on the
+signed build: no prompt, and a cookie read back after a restart. A real passkey wants a finger.
+
+The stray Google request of beta 12 (S-443) was the test's: the suite pretends an OAuth client exists,
+so sign-in was allowed there, and a fresh real profile asked nothing in 75 seconds. A quit during a
+dialog (S-435, S-438) never begins on the Mac, as with any app with a dialog up, and H3 now says so.
+Split view (S-102): one number for a split, the key to the pane used last, and a pin that keeps its
+run when a tab joins it. The PC built little windows' rest (S-157), the redirected link in a peek and
+a screenshot of a peek (S-93), Move Tab on a selection (S-127), child tabs' rest (S-92) and the question
+when a page is open in another window (S-94's first slice). The bar's small rows are S-158.
+
+A read of the eleven commits found six faults, none a crash: a Mac swipe that closed a child, Back
+that closed a pin, a fold that hid pins and could strand children, ⌘W on a little window not recorded,
+Show Here leaving a pin under the line, and half a pin after a swap. Using the Mac's real build found a
+seventh: a plain click on a `target=_blank` link, the commonest new tab there is, was nobody's child,
+since it comes to the front with no opener and has not started loading when it reaches the strip. The
+tests had all opened links in the background. Each has a test, seen red but for the swap, which passes
+either way.
+
+Checked on the final tree, the same on both machines: 1490 unit and 907 browser tests on the Mac and
+1478 and 857 on Windows, each on the release build and the DCHECK build, with one sync test on the
+Mac's release build and one drag test on Windows timing out once among the others and passing alone;
+AddressSanitizer on Windows with no report and no dangling pointer, one peek test timing out and
+passing twice alone; acceptance on an installed Windows copy, TST-6 again alone after the installer
+cycle, and on a copy of the notarized Mac build; the update from beta 12 through a local feed on both;
+on the notarized build, Touch ID offered to a page, the dialog's words, the real keychain with no
+prompt, and a cookie read back after a restart. The new states were looked at on the Mac's real
+build, light and dark. Not checked: a real passkey, ghost pins (not built), and the child rows'
+favicons clipped on one side after their parent is pinned (in S-92).
+
 ## 2026-11-06 -- 0.4.0 beta 12: sync through WebDAV or S3 storage, and what the real builds left
 
 Patches 0161 to 0164. Sync can go through WebDAV or S3 storage the user sets up, beside the folder

@@ -17,21 +17,67 @@ infrastructure, then features. A request in chat comes before this list. A spec 
 
 ### The next release
 
-0.4.0 beta 12 went out on 2026-11-06. The owner calls the next one. It brought, in patches 0157 to
-0164:
+0.4.0 beta 12 went out on 2026-11-06, and what it brought is in `docs/release-notes/`. The owner
+calls the next one, and nothing here hurries it.
 
-1. A private window that ignores the settings hiding the address row (S-439, issue 83).
-2. The Space name's reorder during a layout, the one crash of beta 11's AddressSanitizer run (S-440).
-3. The − buttons on a folder and on a pin: the glyph off the centre of its hover circle, and the
-   circle too small (S-441, a comment on issue 78; the owner, 2026-11-06).
-4. The shield's and the moon's lit circle, a DIP wider after the owner's look (S-423).
-5. The folder's − leaves the list where it is (S-442, the owner, 2026-11-06).
-6. A little window through a second restart (S-436), the DRM notice's sentence and its place beside another bar (S-437), and a rename's keys (S-438).
+The plan of 2026-11-06: the work that needs no one else, in this order. An item is done as
+`PLAN.md` says: a test seen red first, its spec row, and a check on a real build.
 
-7. Sync through WebDAV or S3 storage the user sets up, beside the folder (S-426, issue 77; ADR 0032),
-   the owner's of 2026-11-06, in 0164.
+Bugs first:
 
-After them, what beta 11's list below did not reach, in its order.
+1. **S-443, the stray Google request.** First suspect: a request queued in a slow start before
+   `prefs::kSigninAllowed` reads false, since the guard in `TriggerListAccounts` looks at the pref
+   only at that moment. Log the caller, slow the start down until it happens, and find whether a
+   real profile can do it. If it can, stop it where the request is sent as well, with a test.
+2. **S-435 and the rest of S-438.** A quit during a pin's Leave-site question and a quit during
+   Delete Space may share one cause on the Mac: a quit that does not arrive while a dialog is up.
+   Reproduce both, then one fix and one browser test. Then time Chromium's ten-second teardown
+   watchdog over 50 quits on a quiet Mac, and look at the peek prompt's edge on a white page.
+
+Leftovers people meet:
+
+3. **S-157, little windows.** Two clauses of its row look stale and get checked and removed: the
+   mark is now saved (S-326, closed), and a deleted Space's routes now go with it (S-162). To fix:
+   the chords with no Spaces, the setting offered where little windows do not exist, and ⇧⌘T, which
+   brings a closed little window back as a plain popup (E1). "Pin on the little window" has no spec
+   row: find what Arc's does, then spec it or drop it.
+4. **S-93, peek.** A pin's link that the server redirects to another site opens a peek at the
+   destination, judged by P15 and P16, so a sign-in stays in the pin and the redirect is not asked
+   twice. The screenshot chords capture the peek when one is over the page. Option-click stays
+   Chromium's download: the spec already says so, and the clause closes.
+5. **S-127, the command bar.** The Move Tab row acts on the selection, with a test (tabs R22). A
+   click on the address keeps editing in place, and K12 records that as the decision, unless the
+   owner wants Arc's way.
+
+Bigger pieces:
+
+6. **S-92, child tabs (tabs R60).** Back at a child's first page closes it and returns to its
+   parent, a parent's children fold away with it, and Close Other Tabs keeps them. All three only
+   with "Show tabs under the tab that opened them" on, so the default does not change.
+7. **S-102, split view.** J3: check what Chromium does, then ⌘W closes the active pane and the other
+   stays as a plain tab, and a pinned split sleeps as one row (J4). J5: a Space pin that joins a
+   split stays in the pinned run and both panes are pinned, as J1 says, which lifts J13's refusal
+   for Space pins. J2: ⌘1–9 and the badges count a split once. Then a real-input pass: resize, swap
+   and dismiss by mouse and keyboard, and DevTools, find-in-page and full-screen video in a split.
+8. **S-94, a page open in another window, in two slices.** First the choice: picking a tab that
+   lives in another window offers "Show here / Go to window" instead of a silent jump. Then ghost
+   pins (windows G2), rows for another window's pins. A pin is a tab of one window today, so that
+   slice needs its spec and an ADR before code. It is the largest item and goes last, and it can
+   wait for the release after without holding the rest back.
+
+Then the release gate, as for beta 12: the suites on the shipping and DCHECK builds on both
+platforms, ASan on Windows, acceptance on both, an update from the installed beta 12 on both, and
+every changed state reviewed on both, light and dark.
+
+The Mac holds S-435, S-438's quits and the real-input checks, and takes turns with the owner. The
+rest starts on the PC. Before the first build, the PC pulls main, and patches 0157 to 0164 fold into
+the patches that own their code.
+
+Waiting on the owner, so not in this plan: one import of a real Arc file (S-107, S-103, S-431),
+Spaces that share one session (S-272), a commercial WebDAV or S3 service (S-426), passkeys (S-239),
+S-428 when it next happens, S-318's decision, and the move to Chromium 158.
+
+After these, step 6 of beta 11's list below, in its order.
 
 ### Beta 11's list
 
@@ -118,7 +164,7 @@ is in. The Windows times are not.
 |---|---|---|---|
 | S-270 | Widevine (Netflix, Disney+, Prime Video, Spotify) | `docs/ARCHITECTURE.md`; `docs/PRIVACY.md`; `docs/FAQ.md` | Nothing protected by Widevine plays. Desktop browsers run L3. The owner has written to Google (the CDM through the component updater, plus a production VMP certificate) and to castLabs. castLabs' free EVS signs its own Electron fork; VMP for a custom Chromium is a paid service. Turning the component on before Google answers is the licensing risk another fork refused. After a grant: VMP-sign each release, `enable_widevine` in `tooling/args/*.gn`, list the network call in `docs/PRIVACY.md`, then a DRM test page and Netflix on both platforms. |
 | S-238 | Google services that cannot work here | `docs/PRIVACY.md`; ADR 0020; S-75 | Each is offered and needs Google's key or service. Remove Enhanced Safe Browsing (an ADR: it can only send page addresses to Google; S-75 is the route to working Safe Browsing). Confirm download verdicts and the password leak check with a network log, then off by default, with an ADR. Website voice input should fail inside the browser. Hide or relabel "Use enhanced spell check" and Settings' "Use Google Translate". `docs/PRIVACY.md` still misses the Windows spelling-dictionary download, the Mac's network-location fallback, and the Windows profile's per-user-only protection. |
-| S-239 | Passkeys on the Mac | `docs/features/`; an ADR | Touch ID and iCloud Keychain passkeys need Apple-granted entitlements in a provisioning profile. The same profile can carry universal links. Only the owner can create it and ask Apple. The team choice is hard to reverse and wants an ADR. |
+| S-239 | Passkeys on the Mac | `docs/features/`; an ADR | Touch ID passkeys and passkeys from Apple Passwords need a provisioning profile embedded in the app. Chrome, Firefox, Brave, Vivaldi and Arc are all Developer ID apps that carry one (read from their bundles, 2026-11-06). Apple's `com.apple.developer.web-browser.public-key-credential` is granted on request to an organization's Account Holder (the form is `developer.apple.com/contact/request/macos-browsers-passkeys/`, or the App ID's Capability Requests tab); once it is granted, it is enabled on the App ID's Capabilities tab, and the profile is made after that. Only the owner can do these. The Touch ID half looks to need only a Developer ID profile, since each of those profiles lists `keychain-access-groups` for the whole team, even in Firefox, whose app does not use it; to be proved. Here: set `MAC_TEAM_ID` in `branding/BRANDING` (empty today, so Chromium's Touch ID group has no team in it), add the entitlements to `chrome/app`, give the signer `provisioning_profile_basename`, then an update from the installed release, to see the keychain items survive. Touch ID passkeys live under the team id, so moving team later loses them, and that wants an ADR. The same profile can carry universal links. |
 | S-241 | What else the comparison found | `docs/ARCHITECTURE.md`; ADR 0023; `docs/HANDOFF.md` trap 134 | Owner decisions still open: the component allowlist before 1.0 (keep the security components, drop the unused), and extensions pinned to the toolbar on install. M157 does that pin, and Stedding follows it until the owner decides (trap 134). Widevine is S-270. A system install is S-169. Releases built on a pin from before 1 November 2026 lose the built-in HTTPS-only list on 2026-12-13; 157.0.8103.39 keeps it until 2027-01-10. |
 
 ### Faults from the review of 2026-10-28

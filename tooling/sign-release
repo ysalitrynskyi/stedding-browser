@@ -11,6 +11,9 @@
 #   STEDDING_NOTARY_ARGS     arguments for `xcrun notarytool`, usually
 #                            "--keychain-profile=stedding-notary" after a one-time
 #                            `xcrun notarytool store-credentials stedding-notary`
+#   STEDDING_PROVISION_PROFILE  the Developer ID provisioning profile of the App ID
+#                            dev.stedding.Stedding (docs/decisions/0033). It names
+#                            the certificate, so a new certificate needs a new one.
 #
 # --development signs with an "Apple Development" identity from the keychain
 # instead (no notarisation): the app runs on this machine without the
@@ -44,6 +47,7 @@ main() {
     packaging="$(find "$OUT" -maxdepth 1 -type d -name '* Packaging' 2>/dev/null | head -1 || true)"
     identity="${STEDDING_SIGN_IDENTITY:-}"
     notary_args="${STEDDING_NOTARY_ARGS:-}"
+    profile="${STEDDING_PROVISION_PROFILE:-}"
     missing=0
     if [ "$DEVELOPMENT" -eq 1 ]; then
       # Any Apple Development identity will do for a local build; notarisation
@@ -51,6 +55,7 @@ main() {
       [ -n "$identity" ] || identity="$(security find-identity -v -p codesigning 2>/dev/null \
         | sed -n 's/.*"\(Apple Development: [^"]*\)".*/\1/p' | head -1)"
       notary_args="${notary_args:-(not needed for --development)}"
+      profile=""
     fi
 
     report() { printf '  %-28s %s\n' "$1" "$2" >&2; }
@@ -85,6 +90,15 @@ main() {
       report "notary args" "MISSING: export STEDDING_NOTARY_ARGS (e.g. --keychain-profile=stedding-notary)"
       missing=1
     fi
+    if [ "$DEVELOPMENT" -eq 0 ]; then
+      if [ -n "$profile" ] && [ -f "$profile" ] \
+        && security cms -D -i "$profile" 2>/dev/null | grep -q "\.dev\.stedding\.Stedding<"; then
+        report "provisioning profile" "$profile"
+      else
+        report "provisioning profile" "MISSING: export STEDDING_PROVISION_PROFILE (the App ID's Developer ID profile)"
+        missing=1
+      fi
+    fi
     if xcrun --find notarytool >/dev/null 2>&1; then
       report "notarytool" "$(xcrun --find notarytool)"
     else
@@ -117,6 +131,13 @@ main() {
       # own and stops with "expected one argument", which is how the first
       # Developer ID run failed (2026-09-23).
       sign_args+=(--notarize staple)
+      # The signer looks for <name>.<certificate's SHA-1>.provisionprofile in the
+      # packaging directory, and embeds it as embedded.provisionprofile.
+      certificate="$(security find-identity -v -p codesigning \
+        | awk -v id="\"$identity\"" 'index($0, id) { print tolower($2); exit }')"
+      [ -n "$certificate" ] || die "no certificate for the signing identity"
+      cp "$profile" "$packaging/stedding.$certificate.provisionprofile"
+      export STEDDING_PROVISION_PROFILE_BASENAME=stedding
       # shellcheck disable=SC2086  # notary args are a list of words by design
       for word in $notary_args; do
         sign_args+=("--notary-arg=$word")
@@ -139,6 +160,9 @@ main() {
       printf '%s\n' "$assessment" | grep -q "source=Notarized Developer ID" \
         || die "Gatekeeper does not accept the stapled app"
       xcrun stapler validate "$out_app" >&2 || die "no notarization ticket is stapled"
+      # macOS kills an app whose entitlements its profile does not grant, and
+      # none of the checks above would see that. It has to start.
+      "$out_app/Contents/MacOS/Stedding" --version >&2 || die "the signed app does not start"
     fi
     log "signed app: $out_app"
     log "next: tooling/package-dmg $CONFIG --app '$out_app'"

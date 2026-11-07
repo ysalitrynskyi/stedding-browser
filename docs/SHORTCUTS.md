@@ -26,6 +26,8 @@ Keys: ⌘ Command, ⌥ Option, ⇧ Shift, ⌃ Control, ⇥ Tab.
 | In a little window or a peek: send the page into a split of your window (the page's menu, and on the Mac the File menu: Open in Split View). The page opens as its own tab when the tab it would join is an essential, already in a split, or outside the active Space, or when that window has no tab yet | ⇧⌘O | Ctrl+Shift+O |
 | In a little window or a peek: close it. The page gets Escape first when it uses that key | Esc | Esc |
 
+In a private window, which has no Spaces, ⌥⌘→ / ⌥⌘← step through the tabs and ⌘D makes a bookmark, as in Chromium.
+
 ### Switching Spaces with the mouse
 
 Over the sidebar, or over its icons, scroll sideways. With a wheel, and with a sideways swipe on Windows, to the right is the next Space and to the left the one before. On the Mac, two fingers follow the hand, so a swipe to the left is the next Space and a swipe to the right the one before. Scrolling up and down still scrolls the tabs. After each change the wheel waits a moment, so a fast spin does not run through every Space.

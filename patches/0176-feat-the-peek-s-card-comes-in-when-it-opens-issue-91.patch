@@ -1,0 +1,218 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Sun, 8 Nov 2026 11:31:17 -0500
+Subject: feat: the peek's card comes in when it opens (issue 91)
+
+A peek over the page fades in over 160 ms, eased out, when it opens, so the
+card is on screen while the page paints its first frame (motion O10). It
+follows "Animate the sidebar and overlays" and the system's Reduce Motion
+(motion O1); off, the card shows as it did. Closing is not animated.
+
+Why: GitHub issue 91. With no motion the card appeared in one frame once
+the page had painted, which read as slower than Arc's peek.
+
+Removable when: never; Stedding's own motion.
+---
+ chrome/browser/ui/views/peek/BUILD.gn         |  1 +
+ chrome/browser/ui/views/peek/peek_overlay.cc  | 27 +++++++++++
+ chrome/browser/ui/views/peek/peek_overlay.h   | 24 +++++++++-
+ .../stedding/peek_over_page_browsertest.cc    | 48 +++++++++++++++++++
+ 4 files changed, 99 insertions(+), 1 deletion(-)
+
+diff --git a/chrome/browser/ui/views/peek/BUILD.gn b/chrome/browser/ui/views/peek/BUILD.gn
+index c5f55cf5ea416..0c0348ad5f37f 100644
+--- a/chrome/browser/ui/views/peek/BUILD.gn
++++ b/chrome/browser/ui/views/peek/BUILD.gn
+@@ -30,6 +30,7 @@ source_set("peek") {
+     "//chrome/browser/ui/spaces",
+     "//chrome/browser/ui/stedding:copy_link",
+     "//chrome/browser/ui/stedding:little_window",
++    "//chrome/browser/ui/stedding:motion",
+     "//chrome/browser/ui/stedding:pin_lifecycle",
+     "//chrome/browser/ui/stedding:prefs",
+     "//chrome/browser/ui/views/frame:browser_view_header",
+diff --git a/chrome/browser/ui/views/peek/peek_overlay.cc b/chrome/browser/ui/views/peek/peek_overlay.cc
+index 81fc8b80412f4..01d66193d4c6b 100644
+--- a/chrome/browser/ui/views/peek/peek_overlay.cc
++++ b/chrome/browser/ui/views/peek/peek_overlay.cc
+@@ -26,6 +26,7 @@
+ #include "chrome/browser/ui/navigator/browser_navigator.h"
+ #include "chrome/browser/ui/navigator/browser_navigator_params.h"
+ #include "chrome/browser/ui/stedding/copy_link.h"
++#include "chrome/browser/ui/stedding/motion.h"
+ #include "chrome/browser/ui/stedding/little_window.h"
+ #include "chrome/browser/ui/stedding/peek.h"
+ #include "chrome/browser/ui/stedding/stedding_prefs.h"
+@@ -54,6 +55,7 @@
+ #include "ui/base/l10n/l10n_util.h"
+ #include "ui/base/metadata/metadata_impl_macros.h"
+ #include "ui/base/ui_base_features.h"
++#include "ui/gfx/animation/tween.h"
+ #include "ui/base/window_open_disposition.h"
+ #include "ui/color/color_id.h"
+ #include "ui/color/color_provider.h"
+@@ -580,10 +582,35 @@ bool PeekOverlay::Show() {
+     return true;
+   }
+   view_->UpdateSplit(CanSplit());
++  // O10: the card comes in, unless motion is off (O1).
++  if (ShouldAnimate(
++          Profile::FromBrowserContext(page_->GetBrowserContext())->GetPrefs())) {
++    opacity_ = 0.0f;
++    widget_->SetOpacity(opacity_);
++    appear_ = std::make_unique<gfx::LinearAnimation>(
++        base::Milliseconds(kAppearMs), gfx::LinearAnimation::kDefaultFrameRate,
++        this);
++    appear_->Start();
++  }
+   page_->Focus();
+   return true;
+ }
+ 
++void PeekOverlay::AnimationProgressed(const gfx::Animation* animation) {
++  opacity_ = static_cast<float>(gfx::Tween::CalculateValue(
++      gfx::Tween::EASE_OUT, animation->GetCurrentValue()));
++  if (widget_) {
++    widget_->SetOpacity(opacity_);
++  }
++}
++
++void PeekOverlay::AnimationEnded(const gfx::Animation* animation) {
++  opacity_ = 1.0f;
++  if (widget_) {
++    widget_->SetOpacity(opacity_);
++  }
++}
++
+ gfx::Rect PeekOverlay::PageBoundsInScreen() const {
+   tabs::TabInterface* const source = source_.get();
+   BrowserWindowInterface* const window =
+diff --git a/chrome/browser/ui/views/peek/peek_overlay.h b/chrome/browser/ui/views/peek/peek_overlay.h
+index 794e283179532..2404b48e52f17 100644
+--- a/chrome/browser/ui/views/peek/peek_overlay.h
++++ b/chrome/browser/ui/views/peek/peek_overlay.h
+@@ -16,6 +16,8 @@
+ #include "content/public/browser/web_contents_delegate.h"
+ #include "content/public/browser/web_contents_observer.h"
+ #include "ui/base/metadata/metadata_header_macros.h"
++#include "ui/gfx/animation/animation_delegate.h"
++#include "ui/gfx/animation/linear_animation.h"
+ #include "ui/views/controls/webview/unhandled_keyboard_event_handler.h"
+ #include "ui/views/view.h"
+ #include "ui/views/widget/widget.h"
+@@ -105,7 +107,8 @@ void RegisterPeekOverPage();
+ class PeekOverlay : public content::WebContentsDelegate,
+                     public content::WebContentsObserver,
+                     public web_modal::WebContentsModalDialogManagerDelegate,
+-                    public web_modal::WebContentsModalDialogHost {
++                    public web_modal::WebContentsModalDialogHost,
++                    public gfx::AnimationDelegate {
+  public:
+   // The peek over `source`'s page, or null.
+   static PeekOverlay* ForSource(const tabs::TabInterface* source);
+@@ -131,6 +134,17 @@ class PeekOverlay : public content::WebContentsDelegate,
+   // Whether the pinned tab can take a split beside the page (P9).
+   bool CanSplit() const;
+ 
++  // motion O10 (GitHub issue 91): the card comes in when the peek opens,
++  // from nothing over kAppearMs, eased out, so it is on screen while the page
++  // paints its first frame. Not when motion is off (O1). Closing is not
++  // animated: the widget closes synchronously (tabs R67).
++  static constexpr int kAppearMs = 160;
++  bool appearing() const { return appear_ && appear_->is_animating(); }
++  // Whether the card came in with motion, whether or not it has ended.
++  bool came_in_for_testing() const { return appear_ != nullptr; }
++  // The opacity the peek's widget was last given.
++  float opacity_for_testing() const { return opacity_; }
++
+   base::WeakPtr<PeekOverlay> GetWeakPtr() {
+     return weak_factory_.GetWeakPtr();
+   }
+@@ -188,6 +202,10 @@ class PeekOverlay : public content::WebContentsDelegate,
+       content::WebContents* web_contents) override;
+   bool IsWebContentsVisible(content::WebContents* web_contents) override;
+ 
++  // gfx::AnimationDelegate:
++  void AnimationProgressed(const gfx::Animation* animation) override;
++  void AnimationEnded(const gfx::Animation* animation) override;
++
+   // web_modal::WebContentsModalDialogHost:
+   gfx::NativeView GetHostView() const override;
+   gfx::Point GetDialogPosition(const gfx::Size& size) override;
+@@ -226,6 +244,10 @@ class PeekOverlay : public content::WebContentsDelegate,
+   bool destroying_ = false;
+   // Close asked the page "Leave site?" and waits for its answer.
+   bool closing_ = false;
++  // O10: the card's way in, and the opacity it has reached. Declared after
++  // the widget, so it stops before the widget goes.
++  std::unique_ptr<gfx::LinearAnimation> appear_;
++  float opacity_ = 1.0f;
+   base::WeakPtrFactory<PeekOverlay> weak_factory_{this};
+ };
+ 
+diff --git a/chrome/test/stedding/peek_over_page_browsertest.cc b/chrome/test/stedding/peek_over_page_browsertest.cc
+index ba63bbba809f6..5337544bffbdb 100644
+--- a/chrome/test/stedding/peek_over_page_browsertest.cc
++++ b/chrome/test/stedding/peek_over_page_browsertest.cc
+@@ -76,6 +76,7 @@
+ #include "ui/events/keycodes/dom/dom_code.h"
+ #include "ui/events/keycodes/dom/dom_key.h"
+ #include "ui/events/keycodes/keyboard_codes.h"
++#include "ui/gfx/animation/animation.h"
+ #include "ui/views/controls/button/image_button.h"
+ #include "ui/views/controls/label.h"
+ #include "ui/views/controls/webview/webview.h"
+@@ -248,6 +249,53 @@ class PeekOverPageTest : public InProcessBrowserTest {
+   }
+ };
+ 
++// motion O10 (GitHub issue 91): the card comes in when the peek opens, from
++// nothing, and is whole once the motion ends. With motion off (O1, the
++// "Animate the sidebar and overlays" switch, or the system's Reduce Motion)
++// it shows as it is, as every peek did.
++IN_PROC_BROWSER_TEST_F(PeekOverPageTest, TheCardComesInAndStillDoesNot) {
++  gfx::Animation::SetPrefersReducedMotionForTesting(false);
++  ASSERT_NO_FATAL_FAILURE(OpenPin(Url("b.test", "/title3.html")));
++  tabs::TabInterface* const pin = tab();
++  {
++    SCOPED_TRACE("motion on");
++    ClickLink();
++    stedding::PeekOverlay* const peek = WaitForPeek(pin);
++    ASSERT_TRUE(peek);
++    // Under load the motion may be over by now: whether it ran is the test.
++    EXPECT_TRUE(peek->came_in_for_testing())
++        << "the card showed with no motion";
++    ASSERT_TRUE(base::test::RunUntil([&] { return !peek->appearing(); }));
++    EXPECT_EQ(1.0f, peek->opacity_for_testing());
++    Press(peek->view()->close_button());
++    ASSERT_TRUE(WaitForNoPeek(pin));
++  }
++  {
++    SCOPED_TRACE("motion off in Settings");
++    browser()->GetProfile()->GetPrefs()->SetBoolean(
++        stedding::prefs::kUiAnimate, false);
++    ClickLink();
++    stedding::PeekOverlay* const peek = WaitForPeek(pin);
++    ASSERT_TRUE(peek);
++    EXPECT_FALSE(peek->came_in_for_testing());
++    EXPECT_EQ(1.0f, peek->opacity_for_testing());
++    Press(peek->view()->close_button());
++    ASSERT_TRUE(WaitForNoPeek(pin));
++    browser()->GetProfile()->GetPrefs()->SetBoolean(
++        stedding::prefs::kUiAnimate, true);
++  }
++  {
++    SCOPED_TRACE("Reduce Motion on");
++    gfx::Animation::SetPrefersReducedMotionForTesting(true);
++    ClickLink();
++    stedding::PeekOverlay* const peek = WaitForPeek(pin);
++    ASSERT_TRUE(peek);
++    EXPECT_FALSE(peek->came_in_for_testing());
++    EXPECT_EQ(1.0f, peek->opacity_for_testing());
++    gfx::Animation::SetPrefersReducedMotionForTesting(false);
++  }
++}
++
+ #if defined(USE_AURA)
+ // tabs R67 (BACKLOG S-429, GitHub issue 82): a peek goes with its widget at
+ // once. One closed as its tab comes back, so as its window shows, leaves the

@@ -65,10 +65,10 @@ Removable when: never as a feature.
  .../webui/stedding_space/stedding_space_ui.h  |  30 ++
  chrome/chrome_paks.gni                        |   1 +
  chrome/test/stedding/BUILD.gn                 |   2 +
- chrome/test/stedding/downloads_browsertest.cc | 101 +++++++
+ chrome/test/stedding/downloads_browsertest.cc | 178 ++++++++++++
  .../test/stedding/pinned_run_browsertest.cc   |  79 ++++++
  tools/gritsettings/resource_ids.spec          |   5 +
- 36 files changed, 2096 insertions(+), 39 deletions(-)
+ 36 files changed, 2173 insertions(+), 39 deletions(-)
  create mode 100644 chrome/browser/resources/stedding_space/BUILD.gn
  create mode 100644 chrome/browser/resources/stedding_space/app.css
  create mode 100644 chrome/browser/resources/stedding_space/app.ts
@@ -2536,11 +2536,14 @@ index 5317bae491ab9..99857c4929418 100644
      "//chrome/browser/ui/stedding:tab_names",
      "//chrome/browser/ui/stedding:tab_parents",
 diff --git a/chrome/test/stedding/downloads_browsertest.cc b/chrome/test/stedding/downloads_browsertest.cc
-index 986ae648d665b..51211d37050e4 100644
+index 986ae648d665b..e9291c2614964 100644
 --- a/chrome/test/stedding/downloads_browsertest.cc
 +++ b/chrome/test/stedding/downloads_browsertest.cc
-@@ -13,9 +13,11 @@
+@@ -11,22 +11,35 @@
+ // one that sends no more progress (docs/history/plan-2026-09-26.md WIN-16,
+ // WIN-F6).
  
++#include <algorithm>
  #include <optional>
  #include <string>
 +#include <vector>
@@ -2549,9 +2552,18 @@ index 986ae648d665b..51211d37050e4 100644
  #include "base/run_loop.h"
 +#include "base/test/bind.h"
  #include "base/test/run_until.h"
++#include "base/test/test_future.h"
  #include "chrome/app/chrome_command_ids.h"
++#include "chrome/browser/history/history_service_factory.h"
  #include "chrome/browser/profiles/profile.h"
-@@ -24,9 +26,11 @@
++#include "chrome/browser/ui/spaces/space.h"
++#include "chrome/browser/ui/spaces/space_model.h"
++#include "components/history/core/browser/download_row.h"
++#include "components/history/core/browser/history_service.h"
++#include "components/keyed_service/core/service_access_type.h"
++#include "third_party/skia/include/core/SkColor.h"
+ #include "chrome/browser/ui/actions/chrome_action_id.h"
+ #include "chrome/browser/ui/animation/browser_animation_controller.h"
  #include "chrome/browser/ui/browser_actions.h"
  #include "chrome/browser/ui/browser_commands.h"
  #include "chrome/browser/ui/stedding/stedding_prefs.h"
@@ -2563,7 +2575,7 @@ index 986ae648d665b..51211d37050e4 100644
  #include "chrome/browser/ui/views/frame/browser_view.h"
  #include "chrome/browser/ui/views/frame/toolbar_button_provider.h"
  #include "chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h"
-@@ -40,6 +44,7 @@
+@@ -40,6 +53,7 @@
  #include "components/download/public/common/download_item.h"
  #include "components/prefs/pref_service.h"
  #include "content/public/browser/download_manager.h"
@@ -2571,7 +2583,82 @@ index 986ae648d665b..51211d37050e4 100644
  #include "content/public/test/browser_test.h"
  #include "content/public/test/download_test_observer.h"
  #include "content/public/test/slow_download_http_response.h"
-@@ -391,4 +396,100 @@ IN_PROC_BROWSER_TEST_F(SteddingDownloadsTest,
+@@ -223,6 +237,74 @@ class SteddingDownloadsTest
+   }
+ };
+ 
++// GitHub issue 90 (sidebar-panels Pn9): a finished download stays in the
++// list after a restart, one from a Space with its own session (sessions S1,
++// its own storage partition) as well as one from a shared Space.
++constexpr char kSharedDownload[] = "/downloads/a_zip_file.zip";
++constexpr char kOwnSessionDownload[] = "/downloads/Picture_1.doc";
++
++// The downloads the history database holds, by their address.
++std::vector<GURL> HistoryDownloads(Profile* profile) {
++  base::test::TestFuture<std::vector<history::DownloadRow>> rows;
++  HistoryServiceFactory::GetForProfile(profile,
++                                       ServiceAccessType::EXPLICIT_ACCESS)
++      ->QueryDownloads(rows.GetCallback());
++  std::vector<GURL> urls;
++  for (const history::DownloadRow& row : rows.Get()) {
++    urls.push_back(row.url_chain.empty() ? GURL() : GURL(row.url_chain.back()));
++  }
++  return urls;
++}
++
++IN_PROC_BROWSER_TEST_F(SteddingDownloadsTest,
++                       PRE_ADownloadFromASpaceWithItsOwnSessionStaysListed) {
++  spaces::SpaceModel* const model = spaces::SpaceModel::From(browser());
++  ASSERT_TRUE(model);
++  const auto download = [&](const char* path) {
++    content::DownloadTestObserverTerminal done(
++        manager(), 1,
++        content::DownloadTestObserver::ON_DANGEROUS_DOWNLOAD_ACCEPT);
++    ui_test_utils::NavigateToURLWithDisposition(
++        browser(), embedded_test_server()->GetURL(path),
++        WindowOpenDisposition::NEW_FOREGROUND_TAB,
++        ui_test_utils::BROWSER_TEST_NO_WAIT);
++    done.WaitForFinished();
++    EXPECT_EQ(1u, done.NumDownloadsSeenInState(
++                      download::DownloadItem::COMPLETE));
++  };
++  download(kSharedDownload);
++  const spaces::SpaceId work = model->AddSpace("Work", SK_ColorBLUE)->id();
++  model->SetSpaceIsolated(work, true);
++  ASSERT_TRUE(model->SetActiveSpace(work));
++  download(kOwnSessionDownload);
++  content::DownloadManager::DownloadVector items;
++  manager()->GetAllDownloads(&items);
++  ASSERT_EQ(2u, items.size());
++  // Both are in the history database before the browser quits.
++  ASSERT_TRUE(base::test::RunUntil(
++      [&] { return HistoryDownloads(browser()->GetProfile()).size() == 2u; }))
++      << HistoryDownloads(browser()->GetProfile()).size()
++      << " download(s) written to history";
++}
++
++IN_PROC_BROWSER_TEST_F(SteddingDownloadsTest,
++                       ADownloadFromASpaceWithItsOwnSessionStaysListed) {
++  ASSERT_TRUE(base::test::RunUntil([&] {
++    return manager()->IsManagerInitialized();
++  }));
++  content::DownloadManager::DownloadVector items;
++  manager()->GetAllDownloads(&items);
++  std::vector<std::string> paths;
++  for (download::DownloadItem* const item : items) {
++    paths.emplace_back(item->GetURL().path());
++  }
++  EXPECT_TRUE(std::ranges::contains(paths, kSharedDownload));
++  EXPECT_TRUE(std::ranges::contains(paths, kOwnSessionDownload))
++      << "the download from Work's own session is gone after the restart; "
++      << HistoryDownloads(browser()->GetProfile()).size()
++      << " in the history database";
++}
++
+ // toolbar T27: with horizontal tabs, Chromium's own toolbar button shows
+ // during a download, carries its ring, and the bubble opens from it.
+ IN_PROC_BROWSER_TEST_F(SteddingDownloadsTest,
+@@ -391,4 +473,100 @@ IN_PROC_BROWSER_TEST_F(SteddingDownloadsTest,
    })) << "the sidebar is open again and the toolbar kept the download";
  }
  

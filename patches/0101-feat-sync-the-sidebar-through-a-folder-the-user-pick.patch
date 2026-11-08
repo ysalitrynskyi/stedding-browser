@@ -57,11 +57,11 @@ Removable when: not removable; it is product behaviour.
  .../browser/ui/spaces/sidebar_sync_service.h  |  305 +++
  .../ui/spaces/sidebar_sync_service_factory.cc |   51 +
  .../ui/spaces/sidebar_sync_service_factory.h  |   41 +
- .../browser/ui/spaces/sidebar_sync_state.cc   |  971 +++++++++
+ .../browser/ui/spaces/sidebar_sync_state.cc   | 1011 +++++++++
  chrome/browser/ui/spaces/sidebar_sync_state.h |  288 +++
  .../browser/ui/spaces/sidebar_sync_tracker.cc |  238 +++
  .../browser/ui/spaces/sidebar_sync_tracker.h  |   56 +
- .../ui/spaces/sidebar_sync_unittest.cc        |  752 +++++++
+ .../ui/spaces/sidebar_sync_unittest.cc        |  794 ++++++++
  chrome/browser/ui/spaces/space_model.cc       |    9 +
  chrome/browser/ui/spaces/space_model.h        |   11 +
  chrome/browser/ui/spaces/space_registry.cc    |    5 +-
@@ -78,7 +78,7 @@ Removable when: not removable; it is product behaviour.
  chrome/test/stedding/BUILD.gn                 |    3 +
  .../test/stedding/sidebar_sync_browsertest.cc |  387 ++++
  .../tools/build/mac/infoplist_strings_util.cc |   16 +
- 45 files changed, 8428 insertions(+), 91 deletions(-)
+ 45 files changed, 8510 insertions(+), 91 deletions(-)
  create mode 100644 chrome/browser/resources/settings/stedding_page/stedding_sync_section.css
  create mode 100644 chrome/browser/resources/settings/stedding_page/stedding_sync_section.html.ts
  create mode 100644 chrome/browser/resources/settings/stedding_page/stedding_sync_section.ts
@@ -5637,10 +5637,10 @@ index 0000000000000..527f38626a0e5
 +#endif  // CHROME_BROWSER_UI_SPACES_SIDEBAR_SYNC_SERVICE_FACTORY_H_
 diff --git a/chrome/browser/ui/spaces/sidebar_sync_state.cc b/chrome/browser/ui/spaces/sidebar_sync_state.cc
 new file mode 100644
-index 0000000000000..e862da370bf36
+index 0000000000000..e9565769ca2e6
 --- /dev/null
 +++ b/chrome/browser/ui/spaces/sidebar_sync_state.cc
-@@ -0,0 +1,971 @@
+@@ -0,0 +1,1011 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -5657,6 +5657,7 @@ index 0000000000000..e862da370bf36
 +#include "base/json/json_reader.h"
 +#include "base/json/json_writer.h"
 +#include "base/no_destructor.h"
++#include "base/strings/string_number_conversions.h"
 +#include "base/strings/string_util.h"
 +#include "base/strings/utf_string_conversions.h"
 +#include "base/time/time.h"
@@ -6372,6 +6373,42 @@ index 0000000000000..e862da370bf36
 +
 +}  // namespace
 +
++namespace {
++
++// Sf10 (GitHub issue 89): each alive Space by the name the sidebar shows it
++// by: its own, or "Space 2" for one never named, by its place in the Space
++// list, as SpaceModel::DisplayName does in every language. A fresh install's
++// first Space has no name, so two fresh installs never paired it, and each
++// one's pins came to the other as a second copy.
++std::map<std::string, std::string> ShownSpaceNames(const State& state) {
++  std::vector<std::string> order;
++  std::set<std::string> seen;
++  const auto take = [&](const std::string& id) {
++    const Record* const record = state.FindAlive(id);
++    if (record && record->kind == Kind::kSpace && seen.insert(id).second) {
++      order.push_back(id);
++    }
++  };
++  if (const auto it = state.lists.find(kSpacesList); it != state.lists.end()) {
++    for (const std::string& id : it->second.order) {
++      take(id);
++    }
++  }
++  // Any the list lacks, at its end.
++  for (const auto& [id, record] : state.records) {
++    take(id);
++  }
++  std::map<std::string, std::string> shown;
++  for (size_t i = 0; i < order.size(); ++i) {
++    const std::string& name = state.records.at(order[i]).Get(kFieldName);
++    shown[order[i]] =
++        name.empty() ? "Space " + base::NumberToString(i + 1) : name;
++  }
++  return shown;
++}
++
++}  // namespace
++
 +std::vector<Pair> ProposePairs(const State& local, const State& peers) {
 +  std::vector<Pair> pairs;
 +  const auto spaces_of = [](const State& state, const State& other) {
@@ -6385,15 +6422,18 @@ index 0000000000000..e862da370bf36
 +    }
 +    return ids;
 +  };
-+  const auto name_key = [](const State& state) {
-+    return [records = &state.records](const std::string& id) {
-+      return PairingName(records->at(id).Get(kFieldName));
++  const std::map<std::string, std::string> local_shown = ShownSpaceNames(local);
++  const std::map<std::string, std::string> peer_shown = ShownSpaceNames(peers);
++  const auto name_key = [](const std::map<std::string, std::string>& shown) {
++    return [&shown](const std::string& id) {
++      const auto it = shown.find(id);
++      return it == shown.end() ? std::string() : PairingName(it->second);
 +    };
 +  };
 +  const std::map<std::string, std::string> local_spaces =
-+      UniqueByKey(spaces_of(local, peers), name_key(local));
++      UniqueByKey(spaces_of(local, peers), name_key(local_shown));
 +  const std::map<std::string, std::string> peer_spaces =
-+      UniqueByKey(spaces_of(peers, local), name_key(peers));
++      UniqueByKey(spaces_of(peers, local), name_key(peer_shown));
 +  for (const auto& [key, local_id] : local_spaces) {
 +    const auto peer = peer_spaces.find(key);
 +    if (peer == peer_spaces.end()) {
@@ -6403,7 +6443,7 @@ index 0000000000000..e862da370bf36
 +    pair.local_id = local_id;
 +    pair.peer_id = peer->second;
 +    pair.kind = Kind::kSpace;
-+    pair.label = local.records.at(local_id).Get(kFieldName);
++    pair.label = local_shown.at(local_id);
 +    pairs.push_back(std::move(pair));
 +    PairChildren(local, peers, PinsListOf(local_id), PinsListOf(peer->second),
 +                 false, &pairs);
@@ -7214,10 +7254,10 @@ index 0000000000000..c127ba238434a
 +#endif  // CHROME_BROWSER_UI_SPACES_SIDEBAR_SYNC_TRACKER_H_
 diff --git a/chrome/browser/ui/spaces/sidebar_sync_unittest.cc b/chrome/browser/ui/spaces/sidebar_sync_unittest.cc
 new file mode 100644
-index 0000000000000..e92478de7f4ca
+index 0000000000000..b82f7c29b079d
 --- /dev/null
 +++ b/chrome/browser/ui/spaces/sidebar_sync_unittest.cc
-@@ -0,0 +1,752 @@
+@@ -0,0 +1,794 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -7674,6 +7714,48 @@ index 0000000000000..e92478de7f4ca
 +  const State there = StateOf(
 +      SpaceWithPin(kWork, "Work", kPinA, "https://m.example/"), -1, kOffice);
 +  EXPECT_TRUE(ProposePairs(here, there).empty());
++}
++
++// Sf10 (GitHub issue 89): a Space never named pairs by the name the sidebar
++// shows, "Space 1" by its place in the list. Two fresh installs each have an
++// unnamed first Space; they never paired, and every pin came across twice.
++TEST(SidebarSyncPairTest, UnnamedSpacesPairByTheNameTheSidebarShows) {
++  {
++    SCOPED_TRACE("two fresh installs");
++    const State here = StateOf(
++        SpaceWithPin(kHome, "", kPinB, "https://m.example/"), -2, kLaptop);
++    const State there = StateOf(
++        SpaceWithPin(kWork, "", kPinA, "https://m.example/"), -1, kOffice);
++    const std::vector<Pair> pairs = ProposePairs(here, there);
++    ASSERT_EQ(2u, pairs.size());
++    EXPECT_EQ(Kind::kSpace, pairs[0].kind);
++    EXPECT_EQ("Space 1", pairs[0].label);
++    const std::map<std::string, std::string> aliases = AliasesFor(pairs);
++    EXPECT_EQ(kWork, aliases.at(kHome));
++    EXPECT_EQ(kPinA, aliases.at(kPinB));
++    EXPECT_EQ(aliases, AliasesFor(ProposePairs(there, here)));
++  }
++  {
++    SCOPED_TRACE("one named \"Space 1\", one never named, first in each");
++    const State here = StateOf(
++        SpaceWithPin(kHome, "Space 1", kPinB, "https://m.example/"), -2,
++        kLaptop);
++    const State there = StateOf(
++        SpaceWithPin(kWork, "", kPinA, "https://m.example/"), -1, kOffice);
++    EXPECT_EQ(2u, ProposePairs(here, there).size());
++  }
++  {
++    SCOPED_TRACE("unnamed, but second here and first there");
++    LocalView two = SpaceWithPin(kHome, "", kPinB, "https://m.example/");
++    const std::string first = "00000000000000000000000000000001";
++    two.items[first] = SpaceItem("Mail");
++    two.lists[kSpacesList] = {first, kHome};
++    const State here = StateOf(two, -2, kLaptop);
++    const State there = StateOf(
++        SpaceWithPin(kWork, "", kPinA, "https://m.example/"), -1, kOffice);
++    EXPECT_TRUE(ProposePairs(here, there).empty())
++        << "\"Space 2\" paired with \"Space 1\"";
++  }
 +}
 +
 +// Sf10: a pair is one item under the smaller id; no local id is re-keyed,

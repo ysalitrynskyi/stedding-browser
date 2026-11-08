@@ -2,6 +2,35 @@
 
 What was built, newest first. Nothing here is needed to do a task: `AGENTS.md` carries what is true now, `BACKLOG.md` the order of work, `PLAN.md` the owner's decisions. This file was the "State of the project" section of `AGENTS.md` until 2026-09-30. This log starts at 2026-10-15. Closed work from before that is the table in [docs/history/archive.md](history/archive.md).
 
+## 2026-11-08 -- After beta 14: issues 89, 90 and 91
+
+Issue 89, sync showing every pin twice: at a join with **Combine**, Spaces pair by name, and a Space
+never named was skipped. A fresh install's first Space has no name (the sidebar shows "Space 1"),
+so two fresh installs never paired it, and each one's pins came to the other as a second copy.
+Such a Space now pairs by the name the sidebar shows it by, its place in the list, the same text
+on every computer (sidebar-file Sf10, folded into the sync patch). A test with two profiles through
+a WebDAV and an S3 place takes the report's steps and failed first: two of each pin on the second
+computer. Restarts and a Space with its own session were looked at first and keep a synced pin's
+id; a test holds that. Copies already made stay until the extra Space is deleted on one computer.
+
+Issue 90, finished downloads gone from the list: no steps yet. A download from a Space with its
+own session is written to history and listed after a restart, as one from a shared Space is; a
+test holds that, and nothing in the series removes a download. It waits on the reporter (S-450).
+
+Issue 91, the peek's card: it fades in over 160 ms when the peek opens, under "Animate the sidebar
+and overlays" and Reduce Motion, with no setting of its own (motion O10, patch 0176). A recording
+of the window on the real build shows the card coming in over four frames.
+
+Checked on one tree, the same on both machines: 1492 unit and 915 browser tests on the Mac and the
+unit and browser suites on Windows, each on the release build and the DCHECK build. The pairing
+unit test, the two-computer test and the peek's test failed with their fix taken out; the restart
+and download tests guard what was ruled out and passed before any change. The peek's test had
+looked for the motion while it ran, and under the full run's load it had ended by then; it now
+asks whether the motion ran, and passed six times over under load. Once each among the others, and
+each passing alone: a routes card test on the Mac's release build, a screenshot test on its DCHECK
+build, and a child tabs test on Windows that lost its connection to the test server (no socket
+buffers). Not run: AddressSanitizer, acceptance, the update test.
+
 ## 2026-11-08 -- 0.4.0 beta 14: issues 85, 86 and 88
 
 The three fixes of the entry below, released. Using the signed build found one more fault before it

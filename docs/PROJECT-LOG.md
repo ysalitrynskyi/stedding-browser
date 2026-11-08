@@ -2,6 +2,18 @@
 
 What was built, newest first. Nothing here is needed to do a task: `AGENTS.md` carries what is true now, `BACKLOG.md` the order of work, `PLAN.md` the owner's decisions. This file was the "State of the project" section of `AGENTS.md` until 2026-09-30. This log starts at 2026-10-15. Closed work from before that is the table in [docs/history/archive.md](history/archive.md).
 
+## 2026-11-08 -- 0.4.0 beta 15: issues 89 and 91
+
+The two fixes of the entry below, released. Checked on the final tree, the same on both machines:
+1492 unit and 915 browser tests on the Mac and the unit and browser suites on Windows, each on the
+release build and the DCHECK build, with one restore test and one Space session test on the Mac's
+DCHECK build timing out once among the others and passing alone; AddressSanitizer on Windows with
+no report and no dangling pointer; acceptance on an installed Windows copy, TST-6 again alone after
+the installer cycle, and on a copy of the notarized Mac build; the update from beta 14 through a
+local feed on both. The site's capture is a frame of a recording of the signed build halfway
+through the peek's fade, with the window's buttons from a still of the same window (a recording
+of a window draws them as a badge) and the pointer taken out.
+
 ## 2026-11-08 -- After beta 14: issues 89, 90 and 91
 
 Issue 89, sync showing every pin twice: at a join with **Combine**, Spaces pair by name, and a Space

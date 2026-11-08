@@ -2,7 +2,7 @@
 
 What was built, newest first. Nothing here is needed to do a task: `AGENTS.md` carries what is true now, `BACKLOG.md` the order of work, `PLAN.md` the owner's decisions. This file was the "State of the project" section of `AGENTS.md` until 2026-09-30. This log starts at 2026-10-15. Closed work from before that is the table in [docs/history/archive.md](history/archive.md).
 
-## 2026-11-07 -- 0.4.0 beta 14: issues 85, 86 and 88
+## 2026-11-08 -- 0.4.0 beta 14: issues 85, 86 and 88
 
 The three fixes of the entry below, released. Using the signed build found one more fault before it
 went out: with the focus in a peek's page, ⇧⌘C and ⌥⇧⌘C did nothing on the Mac. The page hands a

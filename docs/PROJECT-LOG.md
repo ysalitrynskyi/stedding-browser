@@ -2,6 +2,26 @@
 
 What was built, newest first. Nothing here is needed to do a task: `AGENTS.md` carries what is true now, `BACKLOG.md` the order of work, `PLAN.md` the owner's decisions. This file was the "State of the project" section of `AGENTS.md` until 2026-09-30. This log starts at 2026-10-15. Closed work from before that is the table in [docs/history/archive.md](history/archive.md).
 
+## 2026-11-07 -- 0.4.0 beta 14: issues 85, 86 and 88
+
+The three fixes of the entry below, released. Using the signed build found one more fault before it
+went out: with the focus in a peek's page, ⇧⌘C and ⌥⇧⌘C did nothing on the Mac. The page hands a
+key it does not take to the peek's own widget, and the window's menu never sees it there; the
+browser test had run the commands, not the keys. The peek now runs the two keys itself, as it does
+⌘W (copy-link L8, folded into 0119, its test into 0171). The test presses them in the page and
+failed without the fix.
+
+Checked on the final tree, the same on both machines: 1491 unit and 908 browser tests on the Mac
+and 1479 and 858 on Windows, each on the release build and the DCHECK build. Four Copy Link tests
+timed out once among the others on the Mac's release build and passed alone; they had passed in the
+sweep before the fix and on the DCHECK build. AddressSanitizer on Windows, both suites, with no
+report and no dangling pointer. Acceptance on an installed Windows copy, TST-6 again alone after the
+installer cycle, and on a copy of the notarized Mac build; the update from beta 13 through a local
+feed on both. On the signed Mac build, each of the four copies from a peek (the two keys and the
+bar's button, plain and Option) took the peek's page, and the three on Windows did on the installed
+copy, light and dark. Not checked: a real ⌘Q with the new switch off, which the tests cover through
+the setting.
+
 ## 2026-11-07 -- After beta 13: issues 85, 86 and 88, and the issue labels
 
 Issue 85: a pin closed with its − was put to sleep but stayed in the Space's history, so the next

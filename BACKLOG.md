@@ -18,7 +18,8 @@ infrastructure, then features. A request in chat comes before this list. A spec 
 ### The next release
 
 0.4.0 beta 13 went out on 2026-11-07 with every item of the plan below but ghost pins (S-94's
-second slice), and what it brought is in `docs/release-notes/`. What each item left is in its row:
+second slice), and beta 14 the same day with GitHub issues 85, 86 and 88; what the latest brought
+is in `docs/release-notes/`. What each item left is in its row:
 a real passkey with a finger and Apple Passwords (S-239), the Mac's look at S-157, S-93 and S-127
 (done on Windows), and the child rows' favicons after their parent is pinned (S-92). The owner calls
 the next release, and nothing here hurries it.

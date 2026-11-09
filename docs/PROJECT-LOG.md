@@ -2,6 +2,17 @@
 
 What was built, newest first. Nothing here is needed to do a task: `AGENTS.md` carries what is true now, `BACKLOG.md` the order of work, `PLAN.md` the owner's decisions. This file was the "State of the project" section of `AGENTS.md` until 2026-09-30. This log starts at 2026-10-15. Closed work from before that is the table in [docs/history/archive.md](history/archive.md).
 
+## 2026-11-09 -- Issue 89's answers, not reproduced yet
+
+The reporter answered: the copies stay at two, only the Mac (the first computer) shows them, after
+Windows is used and syncs; both were on beta 15 at the join; the place is WebDAV on Koofr. On the
+Windows PC (the Mac was in use), two profiles through a WebDAV place took those steps with pins and
+essentials: a fresh second computer and one with the same pins, combined, then used (every pin and
+essential opened, one navigated away and back, all put to sleep), and the first computer restarted
+from the New Tab page and with its session while the join's pairs were in force. One of each on
+both sides every time. Four new browser tests keep those steps (patch 0164); they have not run on
+the Mac yet. S-452 lists what was ruled out and what the reporter is asked next.
+
 ## 2026-11-09 -- The traffic lights: issue 93 and full screen
 
 Issue 93 (S-453, sidebar Y55): with the sidebar hidden and the address row hidden, only the page

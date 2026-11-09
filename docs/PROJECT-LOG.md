@@ -2,6 +2,28 @@
 
 What was built, newest first. Nothing here is needed to do a task: `AGENTS.md` carries what is true now, `BACKLOG.md` the order of work, `PLAN.md` the owner's decisions. This file was the "State of the project" section of `AGENTS.md` until 2026-09-30. This log starts at 2026-10-15. Closed work from before that is the table in [docs/history/archive.md](history/archive.md).
 
+## 2026-11-09 -- The traffic lights: issue 93 and full screen
+
+Issue 93 (S-453, sidebar Y55): with the sidebar hidden and the address row hidden, only the page
+lay under the Mac's traffic lights, and they covered its top left corner. They now hide there and
+show while the pointer rests at the window's top over them, or when anything of the window's comes
+under them (the row, the open sidebar, the rail, a slide-in). The owner chose the reporter's first
+option. Patch 0119, with the lights' other rule (Y53); the test is in patch 0120.
+
+The owner's report from full screen (S-454, sidebar Y17): pointing at the screen's top brought the
+lights in on a strip of their own above the address row, and the row dropped under it. A window
+that draws its tabs in the sidebar took Chromium's full-screen mode without a tab strip in the
+title bar, so AppKit's title bar held the lights alone. With the row always shown the overlay that
+holds the row is now the title bar's own row, as Chromium places its tab strip: the lights at the
+row's left, the sidebar's toggle after them on their centre (as in a window), the rail's own toggle
+kept under them, and a hidden sidebar's row past them on a bar that runs under them. Always Show
+Toolbar off and the row hidden keep the old placement. Measured in real full screen in a test
+window, at rest and with the menu bar in; a real full-screen test failed first. Patch 0120.
+
+A Shift-click range in the sidebar (S-455, tabs R20), which the owner saw fail perhaps in full
+screen: not reproduced, for plain rows, pins, sleeping rows and essentials, after a Space switch,
+and in real full screen with the event generator's clicks. Two tests keep it (patch 0165).
+
 ## 2026-11-09 -- Issue 89's second report
 
 The reporter says the copies came whenever the Windows computer was used, not once at the join.

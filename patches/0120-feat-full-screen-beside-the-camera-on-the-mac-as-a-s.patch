@@ -36,9 +36,12 @@ camera.
  .../ui/views/frame/browser_frame_view_mac.mm  |  12 +
  .../views/frame/browser_native_widget_mac.h   |  24 ++
  .../views/frame/browser_native_widget_mac.mm  |  67 ++-
- .../layout/stedding_browser_view_layout.cc    |  86 +++-
+ .../frame/immersive_mode_controller_mac.mm    |   7 +
+ .../layout/stedding_browser_view_layout.cc    | 147 ++++++-
+ .../layout/stedding_browser_view_layout.h     |   9 +
  .../ui/views/frame/stedding_camera_row_mac.h  | 114 +++++
  .../ui/views/frame/stedding_camera_row_mac.mm | 405 ++++++++++++++++++
+ .../views/frame/stedding_window_background.cc |  15 +-
  .../views/location_bar/location_bar_view.cc   |  17 +
  .../ui/views/location_bar/location_bar_view.h |   5 +
  .../vertical_tab_strip_top_container.cc       |  14 +-
@@ -49,9 +52,13 @@ camera.
  chrome/test/stedding/BUILD.gn                 |   2 +
  .../test/stedding/camera_row_browsertest.mm   | 367 ++++++++++++++++
  .../stedding/settings_spaces_browsertest.cc   |  15 +-
+ .../stedding/window_buttons_browsertest.mm    | 289 ++++++++++++-
+ .../immersive_mode_controller_cocoa.h         |  18 +
+ .../immersive_mode_controller_cocoa.mm        |  66 +++
  .../app_shim/native_widget_mac_nswindow.h     |   6 +
  .../app_shim/native_widget_mac_nswindow.mm    |  12 +
- 34 files changed, 1373 insertions(+), 17 deletions(-)
+ .../native_widget_ns_window_bridge.mm         |   9 +-
+ 41 files changed, 1827 insertions(+), 37 deletions(-)
  create mode 100644 chrome/browser/ui/views/frame/stedding_camera_row_mac.h
  create mode 100644 chrome/browser/ui/views/frame/stedding_camera_row_mac.mm
  create mode 100644 chrome/test/stedding/camera_row_browsertest.mm
@@ -451,10 +458,10 @@ index c5c7b1276a2ac..f10ce00c8c978 100644
            {stedding::prefs::kNewTabShowHint,
             u"Command-bar hint on the new tab page"},
 diff --git a/chrome/browser/ui/views/frame/BUILD.gn b/chrome/browser/ui/views/frame/BUILD.gn
-index 223c0c9f29280..cc20412df9275 100644
+index c1cb1ff37ba9b..261b233ac6bb4 100644
 --- a/chrome/browser/ui/views/frame/BUILD.gn
 +++ b/chrome/browser/ui/views/frame/BUILD.gn
-@@ -2073,6 +2073,7 @@ if (is_mac) {
+@@ -2081,6 +2081,7 @@ if (is_mac) {
        "//chrome/browser/ui/exclusive_access",
        "//chrome/browser/ui/immersive:immersive_mode_controller",
        # Stedding little E8: a little window's traffic lights are in its row.
@@ -462,7 +469,7 @@ index 223c0c9f29280..cc20412df9275 100644
        "//chrome/browser/ui/stedding:little_window",
        "//chrome/browser/ui/tabs",
        "//chrome/browser/ui/views/bookmarks",
-@@ -2108,7 +2109,13 @@ if (is_mac) {
+@@ -2116,7 +2117,13 @@ if (is_mac) {
    }
  
    source_set("browser_native_widget_mac_impl") {
@@ -477,7 +484,7 @@ index 223c0c9f29280..cc20412df9275 100644
      public_deps = [
        ":browser_native_widget_mac",
        "//chrome/browser:browser_public_dependencies",
-@@ -2147,6 +2154,11 @@ if (is_mac) {
+@@ -2155,6 +2162,11 @@ if (is_mac) {
        "//chrome/browser/ui/stedding:dark_pages",
        # Stedding little E7: the File menu's rows in a little window.
        "//chrome/browser/ui/stedding:little_window",
@@ -707,8 +714,26 @@ index 3d7a09e779f70..374e667f1771d 100644
  }
  
  content::KeyboardEventProcessingResult
+diff --git a/chrome/browser/ui/views/frame/immersive_mode_controller_mac.mm b/chrome/browser/ui/views/frame/immersive_mode_controller_mac.mm
+index 34b52a6fd0401..dd3a384799ef7 100644
+--- a/chrome/browser/ui/views/frame/immersive_mode_controller_mac.mm
++++ b/chrome/browser/ui/views/frame/immersive_mode_controller_mac.mm
+@@ -176,6 +176,13 @@ void ImmersiveModeControllerMac::SetEnabled(bool enabled) {
+     views::NativeWidgetMacNSWindowHost* overlay_host =
+         views::NativeWidgetMacNSWindowHost::GetFromNativeWindow(
+             browser_view_->overlay_widget()->GetNativeWindow());
++    // Stedding (BACKLOG S-454): a window that draws its tabs in the sidebar
++    // has no tab strip for the title bar's row, and AppKit brought the
++    // traffic lights in on a strip of their own above the address row. The
++    // overlay's own id asks for the overlay in that row, beside the lights.
++    if (separate_tab_strip_ && browser_view_->ShouldDrawVerticalTabStrip()) {
++      tab_native_widget_id_ = overlay_host->bridged_native_widget_id();
++    }
+     if (auto* window = GetNSWindowMojo()) {
+       window->EnableImmersiveFullscreen(
+           overlay_host->bridged_native_widget_id(), tab_native_widget_id_);
 diff --git a/chrome/browser/ui/views/frame/layout/stedding_browser_view_layout.cc b/chrome/browser/ui/views/frame/layout/stedding_browser_view_layout.cc
-index 3648699e31a76..622c7a6e6bf76 100644
+index 3648699e31a76..fec5931b83a05 100644
 --- a/chrome/browser/ui/views/frame/layout/stedding_browser_view_layout.cc
 +++ b/chrome/browser/ui/views/frame/layout/stedding_browser_view_layout.cc
 @@ -12,6 +12,7 @@
@@ -801,7 +826,94 @@ index 3648699e31a76..622c7a6e6bf76 100644
      strip->SetCaptionButtonCenterForLayout(lights_center);
    }
    return layout;
-@@ -504,6 +566,12 @@ gfx::Rect SteddingBrowserViewLayout::CalculateTopContainerLayout(
+@@ -403,8 +465,51 @@ gfx::Rect SteddingBrowserViewLayout::CalculateTopContainerLayout(
+   // come in with it at its left, and full screen reports no box for them;
+   // the box they had in a window stands in.
+   int full_screen_lights_inset = 0;
++  row_lights_reserve_ = 0;
++  row_toggle_fits_ = false;
+ #if BUILDFLAG(IS_MAC)
+-  if (at_trailing_edge && windowed_lights_width_ > 0) {
++  // BACKLOG S-454: in macOS full screen with the row always shown, the row
++  // sits in the title bar beside the traffic lights (the overlay in the title
++  // bar, ImmersiveModeControllerCocoa), and they came in on a strip of their
++  // own above it before. The lights' box at the row's left takes the
++  // sidebar's toggle after it, over the strip's column, and the row's
++  // contents start past both: past the rail's column too, and past the
++  // lights alone beside a hidden sidebar or one on the window's right.
++  if (DrawsVerticalStrip(delegate()) && delegate().IsToolbarVisible()) {
++    const ImmersiveModeController* const row_immersive =
++        delegate().GetImmersiveModeController();
++    if (row_immersive && row_immersive->IsEnabled() &&
++        delegate().GetBrowserWindowState() ==
++            BrowserViewLayoutDelegate::WindowState::kFullscreenWithToolbar) {
++      row_lights_reserve_ = windowed_lights_width_ > 0
++                                ? windowed_lights_width_
++                                : kFullScreenLightsFallback;
++      int toggle = 0;
++      if (!at_trailing_edge && strip_inset > 0 && views().top_container) {
++        for (views::View* const child : views().top_container->children()) {
++          if (views::IsViewClass<SteddingFullscreenSidebarToggle>(child)) {
++            toggle = child->GetPreferredSize().width() +
++                     2 * GetLayoutConstant(
++                             LayoutConstant::kVerticalTabStripHorizontalPadding);
++          }
++        }
++      }
++      const int column = at_trailing_edge ? 0 : strip_inset;
++      // The rail's column has no room for the toggle after the lights: there
++      // the strip keeps its toggle as its own first row, under them, as in a
++      // window (sidebar Y7), and the row starts where the card does.
++      row_toggle_fits_ =
++          toggle > 0 && row_lights_reserve_ + toggle <= column + kCardSideInset;
++      full_screen_lights_inset = std::clamp(
++          row_lights_reserve_ + (row_toggle_fits_ ? toggle : 0) - column -
++              kCardSideInset,
++          0, params.visual_client_area.width());
++      params.visual_client_area.Inset(
++          gfx::Insets::TLBR(0, full_screen_lights_inset, 0, 0));
++    }
++  }
++  if (at_trailing_edge && windowed_lights_width_ > 0 &&
++      full_screen_lights_inset == 0) {
+     const ImmersiveModeController* const lights_immersive =
+         delegate().GetImmersiveModeController();
+     if (lights_immersive && lights_immersive->IsEnabled() &&
+@@ -471,6 +576,8 @@ gfx::Rect SteddingBrowserViewLayout::CalculateTopContainerLayout(
+       const ProposedLayout* const toolbar =
+           layout.GetLayoutFor(views().toolbar);
+       const bool show = strip_inset > 0 && toolbar &&
++                        (row_lights_reserve_ == 0 || at_trailing_edge ||
++                         row_toggle_fits_) &&
+                         toolbar->visibility.value_or(false) &&
+                         !toolbar->bounds.IsEmpty() &&
+                         delegate().GetBrowserWindowState() ==
+@@ -490,20 +597,34 @@ gfx::Rect SteddingBrowserViewLayout::CalculateTopContainerLayout(
+             LayoutConstant::kVerticalTabStripHorizontalPadding);
+         int x = rail ? (strip_inset + kCardSideInset - size.width()) / 2
+                      : padding;
++        // BACKLOG S-454: after the traffic lights, which share the row, at
++        // the gap a window leaves after them, and on their centre, as the
++        // strip's own toggle takes it in a window (sidebar Y7). AppKit
++        // centres them a DIP above the title bar's middle.
++        int y = toolbar->bounds.y() +
++                (toolbar->bounds.height() - size.height()) / 2;
++        if (row_lights_reserve_ > 0 && !at_trailing_edge) {
++          x = std::max(x, row_lights_reserve_ + padding);
++          y = (result.height() - size.height()) / 2 - 1;
++        }
+         if (at_trailing_edge) {
+           x = rail ? result.width() -
+                          (strip_inset + kCardSideInset + size.width()) / 2
+                    : result.width() - strip_inset + padding;
+         }
+-        bounds = gfx::Rect(
+-            x, toolbar->bounds.y() + (toolbar->bounds.height() - size.height()) / 2,
+-            size.width(), size.height());
++        bounds = gfx::Rect(x, y, size.width(), size.height());
+       }
+       layout.AddChild(toggle, bounds, show);
+       views().vertical_tab_strip_region_view->SetTopRowInOverlayForLayout(show);
        break;
      }
    }
@@ -814,7 +926,7 @@ index 3648699e31a76..622c7a6e6bf76 100644
    return result;
  }
  
-@@ -554,6 +622,20 @@ void SteddingBrowserViewLayout::DoPostLayoutVisualAdjustments(
+@@ -554,6 +675,20 @@ void SteddingBrowserViewLayout::DoPostLayoutVisualAdjustments(
      // window's right (sidebar Y42).
      toolbar->SetSteddingTrailingReserve(
          delegate().IsToolbarVisible() ? row_reserve_ : 0);
@@ -835,7 +947,7 @@ index 3648699e31a76..622c7a6e6bf76 100644
    }
  
    MultiContentsView* const contents = views().multi_contents_view;
-@@ -582,7 +664,9 @@ void SteddingBrowserViewLayout::DoPostLayoutVisualAdjustments(
+@@ -582,7 +717,9 @@ void SteddingBrowserViewLayout::DoPostLayoutVisualAdjustments(
    // Under Windows' caption buttons too: the bar runs on to the card's edge
    // there (toolbar T19), so the card's top-right corner is under it like
    // the left one.
@@ -846,6 +958,26 @@ index 3648699e31a76..622c7a6e6bf76 100644
    const gfx::RoundedCornersF current = contents->GetBackgroundRadii();
    // Hidden, every corner is square, whatever an earlier layout left.
    const gfx::RoundedCornersF merged =
+diff --git a/chrome/browser/ui/views/frame/layout/stedding_browser_view_layout.h b/chrome/browser/ui/views/frame/layout/stedding_browser_view_layout.h
+index 14d9fa9c3c111..b018401070209 100644
+--- a/chrome/browser/ui/views/frame/layout/stedding_browser_view_layout.h
++++ b/chrome/browser/ui/views/frame/layout/stedding_browser_view_layout.h
+@@ -41,6 +41,15 @@ class SteddingBrowserViewLayout : public BrowserViewTabbedLayoutImpl {
+   // screen reports no width for it, and with the address row sliding in on
+   // demand the lights come back there over the strip's own top row.
+   mutable int windowed_lights_width_ = 0;
++  // BACKLOG S-454: the traffic lights' box at the start of the row in macOS
++  // full screen with the row always shown, where the row shares the title
++  // bar with them; 0 elsewhere. The box a window had stands in, or this
++  // when the window was never laid out outside full screen.
++  mutable int row_lights_reserve_ = 0;
++  // Whether the sidebar's toggle fits after the lights in the strip's column
++  // on that row; not in the rail's.
++  mutable bool row_toggle_fits_ = false;
++  static constexpr int kFullScreenLightsFallback = 74;
+   mutable int windowed_lights_center_ = 0;
+   // toolbar T19, sidebar Y42: how much of the address row Windows' caption
+   // buttons take, as the last top-container layout worked it out from the
 diff --git a/chrome/browser/ui/views/frame/stedding_camera_row_mac.h b/chrome/browser/ui/views/frame/stedding_camera_row_mac.h
 new file mode 100644
 index 0000000000000..7debbe242a941
@@ -1377,6 +1509,35 @@ index 0000000000000..9fcb52910b0d7
 +}
 +
 +}  // namespace stedding
+diff --git a/chrome/browser/ui/views/frame/stedding_window_background.cc b/chrome/browser/ui/views/frame/stedding_window_background.cc
+index 110131fcbe41c..e0c38ff2ff786 100644
+--- a/chrome/browser/ui/views/frame/stedding_window_background.cc
++++ b/chrome/browser/ui/views/frame/stedding_window_background.cc
+@@ -416,10 +416,23 @@ void PaintOverlayPageBar(const ui::PaintContext& context,
+   if (!controller) {
+     return;
+   }
+-  const gfx::Rect toolbar = browser_view->toolbar()->bounds();
++  gfx::Rect toolbar = browser_view->toolbar()->bounds();
+   if (toolbar.IsEmpty()) {
+     return;
+   }
++  // BACKLOG S-454: on the Mac the row shares the title bar with the traffic
++  // lights in full screen, and starts past them where no strip's column is
++  // to its left (a hidden sidebar, one on the window's right). The bar runs
++  // under them to the card's left edge, as in a window (sidebar Y19, Y41).
++  if (browser_view->multi_contents_view()) {
++    gfx::Point card_left =
++        browser_view->multi_contents_view()->GetBoundsInScreen().origin();
++    views::View::ConvertPointFromScreen(top_container, &card_left);
++    if (card_left.x() < toolbar.x()) {
++      toolbar.set_width(toolbar.right() - std::max(0, card_left.x()));
++      toolbar.set_x(std::max(0, card_left.x()));
++    }
++  }
+   const bool square =
+       VerticalTabStripRegionView::SteddingCardGutter(browser_view) == 0;
+   // toolbar T41: a split's parts, the panes read through the screen.
 diff --git a/chrome/browser/ui/views/location_bar/location_bar_view.cc b/chrome/browser/ui/views/location_bar/location_bar_view.cc
 index ebc2519826777..a98caa5e9fe1c 100644
 --- a/chrome/browser/ui/views/location_bar/location_bar_view.cc
@@ -2043,6 +2204,508 @@ index 89dd1bc92d916..56c8e106e8d41 100644
        EXPECT_EQ(false,
                  content::EvalJs(
                      page, content::JsReplace("chrome.settingsPrivate.getPref($1)"
+diff --git a/chrome/test/stedding/window_buttons_browsertest.mm b/chrome/test/stedding/window_buttons_browsertest.mm
+index 34cf52cb4c76e..963393b968078 100644
+--- a/chrome/test/stedding/window_buttons_browsertest.mm
++++ b/chrome/test/stedding/window_buttons_browsertest.mm
+@@ -23,6 +23,8 @@
+ #include "base/memory/scoped_refptr.h"
+ #include "base/strings/string_util.h"
+ #include "base/strings/sys_string_conversions.h"
++#include "base/run_loop.h"
++#include "base/task/single_thread_task_runner.h"
+ #include "base/test/run_until.h"
+ #include "base/time/time.h"
+ #include "chrome/browser/profiles/profile.h"
+@@ -40,6 +42,7 @@
+ #include "chrome/browser/ui/tabs/vertical_tab_strip_state_controller.h"
+ #include "chrome/browser/ui/views/animations/tab_strip_animations.h"
+ #include "chrome/browser/ui/views/frame/browser_view.h"
++#include "chrome/browser/ui/views/frame/multi_contents_view.h"
+ #include "chrome/browser/ui/views/frame/stedding_fullscreen_sidebar_toggle.h"
+ #include "chrome/browser/ui/views/frame/stedding_window_background.h"
+ #include "chrome/browser/ui/views/frame/top_container_view.h"
+@@ -300,8 +303,12 @@ IN_PROC_BROWSER_TEST_F(WindowButtonsTest,
+   views::test::RunScheduledLayout(browser_view->GetWidget());
+   EXPECT_FALSE(strip->GetTopContainer()->GetVisible());
+   const gfx::Rect on_row = toggle->GetBoundsInScreen();
+-  const gfx::Rect toolbar = browser_view->toolbar()->GetBoundsInScreen();
+-  EXPECT_NEAR(on_row.CenterPoint().y(), toolbar.CenterPoint().y(), 1);
++  // BACKLOG S-454: the row shares the title bar with the traffic lights,
++  // which AppKit centres a DIP above its middle; the toggle sits after them,
++  // on their centre, as the strip's own does in a window (sidebar Y7).
++  const gfx::Rect top = browser_view->top_container()->GetBoundsInScreen();
++  EXPECT_NEAR(on_row.CenterPoint().y(), top.y() + top.height() / 2 - 1, 1);
++  EXPECT_GE(on_row.x() - top.x(), 74) << "the toggle under the lights";
+   EXPECT_LE(on_row.right(), strip->GetBoundsInScreen().right())
+       << "the toggle sits over the sidebar's column";
+ 
+@@ -454,6 +461,260 @@ IN_PROC_BROWSER_TEST_F(WindowButtonsTest, TheLightsAlwaysShowWithTheAddress) {
+   EXPECT_FALSE(any_hidden()) << "the pointer leaving the top hid the lights";
+ }
+ 
++// sidebar Y55 (GitHub issue 93): with the sidebar hidden and the address row
++// hidden, only the page lay under the traffic lights, and they covered its top
++// left corner (GitHub's menu button). They hide there, show while the pointer
++// rests at the window's top over them until it leaves them, and show while
++// anything of the window's lies under them: the row, the open sidebar, the
++// sidebar sliding in, and full screen's own title bar.
++IN_PROC_BROWSER_TEST_F(WindowButtonsTest, TheLightsLeaveThePageAlone) {
++  BrowserView* const browser_view =
++      BrowserView::GetBrowserViewForBrowser(browser());
++  views::Widget* const widget = browser_view->GetWidget();
++  NSWindow* const window = widget->GetNativeWindow().GetNativeNSWindow();
++  ASSERT_TRUE(window);
++  VerticalTabStripRegionView* const region =
++      browser_view->vertical_tab_strip_region_view_for_testing();
++  ASSERT_TRUE(region);
++  tabs::VerticalTabStripStateController* const sidebar =
++      tabs::VerticalTabStripStateController::From(browser());
++  ASSERT_TRUE(sidebar);
++  PrefService* const prefs = browser()->GetProfile()->GetPrefs();
++  const auto settle = [&] {
++    ASSERT_TRUE(base::test::RunUntil([&] {
++      return !BrowserAnimationController::From(browser())->IsAnimating(
++          TabStripAnimations::kVerticalTabStrip);
++    }));
++    views::test::RunScheduledLayout(widget);
++  };
++  const auto hidden = [&] {
++    views::test::RunScheduledLayout(widget);
++    bool any = false;
++    for (const NSWindowButton type :
++         {NSWindowCloseButton, NSWindowMiniaturizeButton, NSWindowZoomButton}) {
++      any = any || [[window standardWindowButton:type] isHidden];
++    }
++    return any;
++  };
++  const auto lights = [&] {
++    NSRect in_window = NSZeroRect;
++    for (const NSWindowButton type :
++         {NSWindowCloseButton, NSWindowMiniaturizeButton, NSWindowZoomButton}) {
++      NSButton* const button = [window standardWindowButton:type];
++      in_window = NSUnionRect(in_window,
++                              [button convertRect:button.bounds toView:nil]);
++    }
++    return gfx::ScreenRectFromNSRect([window convertRectToScreen:in_window]);
++  };
++  // A pointer move the window's monitor hears, at `point` in screen
++  // coordinates.
++  const auto pointer_at = [&](const gfx::Point& point) {
++    region->PlayWindowPointerForTesting(point, /*pressed=*/false);
++  };
++  sidebar->SetExpandOnHoverEnabled(false);
++  prefs->SetInteger(stedding::prefs::kSidebarClosedForm,
++                    stedding::prefs::kSidebarClosedHidden);
++  prefs->SetBoolean(stedding::prefs::kSidebarAddressInSidebar, true);
++  prefs->SetBoolean(stedding::prefs::kToolbarHideWithSidebar, true);
++  ASSERT_FALSE(sidebar->IsCollapsed());
++  settle();
++  const gfx::Rect window_bounds = browser_view->GetBoundsInScreen();
++  const gfx::Point on_page = window_bounds.CenterPoint();
++  pointer_at(on_page);
++  EXPECT_FALSE(hidden()) << "the open sidebar lies under the lights";
++
++  sidebar->RequestCollapse(true);
++  settle();
++  ASSERT_TRUE(sidebar->IsCollapsed());
++  ASSERT_FALSE(browser_view->IsToolbarVisible());
++  ASSERT_TRUE(lights().Intersects(
++      browser_view->contents_container()->GetBoundsInScreen()))
++      << "the page does not reach the lights";
++  EXPECT_TRUE(hidden()) << "the lights cover the page's top left corner";
++
++  // Under the lights, but not at the window's top: the page's own corner.
++  const gfx::Rect at = lights();
++  pointer_at(gfx::Point(at.CenterPoint().x(), at.bottom() + 2));
++  EXPECT_TRUE(hidden()) << "the page's own corner showed the lights";
++
++  // A rest at the window's top over them shows them, after the reveal's
++  // pause, and they stay while the pointer is on them.
++  pointer_at(gfx::Point(at.CenterPoint().x(), window_bounds.y() + 2));
++  EXPECT_TRUE(hidden()) << "shown before the pause";
++  EXPECT_TRUE(base::test::RunUntil([&] { return !hidden(); }))
++      << "a rest at the window's top did not show them";
++  pointer_at(at.CenterPoint());
++  EXPECT_FALSE(hidden()) << "the pointer on the lights hid them";
++  pointer_at(on_page);
++  EXPECT_TRUE(hidden()) << "the pointer left the lights and they stayed";
++
++  // A rest at the top elsewhere does nothing.
++  pointer_at(gfx::Point(on_page.x(), window_bounds.y() + 2));
++  base::RunLoop loop;
++  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
++      FROM_HERE, loop.QuitClosure(), base::Milliseconds(300));
++  loop.Run();
++  EXPECT_TRUE(hidden()) << "a rest at the top's middle showed the lights";
++
++  // The row shown (Shift-Cmd-D) lies under them.
++  chrome::ExecuteCommand(browser(), IDC_STEDDING_TOGGLE_ADDRESS_ROW);
++  views::test::RunScheduledLayout(widget);
++  ASSERT_TRUE(browser_view->IsToolbarVisible());
++  pointer_at(on_page);
++  EXPECT_FALSE(hidden()) << "the row lies under the lights";
++  chrome::ExecuteCommand(browser(), IDC_STEDDING_TOGGLE_ADDRESS_ROW);
++  views::test::RunScheduledLayout(widget);
++  ASSERT_FALSE(browser_view->IsToolbarVisible());
++  EXPECT_TRUE(hidden());
++
++  // The sidebar slid in from the edge lies under them.
++  region->OnPointerAtForTesting(
++      gfx::Point(region->IsOnRight() ? browser_view->width() - 2 : 2,
++                 browser_view->height() / 2));
++  ASSERT_TRUE(region->is_expanded_on_hover());
++  EXPECT_FALSE(hidden()) << "the slid-in sidebar lies under the lights";
++  region->SetPointerForTesting(std::nullopt);
++
++  // Closed to the rail, the rail lies under them.
++  sidebar->RequestCollapse(false);
++  settle();
++  sidebar->RequestCollapse(true);
++  settle();
++  prefs->SetInteger(stedding::prefs::kSidebarClosedForm,
++                    stedding::prefs::kSidebarClosedToIcons);
++  settle();
++  pointer_at(on_page);
++  EXPECT_FALSE(hidden()) << "the rail lies under the lights";
++  prefs->SetInteger(stedding::prefs::kSidebarClosedForm,
++                    stedding::prefs::kSidebarClosedHidden);
++  settle();
++  pointer_at(on_page);
++  EXPECT_TRUE(hidden()) << "hidden again with the sidebar";
++
++  // Opened again, the sidebar lies under them.
++  sidebar->RequestCollapse(false);
++  settle();
++  pointer_at(on_page);
++  EXPECT_FALSE(hidden()) << "the lights stayed hidden over the open sidebar";
++}
++
++// sidebar Y17, toolbar T32 (BACKLOG S-454; the owner, 2026-11-09): in macOS's
++// real full screen with the row always shown, the traffic lights share the
++// address row's line, at its left: AppKit brought them in on a strip of their
++// own above the row, which dropped under it when the pointer reached the
++// screen's top. The sidebar's toggle sits after them on their centre where
++// the strip's column has room, as in a window (sidebar Y7); the rail keeps it
++// as its own first row; beside a hidden sidebar the row starts past them. With
++// the row hidden they keep the title bar's own strip, and leaving full screen
++// leaves the window as it was.
++IN_PROC_BROWSER_TEST_F(WindowButtonsTest, InFullScreenTheLightsShareTheRow) {
++  BrowserView* const browser_view =
++      BrowserView::GetBrowserViewForBrowser(browser());
++  views::Widget* const widget = browser_view->GetWidget();
++  NSWindow* const window = widget->GetNativeWindow().GetNativeNSWindow();
++  ASSERT_TRUE(window);
++  stedding::test::KeepAboveOtherWindows(widget);
++  tabs::VerticalTabStripStateController* const sidebar =
++      tabs::VerticalTabStripStateController::From(browser());
++  ASSERT_TRUE(sidebar);
++  sidebar->SetExpandOnHoverEnabled(false);
++  PrefService* const prefs = browser()->GetProfile()->GetPrefs();
++  const auto settle = [&] {
++    ASSERT_TRUE(base::test::RunUntil([&] {
++      return !BrowserAnimationController::From(browser())->IsAnimating(
++          TabStripAnimations::kVerticalTabStrip);
++    }));
++    views::test::RunScheduledLayout(widget);
++  };
++  const auto light = [&](NSWindowButton type) {
++    NSButton* const button = [window standardWindowButton:type];
++    return button && button.window ? ScreenFrame(button.window, button)
++                                   : gfx::Rect();
++  };
++  const auto toggle = [&]() -> views::View* {
++    for (views::View* const child :
++         browser_view->top_container()->children()) {
++      if (views::IsViewClass<SteddingFullscreenSidebarToggle>(child)) {
++        return child->GetVisible() ? child : nullptr;
++      }
++    }
++    return nullptr;
++  };
++  // The lights' centre lies on the row's line: within the top container,
++  // which holds the row in full screen.
++  const auto on_the_row = [&] {
++    views::test::RunScheduledLayout(widget);
++    const gfx::Rect row = browser_view->top_container()->GetBoundsInScreen();
++    const int centre = light(NSWindowCloseButton).CenterPoint().y();
++    return row.height() > 20 && centre > row.y() && centre < row.bottom();
++  };
++
++  ui_test_utils::ToggleFullscreenModeAndWait(browser());
++  ASSERT_TRUE(widget->IsFullscreen());
++  EXPECT_TRUE(base::test::RunUntil(on_the_row))
++      << "the lights at " << light(NSWindowCloseButton).ToString()
++      << ", the row at "
++      << browser_view->top_container()->GetBoundsInScreen().ToString();
++  const gfx::Rect zoom = light(NSWindowZoomButton);
++
++  {
++    SCOPED_TRACE("the open sidebar: the toggle after the lights, on their line");
++    views::View* const copy = toggle();
++    ASSERT_TRUE(copy);
++    const gfx::Rect at = copy->GetBoundsInScreen();
++    EXPECT_GE(at.x(), zoom.right()) << "the toggle under the lights";
++    EXPECT_NEAR(at.CenterPoint().y(), zoom.CenterPoint().y(), 2);
++  }
++  {
++    SCOPED_TRACE("the rail: its own toggle, the row where the card is");
++    prefs->SetInteger(stedding::prefs::kSidebarClosedForm,
++                      stedding::prefs::kSidebarClosedToIcons);
++    sidebar->RequestCollapse(true);
++    settle();
++    EXPECT_TRUE(on_the_row());
++    EXPECT_FALSE(toggle()) << "a toggle on the row past the rail's column";
++    const gfx::Rect card =
++        browser_view->multi_contents_view()->GetBoundsInScreen();
++    // The card is the contents view less its gutter.
++    EXPECT_NEAR(browser_view->toolbar()->GetBoundsInScreen().x(),
++                card.x() +
++                    VerticalTabStripRegionView::SteddingCardGutter(browser_view),
++                1)
++        << "the row and the card below it start apart";
++    EXPECT_LE(zoom.right(), card.x());
++  }
++  {
++    SCOPED_TRACE("a hidden sidebar: the row starts past the lights");
++    prefs->SetInteger(stedding::prefs::kSidebarClosedForm,
++                      stedding::prefs::kSidebarClosedHidden);
++    settle();
++    EXPECT_TRUE(on_the_row());
++    EXPECT_GE(browser_view->toolbar()->GetBoundsInScreen().x(), zoom.right())
++        << "the row's contents under the lights";
++  }
++  {
++    SCOPED_TRACE("the row hidden: the title bar's own strip");
++    chrome::ExecuteCommand(browser(), IDC_STEDDING_TOGGLE_ADDRESS_ROW);
++    ASSERT_TRUE(base::test::RunUntil([&] {
++      views::test::RunScheduledLayout(widget);
++      return !browser_view->IsToolbarVisible();
++    }));
++    EXPECT_TRUE(base::test::RunUntil([&] { return !on_the_row(); }));
++    chrome::ExecuteCommand(browser(), IDC_STEDDING_TOGGLE_ADDRESS_ROW);
++    EXPECT_TRUE(base::test::RunUntil(on_the_row)) << "the row came back";
++  }
++
++  sidebar->RequestCollapse(false);
++  settle();
++  ui_test_utils::ToggleFullscreenModeAndWait(browser());
++  ASSERT_FALSE(widget->IsFullscreen());
++  EXPECT_FALSE(window.toolbar) << "full screen left its toolbar behind";
++  for (const NSWindowButton type :
++       {NSWindowCloseButton, NSWindowMiniaturizeButton, NSWindowZoomButton}) {
++    EXPECT_FALSE([[window standardWindowButton:type] isHidden]);
++  }
++}
++
+ // toolbar T31, T32 (docs/history/plan-2026-09-26.md WIN-9, BACKLOG S-154):
+ // in full screen a click on another tab's row gives the row in the overlay
+ // that page's colour, and its icons the colour that reads on it. The overlay
+@@ -538,8 +799,8 @@ IN_PROC_BROWSER_TEST_F(WindowButtonsTest,
+ // docs/history/plan-2026-09-26.md WIN-9 (BACKLOG S-154; sidebar Y11, Y17): in
+ // full screen the row starts past the sidebar's column. The rail expanded on
+ // hover is drawn at the open width over the page, and its column stays the
+-// rail's, so the back button and the sidebar's toggle on the row hold still
+-// while the rail opens, stays open and closes again.
++// rail's, so the back button on the row holds still while the rail opens,
++// stays open and closes again; the rail keeps its own toggle (BACKLOG S-454).
+ IN_PROC_BROWSER_TEST_F(WindowButtonsTest,
+                        HoveringTheRailInFullScreenLeavesTheRowAlone) {
+   ui::test::ScopedFakeNSWindowFullscreen fake_fullscreen;
+@@ -588,19 +849,20 @@ IN_PROC_BROWSER_TEST_F(WindowButtonsTest,
+     }
+   }
+   ASSERT_TRUE(toggle);
+-  ASSERT_TRUE(toggle->GetVisible());
++  // BACKLOG S-454: the rail's column has no room for the toggle after the
++  // traffic lights, which share the row; the rail keeps its own, under them.
++  EXPECT_FALSE(toggle->GetVisible()) << "a toggle on the row past the rail";
++  EXPECT_TRUE(rail->GetTopContainer()->GetVisible());
+   const gfx::Rect back_at_rest = back->GetBoundsInScreen();
+-  const gfx::Rect toggle_at_rest = toggle->GetBoundsInScreen();
+-  // The furthest either one strays from its place, over every layout below.
++  // The furthest the back button strays from its place over every layout
++  // below, and whether the row ever shows a toggle.
+   int back_moved = 0;
+-  int toggle_moved = 0;
++  bool toggle_on_row = false;
+   const auto measure = [&] {
+     lay_out();
+     back_moved = std::max(
+         back_moved, std::abs(back->GetBoundsInScreen().x() - back_at_rest.x()));
+-    toggle_moved = std::max(
+-        toggle_moved,
+-        std::abs(toggle->GetBoundsInScreen().x() - toggle_at_rest.x()));
++    toggle_on_row = toggle_on_row || toggle->GetVisible();
+   };
+ 
+   const gfx::Point centre = rail->GetLocalBounds().CenterPoint();
+@@ -621,7 +883,7 @@ IN_PROC_BROWSER_TEST_F(WindowButtonsTest,
+     SCOPED_TRACE("the rail open on hover");
+     EXPECT_EQ(0, back_moved) << "the back button moved with the rail, "
+                              << rail->width() << " DIP wide";
+-    EXPECT_EQ(0, toggle_moved) << "the sidebar's toggle moved on the row";
++    EXPECT_FALSE(toggle_on_row) << "a toggle came onto the row";
+   }
+ 
+   pointer.Off();
+@@ -633,9 +895,8 @@ IN_PROC_BROWSER_TEST_F(WindowButtonsTest,
+   {
+     SCOPED_TRACE("the rail closed again");
+     EXPECT_EQ(0, back_moved);
+-    EXPECT_EQ(0, toggle_moved);
++    EXPECT_FALSE(toggle_on_row);
+     EXPECT_EQ(back_at_rest, back->GetBoundsInScreen());
+-    EXPECT_EQ(toggle_at_rest, toggle->GetBoundsInScreen());
+   }
+ 
+   ASSERT_TRUE(LeaveFullScreen(browser(), browser_view));
+diff --git a/components/remote_cocoa/app_shim/immersive_mode_controller_cocoa.h b/components/remote_cocoa/app_shim/immersive_mode_controller_cocoa.h
+index 62d59d5fc6001..e7915f7ce30e1 100644
+--- a/components/remote_cocoa/app_shim/immersive_mode_controller_cocoa.h
++++ b/components/remote_cocoa/app_shim/immersive_mode_controller_cocoa.h
+@@ -127,6 +127,17 @@ class REMOTE_COCOA_APP_SHIM_EXPORT ImmersiveModeControllerCocoa
+   // a different window.
+   void ImmersiveModeViewWillMoveToWindow(NSWindow* window);
+ 
++  // Stedding (BACKLOG S-454): asks for the overlay to sit in the title bar's
++  // row, beside the traffic lights, while it is always shown and holds a row,
++  // rather than in a row of its own under them: a window with no tab strip in
++  // its title bar otherwise brought the lights in on a strip of their own
++  // above the address row. Call before Init().
++  void SetOverlayInTitlebar(bool in_titlebar) {
++    overlay_in_titlebar_ = in_titlebar;
++  }
++  // Whether the overlay sits in the title bar's row now.
++  bool IsOverlayInTitlebar() const { return overlay_is_in_titlebar_; }
++
+   // Returns true if immersive fullscreen is being used.
+   virtual bool IsTabbed();
+   bool IsContentFullscreen();
+@@ -161,6 +172,13 @@ class REMOTE_COCOA_APP_SHIM_EXPORT ImmersiveModeControllerCocoa
+   // Get offscreen y origin. Used for moving overlay windows offscreen.
+   double GetOffscreenYOrigin();
+ 
++  // Stedding (BACKLOG S-454): moves the overlay into the title bar's row or
++  // back under it, for the style and the overlay's height now.
++  void UpdateOverlayPlacement();
++  bool overlay_in_titlebar_ = false;
++  bool overlay_is_in_titlebar_ = false;
++  int overlay_height_ = 0;
++
+   // Notify the browser window that the reveal status changes.
+   void NotifyBrowserWindowAboutToolbarRevealChanged();
+ 
+diff --git a/components/remote_cocoa/app_shim/immersive_mode_controller_cocoa.mm b/components/remote_cocoa/app_shim/immersive_mode_controller_cocoa.mm
+index 689643967141d..6b37b2d95ce86 100644
+--- a/components/remote_cocoa/app_shim/immersive_mode_controller_cocoa.mm
++++ b/components/remote_cocoa/app_shim/immersive_mode_controller_cocoa.mm
+@@ -11,6 +11,7 @@
+ #include "base/check.h"
+ #include "base/mac/mac_util.h"
+ #include "components/remote_cocoa/app_shim/features.h"
++#import "components/remote_cocoa/app_shim/browser_native_widget_window_mac.h"
+ #import "components/remote_cocoa/app_shim/immersive_mode_delegate_mac.h"
+ #import "components/remote_cocoa/app_shim/native_widget_ns_window_bridge.h"
+ #include "ui/display/screen.h"
+@@ -295,6 +296,12 @@ ImmersiveModeControllerCocoa::ImmersiveModeControllerCocoa(
+ }
+ 
+ ImmersiveModeControllerCocoa::~ImmersiveModeControllerCocoa() {
++  if (overlay_is_in_titlebar_) {
++    [base::apple::ObjCCast<BrowserNativeWidgetWindow>(browser_window_)
++        setAlwaysShowTrafficLights:NO];
++    browser_window_.toolbar = nil;
++    browser_window_.toolbarStyle = NSWindowToolbarStyleAutomatic;
++  }
+   overlay_window_.commandDispatchParentOverride = nil;
+   StopObservingChildWindows(overlay_window_);
+ 
+@@ -334,6 +341,55 @@ void ImmersiveModeControllerCocoa::Init() {
+   [overlay_content_view_.centerYAnchor
+       constraintEqualToAnchor:overlay_content_view_.superview.centerYAnchor]
+       .active = YES;
++  UpdateOverlayPlacement();
++}
++
++void ImmersiveModeControllerCocoa::UpdateOverlayPlacement() {
++  // A row shorter than this is the row hidden (toolbar T8): the lights then
++  // keep the title bar's own strip, which shows only with the menu bar, as
++  // before.
++  constexpr int kMinRowHeight = 20;
++  const bool want = overlay_in_titlebar_ && initialized_ &&
++                    last_used_style_ == mojom::ToolbarVisibilityStyle::kAlways &&
++                    overlay_height_ >= kMinRowHeight;
++  if (want == overlay_is_in_titlebar_) {
++    return;
++  }
++  overlay_is_in_titlebar_ = want;
++  ImmersiveModeTitlebarViewController* const controller =
++      immersive_mode_titlebar_view_controller_;
++  const bool attached = [browser_window_.titlebarAccessoryViewControllers
++      containsObject:controller];
++  if (attached) {
++    [controller removeFromParentViewController];
++  }
++  // In the title bar the view is pinned to the side opposite the lights and
++  // runs under them, as the tab strip's does (ImmersiveModeTabbedController-
++  // Cocoa); the row leaves their box empty.
++  controller.layoutAttribute =
++      want ? NSLayoutAttributeTrailing : NSLayoutAttributeBottom;
++  if (want) {
++    browser_window_.titleVisibility = NSWindowTitleHidden;
++    // A visible toolbar keeps the title bar shown; the compact style lets a
++    // trailing accessory set the title bar's height.
++    browser_window_.toolbar = [[NSToolbar alloc] init];
++    browser_window_.toolbarStyle = NSWindowToolbarStyleUnifiedCompact;
++    browser_window_.toolbar.visible = YES;
++  } else {
++    browser_window_.toolbar = nil;
++    browser_window_.toolbarStyle = NSWindowToolbarStyleAutomatic;
++  }
++  [base::apple::ObjCCast<BrowserNativeWidgetWindow>(browser_window_)
++      setAlwaysShowTrafficLights:want];
++  if (attached) {
++    [browser_window_ addTitlebarAccessoryViewController:controller];
++  }
++  // Under a reveal lock the style waits for the last unlock, as it does in
++  // UpdateToolbarVisibility.
++  if (last_used_style_.has_value() && reveal_lock_count_ == 0) {
++    [controller setVisibility:last_used_style_.value()];
++  }
++  Reanchor();
+ }
+ 
+ void ImmersiveModeControllerCocoa::FullscreenTransitionCompleted() {
+@@ -382,11 +438,20 @@ void ImmersiveModeControllerCocoa::OnTopViewBoundsChanged(
+   // automatically handled by AppKit.
+   NSRect frame = bounds.ToCGRect();
+   NSView* overlay_view = immersive_mode_titlebar_view_controller_.view;
++  overlay_height_ = bounds.height();
++  UpdateOverlayPlacement();
+   NSSize size = overlay_view.window.frame.size;
+   if (frame.size.height != size.height) {
+     size.height = frame.size.height;
+     [overlay_view setFrameSize:size];
+   }
++  // In the title bar's row the view is as wide as the row it holds, as the
++  // tab strip's is; under it AppKit gives it the window's width.
++  if (overlay_is_in_titlebar_ &&
++      overlay_view.frame.size.width != frame.size.width) {
++    [overlay_view
++        setFrameSize:NSMakeSize(frame.size.width, overlay_view.frame.size.height)];
++  }
+ 
+   // If the toolbar is always visible, update the fullscreen min height.
+   // Also update the fullscreen min height if the toolbar auto hides, but only
+@@ -410,6 +475,7 @@ void ImmersiveModeControllerCocoa::UpdateToolbarVisibility(
+   // Remember the last used style for internal use of UpdateToolbarVisibility.
+   std::optional<mojom::ToolbarVisibilityStyle> old_style =
+       std::exchange(last_used_style_, style);
++  UpdateOverlayPlacement();
+   if (!style.has_value() || old_style == style) {
+     return;
+   }
 diff --git a/components/remote_cocoa/app_shim/native_widget_mac_nswindow.h b/components/remote_cocoa/app_shim/native_widget_mac_nswindow.h
 index 48f47bf3eeb84..3536caf48fac8 100644
 --- a/components/remote_cocoa/app_shim/native_widget_mac_nswindow.h
@@ -2090,3 +2753,23 @@ index 0e5d0e59d926e..1c5a6bf8febe0 100644
  - (void)orderFrontKeepWindowKeyState {
    _miniaturizationInProgress = NO;
  
+diff --git a/components/remote_cocoa/app_shim/native_widget_ns_window_bridge.mm b/components/remote_cocoa/app_shim/native_widget_ns_window_bridge.mm
+index f22b33a19b09c..324046dc1aef5 100644
+--- a/components/remote_cocoa/app_shim/native_widget_ns_window_bridge.mm
++++ b/components/remote_cocoa/app_shim/native_widget_ns_window_bridge.mm
+@@ -1252,7 +1252,14 @@ void NativeWidgetNSWindowBridge::EnableImmersiveFullscreen(
+     uint64_t fullscreen_overlay_widget_id,
+     uint64_t tab_widget_id) {
+   NativeWidgetNSWindowBridge* tab_widget_bridge = GetFromId(tab_widget_id);
+-  if (tab_widget_bridge) {
++  // Stedding (BACKLOG S-454): the overlay's own id in place of a tab strip's
++  // asks for the overlay in the title bar's row (a window that draws its tabs
++  // in a sidebar).
++  if (tab_widget_id != 0 && tab_widget_id == fullscreen_overlay_widget_id) {
++    immersive_mode_controller_ = std::make_unique<ImmersiveModeControllerCocoa>(
++        ns_window(), GetFromId(fullscreen_overlay_widget_id)->ns_window());
++    immersive_mode_controller_->SetOverlayInTitlebar(true);
++  } else if (tab_widget_bridge) {
+     NSWindow* tab_window = tab_widget_bridge->ns_window();
+     immersive_mode_controller_ =
+         std::make_unique<ImmersiveModeTabbedControllerCocoa>(

@@ -2,6 +2,22 @@
 
 What was built, newest first. Nothing here is needed to do a task: `AGENTS.md` carries what is true now, `BACKLOG.md` the order of work, `PLAN.md` the owner's decisions. This file was the "State of the project" section of `AGENTS.md` until 2026-09-30. This log starts at 2026-10-15. Closed work from before that is the table in [docs/history/archive.md](history/archive.md).
 
+## 2026-11-09 -- Issue 89's cause: a tab's sync id lasted one restart
+
+The copies came from the computer that restarts, not the one that shows them. A tab's sync id
+reached the session when it was made and when the whole log was rewritten, and each launch starts
+a new log: a pin or essential restored at one launch had no id in it, and a tab whose page a sleep
+or a Space's own session replaced kept its id under its old session id only. At the next launch
+such tabs took new ids, and the other computer took each for a new pin or essential, a copy beside
+its own, while the restarted one showed one of each. Windows, quit and opened most days, sent
+copies; the Mac, rarely quit, received them. The earlier tests restarted once, which keeps every
+id. On the Windows PC (the Mac was in use), with the browser's own profile as the second computer
+so its session comes back as a real launch brings it: two restarts made 7 copies on the first
+computer, a sleep and one restart 6, in tests that failed first. The id is now written with the
+tab's Space, pin and home (sidebar-file Sf2, S-452), in the patch that writes those. Eight cases
+keep it (patch 0164). The restart tests now run one at a time: they keep their place on a fixed
+port. Not yet run on the Mac.
+
 ## 2026-11-09 -- Issue 89's answers, not reproduced yet
 
 The reporter answered: the copies stay at two, only the Mac (the first computer) shows them, after

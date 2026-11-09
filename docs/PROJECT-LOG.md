@@ -2,6 +2,14 @@
 
 What was built, newest first. Nothing here is needed to do a task: `AGENTS.md` carries what is true now, `BACKLOG.md` the order of work, `PLAN.md` the owner's decisions. This file was the "State of the project" section of `AGENTS.md` until 2026-09-30. This log starts at 2026-10-15. Closed work from before that is the table in [docs/history/archive.md](history/archive.md).
 
+## 2026-11-09 -- Issue 89's second report
+
+The reporter says the copies came whenever the Windows computer was used, not once at the join.
+A pin or essential that came back from a restart without its id would do that: the next write
+would send it under a new one. Two new tests restart with On startup on the New Tab page and on
+Continue where you left off, with synced and own pins and essentials; every id survives, on the
+Mac and on Windows. Not reproduced; S-452 holds what was ruled out and what was asked.
+
 ## 2026-11-08 -- 0.4.0 beta 15: issues 89 and 91
 
 The two fixes of the entry below, released. Checked on the final tree, the same on both machines:

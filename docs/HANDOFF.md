@@ -971,8 +971,11 @@ Two switches do the same for windows. `--stedding-welcome[=<step>]` forces the w
 145. **Windows browser tests assume a display scale of 1.** At 150% (the PC's 4K display
     since 2026-11-09) ten geometry tests read a page edge, a strip or a window a DIP off,
     from rounding alone, and passed at 100%. `tooling/dev test` forces scale 1 on Windows
-    for the browser legs (`--force-device-scale-factor=1`); `STEDDING_TEST_SCALE=native`
-    runs at the display's own. Forcing it does not make a 150% display a 100% one: Windows'
+    for the browser legs of a release build (`--force-device-scale-factor=1`);
+    `STEDDING_TEST_SCALE=native` runs at the display's own. A build with DCHECKs or ASan
+    always runs at the display's own: a test that calls `EnablePixelOutput()` forces its
+    own scale, and content's test base stops it when the switch is already on the command
+    line (41 crashes in one `win-checks` run), so S-458's DIPs show there. Forcing it does not make a 150% display a 100% one: Windows'
     own frame metrics stay at 150%, and `AddressBandTest.TheRowsEmptyPartsAreTheCaption`
     fails either way there (BACKLOG S-458). A change to window sizes, restore or
     hit-testing owes a native run too: the little window that grew at every launch

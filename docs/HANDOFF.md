@@ -34,8 +34,8 @@ The traps follow. 28 is retired. Read the one for the topic in front of you, not
 | Building, disk, rebuild cost | 1, 16, 19, 23, 44, 45, 53, 54, 57, 70, 73, 74, 83, 89, 90, 100, 123, 144 |
 | The working loop and the series | 5, 9, 13, 14, 17, 22, 50, 51, 89, 92, 139 |
 | Driving and capturing the window | 3, 7, 10, 11, 12, 15, 18, 24, 27, 29, 30, 36, 37, 52, 56, 59, 61, 63, 64, 65, 76, 82, 93, 94, 95, 96, 103, 105, 107, 116, 121, 130, 132, 133, 136, 137, 142 |
-| What a test can and cannot prove | 2, 4, 31, 46, 48, 51, 52, 55, 56, 58, 59, 60, 66, 68, 69, 72, 75, 77, 78, 79, 80, 81, 84, 86, 87, 88, 91, 98, 99, 101, 102, 104, 106, 107, 110, 111, 112, 113, 114, 115, 119, 120, 126, 127, 138, 141 |
-| Windows | 32, 34, 36, 38, 40, 42, 53, 54, 55, 56, 57, 59, 62, 67, 68, 69, 70, 71, 74, 91, 93, 98, 99, 100, 101, 103, 106, 111, 113, 114, 115, 116, 118, 121, 122, 125, 128, 143 |
+| What a test can and cannot prove | 2, 4, 31, 46, 48, 51, 52, 55, 56, 58, 59, 60, 66, 68, 69, 72, 75, 77, 78, 79, 80, 81, 84, 86, 87, 88, 91, 98, 99, 101, 102, 104, 106, 107, 110, 111, 112, 113, 114, 115, 119, 120, 126, 127, 138, 141, 145 |
+| Windows | 32, 34, 36, 38, 40, 42, 53, 54, 55, 56, 57, 59, 62, 67, 68, 69, 70, 71, 74, 91, 93, 98, 99, 100, 101, 103, 106, 111, 113, 114, 115, 116, 118, 121, 122, 125, 128, 143, 145 |
 | Release and signing | 44, 47, 49, 62, 85, 117, 118, 124, 129, 131, 140 |
 | Chromium's and the platforms' own behaviour to know | 6, 8, 20, 21, 25, 26, 33, 35, 39, 41, 43, 60, 72, 73, 92, 95, 97, 98, 104, 105, 107, 108, 109, 110, 111, 113, 122, 135 |
 
@@ -968,6 +968,17 @@ Two switches do the same for windows. `--stedding-welcome[=<step>]` forces the w
     changed two lines rebuilt 5,400 steps. Apply the patch to a scratch index
     (`GIT_INDEX_FILE`, `git apply --cached`) and write out only the files whose blob differs
     from what is on disk (trap 44 is the same cost through a rebase).
+145. **Windows browser tests assume a display scale of 1.** At 150% (the PC's 4K display
+    since 2026-11-09) ten geometry tests read a page edge, a strip or a window a DIP off,
+    from rounding alone, and passed at 100%. `tooling/dev test` forces scale 1 on Windows
+    for the browser legs (`--force-device-scale-factor=1`); `STEDDING_TEST_SCALE=native`
+    runs at the display's own. Forcing it does not make a 150% display a 100% one: Windows'
+    own frame metrics stay at 150%, and `AddressBandTest.TheRowsEmptyPartsAreTheCaption`
+    fails either way there (BACKLOG S-458). A change to window sizes, restore or
+    hit-testing owes a native run too: the little window that grew at every launch
+    (S-456) showed only at 150%. A test that needs its window's list to overflow or its
+    field to narrow fills or narrows until it does, not by a count made on a 1080-line
+    screen.
 ## The Windows build
 
 Git for Windows runs the bash tooling. PowerShell runs the rest. The toolchain is the installed Visual Studio (`DEPOT_TOOLS_WIN_TOOLCHAIN=0`, set by the scripts). Three variables name the machine's paths, so none is in the repo: `STEDDING_CHROMIUM_SRC` (the checkout's `src`), `STEDDING_DEPOT_TOOLS` when depot_tools is not already on `PATH`, and `STEDDING_VPYTHON_ROOT`, a short directory for vpython's venv (trap 34). The bash tooling takes the checkout as `CHROMIUM_ROOT`, the folder that holds `src`, as a POSIX path.

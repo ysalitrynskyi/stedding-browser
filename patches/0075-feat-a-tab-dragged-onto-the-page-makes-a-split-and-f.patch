@@ -130,8 +130,8 @@ of its own (patches/README.md).
  .../test/stedding/space_keys_browsertest.mm   |  62 ++
  .../test/stedding/space_switch_browsertest.cc |  25 +
  .../test/stedding/startup_load_browsertest.cc | 549 ++++++++++++++
- chrome/test/stedding/tab_drop_browsertest.cc  | 322 +++++++-
- 91 files changed, 6893 insertions(+), 119 deletions(-)
+ chrome/test/stedding/tab_drop_browsertest.cc  | 356 ++++++++-
+ 91 files changed, 6925 insertions(+), 121 deletions(-)
  create mode 100644 chrome/browser/performance_manager/policies/stedding_discard_veto.h
  create mode 100644 chrome/browser/ui/stedding/startup_load.cc
  create mode 100644 chrome/browser/ui/stedding/startup_load.h
@@ -8864,7 +8864,7 @@ index 0000000000000..ef81e9870337d
 +
 +}  // namespace
 diff --git a/chrome/test/stedding/tab_drop_browsertest.cc b/chrome/test/stedding/tab_drop_browsertest.cc
-index 742aed68a7ea1..8db759d30d51e 100644
+index 742aed68a7ea1..717e8dd2b6821 100644
 --- a/chrome/test/stedding/tab_drop_browsertest.cc
 +++ b/chrome/test/stedding/tab_drop_browsertest.cc
 @@ -12,6 +12,7 @@
@@ -8875,7 +8875,7 @@ index 742aed68a7ea1..8db759d30d51e 100644
  #include <initializer_list>
  #include <memory>
  #include <optional>
-@@ -42,17 +43,24 @@
+@@ -42,17 +43,25 @@
  #include "chrome/browser/ui/toasts/toast_controller.h"
  #include "chrome/browser/ui/views/animations/tab_strip_animations.h"
  #include "chrome/browser/ui/views/frame/browser_view.h"
@@ -8886,6 +8886,7 @@ index 742aed68a7ea1..8db759d30d51e 100644
  #include "chrome/browser/ui/views/tabs/common/folder_view.h"
  #include "chrome/browser/ui/views/tabs/common/tab_group_header_view.h"
  #include "chrome/browser/ui/views/tabs/common/tab_view.h"
++#include "chrome/browser/ui/views/tabs/dragging/tab_drag_controller.h"
 +#include "chrome/browser/ui/views/tabs/tab.h"
 +#include "chrome/browser/ui/views/tabs/tab_strip.h"
  #include "chrome/browser/ui/views/test/vertical_tabs_browser_test_mixin.h"
@@ -8900,7 +8901,7 @@ index 742aed68a7ea1..8db759d30d51e 100644
  #include "components/tabs/public/tab_collection.h"
  #include "components/tabs/public/tab_interface.h"
  #include "content/public/browser/navigation_controller.h"
-@@ -61,6 +69,7 @@
+@@ -61,6 +70,7 @@
  #include "net/dns/mock_host_resolver.h"
  #include "net/test/embedded_test_server/embedded_test_server.h"
  #include "third_party/skia/include/core/SkColor.h"
@@ -8908,7 +8909,32 @@ index 742aed68a7ea1..8db759d30d51e 100644
  #include "ui/base/window_open_disposition.h"
  #include "ui/color/color_id.h"
  #include "ui/color/color_provider.h"
-@@ -562,12 +571,9 @@ IN_PROC_BROWSER_TEST_F(TabDropTest,
+@@ -291,6 +301,24 @@ class TabDropTest : public VerticalTabsBrowserTestMixin<InProcessBrowserTest> {
+         << "the drop showed \"Opened in\"";
+   }
+ 
++  // Whether `layer` or a layer under it is still animating, as the list is
++  // while a Space switch slides it in.
++  static bool AnyLayerAnimates(ui::Layer* layer) {
++    if (layer->GetAnimator()->is_animating()) {
++      return true;
++    }
++    return std::ranges::any_of(layer->children(), &AnyLayerAnimates);
++  }
++
++  // Waits for a Space switch to come to rest: its slide ended and the rows
++  // still. A point taken during the slide is where a row was then, which a
++  // person, who aims at a row at rest, never presses (BACKLOG S-459).
++  [[nodiscard]] bool WaitForTheSwitchToSettle() {
++    return base::test::RunUntil(
++               [&]() { return !AnyLayerAnimates(widget()->GetLayer()); }) &&
++           stedding::test::WaitForRowsToSettle(widget());
++  }
++
+   static size_t WindowCount() { return GetAllBrowserWindowInterfaces().size(); }
+ 
+   // What a move must keep of a tab.
+@@ -562,12 +590,9 @@ IN_PROC_BROWSER_TEST_F(TabDropTest,
        EXPECT_TRUE(m->IsSpacePinned(pin));
        EXPECT_EQ(Url("pin.test"), m->HomeUrl(pin).value_or(GURL()));
        EXPECT_EQ(home, m->SpaceForTab(pin));
@@ -8924,7 +8950,7 @@ index 742aed68a7ea1..8db759d30d51e 100644
      }
  
      {
-@@ -643,9 +649,9 @@ IN_PROC_BROWSER_TEST_F(TabDropTest,
+@@ -643,9 +668,9 @@ IN_PROC_BROWSER_TEST_F(TabDropTest,
      tab_strip_model()->ActivateTabAt(Index(red));
      Drag(from, header);
      ASSERT_TRUE(stedding::test::WaitForRowsToSettle(widget()));
@@ -8937,7 +8963,34 @@ index 742aed68a7ea1..8db759d30d51e 100644
      EXPECT_EQ(3, tab_strip_model()->count());
      EXPECT_EQ(1u, WindowCount());
    }
-@@ -1266,4 +1272,302 @@ IN_PROC_BROWSER_TEST_F(TabDropTest, AFolderHeaderRefusesATabGroup) {
+@@ -952,13 +977,24 @@ IN_PROC_BROWSER_TEST_F(TabDropTest, RailDropsJoinTheFolderAndMoveToTheChip) {
+ 
+   {
+     SCOPED_TRACE("two selected rows move together");
++    ASSERT_TRUE(WaitForTheSwitchToSettle()) << "the switch home never settled";
+     tab_strip_model()->ActivateTabAt(Index(b));
+     tab_strip_model()->SelectTabAt(Index(c));
+     ASSERT_EQ(2u, tab_strip_model()->selection_model().size());
+-    Drag(RowCentre(b), *ChipCentre(work));
++    const gfx::Point from = RowCentre(b);
++    const std::optional<gfx::Point> to = ChipCentre(work);
++    ASSERT_TRUE(to) << "the rail's stack shows no chip for Work";
++    ASSERT_EQ(2u, tab_strip_model()->selection_model().size())
++        << "the selection changed while the rows settled";
++    Drag(from, *to);
+     ASSERT_TRUE(base::test::RunUntil([&]() {
+       return m->SpaceForTab(b) == work && m->SpaceForTab(c) == work;
+-    })) << "not all of the selection moved";
++    })) << "not all of the selection moved: the first row "
++        << (m->SpaceForTab(b) == work ? "moved" : "stayed")
++        << ", the second " << (m->SpaceForTab(c) == work ? "moved" : "stayed")
++        << ", " << tab_strip_model()->selection_model().size()
++        << " selected, " << WindowCount() << " windows"
++        << (TabDragController::IsActive() ? ", a drag still runs" : "");
+     EXPECT_EQ(1u, WindowCount()) << "a window tore off";
+     ASSERT_TRUE(m->SetActiveSpace(home));
+   }
+@@ -1266,4 +1302,302 @@ IN_PROC_BROWSER_TEST_F(TabDropTest, AFolderHeaderRefusesATabGroup) {
    EXPECT_EQ(1u, WindowCount()) << "a window tore off";
  }
  

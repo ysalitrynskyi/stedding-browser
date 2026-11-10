@@ -26,6 +26,9 @@ scale. And shared sessions (S-272) were rebased from patch 0139 onto the series 
 local branch, `s272`, with its ADR renumbered 0034: two textual conflicts, and one test helper that
 left its cookie page so a Space's move did not set the cookie again in the jar it moved to. It waits
 for the owner's read of the ADR.
+Last, S-92's leftover on the Mac: a pinned parent's children had their favicons cut on the left.
+The row's clip followed its bounds, not its indent; it now follows the indent (patch 0173), and
+S-92 closes.
 
 ## 2026-11-10 -- 0.4.0 beta 17: the bookmarks bar under a coloured row (issue 98)
 

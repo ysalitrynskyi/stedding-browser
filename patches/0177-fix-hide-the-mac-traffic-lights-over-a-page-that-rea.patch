@@ -1,0 +1,507 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Amaury Lapaque <amaury.lapaque@gmail.com>
+Date: Tue, 10 Nov 2026 08:14:20 +0000
+Subject: fix: hide the Mac traffic lights over a page that reaches the top
+
+With the sidebar hidden completely (sidebar Y19) and the address row
+hidden too (toolbar T8, T10, T50), nothing of the window is left at its
+top: the page runs to the window's top edge, and macOS's traffic lights
+sat on it, over what a site keeps at its top left (GitHub's menu button,
+for one). In that state the lights are hidden now, and they show while
+the pointer is within 8 points of their place (sidebar Y55). The sidebar
+open, as the rail or slid in, the row shown, or full screen: they show as
+before (Y53).
+
+stedding::WindowButtonsOverPageMac, owned by BrowserNativeWidgetMac,
+watches the pointer anywhere in the window (a window EventMonitor, as the
+hidden sidebar's reveal edge does), the strip's bounds, the row's
+visibility and the top container's height, and sets the three buttons'
+hidden state. Windows keeps its caption strip (toolbar T19).
+
+Why: GitHub issue 93. The lights covered and took the clicks of the
+page's own controls at its top left.
+
+Removable when: never; Stedding's own hidden sidebar and hidden row.
+
+Assisted-by: Claude Code:claude-opus-5-5
+---
+ chrome/browser/ui/views/frame/BUILD.gn        |   4 +
+ .../views/frame/browser_native_widget_mac.h   |   5 +
+ .../views/frame/browser_native_widget_mac.mm  |  10 +
+ .../views/frame/stedding_window_buttons_mac.h |  88 +++++++++
+ .../frame/stedding_window_buttons_mac.mm      | 187 ++++++++++++++++++
+ .../stedding/window_buttons_browsertest.mm    |  87 ++++++++
+ 6 files changed, 381 insertions(+)
+ create mode 100644 chrome/browser/ui/views/frame/stedding_window_buttons_mac.h
+ create mode 100644 chrome/browser/ui/views/frame/stedding_window_buttons_mac.mm
+
+diff --git a/chrome/browser/ui/views/frame/BUILD.gn b/chrome/browser/ui/views/frame/BUILD.gn
+index 9c6a4e3c2154d..788ee443f36da 100644
+--- a/chrome/browser/ui/views/frame/BUILD.gn
++++ b/chrome/browser/ui/views/frame/BUILD.gn
+@@ -2117,6 +2117,10 @@ if (is_mac) {
+       # camera.
+       "stedding_camera_row_mac.h",
+       "stedding_camera_row_mac.mm",
++      # Stedding sidebar Y55 (GitHub issue 93): the traffic lights hidden
++      # over a page that runs to the window's top.
++      "stedding_window_buttons_mac.h",
++      "stedding_window_buttons_mac.mm",
+     ]
+     public_deps = [
+       ":browser_native_widget_mac",
+diff --git a/chrome/browser/ui/views/frame/browser_native_widget_mac.h b/chrome/browser/ui/views/frame/browser_native_widget_mac.h
+index 292d9589a2f14..dfc29fc3f1998 100644
+--- a/chrome/browser/ui/views/frame/browser_native_widget_mac.h
++++ b/chrome/browser/ui/views/frame/browser_native_widget_mac.h
+@@ -27,6 +27,7 @@ class BrowserWidget;
+ class BrowserView;
+ namespace stedding {
+ class CameraRowFullscreenMac;
++class WindowButtonsOverPageMac;
+ }  // namespace stedding
+ @class BrowserWindowTouchBarController;
+ @class BrowserWindowTouchBarViewsDelegate;
+@@ -160,6 +161,10 @@ class BrowserNativeWidgetMac : public views::NativeWidgetMac,
+   // Stedding (toolbar T55-T59; BACKLOG S-392): the window's own full screen
+   // beside the camera; none for a window run from an app shim.
+   std::unique_ptr<stedding::CameraRowFullscreenMac> camera_row_;
++  // Stedding (sidebar Y55; GitHub issue 93): the traffic lights hidden while
++  // nothing of the window is under them; none for a window run from an app
++  // shim.
++  std::unique_ptr<stedding::WindowButtonsOverPageMac> lights_over_page_;
+ 
+   base::WeakPtrFactory<BrowserNativeWidgetMac> weak_ptr_factory_{this};
+ };
+diff --git a/chrome/browser/ui/views/frame/browser_native_widget_mac.mm b/chrome/browser/ui/views/frame/browser_native_widget_mac.mm
+index b1d70891ec9e6..5037584d13d41 100644
+--- a/chrome/browser/ui/views/frame/browser_native_widget_mac.mm
++++ b/chrome/browser/ui/views/frame/browser_native_widget_mac.mm
+@@ -46,6 +46,7 @@
+ #include "chrome/browser/ui/stedding/stedding_command_ids.h"
+ #include "chrome/browser/ui/stedding/stedding_prefs.h"
+ #import "chrome/browser/ui/views/frame/stedding_camera_row_mac.h"
++#import "chrome/browser/ui/views/frame/stedding_window_buttons_mac.h"
+ #include "chrome/browser/ui/tabs/split_tab_metrics.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "chrome/browser/ui/tabs/vertical_tab_strip_metrics.h"
+@@ -431,6 +432,8 @@ void BrowserNativeWidgetMac::OnWidgetDestroyed(views::Widget* widget) {
+   // too, and goes before it does: at a window's close the BrowserView can be
+   // freed before the window says it is destroying, and the pointer dangled.
+   camera_row_.reset();
++  // Stedding (sidebar Y55): so does the lights' keeper.
++  lights_over_page_.reset();
+   if (UsesRemoteCocoaApplicationHost(browser_view_->browser())) {
+     chrome::RemoveCommandObserver(browser_view_->browser(), IDC_BACK, this);
+     chrome::RemoveCommandObserver(browser_view_->browser(), IDC_FORWARD, this);
+@@ -924,6 +927,12 @@ void BrowserNativeWidgetMac::OnWidgetInitDone() {
+           browser_view_, ns_window);
+     }
+   }
++  // Stedding (sidebar Y55; GitHub issue 93): the traffic lights hidden over
++  // a page that runs to the window's top, for a window in this process.
++  if (GetInProcessNSWindowBridge() && !lights_over_page_) {
++    lights_over_page_ = std::make_unique<stedding::WindowButtonsOverPageMac>(
++        browser_view_, GetNativeWindow().GetNativeNSWindow());
++  }
+   paint_as_active_subscription_ =
+       GetWidget()->RegisterPaintAsActiveChangedCallback(
+           base::BindRepeating(&BrowserNativeWidgetMac::UpdateBackgroundColor,
+@@ -984,6 +993,7 @@ void BrowserNativeWidgetMac::OnWindowDestroying(
+           native_window.GetNativeNSWindow());
+   [ns_window setWindowTouchBarDelegate:nil];
+   camera_row_.reset();
++  lights_over_page_.reset();
+ }
+ 
+ void BrowserNativeWidgetMac::OnWidgetActivationChanged(views::Widget* widget,
+diff --git a/chrome/browser/ui/views/frame/stedding_window_buttons_mac.h b/chrome/browser/ui/views/frame/stedding_window_buttons_mac.h
+new file mode 100644
+index 0000000000000..ec47b5d1253a7
+--- /dev/null
++++ b/chrome/browser/ui/views/frame/stedding_window_buttons_mac.h
+@@ -0,0 +1,88 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_VIEWS_FRAME_STEDDING_WINDOW_BUTTONS_MAC_H_
++#define CHROME_BROWSER_UI_VIEWS_FRAME_STEDDING_WINDOW_BUTTONS_MAC_H_
++
++#import <Foundation/Foundation.h>
++
++#include <memory>
++#include <optional>
++
++#include "base/memory/raw_ptr.h"
++#include "base/scoped_multi_source_observation.h"
++#include "ui/events/event_observer.h"
++#include "ui/gfx/geometry/point.h"
++#include "ui/views/view.h"
++#include "ui/views/view_observer.h"
++
++class BrowserView;
++@class NSWindow;
++
++namespace views {
++class EventMonitor;
++}  // namespace views
++
++namespace stedding {
++
++// docs/features/sidebar.md Y55 (GitHub issue 93): with the sidebar hidden
++// completely (Y19) and the address row hidden too (toolbar T8, T10, T50),
++// nothing of the window is left at its top: the page runs to the window's
++// top edge, and macOS's traffic lights sat on the page, over what a site
++// keeps at its top left. In that state the lights are hidden, and they show
++// while the pointer is near their place, at the window's top left. Anywhere
++// else -- the sidebar open, as the rail or slid in over the page, the row
++// shown, full screen -- they show as always (Y53).
++//
++// One per in-process browser window, owned by its BrowserNativeWidgetMac.
++class WindowButtonsOverPageMac : public ui::EventObserver,
++                                 public views::ViewObserver {
++ public:
++  // How far past the lights' own frames the pointer shows them, in points.
++  static constexpr int kRevealMargin = 8;
++
++  // Tests stand a point on the screen in for the real pointer; nullopt goes
++  // back to the real one. UpdateAllForTesting re-reads every window, as a
++  // pointer move would.
++  static void SetPointerForTesting(std::optional<gfx::Point> screen_point);
++  static void UpdateAllForTesting();
++
++  WindowButtonsOverPageMac(BrowserView* browser_view, NSWindow* window);
++  WindowButtonsOverPageMac(const WindowButtonsOverPageMac&) = delete;
++  WindowButtonsOverPageMac& operator=(const WindowButtonsOverPageMac&) =
++      delete;
++  ~WindowButtonsOverPageMac() override;
++
++  // Hides or shows the lights for the window's state and the pointer.
++  void Update();
++
++  // ui::EventObserver: the pointer moving anywhere in the window, the page
++  // included, where no view of the browser's hears it.
++  void OnEvent(const ui::Event& event) override;
++
++  // views::ViewObserver: the sidebar opening, closing or sliding in, and the
++  // address row hiding or showing.
++  void OnViewBoundsChanged(views::View* observed_view) override;
++  void OnViewVisibilityChanged(views::View* observed_view,
++                               views::View* starting_view, bool visible) override;
++  void OnViewIsDeleting(views::View* observed_view) override;
++
++ private:
++  void ObserveViews();
++  // The state in which nothing of the window is under the lights.
++  bool LightsAreOverThePage() const;
++  bool PointerIsNearTheLights() const;
++  void SetLightsHidden(bool hidden);
++
++  raw_ptr<BrowserView> browser_view_;
++  NSWindow* __weak window_;
++  std::unique_ptr<views::EventMonitor> pointer_monitor_;
++  base::ScopedMultiSourceObservation<views::View, views::ViewObserver>
++      view_observations_{this};
++  bool lights_hidden_ = false;
++};
++
++}  // namespace stedding
++
++#endif  // CHROME_BROWSER_UI_VIEWS_FRAME_STEDDING_WINDOW_BUTTONS_MAC_H_
+diff --git a/chrome/browser/ui/views/frame/stedding_window_buttons_mac.mm b/chrome/browser/ui/views/frame/stedding_window_buttons_mac.mm
+new file mode 100644
+index 0000000000000..58043d249fd7a
+--- /dev/null
++++ b/chrome/browser/ui/views/frame/stedding_window_buttons_mac.mm
+@@ -0,0 +1,187 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#import "chrome/browser/ui/views/frame/stedding_window_buttons_mac.h"
++
++#import <AppKit/AppKit.h>
++
++#include <set>
++
++#include "base/no_destructor.h"
++#include "chrome/browser/ui/views/frame/browser_view.h"
++#include "chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h"
++#include "chrome/browser/ui/views/toolbar/toolbar_view.h"
++#include "ui/events/event.h"
++#include "ui/events/event_constants.h"
++#include "ui/gfx/mac/coordinate_conversion.h"
++#include "ui/views/event_monitor.h"
++#include "ui/views/view_utils.h"
++#include "ui/views/widget/widget.h"
++
++namespace stedding {
++
++namespace {
++
++std::optional<gfx::Point>& PointerForTesting() {
++  static std::optional<gfx::Point> point;
++  return point;
++}
++
++std::set<WindowButtonsOverPageMac*>& Instances() {
++  static base::NoDestructor<std::set<WindowButtonsOverPageMac*>> instances;
++  return *instances;
++}
++
++constexpr NSWindowButton kLights[] = {
++    NSWindowCloseButton, NSWindowMiniaturizeButton, NSWindowZoomButton};
++
++VerticalTabStripRegionView* StripOf(BrowserView* browser_view) {
++  if (!browser_view) {
++    return nullptr;
++  }
++  for (views::View* const child : browser_view->children()) {
++    if (auto* const strip =
++            views::AsViewClass<VerticalTabStripRegionView>(child)) {
++      return strip;
++    }
++  }
++  return nullptr;
++}
++
++}  // namespace
++
++// static
++void WindowButtonsOverPageMac::SetPointerForTesting(
++    std::optional<gfx::Point> screen_point) {
++  PointerForTesting() = screen_point;
++}
++
++// static
++void WindowButtonsOverPageMac::UpdateAllForTesting() {
++  for (WindowButtonsOverPageMac* const instance : Instances()) {
++    instance->Update();
++  }
++}
++
++WindowButtonsOverPageMac::WindowButtonsOverPageMac(BrowserView* browser_view,
++                                                   NSWindow* window)
++    : browser_view_(browser_view), window_(window) {
++  Instances().insert(this);
++  if (views::Widget* const widget =
++          browser_view_ ? browser_view_->GetWidget() : nullptr;
++      widget && widget->GetNativeWindow()) {
++    pointer_monitor_ = views::EventMonitor::CreateWindowMonitor(
++        this, widget->GetNativeWindow(),
++        {ui::EventType::kMouseMoved, ui::EventType::kMouseExited});
++  }
++  Update();
++}
++
++WindowButtonsOverPageMac::~WindowButtonsOverPageMac() {
++  Instances().erase(this);
++  pointer_monitor_.reset();
++  view_observations_.RemoveAllObservations();
++  // A window this no longer looks after keeps its lights.
++  SetLightsHidden(false);
++}
++
++void WindowButtonsOverPageMac::ObserveViews() {
++  if (!browser_view_) {
++    return;
++  }
++  // The strip's bounds change as the sidebar closes to nothing, opens or
++  // slides in over the page; the row's visibility, and the top container's
++  // height, as the row hides or shows. The window may be made before the
++  // browser's views are, so each is looked for again until it is found.
++  views::View* const views_to_observe[] = {StripOf(browser_view_),
++                                           browser_view_->toolbar(),
++                                           (browser_view_->toolbar() ? browser_view_->toolbar()->parent() : nullptr)};
++  for (views::View* const view : views_to_observe) {
++    if (view && !view_observations_.IsObservingSource(view)) {
++      view_observations_.AddObservation(view);
++    }
++  }
++}
++
++void WindowButtonsOverPageMac::Update() {
++  ObserveViews();
++  SetLightsHidden(LightsAreOverThePage() && !PointerIsNearTheLights());
++}
++
++void WindowButtonsOverPageMac::OnEvent(const ui::Event& event) {
++  Update();
++}
++
++void WindowButtonsOverPageMac::OnViewBoundsChanged(
++    views::View* observed_view) {
++  Update();
++}
++
++void WindowButtonsOverPageMac::OnViewVisibilityChanged(
++    views::View* observed_view,
++    views::View* starting_view, bool visible) {
++  Update();
++}
++
++void WindowButtonsOverPageMac::OnViewIsDeleting(views::View* observed_view) {
++  view_observations_.RemoveObservation(observed_view);
++}
++
++bool WindowButtonsOverPageMac::LightsAreOverThePage() const {
++  if (!browser_view_ || !window_) {
++    return false;
++  }
++  // macOS's full screen hides the lights with the title bar and brings them
++  // in with the row; that is its own (sidebar Y17, Y41).
++  const views::Widget* const widget = browser_view_->GetWidget();
++  if (!widget || widget->IsFullscreen()) {
++    return false;
++  }
++  // The sidebar hidden completely and not slid in over the page: a sidebar
++  // slid in starts under the lights (Y52), and they show over its top.
++  const VerticalTabStripRegionView* const strip = StripOf(browser_view_);
++  if (!strip || !strip->GetVisible() || !strip->IsHiddenCompletely() ||
++      strip->is_expanded_on_hover()) {
++    return false;
++  }
++  // The row hidden: shown, the lights sit on its bar (Y19).
++  return !browser_view_->IsToolbarVisible();
++}
++
++bool WindowButtonsOverPageMac::PointerIsNearTheLights() const {
++  if (!window_) {
++    return false;
++  }
++  // The lights' place in screen points: their frames, hidden or not, and a
++  // margin round them, so the pointer shows them before it reaches one.
++  NSRect place = NSZeroRect;
++  for (const NSWindowButton kind : kLights) {
++    NSButton* const button = [window_ standardWindowButton:kind];
++    if (!button) {
++      continue;
++    }
++    const NSRect in_window = [button convertRect:button.bounds toView:nil];
++    place = NSUnionRect(place, [window_ convertRectToScreen:in_window]);
++  }
++  if (NSIsEmptyRect(place)) {
++    return false;
++  }
++  place = NSInsetRect(place, -kRevealMargin, -kRevealMargin);
++  const NSPoint pointer = PointerForTesting()
++                              ? gfx::ScreenPointToNSPoint(*PointerForTesting())
++                              : [NSEvent mouseLocation];
++  return NSPointInRect(pointer, place);
++}
++
++void WindowButtonsOverPageMac::SetLightsHidden(bool hidden) {
++  if (!window_ || hidden == lights_hidden_) {
++    return;
++  }
++  lights_hidden_ = hidden;
++  for (const NSWindowButton kind : kLights) {
++    [[window_ standardWindowButton:kind] setHidden:hidden];
++  }
++}
++
++}  // namespace stedding
+diff --git a/chrome/test/stedding/window_buttons_browsertest.mm b/chrome/test/stedding/window_buttons_browsertest.mm
+index 34cf52cb4c76e..5a2b8d72d85d7 100644
+--- a/chrome/test/stedding/window_buttons_browsertest.mm
++++ b/chrome/test/stedding/window_buttons_browsertest.mm
+@@ -42,6 +42,7 @@
+ #include "chrome/browser/ui/views/frame/browser_view.h"
+ #include "chrome/browser/ui/views/frame/stedding_fullscreen_sidebar_toggle.h"
+ #include "chrome/browser/ui/views/frame/stedding_window_background.h"
++#import "chrome/browser/ui/views/frame/stedding_window_buttons_mac.h"
+ #include "chrome/browser/ui/views/frame/top_container_view.h"
+ #include "chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h"
+ #include "chrome/browser/ui/views/tabs/common/clear_tabs_separator.h"
+@@ -951,4 +952,90 @@ IN_PROC_BROWSER_TEST_F(WindowButtonsTest, OnTheRightTheLightsSitOnTheRow) {
+   }
+ }
+ 
++
++// sidebar Y55 (GitHub issue 93): with the sidebar hidden completely and the
++// address row hidden too, the page runs to the window's top and the traffic
++// lights sat on it, over what the site has at its top left. There they are
++// hidden, and show while the pointer is near their place; the row coming
++// back, or the sidebar opening, shows them for good.
++IN_PROC_BROWSER_TEST_F(WindowButtonsTest,
++                       HiddenWithTheRowHiddenTheLightsShowOnHover) {
++  BrowserView* const browser_view =
++      BrowserView::GetBrowserViewForBrowser(browser());
++  VerticalTabStripRegionView* const strip =
++      browser_view->vertical_tab_strip_region_view_for_testing();
++  NSWindow* const window =
++      browser_view->GetWidget()->GetNativeWindow().GetNativeNSWindow();
++  ASSERT_TRUE(window);
++  const auto lights_hidden = [&] {
++    views::test::RunScheduledLayout(browser_view->GetWidget());
++    stedding::WindowButtonsOverPageMac::UpdateAllForTesting();
++    bool all = true;
++    bool any = false;
++    for (const NSWindowButton kind :
++         {NSWindowCloseButton, NSWindowMiniaturizeButton, NSWindowZoomButton}) {
++      const bool hidden = [[window standardWindowButton:kind] isHidden];
++      all = all && hidden;
++      any = any || hidden;
++    }
++    EXPECT_EQ(all, any) << "some of the lights are hidden, not all";
++    return all;
++  };
++  // The pointer in the middle of the page, away from the lights.
++  const gfx::Point away = browser_view->GetBoundsInScreen().CenterPoint();
++  stedding::WindowButtonsOverPageMac::SetPointerForTesting(away);
++
++  browser()->GetProfile()->GetPrefs()->SetInteger(
++      stedding::prefs::kSidebarClosedForm,
++      stedding::prefs::kSidebarClosedHidden);
++  tabs::VerticalTabStripStateController::From(browser())->RequestCollapse(true);
++  ASSERT_TRUE(base::test::RunUntil([&] {
++    views::test::RunScheduledLayout(browser_view->GetWidget());
++    return !BrowserAnimationController::From(browser())->IsAnimating(
++               TabStripAnimations::kVerticalTabStrip) &&
++           strip->IsHiddenCompletely() && strip->width() == 0;
++  }));
++  ASSERT_TRUE(browser_view->IsToolbarVisible());
++  EXPECT_FALSE(lights_hidden())
++      << "the row is shown: the lights sit on its bar (Y19)";
++
++  ASSERT_TRUE(
++      chrome::ExecuteCommand(browser(), IDC_STEDDING_TOGGLE_ADDRESS_ROW));
++  views::test::RunScheduledLayout(browser_view->GetWidget());
++  ASSERT_FALSE(browser_view->IsToolbarVisible());
++  EXPECT_TRUE(lights_hidden()) << "the lights are drawn over the page";
++
++  // The pointer at the close button shows them, and leaving hides them.
++  stedding::WindowButtonsOverPageMac::SetPointerForTesting(
++      ScreenFrame(window, [window standardWindowButton:NSWindowCloseButton])
++          .CenterPoint());
++  EXPECT_FALSE(lights_hidden()) << "the pointer at the lights left them hidden";
++  stedding::WindowButtonsOverPageMac::SetPointerForTesting(away);
++  EXPECT_TRUE(lights_hidden()) << "the pointer leaving left the lights shown";
++
++  // The row back: the lights show wherever the pointer is.
++  ASSERT_TRUE(
++      chrome::ExecuteCommand(browser(), IDC_STEDDING_TOGGLE_ADDRESS_ROW));
++  views::test::RunScheduledLayout(browser_view->GetWidget());
++  ASSERT_TRUE(browser_view->IsToolbarVisible());
++  EXPECT_FALSE(lights_hidden()) << "the row came back, the lights did not";
++
++  // Hidden again, then the sidebar opening: the same.
++  ASSERT_TRUE(
++      chrome::ExecuteCommand(browser(), IDC_STEDDING_TOGGLE_ADDRESS_ROW));
++  views::test::RunScheduledLayout(browser_view->GetWidget());
++  ASSERT_TRUE(lights_hidden());
++  tabs::VerticalTabStripStateController::From(browser())->RequestCollapse(
++      false);
++  ASSERT_TRUE(base::test::RunUntil([&] {
++    views::test::RunScheduledLayout(browser_view->GetWidget());
++    return !BrowserAnimationController::From(browser())->IsAnimating(
++               TabStripAnimations::kVerticalTabStrip) &&
++           !strip->IsHiddenCompletely();
++  }));
++  EXPECT_FALSE(lights_hidden()) << "the sidebar opened, the lights did not";
++
++  stedding::WindowButtonsOverPageMac::SetPointerForTesting(std::nullopt);
++}
++
+ }  // namespace

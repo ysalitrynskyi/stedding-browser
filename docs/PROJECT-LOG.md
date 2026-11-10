@@ -2,6 +2,22 @@
 
 What was built, newest first. Nothing here is needed to do a task: `AGENTS.md` carries what is true now, `BACKLOG.md` the order of work, `PLAN.md` the owner's decisions. This file was the "State of the project" section of `AGENTS.md` until 2026-09-30. This log starts at 2026-10-15. Closed work from before that is the table in [docs/history/archive.md](history/archive.md).
 
+## 2026-11-09 -- Chromium 157.0.8103.51, and no "Tabs from other devices"
+
+The owner: move the pin, and fix the History page, which offered to sync. The pin moved from
+157.0.8103.39 to 157.0.8103.51, the stable point release on the Mac and Windows; the series
+applies to it unchanged and Windows built it (win-release, the browser, the installer and both
+test binaries). The History page had "Tabs from other devices", a page that asked to sync
+history, and the History menu offered a sign-in that went nowhere: those tabs come only through
+Google sync, which no Stedding profile may turn on (privacy Q16). Where browser sign-in is not
+allowed, the side bar's item is hidden, `chrome://history/syncedTabs` opens the history list, and
+the menu has no part for other devices (privacy Q18, S-457, in the patch that turned sign-in
+off). `BrowserSigninTest.NothingOffersTabsFromOtherDevices` failed on Chromium's own files and
+passes with the fix, twice. On the real Windows build, a fresh profile's
+`chrome://history/syncedTabs` opened `chrome://history/` with "Stedding history" and "Delete
+browsing data" alone. Not yet: the Mac checkout's move to .51, its build, and the suites on both
+platforms.
+
 ## 2026-11-09 -- Issue 89's cause: a tab's sync id lasted one restart
 
 The copies came from the computer that restarts, not the one that shows them. A tab's sync id

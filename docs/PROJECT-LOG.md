@@ -2,6 +2,21 @@
 
 What was built, newest first. Nothing here is needed to do a task: `AGENTS.md` carries what is true now, `BACKLOG.md` the order of work, `PLAN.md` the owner's decisions. This file was the "State of the project" section of `AGENTS.md` until 2026-09-30. This log starts at 2026-10-15. Closed work from before that is the table in [docs/history/archive.md](history/archive.md).
 
+## 2026-11-10 -- after beta 17: the Mac's owed checks, Cmd-D in a private window, S-463
+
+The plan's second and third items, with the machines free for the evening. On the Mac, with the
+real keyboard and pointer on the release build: little windows (S-157) and a pin's redirected link
+with the screenshot keys over its peek (S-93) behaved as on Windows, and both rows closed. The
+first found that ⌘D in a private window did nothing on the Mac, though it bookmarks on Windows:
+the Spaces menu's pin row carries the chord and was enabled only in a window with Spaces. The
+tests had run the command directly; the new one presses the key through the application's event
+queue and the main menu, and failed first. Fixed in patch 0170 (shortcuts Z24).
+
+S-463, the Space switch's slide that failed alone on the PC, was the test's: the layers beside the
+list showed the snapshot of the Space left, sliding out, 180 DIP tall over a list of 158, and the
+test took only a layer of the list's exact bounds. It now matches place and width, and passed 15
+of 15 on the PC (patch 0158).
+
 ## 2026-11-10 -- 0.4.0 beta 17: the bookmarks bar under a coloured row (issue 98)
 
 The owner asked for the next release while away for the evening, with one rule from earlier that

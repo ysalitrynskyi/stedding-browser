@@ -2,6 +2,35 @@
 
 What was built, newest first. Nothing here is needed to do a task: `AGENTS.md` carries what is true now, `BACKLOG.md` the order of work, `PLAN.md` the owner's decisions. This file was the "State of the project" section of `AGENTS.md` until 2026-09-30. This log starts at 2026-10-15. Closed work from before that is the table in [docs/history/archive.md](history/archive.md).
 
+## 2026-11-10 -- 0.4.0 beta 17: the bookmarks bar under a coloured row (issue 98)
+
+The owner asked for the next release while away for the evening, with one rule from earlier that
+day (`PLAN.md` decision 21): nothing goes out until every check has passed and nothing published
+with it is in doubt. Beta 16's site capture had just made a planned look read as a bug: it kept
+the home page's hero band under the window buttons. It was retaken from a test window over plain
+page and put live first.
+
+GitHub issue 98 (S-462), reported that day from Windows: with a page-coloured address row the
+bookmarks bar kept Material's own surface, a grey band, and on the Mac its text was #474747 on a
+dark page's row. The bar now paints nothing of its own; the window paints the row's surface under
+it, the full-screen overlay too, and its text and icons are the row's (toolbar T61, patch 0120).
+The look on the release build found a second fault the tests had missed: with the address row
+hidden or in the sidebar the bar's buttons were centred against the hidden row's address field,
+18 DIP low, and the page cut them in half. Beta 16 did the same. The browser test now lays the bar
+out afresh in that state and failed first; the fix counts the toolbar's margin only while the
+toolbar shows.
+
+Checked: 1493 unit and 949 browser tests on the Mac, release and DCHECK, the DCHECK build's one
+timeout passing three of three alone; 1481 unit and 896 browser tests on Windows, release, DCHECK
+and ASan. On Windows the failures were beta 16's: S-458's geometry at 150%, S-461's drag (5 of 5
+alone) and a frame-timing test, plus a Space switch's slide that failed 3 of 5 alone, as it had on
+beta 16 there (S-463, opened). A private window's drag (DCHECK), a folder's hover and two
+tests of Settings' search for Arc's words (ASan, the sanitizer's allocator out of memory in the parallel run) each passed
+every time alone, the last with no AddressSanitizer report. Acceptance on a copy of the notarized Mac build and on the installed Windows
+copy; the update from beta 16 through a local feed on both; the bar looked at on both release
+builds in every state its spec names. Items 2 to 4 of the day's plan (S-272, the Mac's real-input
+checks, S-461 and S-458) carry to the next release.
+
 ## 2026-11-10 -- 0.4.0 beta 16: Chromium .51, issues 89 and 93, History
 
 The entries below, released: the sync id that lasts every restart (issue 89), the window buttons

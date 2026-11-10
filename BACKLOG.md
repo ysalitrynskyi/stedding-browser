@@ -17,10 +17,12 @@ infrastructure, then features. A request in chat comes before this list. A spec 
 
 ### The next release
 
-0.4.0 beta 17. The owner, 2026-11-10: a release goes out only when everything in it has passed
-and nothing published with it is in doubt. An item that is not ready by then moves to the release
-after; it does not go out half-checked. The plan of 2026-11-06 went out in betas 13 to 16, and what
-each of its items left is in its row.
+0.4.0 beta 17 went out on 2026-11-10 with the bookmarks bar under a coloured address row
+(S-462, GitHub issue 98), the first item of that day's plan; the rest of it, below, carries to
+the next release. The owner, 2026-11-10: a release goes out only when everything in it has passed and
+nothing published with it is in doubt (`PLAN.md` decision 21). An item that is not ready by then
+moves to the release after; it does not go out half-checked. The plan of 2026-11-06 went out in
+betas 13 to 16, and what each of its items left is in its row.
 
 Chromium stays on 157.0.8103.51, M157's newest point release (`tooling/check-pin`, 2026-11-10).
 158.0.8127.18 is early stable at 0.5% of users, and the full rollout usually follows about a week
@@ -29,26 +31,22 @@ owner says so.
 
 In this order:
 
-1. **S-462, the bookmarks bar under a coloured address row (GitHub issue 98).** On Windows with
-   horizontal tabs the address row takes the page's colour (toolbar T15) and the bookmarks bar under
-   it keeps the window's, so the top splits in two. Reproduce it on both platforms and in each
-   layout where the bar shows, then a spec row, a test seen red first, the fix, and a look on a real
-   build in light and dark, over a dark page and a light one.
-2. **S-272, Spaces that share one session (GitHub issues 8 and 99).** Built on 2026-11-05 on the
+1. **S-272, Spaces that share one session (GitHub issues 8 and 99).** Built on 2026-11-05 on the
    branch `s272-wip`, on the series as it was at patch 0139. Its ADR needs the owner's read and a
    new number (0032 went to WebDAV). Then a rebase onto the current series, the run on a Windows
    build, and the DCHECK build its lifetimes need. It goes in only once the owner has approved the
    ADR and it has passed everything below.
-3. **The Mac's real-input checks still owed**, each already passed on Windows: little windows
+2. **The Mac's real-input checks still owed**, each already passed on Windows: little windows
    (S-157), a pin's redirected link and the screenshot keys over a peek (S-93), and child tabs, where
    Back is ⌘[ (S-92). An evening with nobody at the Mac.
-4. **The tests:** S-461, the dragged row's copy, and S-458, the Windows geometry a DIP off at 150%.
+3. **The tests:** S-461, the dragged row's copy; S-458, the Windows geometry a DIP off at 150%;
+   and S-463, a Space switch's slide on the PC.
    For each test, decide whether the product or the test is wrong, and fix that one.
 
 Then the gate. The release waits until every line of it has passed:
 
 - the suites on the shipping and DCHECK builds on both platforms, and ASan on Windows;
-- acceptance on both platforms, and an update from the installed beta 16 on both;
+- acceptance on both platforms, and an update from the installed beta 17 on both;
 - every changed state captured from the release build on both platforms, light and dark, and looked
   at against its spec;
 - the what's-new entry looked at as an updater sees it on the live page, each capture included, down
@@ -187,8 +185,8 @@ Crashes and broken privacy promises first, then what a user sees.
 
 | Id | Item | Feature / spec | Notes |
 |---|---|---|---|
-| S-462 | The bookmarks bar keeps the window's colour under an address row in the page's (GitHub issue 98) | `docs/features/toolbar.md` T15, T36 | Reported 2026-11-10 with a capture from Windows with horizontal tabs: on a dark page (github.com) the address row is the page's colour, as T15 says, and the bookmarks bar under it is the window's lighter grey, so the top of the window splits in two. Not reproduced here yet. To check: the Mac, and each layout where the bar shows. Reproduced on the Mac on 2026-11-10: on a dark page the bar's text and icons were #474747, Material's on-surface grey, over the row's dark colour. Fixed in patch 0120 (toolbar T61): the bar paints nothing of its own, the window paints the row's surface under it, its text and icons are the row's, and with the row hidden it alone is the strip (`PageColourRowTest.TheBookmarksBarIsPartOfTheRow`, `SteddingColorMixerTest.TheBookmarksBarTakesTheRowsColours`, both seen red first). Left: the look on a real build on both platforms, light and dark. |
-| S-461 | A dragged row's copy went while the button was held, once, on Windows | `docs/features/pins.md` H27 | In 0.4.0 beta 16's release sweep on the PC (forced to scale 1 on the 4K display), `PinnedRunTest.ADraggedTabTurnsIntoACardAndBack` waited for the row's copy over the essentials to finish turning; the copy went before it did, and the test read the freed view and crashed. It passed 5 of 5 alone on `win-release` and 3 of 3 on `win-checks`, and on the Mac. The test now watches the copy and fails with "the floating copy went while the button was held". Not known: what ended the drag. It also failed in the first release sweep at the display's own scale, and on `win-checks` there. Next time: whether the drag controller still ran, and where the real pointer was. |
+| S-461 | A dragged row's copy went while the button was held, once, on Windows | `docs/features/pins.md` H27 | In 0.4.0 beta 16's release sweep on the PC (forced to scale 1 on the 4K display), `PinnedRunTest.ADraggedTabTurnsIntoACardAndBack` waited for the row's copy over the essentials to finish turning; the copy went before it did, and the test read the freed view and crashed. It passed 5 of 5 alone on `win-release` and 3 of 3 on `win-checks`, and on the Mac. The test now watches the copy and fails with "the floating copy went while the button was held". Not known: what ended the drag. It also failed in the first release sweep at the display's own scale, and on `win-checks` there. Next time: whether the drag controller still ran, and where the real pointer was. In beta 17's sweeps (2026-11-10) it failed as a test, not a crash, with "no floating copy", on `win-release` (scale 1), `win-checks` and `win-asan` (150%), and passed 5 of 5 alone on `win-release`. |
+| S-463 | A Space switch's slide failed alone on the PC | `docs/features/spaces.md` B32 | `SpaceSwitchTest.TheSpaceLeftSlidesOutAsTheNewOneComesIn` ("the Space left vanished at the switch") failed in 0.4.0 beta 17's release sweep on the PC (forced to scale 1 on the 4K display) and 3 of 5 times alone there; it had failed in one of beta 16's release runs on the PC too, and passes on the Mac. Not known: whether the outgoing list really drops at the switch on that machine, which a person would see, or the test misses the frames it samples. Next: watch a switch on the installed copy there at 150% and at 100%, then fix the product or the test. |
 | S-458 | On Windows at 150% some geometry is a DIP off, and one strip of the address row is not the caption | `docs/features/sidebar.md`; `docs/features/toolbar.md` | Found 2026-11-09 on the PC's 4K display at 150%. Ten browser tests read a page edge, a strip or a window a DIP off (for example the page at 357 where the strip and its gutter end at 358) and pass at scale 1; `tooling/dev test` now forces scale 1 on Windows (trap 145). Four tests that counted on a 1080-line screen (a list that scrolls, a list twice what shows, a field that narrows) now fill or narrow until it holds. Forced to scale 2 (a 1920x1080 screen) the row-count and caption tests pass and the two that rest the real pointer in the window's corner fail, so no forced scale passes everything on a 150% display. `AddressBandTest.TheRowsEmptyPartsAreTheCaption` fails either way there: at 150% a 2 DIP seam just before the window's buttons answers as nowhere, not the caption, so a drag there does not move the window; forced to scale 1 on that display, the 34 DIP between the row's end and the buttons do. Not yet looked at on a real build at 150%: whether any of the DIPs shows, and what the seam is. The DCHECK and ASan builds always run at the display's own scale (trap 145): on 2026-11-10 the same tests failed there (`SidebarFormsTest` three, `SidebarRightTest` two, `SidebarRightRtlTest`, `SidebarAddressTest` two, `PeekOverPageTest`, `PinnedRunTest.ADraggedTabTurnsIntoACardAndBack`, `AddressBandTest`), and under ASan `MotionFramesTest.ASpaceSwitchAfterTheSidebarsMotionsSlides` waited 0.26 to 0.48 s for a frame against 0.1 s; at 100% on 2026-11-08 it passed. |
 | S-455 | A Shift-click seemed to select nothing in macOS full screen | `docs/features/tabs.md` R20 | The owner, 2026-11-09: Shift-click did not select a range "in full screen maybe"; out of full screen it works. Not reproduced: a click and a Shift-click select the rows between for plain rows, pins, sleeping rows and essentials, after a Space switch, and in macOS's real full screen (`SidebarSelectionTest.AShiftClickTakesTheRowsBetween`, `...InFullScreen`), with the event generator's clicks. Next: the owner's steps, or real clicks in real full screen with the owner's Stedding quit. |
 | S-450 | Finished downloads vanish from the Downloads list (GitHub issue 90) | `docs/features/sidebar-panels.md` Pn9 | Reported on 2026-11-08, Windows likely (the reporter's other issues): the list's newest rows were two days old although files had been downloaded since. No steps yet; asked for them. Checked 2026-11-08: a download from a Space with its own session is written to history and listed after a restart, as one from a shared Space is (`SteddingDownloadsTest.ADownloadFromASpaceWithItsOwnSessionStaysListed`), and nothing in the series removes a download. The panel lists what Chromium's Downloads page lists. Waits on the reporter's steps: whether `chrome://downloads` lists them, and what came between. |

@@ -17,76 +17,50 @@ infrastructure, then features. A request in chat comes before this list. A spec 
 
 ### The next release
 
-0.4.0 beta 13 went out on 2026-11-07 with every item of the plan below but ghost pins (S-94's
-second slice), and beta 14 on 2026-11-08 with GitHub issues 85, 86 and 88, and beta 15 the same day with 89 and 91; what the latest brought
-is in `docs/release-notes/`. What each item left is in its row:
-a real passkey with a finger and Apple Passwords (S-239), the Mac's look at S-157, S-93 and S-127
-(done on Windows), and the child rows' favicons after their parent is pinned (S-92). The owner calls
-the next release, and nothing here hurries it.
+0.4.0 beta 17. The owner, 2026-11-10: a release goes out only when everything in it has passed
+and nothing published with it is in doubt. An item that is not ready by then moves to the release
+after; it does not go out half-checked. The plan of 2026-11-06 went out in betas 13 to 16, and what
+each of its items left is in its row.
 
-The plan of 2026-11-06, kept as it was: the work that needs no one else, in this order. An item is
-done as `PLAN.md` says: a test seen red first, its spec row, and a check on a real build.
+Chromium stays on 157.0.8103.51, M157's newest point release (`tooling/check-pin`, 2026-11-10).
+158.0.8127.18 is early stable at 0.5% of users, and the full rollout usually follows about a week
+after early stable. The move to 158, with Sparkle 2.10.1 (S-358), is a release of its own, when the
+owner says so.
 
-Bugs first:
+In this order:
 
-1. **S-443, the stray Google request.** First suspect: a request queued in a slow start before
-   `prefs::kSigninAllowed` reads false, since the guard in `TriggerListAccounts` looks at the pref
-   only at that moment. Log the caller, slow the start down until it happens, and find whether a
-   real profile can do it. If it can, stop it where the request is sent as well, with a test.
-2. **S-435 and the rest of S-438.** A quit during a pin's Leave-site question and a quit during
-   Delete Space may share one cause on the Mac: a quit that does not arrive while a dialog is up.
-   Reproduce both, then one fix and one browser test. Then time Chromium's ten-second teardown
-   watchdog over 50 quits on a quiet Mac, and look at the peek prompt's edge on a white page.
+1. **S-462, the bookmarks bar under a coloured address row (GitHub issue 98).** On Windows with
+   horizontal tabs the address row takes the page's colour (toolbar T15) and the bookmarks bar under
+   it keeps the window's, so the top splits in two. Reproduce it on both platforms and in each
+   layout where the bar shows, then a spec row, a test seen red first, the fix, and a look on a real
+   build in light and dark, over a dark page and a light one.
+2. **S-272, Spaces that share one session (GitHub issues 8 and 99).** Built on 2026-11-05 on the
+   branch `s272-wip`, on the series as it was at patch 0139. Its ADR needs the owner's read and a
+   new number (0032 went to WebDAV). Then a rebase onto the current series, the run on a Windows
+   build, and the DCHECK build its lifetimes need. It goes in only once the owner has approved the
+   ADR and it has passed everything below.
+3. **The Mac's real-input checks still owed**, each already passed on Windows: little windows
+   (S-157), a pin's redirected link and the screenshot keys over a peek (S-93), and child tabs, where
+   Back is ⌘[ (S-92). An evening with nobody at the Mac.
+4. **The tests:** S-461, the dragged row's copy, and S-458, the Windows geometry a DIP off at 150%.
+   For each test, decide whether the product or the test is wrong, and fix that one.
 
-Leftovers people meet:
+Then the gate. The release waits until every line of it has passed:
 
-3. **S-157, little windows.** Two clauses of its row look stale and get checked and removed: the
-   mark is now saved (S-326, closed), and a deleted Space's routes now go with it (S-162). To fix:
-   the chords with no Spaces, the setting offered where little windows do not exist, and ⇧⌘T, which
-   brings a closed little window back as a plain popup (E1). "Pin on the little window" has no spec
-   row: find what Arc's does, then spec it or drop it.
-4. **S-93, peek.** A pin's link that the server redirects to another site opens a peek at the
-   destination, judged by P15 and P16, so a sign-in stays in the pin and the redirect is not asked
-   twice. The screenshot chords capture the peek when one is over the page. Option-click stays
-   Chromium's download: the spec already says so, and the clause closes.
-5. **S-127, the command bar.** The Move Tab row acts on the selection, with a test (tabs R22). A
-   click on the address keeps editing in place, and K12 records that as the decision, unless the
-   owner wants Arc's way.
+- the suites on the shipping and DCHECK builds on both platforms, and ASan on Windows;
+- acceptance on both platforms, and an update from the installed beta 16 on both;
+- every changed state captured from the release build on both platforms, light and dark, and looked
+  at against its spec;
+- the what's-new entry looked at as an updater sees it on the live page, each capture included, down
+  to what lies under the window's own buttons and edges. Beta 16's first capture left the home
+  page's hero band under the window buttons, and they read as a bug. Then the release notes, both
+  feeds, Homebrew and the site, each checked live after publishing.
 
-Bigger pieces:
-
-6. **S-92, child tabs (tabs R60).** Back at a child's first page closes it and returns to its
-   parent, a parent's children fold away with it, and Close Other Tabs keeps them. All three only
-   with "Show tabs under the tab that opened them" on, so the default does not change.
-7. **S-102, split view.** J3: check what Chromium does, then ⌘W closes the active pane and the other
-   stays as a plain tab, and a pinned split sleeps as one row (J4). J5: a Space pin that joins a
-   split stays in the pinned run and both panes are pinned, as J1 says, which lifts J13's refusal
-   for Space pins. J2: ⌘1–9 and the badges count a split once. Then a real-input pass: resize, swap
-   and dismiss by mouse and keyboard, and DevTools, find-in-page and full-screen video in a split.
-8. **S-94, a page open in another window, in two slices.** First the choice: picking a tab that
-   lives in another window offers "Show here / Go to window" instead of a silent jump. Then ghost
-   pins (windows G2), rows for another window's pins. A pin is a tab of one window today, so that
-   slice needs its spec and an ADR before code. It is the largest item and goes last, and it can
-   wait for the release after without holding the rest back.
-
-9. **S-239, Touch ID passkeys.** The owner's Developer ID profile is in hand. Set `MAC_TEAM_ID`, add
-   the entitlements and hand the signer the profile, keeping `--development` signing and the test
-   copies working, since neither can carry it. Passkeys from Apple Passwords wait for Apple's answer.
-   A real passkey wants the owner's finger, so the proof here is a signed build that reports a
-   platform authenticator where beta 12 does not, and an update from beta 12 that keeps its keychain
-   items. Item 9 goes before the gate so that the gate covers it.
-
-Then the release gate, as for beta 12: the suites on the shipping and DCHECK builds on both
-platforms, ASan on Windows, acceptance on both, an update from the installed beta 12 on both, and
-every changed state reviewed on both, light and dark.
-
-The Mac holds S-435, S-438's quits and the real-input checks, and takes turns with the owner. The
-rest starts on the PC. Before the first build, the PC pulls main, and patches 0157 to 0164 fold into
-the patches that own their code.
-
-Waiting on the owner, so not in this plan: one import of a real Arc file (S-107, S-103, S-431),
-Spaces that share one session (S-272), a commercial WebDAV or S3 service (S-426), a touch of Touch ID and
-Apple's answer on passkeys (S-239), the new signing certificate (S-444), S-428 when it next happens, S-318's decision, and the move to Chromium 158.
+Not in this release: ghost pins (S-94's second slice, which needs its spec and an ADR first), and
+what waits on the owner or on others: a real passkey with a finger, and Apple's answer (S-239); the
+new signing certificate, before 2027-02-01 (S-444); one import of a real Arc file (S-107, S-103,
+S-431); a commercial WebDAV or S3 service (S-426); S-428 when it next happens; S-318's decision; and
+the reporter's steps for S-450 (GitHub issue 90).
 
 After these, step 6 of beta 11's list below, in its order.
 
@@ -213,6 +187,7 @@ Crashes and broken privacy promises first, then what a user sees.
 
 | Id | Item | Feature / spec | Notes |
 |---|---|---|---|
+| S-462 | The bookmarks bar keeps the window's colour under an address row in the page's (GitHub issue 98) | `docs/features/toolbar.md` T15, T36 | Reported 2026-11-10 with a capture from Windows with horizontal tabs: on a dark page (github.com) the address row is the page's colour, as T15 says, and the bookmarks bar under it is the window's lighter grey, so the top of the window splits in two. Not reproduced here yet. To check: the Mac, and each layout where the bar shows. The likely fix: the bar takes the row's colour whenever the row takes the page's, and the hairline (T15, T36) moves under the bar. |
 | S-461 | A dragged row's copy went while the button was held, once, on Windows | `docs/features/pins.md` H27 | In 0.4.0 beta 16's release sweep on the PC (forced to scale 1 on the 4K display), `PinnedRunTest.ADraggedTabTurnsIntoACardAndBack` waited for the row's copy over the essentials to finish turning; the copy went before it did, and the test read the freed view and crashed. It passed 5 of 5 alone on `win-release` and 3 of 3 on `win-checks`, and on the Mac. The test now watches the copy and fails with "the floating copy went while the button was held". Not known: what ended the drag. It also failed in the first release sweep at the display's own scale, and on `win-checks` there. Next time: whether the drag controller still ran, and where the real pointer was. |
 | S-458 | On Windows at 150% some geometry is a DIP off, and one strip of the address row is not the caption | `docs/features/sidebar.md`; `docs/features/toolbar.md` | Found 2026-11-09 on the PC's 4K display at 150%. Ten browser tests read a page edge, a strip or a window a DIP off (for example the page at 357 where the strip and its gutter end at 358) and pass at scale 1; `tooling/dev test` now forces scale 1 on Windows (trap 145). Four tests that counted on a 1080-line screen (a list that scrolls, a list twice what shows, a field that narrows) now fill or narrow until it holds. Forced to scale 2 (a 1920x1080 screen) the row-count and caption tests pass and the two that rest the real pointer in the window's corner fail, so no forced scale passes everything on a 150% display. `AddressBandTest.TheRowsEmptyPartsAreTheCaption` fails either way there: at 150% a 2 DIP seam just before the window's buttons answers as nowhere, not the caption, so a drag there does not move the window; forced to scale 1 on that display, the 34 DIP between the row's end and the buttons do. Not yet looked at on a real build at 150%: whether any of the DIPs shows, and what the seam is. The DCHECK and ASan builds always run at the display's own scale (trap 145): on 2026-11-10 the same tests failed there (`SidebarFormsTest` three, `SidebarRightTest` two, `SidebarRightRtlTest`, `SidebarAddressTest` two, `PeekOverPageTest`, `PinnedRunTest.ADraggedTabTurnsIntoACardAndBack`, `AddressBandTest`), and under ASan `MotionFramesTest.ASpaceSwitchAfterTheSidebarsMotionsSlides` waited 0.26 to 0.48 s for a frame against 0.1 s; at 100% on 2026-11-08 it passed. |
 | S-455 | A Shift-click seemed to select nothing in macOS full screen | `docs/features/tabs.md` R20 | The owner, 2026-11-09: Shift-click did not select a range "in full screen maybe"; out of full screen it works. Not reproduced: a click and a Shift-click select the rows between for plain rows, pins, sleeping rows and essentials, after a Space switch, and in macOS's real full screen (`SidebarSelectionTest.AShiftClickTakesTheRowsBetween`, `...InFullScreen`), with the event generator's clicks. Next: the owner's steps, or real clicks in real full screen with the owner's Stedding quit. |
@@ -343,7 +318,7 @@ Rows the specs still leave open. M10 is in ROADMAP's order (ADR 0021).
 | S-152 | One sidebar width | `docs/features/sidebar.md` Y1 | Decide whether windows share one sidebar width, clamp the value, and stop one window's drag from writing the shared collapsed state. |
 | S-161 | Welcome and Settings polish | `docs/features/settings.md` T6, T7; `docs/features/welcome.md` | The width slider can rewrite a width the user is dragging. The welcome and the toasts still use the other platform's words in places. The welcome page is rebuilt instead of updated in place. The default-browser step does not refresh after the system prompt. Settings does not say where updates come from. The in-browser shortcut reference does not read the two prefs. Settings strings are not all in `stedding_strings.grdp`. |
 | S-164 | Spaces, the leftovers | `docs/features/sessions.md`; `docs/features/spaces.md` | The isolation mark is painted (patch 0072, sessions S32–S34). A window that stops being active ends the Ctrl-Tab run (switcher X3). A Blank Window's menu offers no Independent session. Still open: Settings opened in a Blank Window shows the session switch; a reload in a Space reloads essentials, other partitions and discarded tabs; the animation preference does not reach every badge and hover card; an @Space query does not fold Unicode case or take the longest multi-word name; chip-menu and Focus strings are hard-coded English. |
-| S-272 | Spaces that share one session (GitHub issue 8) | `docs/features/sessions.md`; ADR 0028 | A session named once and chosen by several Spaces, which share its sign-ins and its essentials. Built on the Mac, on `stedding-work`, 2026-11-05: its ADR, 0032 on the branch `s272-wip` and to be renumbered, since WebDAV took that number, and sessions S37–S52. Left: the owner's check of the ADR, the run on a Windows build, and the DCHECK build the lifetimes need. Asked for on r/Stedding, 2026-11-05: several Spaces on one profile, as Arc has them. |
+| S-272 | Spaces that share one session (GitHub issues 8 and 99) | `docs/features/sessions.md`; ADR 0028 | A session named once and chosen by several Spaces, which share its sign-ins and its essentials. Built on the Mac, on `stedding-work`, 2026-11-05: its ADR, 0032 on the branch `s272-wip` and to be renumbered, since WebDAV took that number, and sessions S37–S52. Left: the owner's check of the ADR, the run on a Windows build, and the DCHECK build the lifetimes need. Asked for on r/Stedding, 2026-11-05: several Spaces on one profile, as Arc has them. Asked for again in GitHub issue 99 (2026-11-10), as the last thing keeping its reporter on Arc. |
 | S-286 | Separators, the rest (GitHub issue 19) | `docs/features/sidebar.md` Y45 | Patch 0107: Add Separator Above and Remove Separator on a row's menu, kept across a restart (Y45). Left, as the patch says: a label, separators inside folders, in the export file and in folder sync, and a command-bar row. |
 | S-374 | Snap layouts from the sidebar's window buttons | `docs/features/sidebar.md` Y48 | With the address in the sidebar on Windows, the maximize button on the sidebar's top row maximizes and restores; Windows 11's snap layouts do not open from it (Win+Z does). The frame's own button returns `HTMAXBUTTON` for that; the sidebar's would have to answer the frame's hit test the same way. |
 | S-445 | A Space's own essentials without a session of its own (GitHub issue 87) | `docs/features/spaces.md` B6; ADR 0028 | Later, perhaps as an option (the owner, 2026-11-07). Today essentials follow the session, as in Arc: Spaces that share a session share them, and a Space with an Independent session has its own (ADR 0028). The issue asks for each Space's own essentials with the sign-ins shared, as Zen offers. It would be a third kind of essential, through the restore mark, the essentials grid, export and import, a session turned on or off and a deleted Space. Wait for S-272, which ties essentials to a named session too. Pins are each Space's own meanwhile. |

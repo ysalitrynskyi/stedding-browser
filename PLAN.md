@@ -90,6 +90,11 @@ still open is a BACKLOG row that names its id.
     cleaning is off by default because it can strip the code a site credits a referral by.
     The blocker's step says how it works and that an extension can block more, without
     running Stedding down.
+21. A release goes out only when everything in it has passed and nothing published with it
+    is in doubt: the build, the notes, the feeds, and the site's text and captures, each
+    looked at as a user meets it (the owner, 2026-11-10). An item that is not ready moves to
+    the next release; it does not go out half-checked. A capture that makes the browser look
+    wrong is a defect, even when the browser is right.
 
 The operator's own request in chat comes before any of this and before BACKLOG's order.
 

@@ -17,6 +17,16 @@ list showed the snapshot of the Space left, sliding out, 180 DIP tall over a lis
 test took only a layer of the list's exact bounds. It now matches place and width, and passed 15
 of 15 on the PC (patch 0158).
 
+Later the same evening: on the PC, `AddressBandTest.TheRowsEmptyPartsAreTheCaption` (S-458) turned
+out to be the Windows frame's hit test. The system's caption-button rectangle, which DWM gives in
+pixels converted at the system's scale, ran past Stedding's drawn buttons (2 DIP at 150%, 34 with the
+scale forced to 1), and that strip of the row answered "nowhere", so a drag there did not move the
+window. The rule now holds over the drawn buttons only (patch 0119); the test passed 5 of 5 at each
+scale. And shared sessions (S-272) were rebased from patch 0139 onto the series after beta 17 on a
+local branch, `s272`, with its ADR renumbered 0034: two textual conflicts, and one test helper that
+left its cookie page so a Space's move did not set the cookie again in the jar it moved to. It waits
+for the owner's read of the ADR.
+
 ## 2026-11-10 -- 0.4.0 beta 17: the bookmarks bar under a coloured row (issue 98)
 
 The owner asked for the next release while away for the evening, with one rule from earlier that

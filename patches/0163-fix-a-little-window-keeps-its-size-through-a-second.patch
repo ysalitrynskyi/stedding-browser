@@ -14,12 +14,15 @@ Why: seen on beta 11 (BACKLOG S-436, little E12).
 
 Removable when: little windows are no longer kept in the session.
 ---
- chrome/browser/sessions/session_restore.cc    |  5 ++
- .../stedding/little_window_browsertest.cc     | 58 +++++++++++++------
- 2 files changed, 46 insertions(+), 17 deletions(-)
+ chrome/browser/sessions/session_restore.cc    | 11 +++
+ chrome/browser/ui/stedding/little_window.cc   | 45 ++++++++++++-
+ chrome/browser/ui/stedding/little_window.h    | 13 ++++
+ chrome/browser/ui/views/frame/browser_view.cc | 11 ++-
+ .../stedding/little_window_browsertest.cc     | 67 ++++++++++++++-----
+ 5 files changed, 128 insertions(+), 19 deletions(-)
 
 diff --git a/chrome/browser/sessions/session_restore.cc b/chrome/browser/sessions/session_restore.cc
-index 641877b8018d3..28febc470ee64 100644
+index 641877b8018d3..9982b95376976 100644
 --- a/chrome/browser/sessions/session_restore.cc
 +++ b/chrome/browser/sessions/session_restore.cc
 @@ -76,6 +76,7 @@
@@ -30,22 +33,140 @@ index 641877b8018d3..28febc470ee64 100644
  #include "chrome/browser/ui/navigator/browser_navigator.h"
  #include "chrome/browser/ui/navigator/browser_navigator_params.h"
  #include "chrome/browser/ui/startup/startup_browser_creator.h"
-@@ -1550,6 +1551,10 @@ class SessionRestoreImpl : public BrowserCollectionObserver {
+@@ -1550,6 +1551,16 @@ class SessionRestoreImpl : public BrowserCollectionObserver {
        stedding::SetNextWindowLittle(false);
        stedding::MarkLittleWindow(browser_window);
        stedding::KeepLittleWindowInSession(browser_window);
 +      // little E12 (BACKLOG S-436): nothing moves a restored window, so this
 +      // launch's session would hold no bounds for it, and the next launch
 +      // would bring it back at a new window's size.
++      // little E12 (BACKLOG S-456): a little window's session keeps its
++      // window's bounds (BrowserView::SaveWindowPlacement), but a popup is
++      // made with its page's, the frame going round them: on Windows it came
++      // back 8 by 20 DIP bigger at every launch at 150%. Set once it is made,
++      // as a new little window's are, they hold.
++      stedding::GiveLittleWindowBounds(browser_window, bounds);
 +      chrome::SaveWindowPlacement(browser_window, bounds, show_state);
      }
      if (auto* manager =
              InitialWebUIWindowMetricsManager::From(browser_window)) {
+diff --git a/chrome/browser/ui/stedding/little_window.cc b/chrome/browser/ui/stedding/little_window.cc
+index f42ba28dca181..05a0d42971adf 100644
+--- a/chrome/browser/ui/stedding/little_window.cc
++++ b/chrome/browser/ui/stedding/little_window.cc
+@@ -74,6 +74,15 @@ std::map<SessionID, OpenedLittleWindow>& OpenedLittleWindows() {
+   return *windows;
+ }
+ 
++// E12 (BACKLOG S-456): the bounds each little window was last given, or last
++// saved at once the user moved or resized it. At a fractional scale a window
++// measures a DIP off the bounds it was given, and saving what it measured
++// grew it a DIP at every launch.
++std::map<SessionID, gfx::Rect>& GivenLittleBounds() {
++  static base::NoDestructor<std::map<SessionID, gfx::Rect>> bounds;
++  return *bounds;
++}
++
+ // E1: the screen bounds of `anchor`'s window; empty when there is no anchor
+ // on screen to open over.
+ gfx::Rect WindowBoundsOf(BrowserWindowInterface* anchor) {
+@@ -191,10 +200,44 @@ BrowserWindowInterface* CreateLittleWindow(Profile* profile,
+   // set aside: on the Mac it took the last window's place and size, 22 DIP
+   // down and right, so a little window was never little. Set once it is
+   // made, they hold.
+-  window->GetWindow()->SetBounds(bounds);
++  GiveLittleWindowBounds(window, bounds);
+   return window;
+ }
+ 
++void GiveLittleWindowBounds(BrowserWindowInterface* window,
++                            const gfx::Rect& bounds) {
++  if (!window || bounds.IsEmpty()) {
++    return;
++  }
++  GivenLittleBounds()[window->GetSessionID()] = bounds;
++  window->GetWindow()->SetBounds(bounds);
++}
++
++gfx::Rect LittleWindowBoundsToSave(BrowserWindowInterface* window,
++                                   const gfx::Rect& measured,
++                                   bool closing) {
++  std::map<SessionID, gfx::Rect>& given = GivenLittleBounds();
++  const auto it = window ? given.find(window->GetSessionID()) : given.end();
++  if (it == given.end()) {
++    return measured;
++  }
++  const gfx::Rect& was = it->second;
++  const bool same = std::abs(was.x() - measured.x()) <= 1 &&
++                    std::abs(was.y() - measured.y()) <= 1 &&
++                    std::abs(was.width() - measured.width()) <= 1 &&
++                    std::abs(was.height() - measured.height()) <= 1;
++  gfx::Rect saved = measured;
++  if (same) {
++    saved = was;
++  } else {
++    it->second = measured;
++  }
++  if (closing) {
++    given.erase(it);
++  }
++  return saved;
++}
++
+ BrowserWindowInterface* OpenLittleWindow(Profile* profile,
+                                          const GURL& url,
+                                          BrowserWindowInterface* anchor,
+diff --git a/chrome/browser/ui/stedding/little_window.h b/chrome/browser/ui/stedding/little_window.h
+index 6958e1ca4d563..66c368249c524 100644
+--- a/chrome/browser/ui/stedding/little_window.h
++++ b/chrome/browser/ui/stedding/little_window.h
+@@ -64,6 +64,19 @@ gfx::Rect LittleWindowBounds(const gfx::Rect& over,
+                              const gfx::Size& remembered,
+                              const gfx::Rect& work_area);
+ 
++// E1, E12: gives the little window `window` the screen bounds `bounds`, and
++// keeps them as the bounds it was given.
++void GiveLittleWindowBounds(BrowserWindowInterface* window,
++                            const gfx::Rect& bounds);
++
++// E12 (BACKLOG S-456): the bounds a save of the little window `window`'s
++// placement keeps: the bounds it was given while it measures within a DIP of
++// them, which at a fractional scale it does, and what it measures once the
++// user has moved or resized it. `closing` at the last save.
++gfx::Rect LittleWindowBoundsToSave(BrowserWindowInterface* window,
++                                   const gfx::Rect& measured,
++                                   bool closing);
++
+ // E1: `window` has been placed at `size` (its view, at every save of its
+ // placement; `closing` at the last one). A little window OpenLittleWindow
+ // opened that the user has resized hands its size to the next one. The
+diff --git a/chrome/browser/ui/views/frame/browser_view.cc b/chrome/browser/ui/views/frame/browser_view.cc
+index a19391aaba266..7d4c50a3d7754 100644
+--- a/chrome/browser/ui/views/frame/browser_view.cc
++++ b/chrome/browser/ui/views/frame/browser_view.cc
+@@ -4350,7 +4350,16 @@ void BrowserView::SaveWindowPlacement(const gfx::Rect& bounds,
+                                GetWidget()->IsClosed());
+   WidgetDelegate::SaveWindowPlacement(bounds, show_state);
+   gfx::Rect saved_bounds = bounds;
+-  if (chrome::SavedBoundsAreContentBounds(browser_.get())) {
++  // Stedding little E12 (BACKLOG S-456): a little window keeps its window's
++  // bounds, not its page's. A popup's restore adds the frame to its page's
++  // size, and on Windows at 150% that came back 8 by 20 DIP bigger at every
++  // launch; session restore gives a little window its bounds once it is
++  // made. They are the bounds it was given while it measures within a DIP of
++  // them, or a DIP of rounding grew it at every launch.
++  if (stedding::IsLittleWindow(browser_.get())) {
++    saved_bounds = stedding::LittleWindowBoundsToSave(
++        browser_.get(), bounds, GetWidget()->IsClosed());
++  } else if (chrome::SavedBoundsAreContentBounds(browser_.get())) {
+     // Invert the transformation done in GetSavedWindowPlacement().
+     gfx::Size client_size = GetFrameView()->GetBoundsForClientView().size();
+     if (IsToolbarVisible()) {
 diff --git a/chrome/test/stedding/little_window_browsertest.cc b/chrome/test/stedding/little_window_browsertest.cc
-index 1a86c815dae05..d03f320901af9 100644
+index 1a86c815dae05..83d822684808d 100644
 --- a/chrome/test/stedding/little_window_browsertest.cc
 +++ b/chrome/test/stedding/little_window_browsertest.cc
-@@ -751,10 +751,34 @@ class LittleWindowRestoreTest : public InProcessBrowserTest {
+@@ -751,10 +751,43 @@ class LittleWindowRestoreTest : public InProcessBrowserTest {
      SessionStartupPref::SetStartupPref(
          browser()->GetProfile(), SessionStartupPref(SessionStartupPref::LAST));
    }
@@ -64,10 +185,19 @@ index 1a86c815dae05..d03f320901af9 100644
 +    EXPECT_TRUE(stedding::IsLittleWindow(popup))
 +        << "it came back as a plain popup";
 +    const PrefService* const prefs = browser()->GetProfile()->GetPrefs();
-+    EXPECT_EQ(gfx::Size(prefs->GetInteger(stedding::prefs::kLittleWidth),
-+                        prefs->GetInteger(stedding::prefs::kLittleHeight)),
-+              popup->GetWindow()->GetBounds().size())
-+        << "it came back at another size";
++    const gfx::Size was(prefs->GetInteger(stedding::prefs::kLittleWidth),
++                        prefs->GetInteger(stedding::prefs::kLittleHeight));
++    const gfx::Size is = popup->GetWindow()->GetBounds().size();
++    // little E12 (BACKLOG S-456): within a DIP. At a fractional scale
++    // (Windows at 150%) the window's bounds and the placement its session
++    // keeps are each rounded from pixels, and can be a DIP apart; a restored
++    // window a frame bigger, as on Windows before, is 8 by 20 DIP.
++    EXPECT_LE(std::abs(was.width() - is.width()), 1)
++        << "it came back at another size: " << is.ToString() << ", not "
++        << was.ToString();
++    EXPECT_LE(std::abs(was.height() - is.height()), 1)
++        << "it came back at another size: " << is.ToString() << ", not "
++        << was.ToString();
 +    EXPECT_EQ(embedded_test_server()->GetURL("/title1.html").path(),
 +              popup->GetTabStripModel()->GetActiveWebContents()
 +                  ->GetVisibleURL()
@@ -81,7 +211,7 @@ index 1a86c815dae05..d03f320901af9 100644
    BrowserWindowInterface* const little = stedding::OpenLittleWindow(
        browser()->GetProfile(), embedded_test_server()->GetURL("/title1.html"),
        browser(), /*untrusted_launch=*/false);
-@@ -763,25 +787,25 @@ IN_PROC_BROWSER_TEST_F(LittleWindowRestoreTest,
+@@ -763,25 +796,25 @@ IN_PROC_BROWSER_TEST_F(LittleWindowRestoreTest,
    // Loaded, so the session has its page: a tab with none is left out.
    ASSERT_TRUE(content::WaitForLoadStop(
        little->GetTabStripModel()->GetActiveWebContents()));

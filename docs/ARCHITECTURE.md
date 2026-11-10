@@ -133,7 +133,7 @@ The Chromium tree lives outside this repository.
 | depot_tools | `~/depot_tools` | `$DEPOT_TOOLS_DIR` |
 | gclient checkout root | `~/chromium` | `$CHROMIUM_ROOT` |
 | Chromium source | `~/chromium/src` | `$CHROMIUM_SRC` |
-| depot_tools git cache | `~/chromium/.git-cache` | `$GIT_CACHE_PATH` |
+| depot_tools git cache | `~/chromium-git-cache` | `$GIT_CACHE_PATH` |
 
 Those defaults are what `tooling/lib.sh` uses. Set `CHROMIUM_ROOT` on the first
 sync and it records the location in `.stedding-local`. Later commands read that

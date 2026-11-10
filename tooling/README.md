@@ -132,7 +132,7 @@ All overridable by environment variable. Defaults suit a fresh machine.
 | `DEPOT_TOOLS_DIR` | `~/depot_tools` | Chromium's `depot_tools` |
 | `CHROMIUM_ROOT` | `~/chromium`, or the location the first sync recorded in `.stedding-local` (local state, never committed) | `gclient` checkout root |
 | `CHROMIUM_SRC` | `$CHROMIUM_ROOT/src` | Chromium source tree, for the shell scripts |
-| `GIT_CACHE_PATH` | `$CHROMIUM_ROOT/.git-cache` | depot_tools git cache. The Windows sync does not use one |
+| `GIT_CACHE_PATH` | `$CHROMIUM_ROOT-git-cache` | depot_tools git cache, beside the checkout (trap 146). The Windows sync does not use one |
 | `STEDDING_CHROMIUM_SRC` | none; the PowerShell scripts require it | The checkout's `src` for `win/` |
 
 The Chromium tree is never committed to this repository.

@@ -31,7 +31,7 @@ The traps follow. 28 is retired. Read the one for the topic in front of you, not
 
 | Topic | Traps |
 |---|---|
-| Building, disk, rebuild cost | 1, 16, 19, 23, 44, 45, 53, 54, 57, 70, 73, 74, 83, 89, 90, 100, 123, 144 |
+| Building, disk, rebuild cost | 1, 16, 19, 23, 44, 45, 53, 54, 57, 70, 73, 74, 83, 89, 90, 100, 123, 144, 146 |
 | The working loop and the series | 5, 9, 13, 14, 17, 22, 50, 51, 89, 92, 139 |
 | Driving and capturing the window | 3, 7, 10, 11, 12, 15, 18, 24, 27, 29, 30, 36, 37, 52, 56, 59, 61, 63, 64, 65, 76, 82, 93, 94, 95, 96, 103, 105, 107, 116, 121, 130, 132, 133, 136, 137, 142 |
 | What a test can and cannot prove | 2, 4, 31, 46, 48, 51, 52, 55, 56, 58, 59, 60, 66, 68, 69, 72, 75, 77, 78, 79, 80, 81, 84, 86, 87, 88, 91, 98, 99, 101, 102, 104, 106, 107, 110, 111, 112, 113, 114, 115, 119, 120, 126, 127, 138, 141, 145 |
@@ -979,6 +979,15 @@ Two switches do the same for windows. `--stedding-welcome[=<step>]` forces the w
     (S-456) showed only at 150%. A test that needs its window's list to overflow or its
     field to narrow fills or narrows until it does, not by a count made on a 1080-line
     screen.
+146. **gclient refuses a git cache inside its checkout (depot_tools of 2026-11-09).** The Mac's
+    cache was `$CHROMIUM_ROOT/.git-cache`, and the 157.0.8103.51 sync stopped at "The git cache
+    must live outside the gclient checkout"; the script that ran `tooling/apply-patches` after it
+    did not stop, and the series went onto `src` at .51 with every dependency still at .39. The default is now
+    `$CHROMIUM_ROOT-git-cache`, beside the checkout. A checkout made before has the cache
+    inside, and about 150 dependency repositories borrow from it by path
+    (`.git/objects/info/alternates`): move it, and rewrite those paths, as
+    `tooling/sync-chromium` says when it finds the old place. A sync that fails is not a
+    synced tree: read the line before "apply".
 ## The Windows build
 
 Git for Windows runs the bash tooling. PowerShell runs the rest. The toolchain is the installed Visual Studio (`DEPOT_TOOLS_WIN_TOOLCHAIN=0`, set by the scripts). Three variables name the machine's paths, so none is in the repo: `STEDDING_CHROMIUM_SRC` (the checkout's `src`), `STEDDING_DEPOT_TOOLS` when depot_tools is not already on `PATH`, and `STEDDING_VPYTHON_ROOT`, a short directory for vpython's venv (trap 34). The bash tooling takes the checkout as `CHROMIUM_ROOT`, the folder that holds `src`, as a POSIX path.

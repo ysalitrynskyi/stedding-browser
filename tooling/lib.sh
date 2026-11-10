@@ -7,7 +7,7 @@
 #   $DEPOT_TOOLS_DIR      Chromium's depot_tools     (default: ~/depot_tools)
 #   $CHROMIUM_ROOT        gclient checkout root      (default: ~/chromium)
 #   $CHROMIUM_SRC         Chromium source tree       (default: $CHROMIUM_ROOT/src)
-#   $GIT_CACHE_PATH       depot_tools git cache      (default: $CHROMIUM_ROOT/.git-cache)
+#   $GIT_CACHE_PATH       depot_tools git cache      (default: $CHROMIUM_ROOT-git-cache)
 #
 # The Chromium tree lives OUTSIDE this repository and is never committed here.
 
@@ -43,7 +43,9 @@ CHROMIUM_SRC="${CHROMIUM_SRC:-$CHROMIUM_ROOT/src}"
 # Google Storage over plain HTTP instead. gclient picks this up for every dependency
 # as well, so it is set for all tooling rather than in one script.
 # See docs/ARCHITECTURE.md, "Known failure modes".
-GIT_CACHE_PATH="${GIT_CACHE_PATH:-$CHROMIUM_ROOT/.git-cache}"
+# Beside the checkout, not in it: from 2026-11-09 gclient refuses a cache inside its root,
+# where a dependency could commit a fake mirror (docs/HANDOFF.md, trap 146).
+GIT_CACHE_PATH="${GIT_CACHE_PATH:-${CHROMIUM_ROOT%/}-git-cache}"
 
 export STEDDING_ROOT DEPOT_TOOLS_DIR CHROMIUM_ROOT CHROMIUM_SRC GIT_CACHE_PATH
 

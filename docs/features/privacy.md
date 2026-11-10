@@ -1,7 +1,7 @@
 # Feature: Tracker-free defaults, one Privacy block
 
-Status: **Q0–Q16 built.**
-Owner docs: `docs/PRIVACY.md`, `docs/decisions/0017-privacy-defaults.md`. Patches: 0030; Q10's refresh features, 0042; Q11–Q13, 0062; Q14, 0065; Q15, 0089; Q16, 0104.
+Status: **Q0–Q18 built.**
+Owner docs: `docs/PRIVACY.md`, `docs/decisions/0017-privacy-defaults.md`. Patches: 0030; Q10's refresh features, 0042; Q11–Q13, 0062; Q14, 0065; Q15, 0089; Q16 and Q18, 0104.
 
 `docs/PRIVACY.md` promises defaults Chromium does not ship with. Each promise is a preference default, and the controls sit in one Privacy block of chrome://settings/stedding. A row that Chromium already has binds Chromium's preference, so the eye icon, per-site cookie allowances and the permission prompts keep working. Global Privacy Control is Stedding's own preference.
 
@@ -27,6 +27,7 @@ Owner docs: `docs/PRIVACY.md`, `docs/decisions/0017-privacy-defaults.md`. Patche
 | Q15 | "Remove tracking from links you open" is off until the user turns it on, in Settings or the welcome flow (welcome W19): `stedding.privacy.clean_links` (profile, off by default since 2026-11-02, the owner: it can strip the code a site credits a referral by). The behaviour is `docs/features/clean-links.md` Cl1–Cl14. The row is in the Privacy block right after Global Privacy Control, with the kept-sites list under it (settings T31, T32). | unit: `SteddingPrefsTest.EveryPreferenceRegistersWithItsDefault`, `CleanLinksThrottleTest.TheSettingOffLeavesEveryLinkAlone`; browser: `CleanLinksSettingsTest.TheSwitchIsBoundAndOff`; unit: `SteddingWelcomeHandlerTest.ThePrivacyChoicesWriteTheirSwitches` | built |
 | Q16 | Browser sign-in is never offered. `CanEnableDiceForBuild` stays false unless a test asks otherwise, including when `GOOGLE_DEFAULT_CLIENT_ID` and `GOOGLE_DEFAULT_CLIENT_SECRET` are set or `--oauth2-client-id` is passed (GitHub issue 38). The profile's `signin.allowed` is false, and Desktop Identity Consistency is off. Signing in to Google's websites works as in any browser. | browser: `BrowserSigninTest.NoOAuthClientTurnsSignInOn` | built |
 | Q17 | A focused address field offers no "Ask Google about this page" and asks Google for no suggestions about the page: Chromium's `OmniboxContextualSearchOnFocusSuggestions` is off (GitHub issue 14). With Google as the engine it had put that line at the field's left. | `PrivacyDefaultsTest.TheFocusedFieldAsksGoogleNothingAboutThePage` | built |
+| Q18 | Nothing offers tabs from other devices. They come only through Google sync, which a profile that may not sign the browser in to Google (`signin.allowed` false, Q16) cannot turn on. The History page's side bar lists History and Delete browsing data, with no "Tabs from other devices"; `chrome://history/syncedTabs` opens the history list, not a page that asks to sync history; the History menu has no part for other devices, where it offered a sign-in that went nowhere. A profile that may sign in keeps Chromium's page and menu. | browser: `BrowserSigninTest.NothingOffersTabsFromOtherDevices` | built |
 
 ## Notes
 

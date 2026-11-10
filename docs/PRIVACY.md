@@ -257,7 +257,9 @@ Stedding does not offer to sign the browser in to Google, including on a
 computer where `GOOGLE_DEFAULT_CLIENT_ID` and `GOOGLE_DEFAULT_CLIENT_SECRET`
 are set (`features/privacy.md` Q16,
 `BrowserSigninTest.NoOAuthClientTurnsSignInOn`). Signing in to Google websites
-works as in any browser. There is no Stedding account or server. A sync
+works as in any browser. Nothing offers tabs from other devices, which only
+Google sync brings: neither the History page nor the History menu has
+"Tabs from other devices" (`features/privacy.md` Q18). There is no Stedding account or server. A sync
 service of our own is out of scope on the way to 1.0
 ([ROADMAP.md](ROADMAP.md), "Out of scope for this ladder").
 

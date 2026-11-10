@@ -14,6 +14,14 @@ do not, so the Mac did not. Chromium's own first run, the screen that
 asked, never opens either: Stedding's welcome is the first start
 (welcome W18).
 
+Nothing offers tabs from other devices either (privacy Q18). They come
+only through Google sync, which a profile that may not sign the browser
+in cannot turn on. The History page's side bar had "Tabs from other
+devices", a page that asked to sync history, and the History menu
+offered a sign-in that went nowhere. The item is gone,
+chrome://history/syncedTabs opens the history list, and the menu has no
+part for other devices.
+
 The sidebar's foot: History moves from the bottom row to the Archived
 row's line, at its end with its icon over the "+"; the line is shorter,
 its text two sizes under the rows' and at half their strength. The
@@ -24,13 +32,17 @@ Space chips centre on the whole row, not on what the button leaves them
 The command bar casts a shadow and has a hairline edge, so it stands off
 a white page in the light look (commandbar K36, GitHub issue 37).
 
-Why: GitHub issues 38 and 37, and the owner on the sidebar's foot
-(2026-10-25).
+Why: GitHub issues 38 and 37, the owner on the sidebar's foot
+(2026-10-25) and on the History page (2026-11-09).
 Removable when: never; to be folded into the patches that own the code.
 ---
+ chrome/browser/resources/history/router.ts    |  11 +-
+ .../resources/history/side_bar.html.ts        |   1 +
+ chrome/browser/resources/history/side_bar.ts  |   7 +
  .../account_consistency_mode_manager.cc       |  27 ++--
  .../signin/account_consistency_mode_manager.h |   4 +-
  .../browser/ui/startup/first_run_service.cc   |  13 +-
+ .../browser/ui/tabs/remote_tabs_menu_util.cc  |   9 ++
  chrome/browser/ui/views/commandbar/BUILD.gn   |   2 +
  .../ui/views/commandbar/command_bar_view.cc   |  15 +-
  .../ui/views/commandbar/command_bar_view.h    |   6 +
@@ -42,13 +54,83 @@ Removable when: never; to be folded into the patches that own the code.
  .../views/tabs/common/clear_tabs_separator.h  |   7 +
  .../vertical_tab_strip_bottom_container.cc    |  60 -------
  .../vertical_tab_strip_bottom_container.h     |  15 --
+ chrome/browser/ui/webui/history/history_ui.cc |   9 ++
+ chrome/test/stedding/BUILD.gn                 |   1 +
  .../test/stedding/clear_space_browsertest.cc  |  18 ++-
- .../stedding/privacy_defaults_browsertest.cc  |  40 +++++
+ .../stedding/privacy_defaults_browsertest.cc  | 107 +++++++++++++
  .../stedding/sidebar_panels_browsertest.cc    |  45 ++++--
  .../test/stedding/sidebar_rail_browsertest.cc |  21 +++
  chrome/test/stedding/welcome_browsertest.cc   | 110 +++++++++++--
- 19 files changed, 449 insertions(+), 169 deletions(-)
+ 25 files changed, 553 insertions(+), 170 deletions(-)
 
+diff --git a/chrome/browser/resources/history/router.ts b/chrome/browser/resources/history/router.ts
+index 70901c4c9cbe2..6bd22bf3db484 100644
+--- a/chrome/browser/resources/history/router.ts
++++ b/chrome/browser/resources/history/router.ts
+@@ -5,6 +5,7 @@
+ import type {QueryState} from 'chrome://resources/cr_components/history/history.mojom-webui.js';
+ import {CrRouter} from 'chrome://resources/js/cr_router.js';
+ import {EventTracker} from 'chrome://resources/js/event_tracker.js';
++import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
+ import {CrLitElement} from 'chrome://resources/lit/v3_0/lit.rollup.js';
+ import type {PropertyValues} from 'chrome://resources/lit/v3_0/lit.rollup.js';
+ 
+@@ -124,9 +125,17 @@ export class HistoryRouterElement extends CrLitElement {
+ 
+   private onPathChanged_(newPath: string) {
+     const sections = newPath.substr(1).split('/');
+-    const page = sections[0] ||
++    let page = sections[0] ||
+         (window.location.search ? 'history' :
+                                   TABBED_PAGES[this.lastSelectedTab]);
++    // Stedding (privacy Q18): chrome://history/syncedTabs, from a link, a
++    // bookmark or the address field, opens the history list where the page
++    // offers no tabs from other devices (every Stedding profile).
++    if (page === Page.SYNCED_TABS &&
++        !loadTimeData.getBoolean('steddingTabsFromOtherDevices')) {
++      page = Page.HISTORY;
++      CrRouter.getInstance().setPath('/');
++    }
+     // TODO(b/338245900): This is kind of nasty. Without cr-tabs to constrain
+     //   `selectedPage`, this can be set to an arbitrary value from the URL.
+     //   To fix this, we should constrain the selected pages to an actual enum.
+diff --git a/chrome/browser/resources/history/side_bar.html.ts b/chrome/browser/resources/history/side_bar.html.ts
+index f2384bffe54f9..b3da7a3912183 100644
+--- a/chrome/browser/resources/history/side_bar.html.ts
++++ b/chrome/browser/resources/history/side_bar.html.ts
+@@ -22,6 +22,7 @@ export function getHtml(this: HistorySideBarElement) {
+   </a>
+   <a id="syncedTabs" role="menuitem" href="/syncedTabs"
+       class="page-item cr-nav-menu-item" path="syncedTabs"
++      ?hidden="${!this.tabsFromOtherDevices_}"
+       @click="${this.onItemClick_}">
+     <cr-icon icon="cr:devices"></cr-icon>
+     $i18n{openTabsMenuItem}
+diff --git a/chrome/browser/resources/history/side_bar.ts b/chrome/browser/resources/history/side_bar.ts
+index f1667adc56278..20def7c5cf178 100644
+--- a/chrome/browser/resources/history/side_bar.ts
++++ b/chrome/browser/resources/history/side_bar.ts
+@@ -73,6 +73,8 @@ export class HistorySideBarElement extends CrLitElement {
+ 
+       guestSession_: {type: Boolean},
+ 
++      tabsFromOtherDevices_: {type: Boolean},
++
+       /**
+        * Used to display notices for profile sign-in status and managed status.
+        */
+@@ -112,6 +114,11 @@ export class HistorySideBarElement extends CrLitElement {
+   accessor selectedPage: string = '';
+   accessor selectedTab: number = -1;
+   protected accessor guestSession_ = loadTimeData.getBoolean('isGuestSession');
++  // Stedding (privacy Q18): no "Tabs from other devices" where the profile may
++  // not sign the browser in to Google, as every Stedding profile may not
++  // (privacy Q16). The page could only offer Google sync there.
++  protected accessor tabsFromOtherDevices_ =
++      loadTimeData.getBoolean('steddingTabsFromOtherDevices');
+   protected accessor showFooter_: boolean = false;
+   protected accessor showGoogleAccountFooter_: boolean = false;
+   protected accessor showGMAOnly_: boolean = false;
 diff --git a/chrome/browser/signin/account_consistency_mode_manager.cc b/chrome/browser/signin/account_consistency_mode_manager.cc
 index 7d4c893cbcd99..053e0324c0991 100644
 --- a/chrome/browser/signin/account_consistency_mode_manager.cc
@@ -152,6 +234,33 @@ index 7e1709c6744f6..b2621f5452cff 100644
 +  // issue 38), and Stedding has no Google sign-in to offer.
 +  return false;
  }
+diff --git a/chrome/browser/ui/tabs/remote_tabs_menu_util.cc b/chrome/browser/ui/tabs/remote_tabs_menu_util.cc
+index feae25a998e30..cb01accb8a297 100644
+--- a/chrome/browser/ui/tabs/remote_tabs_menu_util.cc
++++ b/chrome/browser/ui/tabs/remote_tabs_menu_util.cc
+@@ -10,6 +10,8 @@
+ #include "chrome/browser/signin/identity_manager_factory.h"
+ #include "chrome/browser/signin/signin_util.h"
+ #include "chrome/browser/sync/sync_service_factory.h"
++#include "components/prefs/pref_service.h"
++#include "components/signin/public/base/signin_pref_names.h"
+ #include "components/signin/public/identity_manager/identity_manager.h"
+ #include "components/sync/base/features.h"
+ #include "components/sync/base/user_selectable_type.h"
+@@ -23,6 +25,13 @@
+ namespace remote_tabs_menu_util {
+ 
+ bool ShouldShowTabsFromOtherDevices(Profile* profile) {
++  // Stedding (privacy Q18): tabs from other devices come only through Google
++  // sync, which a profile that may not sign the browser in to Google cannot
++  // turn on: every Stedding profile (privacy Q16). The History menu then
++  // offered a sign-in that goes nowhere.
++  if (!profile->GetPrefs()->GetBoolean(prefs::kSigninAllowed)) {
++    return false;
++  }
+ #if !BUILDFLAG(IS_CHROMEOS)
+   if (syncer::IsReplaceSyncPromosWithSignInPromosEnabled()) {
+     syncer::SyncService* sync_service =
 diff --git a/chrome/browser/ui/views/commandbar/BUILD.gn b/chrome/browser/ui/views/commandbar/BUILD.gn
 index 066d8eb3e76e3..b2b860186ec47 100644
 --- a/chrome/browser/ui/views/commandbar/BUILD.gn
@@ -805,6 +914,47 @@ index 2b5dc10ac9f0d..ec003347f99b1 100644
    VerticalTabStripBottomContainer(
        tabs::VerticalTabStripStateController* state_controller,
        actions::ActionItem* root_action_item,
+diff --git a/chrome/browser/ui/webui/history/history_ui.cc b/chrome/browser/ui/webui/history/history_ui.cc
+index 7c21a8d33ddad..05c7268555757 100644
+--- a/chrome/browser/ui/webui/history/history_ui.cc
++++ b/chrome/browser/ui/webui/history/history_ui.cc
+@@ -36,8 +36,10 @@
+ #include "components/critical_actions/core/browser/features.h"
+ #include "components/grit/components_scaled_resources.h"
+ #include "components/history/core/browser/features.h"
++#include "components/prefs/pref_service.h"
+ #include "components/page_image_service/image_service.h"
+ #include "components/page_image_service/image_service_handler.h"
++#include "components/signin/public/base/signin_pref_names.h"
+ #include "components/strings/grit/components_strings.h"
+ #include "components/sync/base/features.h"
+ #include "content/public/browser/web_contents.h"
+@@ -69,6 +71,13 @@ content::WebUIDataSource* CreateAndAddHistoryUIHTMLSource(Profile* profile) {
+                      base::FeatureList::IsEnabled(syncer::kUnoPhase2FollowUp));
+ #endif  // !BUILDFLAG(IS_CHROMEOS)
+ 
++  // Stedding (privacy Q18): the "Tabs from other devices" page and its menu
++  // item only where the profile may sign the browser in to Google, which
++  // Google sync, the only source of those tabs, needs. Elsewhere, every
++  // Stedding profile (privacy Q16), the page could only offer to sync.
++  source->AddBoolean("steddingTabsFromOtherDevices",
++                     profile->GetPrefs()->GetBoolean(prefs::kSigninAllowed));
++
+   HistoryUtil::PopulateCommonSourceForHistory(source, profile);
+ 
+   static constexpr webui::LocalizedString kStrings[] = {
+diff --git a/chrome/test/stedding/BUILD.gn b/chrome/test/stedding/BUILD.gn
+index 00e38cb5ca0cd..5fa16fdd2d949 100644
+--- a/chrome/test/stedding/BUILD.gn
++++ b/chrome/test/stedding/BUILD.gn
+@@ -294,6 +294,7 @@ test("stedding_browser_tests") {
+     "//components/sessions",
+     "//components/split_tabs",
+     "//components/strings:components_branded_strings",
++    "//components/strings:components_strings",
+     "//components/tab_groups",
+     "//components/tabs:public",
+     "//components/variations/service",
 diff --git a/chrome/test/stedding/clear_space_browsertest.cc b/chrome/test/stedding/clear_space_browsertest.cc
 index 522461b189b9f..6d6bc36d00c63 100644
 --- a/chrome/test/stedding/clear_space_browsertest.cc
@@ -845,10 +995,10 @@ index 522461b189b9f..6d6bc36d00c63 100644
  
  }  // namespace
 diff --git a/chrome/test/stedding/privacy_defaults_browsertest.cc b/chrome/test/stedding/privacy_defaults_browsertest.cc
-index 60b891cc38197..86df1d6c97543 100644
+index 60b891cc38197..16414a929f041 100644
 --- a/chrome/test/stedding/privacy_defaults_browsertest.cc
 +++ b/chrome/test/stedding/privacy_defaults_browsertest.cc
-@@ -9,11 +9,14 @@
+@@ -9,25 +9,35 @@
  // framed by another sets no cookie. The rows cited reads of the preferences'
  // defaults and of the switch the preference becomes.
  
@@ -857,17 +1007,22 @@ index 60b891cc38197..86df1d6c97543 100644
  
 +#include "base/environment.h"
  #include "base/test/run_until.h"
++#include "chrome/app/chrome_command_ids.h"
  #include "chrome/browser/browser_process.h"
  #include "chrome/browser/profiles/profile.h"
 +#include "chrome/browser/signin/account_consistency_mode_manager.h"
  #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
  #include "chrome/browser/ui/stedding/stedding_prefs.h"
++#include "chrome/browser/ui/tabs/recent_tabs_sub_menu_model.h"
++#include "chrome/browser/ui/tabs/remote_tabs_menu_util.h"
  #include "chrome/browser/ui/tabs/tab_strip_model.h"
-@@ -22,9 +25,11 @@
+ #include "chrome/test/base/in_process_browser_test.h"
+ #include "chrome/test/base/ui_test_utils.h"
  #include "components/content_settings/core/browser/cookie_settings.h"
  #include "components/content_settings/core/common/pref_names.h"
  #include "components/prefs/pref_service.h"
 +#include "components/signin/public/base/signin_pref_names.h"
++#include "components/strings/grit/components_strings.h"
  #include "content/public/browser/web_contents.h"
  #include "content/public/test/browser_test.h"
  #include "content/public/test/browser_test_utils.h"
@@ -875,7 +1030,11 @@ index 60b891cc38197..86df1d6c97543 100644
  #include "net/dns/mock_host_resolver.h"
  #include "net/test/embedded_test_server/embedded_test_server.h"
  #include "testing/gtest/include/gtest/gtest.h"
-@@ -144,6 +149,41 @@ IN_PROC_BROWSER_TEST_F(GlobalPrivacyControlTest,
++#include "ui/base/l10n/l10n_util.h"
+ #include "url/gurl.h"
+ 
+ namespace {
+@@ -144,6 +154,103 @@ IN_PROC_BROWSER_TEST_F(GlobalPrivacyControlTest,
  
  // Every host resolves to the test server; rules are set before the browser
  // starts its work, as the resolver allows no change after that.
@@ -912,6 +1071,68 @@ index 60b891cc38197..86df1d6c97543 100644
 +      << "browser sign-in is allowed";
 +  EXPECT_FALSE(AccountConsistencyModeManager::IsDiceEnabledForProfile(profile))
 +      << "Google's sign-in headers and prompts are on";
++}
++
++// privacy Q18: tabs from other devices come only through Google sync, which a
++// profile that may not sign the browser in to Google cannot turn on. Nothing
++// offers them: the History page's side bar has History and Delete browsing
++// data and no "Tabs from other devices", its address opens the history list
++// and no page that asks to sync, and the History menu has no part for other
++// devices, where it offered a sign-in that goes nowhere.
++IN_PROC_BROWSER_TEST_F(BrowserSigninTest, NothingOffersTabsFromOtherDevices) {
++  Profile* const profile = browser()->GetProfile();
++  ASSERT_FALSE(profile->GetPrefs()->GetBoolean(prefs::kSigninAllowed));
++  content::WebContents* const contents =
++      browser()->GetTabStripModel()->GetActiveWebContents();
++  // The ids of the side bar's menu items not hidden (the side bar itself is
++  // hidden in a window as narrow as the test's), whether the page for other
++  // devices or the history list is open, and the path, once the page has
++  // drawn them.
++  static constexpr char kHistoryPage[] = R"(
++    new Promise(resolve => {
++      const read = () => {
++        const app = document.querySelector('history-app');
++        const side = app && app.shadowRoot &&
++            app.shadowRoot.querySelector('#contentSideBar');
++        const menu = side && side.shadowRoot &&
++            side.shadowRoot.querySelector('#menu');
++        if (!menu || !menu.querySelector('#history')) {
++          setTimeout(read, 50);
++          return;
++        }
++        const items = [...menu.querySelectorAll('[role=menuitem]')]
++            .filter(item => !item.hidden)
++            .map(item => item.id).join(',');
++        const devices =
++            !!app.shadowRoot.querySelector('history-synced-device-manager');
++        const list = !!app.shadowRoot.querySelector('history-list');
++        resolve(items + ' devices:' + devices + ' list:' + list + ' ' +
++                location.pathname);
++      };
++      read();
++    }))";
++  ASSERT_TRUE(
++      ui_test_utils::NavigateToURL(browser(), GURL("chrome://history/")));
++  EXPECT_EQ("history,clear-browsing-data devices:false list:true /",
++            content::EvalJs(contents, kHistoryPage))
++      << "the History page offers tabs from other devices";
++  ASSERT_TRUE(ui_test_utils::NavigateToURL(
++      browser(), GURL("chrome://history/syncedTabs")));
++  EXPECT_EQ("history,clear-browsing-data devices:false list:true /",
++            content::EvalJs(contents, kHistoryPage))
++      << "chrome://history/syncedTabs opened the page that asks to sync";
++
++  EXPECT_FALSE(remote_tabs_menu_util::ShouldShowTabsFromOtherDevices(profile));
++  RecentTabsSubMenuModel menu(nullptr, browser());
++  const std::u16string your_devices =
++      l10n_util::GetStringUTF16(IDS_YOUR_DEVICES);
++  for (size_t i = 0; i < menu.GetItemCount(); ++i) {
++    SCOPED_TRACE(menu.GetLabelAt(i));
++    EXPECT_NE(your_devices, menu.GetLabelAt(i));
++    EXPECT_NE(IDC_RECENT_TABS_LOGIN_FOR_DEVICE_TABS, menu.GetCommandIdAt(i));
++    EXPECT_NE(IDC_RECENT_TABS_SEE_DEVICE_TABS, menu.GetCommandIdAt(i));
++    EXPECT_NE(IDC_RECENT_TABS_NO_DEVICE_TABS, menu.GetCommandIdAt(i));
++  }
 +}
 +
  class ThirdPartyCookiesTest : public InProcessBrowserTest {

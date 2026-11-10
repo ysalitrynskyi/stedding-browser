@@ -2,6 +2,29 @@
 
 What was built, newest first. Nothing here is needed to do a task: `AGENTS.md` carries what is true now, `BACKLOG.md` the order of work, `PLAN.md` the owner's decisions. This file was the "State of the project" section of `AGENTS.md` until 2026-09-30. This log starts at 2026-10-15. Closed work from before that is the table in [docs/history/archive.md](history/archive.md).
 
+## 2026-11-10 -- 0.4.0 beta 16: Chromium .51, issues 89 and 93, History
+
+The entries below, released: the sync id that lasts every restart (issue 89), the window buttons
+off the page and in full screen (issue 93, S-454), History without Google sync (S-457), the little
+window that grew at 150% (S-456), and Chromium 157.0.8103.51. The Mac's checkout moved to .51
+that night and built the release, signed and notarized, and its DCHECK build.
+
+The sweeps found three more. On the Mac's DCHECK build a page's full screen stopped at a check
+that the full-screen change had made untrue (S-460); release builds leave the check out, so the
+DMG built before the fix behaves the same, and the fix is in that patch. On the PC, whose display
+is 4K at 150% since 2026-11-09, a rail drop test aimed while a Space switch still slid (S-459, a
+test fix), and a dragged row's copy went once while the button was held (S-461, open; the test
+now fails instead of crashing). The release sweeps on Windows force scale 1; the DCHECK and ASan
+sweeps keep the display's own, where S-458's geometry tests read a DIP off.
+
+Checked: 1492 unit and 948 browser tests on the Mac, release and DCHECK, the DCHECK build's
+crashes and timeouts passing twice alone after S-460; 1480 unit and 895 browser tests on Windows,
+release and DCHECK, and ASan with no report and no dangling pointer, with S-458's tests and
+S-461's once as the failures; acceptance on a copy of the notarized Mac build and on the installed
+Windows copy (TST-6 alone after the installer cycle); the update from beta 15 through a local feed
+on both. The tag's series has the three fixes; the released builds were made just before them,
+and differ only in that check and in tests.
+
 ## 2026-11-09 -- Chromium 157.0.8103.51, and no "Tabs from other devices"
 
 The owner: move the pin, and fix the History page, which offered to sync. The pin moved from

@@ -15,7 +15,7 @@ else keeps them (S-464). After logging back in the count was 151 and the owner's
 browser leg over 12,000, checks again before the serial leg, and says what each run added
 (trap 147). `tooling/leftovers` and `tooling\win\leftovers.ps1` list and clear what jobs left:
 that night 2.8 GB of siso logs on the Mac and 8 GB on the PC, three local servers alive for up
-to 17 days, test temp, and 60 one-time scheduled tasks on the PC. Running it also found 64
+to 17 days, test temp, and the one-time scheduled tasks old jobs had left on the PC. Running it also found 64
 empty mount folders that `tooling/publish-appcast` left, one per run; it now removes its own.
 Both machines ended with "nothing left over". The guard was seen refusing a leg at a limit of
 100 and running none of its tests. A full browser leg has not run through it yet.

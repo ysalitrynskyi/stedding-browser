@@ -1,0 +1,694 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Thu, 5 Nov 2026 15:21:09 -0500
+Subject: feat: a session has an id and a name
+
+A Space's profile_id has been the storage-partition name of its own session.
+It is now the id of a session, which several Spaces may hold. The id is the
+jar's token, so a session needs no second key and nothing on disk moves.
+
+The name lives in one new list, stedding.spaces.sessions, and only for a session
+made with a name, joined by a second Space, or left by its last Space. A token
+with no row is a session named after the Space that holds it, which is every
+Independent session on disk today. Nothing is rewritten, so there is no
+migration to fail, and an older build reads every Space as it was.
+
+SpacePartitionNames reads the list as well as the Spaces, so the collection and
+Delete browsing data reach a session no Space uses (sessions S37, S43, S44).
+
+Why: Arc's users keep several Spaces on one sign-in, and two have asked for it
+here (BACKLOG S-272, GitHub issue 8, ADR 0032).
+
+Removable when: Chromium gives a profile more than one set of sign-ins of its
+own, which it has no plan to.
+---
+ .../ui/spaces/space_partitions_unittest.cc    |  21 ++
+ chrome/browser/ui/spaces/space_registry.cc    | 215 ++++++++++++++++++
+ chrome/browser/ui/spaces/space_registry.h     |  60 +++++
+ .../ui/spaces/space_registry_unittest.cc      | 155 +++++++++++++
+ chrome/browser/ui/stedding/stedding_prefs.cc  |   1 +
+ chrome/browser/ui/stedding/stedding_prefs.h   |   4 +
+ .../ui/stedding/stedding_prefs_unittest.cc    |   3 +
+ chrome/common/stedding/space_partitions.cc    |  20 +-
+ chrome/common/stedding/space_partitions.h     |  11 +
+ 9 files changed, 489 insertions(+), 1 deletion(-)
+
+diff --git a/chrome/browser/ui/spaces/space_partitions_unittest.cc b/chrome/browser/ui/spaces/space_partitions_unittest.cc
+index 60d3f9d4d24b3..80b95cc225b8c 100644
+--- a/chrome/browser/ui/spaces/space_partitions_unittest.cc
++++ b/chrome/browser/ui/spaces/space_partitions_unittest.cc
+@@ -47,6 +47,27 @@ TEST(SpacePartitionsTest, RegistryNamesEveryJar) {
+                                    registry.Find(old)->profile_id));
+ }
+ 
++// sessions S44: a jar two Spaces name comes once, and a session no Space uses
++// is named by its row, so the collection keeps it and Delete browsing data
++// reaches it.
++TEST(SpacePartitionsTest, ASessionNoSpaceUsesIsNamed) {
++  TestingPrefServiceSimple prefs;
++  prefs.registry()->RegisterListPref(stedding::prefs::kSpaceRegistry);
++  prefs.registry()->RegisterListPref(stedding::prefs::kSpaceSessions);
++  SpaceRegistry registry(&prefs);
++  const SpaceId mail = registry.Add("Mail", SK_ColorBLUE);
++  const SpaceId docs = registry.Add("Docs", SK_ColorRED);
++  const std::string work = registry.AddSession("Work");
++  const std::string unused = registry.AddSession("Unused");
++  registry.SetSession(mail, work);
++  registry.SetSession(docs, work);
++
++  EXPECT_THAT(stedding::SpacePartitionNames(prefs),
++              testing::ElementsAre(work, unused));
++  EXPECT_EQ(std::string_view(stedding::prefs::kSpaceSessions),
++            std::string_view(stedding::kSpaceSessionsPref));
++}
++
+ // sessions S31: the network context's configuration tells a Space's jar
+ // by its path, the one content gives a partition of the Spaces' domain. The
+ // profile's own jar, the Spaces' directory itself and another domain's
+diff --git a/chrome/browser/ui/spaces/space_registry.cc b/chrome/browser/ui/spaces/space_registry.cc
+index 2acb7cec157aa..fb703cec932bd 100644
+--- a/chrome/browser/ui/spaces/space_registry.cc
++++ b/chrome/browser/ui/spaces/space_registry.cc
+@@ -9,22 +9,52 @@
+ #include <algorithm>
+ #include <utility>
+ 
++#include "base/i18n/case_conversion.h"
++#include "base/strings/strcat.h"
++#include "base/strings/string_number_conversions.h"
++#include "base/strings/utf_string_conversions.h"
++#include "base/third_party/icu/icu_utf.h"
+ #include "base/token.h"
++#include "chrome/browser/ui/spaces/isolation_mark.h"
+ #include "chrome/browser/ui/stedding/stedding_prefs.h"
+ #include "components/prefs/pref_service.h"
+ 
+ namespace spaces {
+ 
++namespace {
++
++// sessions S37: the longest name the sessions list keeps, in UTF-16 units.
++constexpr size_t kMaxSessionName = 64;
++
++}  // namespace
++
+ RegistryEntry::RegistryEntry(SpaceId id, std::string name, SkColor color)
+     : id(id), name(std::move(name)), color(color) {}
+ RegistryEntry::RegistryEntry(const RegistryEntry& other) = default;
+ RegistryEntry& RegistryEntry::operator=(const RegistryEntry& other) = default;
+ RegistryEntry::~RegistryEntry() = default;
+ 
++SessionEntry::SessionEntry() = default;
++SessionEntry::SessionEntry(const SessionEntry& other) = default;
++SessionEntry& SessionEntry::operator=(const SessionEntry& other) = default;
++SessionEntry::~SessionEntry() = default;
++
+ SpaceRegistry::SpaceRegistry(PrefService* prefs) : prefs_(prefs) {
+   if (prefs_) {
+     entries_ = FromValue(prefs_->GetList(stedding::prefs::kSpaceRegistry));
+   }
++  // sessions S37: a test's PrefService may have only the Space list.
++  if (prefs_ && prefs_->FindPreference(stedding::prefs::kSpaceSessions)) {
++    for (const base::Value& item :
++         prefs_->GetList(stedding::prefs::kSpaceSessions)) {
++      const base::DictValue* const dict = item.GetIfDict();
++      const std::string* const id = dict ? dict->FindString("id") : nullptr;
++      const std::string* const name = dict ? dict->FindString("name") : nullptr;
++      if (id && name && base::Token::FromString(*id) && !HasSessionRow(*id)) {
++        session_rows_.push_back({*id, *name});
++      }
++    }
++  }
+ }
+ 
+ SpaceRegistry::~SpaceRegistry() = default;
+@@ -170,6 +200,191 @@ void SpaceRegistry::SetIsolated(const SpaceId& id, bool isolated) {
+   }
+ }
+ 
++std::vector<SessionEntry> SpaceRegistry::Sessions() const {
++  std::vector<SessionEntry> sessions;
++  for (const RegistryEntry& entry : entries_) {
++    if (entry.profile_id.empty()) {
++      continue;
++    }
++    auto it = std::ranges::find_if(sessions, [&](const SessionEntry& session) {
++      return session.id == entry.profile_id;
++    });
++    if (it == sessions.end()) {
++      SessionEntry& session = sessions.emplace_back();
++      session.id = entry.profile_id;
++      session.name = SessionNameOf(entry.profile_id);
++      session.has_row = HasSessionRow(entry.profile_id);
++      it = sessions.end() - 1;
++    }
++    it->spaces.push_back(entry.id);
++  }
++  // sessions S43: a session no Space uses is a row alone.
++  for (const SessionRow& row : session_rows_) {
++    if (std::ranges::none_of(sessions, [&](const SessionEntry& session) {
++          return session.id == row.id;
++        })) {
++      SessionEntry& session = sessions.emplace_back();
++      session.id = row.id;
++      session.name = row.name;
++      session.has_row = true;
++    }
++  }
++  return sessions;
++}
++
++std::optional<SessionEntry> SpaceRegistry::FindSession(
++    std::string_view id) const {
++  for (SessionEntry& session : Sessions()) {
++    if (session.id == id) {
++      return std::move(session);
++    }
++  }
++  return std::nullopt;
++}
++
++bool SpaceRegistry::NamesJar(std::string_view jar) const {
++  return !jar.empty() &&
++         std::ranges::any_of(entries_, [&](const RegistryEntry& entry) {
++           return entry.profile_id == jar;
++         });
++}
++
++bool SpaceRegistry::ANameOtherThan(const SpaceId& except,
++                                   std::string_view jar) const {
++  return !jar.empty() &&
++         std::ranges::any_of(entries_, [&](const RegistryEntry& entry) {
++           return entry.id != except && entry.profile_id == jar;
++         });
++}
++
++bool SpaceRegistry::HasSessionRow(std::string_view id) const {
++  return std::ranges::any_of(
++      session_rows_, [&](const SessionRow& row) { return row.id == id; });
++}
++
++std::string SpaceRegistry::AddSession(std::string_view name) {
++  std::string id = base::Token::CreateRandom().ToString();
++  AddSessionRow(id, std::string(name));
++  WriteSessions();
++  observers_.Notify(&Observer::OnRegistryChanged);
++  return id;
++}
++
++void SpaceRegistry::EnsureSessionRow(const std::string& id,
++                                     std::string_view name) {
++  // S50, S51: an id from a file is taken only if it is a token, as a window's
++  // session is (S2).
++  if (!base::Token::FromString(id) || HasSessionRow(id)) {
++    return;
++  }
++  AddSessionRow(id, std::string(name));
++  WriteSessions();
++  observers_.Notify(&Observer::OnRegistryChanged);
++}
++
++void SpaceRegistry::ForgetSession(std::string_view id) {
++  if (std::erase_if(session_rows_, [&](const SessionRow& row) {
++        return row.id == id;
++      }) > 0) {
++    WriteSessions();
++    observers_.Notify(&Observer::OnRegistryChanged);
++  }
++}
++
++void SpaceRegistry::SetSession(const SpaceId& id, const std::string& session) {
++  RegistryEntry* const entry = FindMutable(id);
++  if (!entry) {
++    return;
++  }
++  // S7: Shared keeps the token, and the Space still names the jar.
++  if (session.empty()) {
++    SetIsolated(id, false);
++    return;
++  }
++  if (entry->profile_id == session) {
++    EnsureIsolated(id);
++    return;
++  }
++  // S43: the last Space to leave leaves the session its name, which until now
++  // it may have had from this Space.
++  const std::string left = entry->profile_id;
++  if (!left.empty() && !ANameOtherThan(id, left) && !HasSessionRow(left)) {
++    AddSessionRow(left, SessionNameOf(left));
++  }
++  // S37: a second Space joining writes down the name the session has.
++  if (!HasSessionRow(session)) {
++    if (const std::string name = SessionNameOf(session); !name.empty()) {
++      AddSessionRow(session, name);
++    }
++  }
++  entry->profile_id = session;
++  entry->isolated = true;
++  WriteSessions();
++  Changed();
++}
++
++std::string SpaceRegistry::SessionNameOf(std::string_view id) const {
++  const auto row = std::ranges::find_if(
++      session_rows_, [&](const SessionRow& each) { return each.id == id; });
++  if (row != session_rows_.end()) {
++    return row->name;
++  }
++  for (size_t i = 0; i < entries_.size(); ++i) {
++    if (entries_[i].profile_id == id) {
++      // As SpaceModel::DisplayName names a Space never named.
++      return entries_[i].name.empty()
++                 ? "Space " + base::NumberToString(i + 1)
++                 : entries_[i].name;
++    }
++  }
++  return std::string();
++}
++
++std::string SpaceRegistry::FitSessionName(std::string_view id,
++                                          std::string_view name) const {
++  std::u16string text = NameInSentence(base::UTF8ToUTF16(name));
++  if (text.empty()) {
++    text = u"Session";
++  }
++  if (text.size() > kMaxSessionName) {
++    // Not in the middle of a character outside the basic plane.
++    const bool split = CBU16_IS_LEAD(text[kMaxSessionName - 1]);
++    text.resize(split ? kMaxSessionName - 1 : kMaxSessionName);
++  }
++  const std::vector<SessionEntry> sessions = Sessions();
++  const auto taken = [&](const std::u16string& candidate) {
++    const std::u16string folded = base::i18n::FoldCase(candidate);
++    return std::ranges::any_of(sessions, [&](const SessionEntry& session) {
++      return session.id != id &&
++             base::i18n::FoldCase(base::UTF8ToUTF16(session.name)) == folded;
++    });
++  };
++  std::u16string fitted = text;
++  for (int number = 2; taken(fitted); ++number) {
++    fitted = base::StrCat({text, u" ", base::NumberToString16(number)});
++  }
++  return base::UTF16ToUTF8(fitted);
++}
++
++void SpaceRegistry::AddSessionRow(std::string id, std::string name) {
++  std::string fitted = FitSessionName(id, name);
++  session_rows_.push_back({std::move(id), std::move(fitted)});
++}
++
++void SpaceRegistry::WriteSessions() {
++  if (!prefs_ || !prefs_->FindPreference(stedding::prefs::kSpaceSessions)) {
++    return;
++  }
++  base::ListValue list;
++  for (const SessionRow& row : session_rows_) {
++    base::DictValue dict;
++    dict.Set("id", row.id);
++    dict.Set("name", row.name);
++    list.Append(std::move(dict));
++  }
++  prefs_->SetList(stedding::prefs::kSpaceSessions, std::move(list));
++}
++
+ void SpaceRegistry::AddObserver(Observer* observer) {
+   observers_.AddObserver(observer);
+ }
+diff --git a/chrome/browser/ui/spaces/space_registry.h b/chrome/browser/ui/spaces/space_registry.h
+index 9de0e173f45f7..551637af63137 100644
+--- a/chrome/browser/ui/spaces/space_registry.h
++++ b/chrome/browser/ui/spaces/space_registry.h
+@@ -7,6 +7,7 @@
+ 
+ #include <optional>
+ #include <string>
++#include <string_view>
+ #include <vector>
+ 
+ #include "base/memory/raw_ptr.h"
+@@ -46,6 +47,25 @@ struct RegistryEntry {
+   bool pins_collapsed = false;
+ };
+ 
++// sessions S37 (ADR 0032): a session as the profile has it. `id` is the jar's
++// token, the storage-partition name, so `spaces` are the entries that hold
++// that token as their `profile_id`, in the list's order, each with its session
++// on or off. `name` is what the list `stedding.spaces.sessions` calls it, else
++// the name of the Space that holds it. `spaces` is empty for a session no Space
++// uses any more (S43).
++struct SessionEntry {
++  SessionEntry();
++  SessionEntry(const SessionEntry& other);
++  SessionEntry& operator=(const SessionEntry& other);
++  ~SessionEntry();
++
++  std::string id;
++  std::string name;
++  // Whether the list has a row for it: its name is its own, chosen once.
++  bool has_row = false;
++  std::vector<SpaceId> spaces;
++};
++
+ // The profile's Space list -- order, names, icons, colours -- which every
+ // window's SpaceModel mirrors (docs/features/windows.md G1, G3). Kept in
+ // the preference stedding.spaces.registry, written on every change.
+@@ -102,6 +122,31 @@ class SpaceRegistry : public KeyedService {
+   // A registry with no PrefService (a Blank Window's) is never written.
+   bool persists() const { return prefs_ != nullptr; }
+ 
++  // sessions S37 (ADR 0032). Every session the profile has: those Spaces
++  // hold, in the order of the first Space that holds each, then those no Space
++  // uses (S43).
++  std::vector<SessionEntry> Sessions() const;
++  // The session with this id, if any Space or row knows it.
++  std::optional<SessionEntry> FindSession(std::string_view id) const;
++  // Whether a Space holds `jar`, its session on or off (S41).
++  bool NamesJar(std::string_view jar) const;
++  // Whether a Space other than `except` holds `jar`.
++  bool ANameOtherThan(const SpaceId& except, std::string_view jar) const;
++  // Whether the sessions list has a row for `id` (S44).
++  bool HasSessionRow(std::string_view id) const;
++  // Makes a session with a new jar and a row, under `name` made fit for the
++  // list (S37), and returns its id. No Space is in it yet.
++  std::string AddSession(std::string_view name);
++  // Gives `id` a row called `name`, for a session that came from elsewhere
++  // (S50, S51). A row it has keeps its name: a name is chosen once.
++  void EnsureSessionRow(const std::string& id, std::string_view name);
++  // Drops the row of `id`, whose jar is being wiped (S41, S45).
++  void ForgetSession(std::string_view id);
++  // Puts Space `id` in `session`, and turns its session on. Empty is Shared,
++  // which keeps the token (S7). The name a joined session has then is written
++  // down (S37), and so is the name of a session its last Space leaves (S43).
++  void SetSession(const SpaceId& id, const std::string& session);
++
+   void AddObserver(Observer* observer);
+   void RemoveObserver(Observer* observer);
+ 
+@@ -115,11 +160,26 @@ class SpaceRegistry : public KeyedService {
+   static std::vector<RegistryEntry> FromValue(const base::ListValue& value);
+ 
+  private:
++  // sessions S37: one row of `stedding.spaces.sessions`.
++  struct SessionRow {
++    std::string id;
++    std::string name;
++  };
++
+   RegistryEntry* FindMutable(const SpaceId& id);
+   void Changed();
++  // The name a session has now: its row's, else its first Space's as the
++  // sidebar shows it.
++  std::string SessionNameOf(std::string_view id) const;
++  // `name` as the sessions list keeps it for session `id`: one line, not too
++  // long, and no other session's (S37).
++  std::string FitSessionName(std::string_view id, std::string_view name) const;
++  void AddSessionRow(std::string id, std::string name);
++  void WriteSessions();
+ 
+   const raw_ptr<PrefService> prefs_;
+   std::vector<RegistryEntry> entries_;
++  std::vector<SessionRow> session_rows_;
+   base::ObserverList<Observer> observers_;
+ };
+ 
+diff --git a/chrome/browser/ui/spaces/space_registry_unittest.cc b/chrome/browser/ui/spaces/space_registry_unittest.cc
+index 7509e1bd62d5a..60957b5aa2483 100644
+--- a/chrome/browser/ui/spaces/space_registry_unittest.cc
++++ b/chrome/browser/ui/spaces/space_registry_unittest.cc
+@@ -7,10 +7,13 @@
+ #include <optional>
+ #include <vector>
+ 
++#include "base/token.h"
+ #include "base/values.h"
+ #include "chrome/browser/ui/stedding/stedding_prefs.h"
++#include "chrome/common/stedding/space_partitions.h"
+ #include "components/prefs/pref_registry_simple.h"
+ #include "components/prefs/testing_pref_service.h"
++#include "testing/gmock/include/gmock/gmock.h"
+ #include "testing/gtest/include/gtest/gtest.h"
+ 
+ namespace spaces {
+@@ -219,5 +222,157 @@ TEST(SpaceRegistryTest, ACollapsedPinnedRunRoundTrips) {
+   EXPECT_FALSE(entries[0].pins_collapsed);
+ }
+ 
++// sessions S37 (ADR 0032): a session made with a name keeps it in the
++// sessions list, under an id that is a jar's token, and two Spaces can hold it.
++// Its name is chosen once: renaming a Space in it changes nothing.
++TEST(SpaceRegistryTest, ASessionHasAnIdAndANameChosenOnce) {
++  TestingPrefServiceSimple prefs;
++  prefs.registry()->RegisterListPref(stedding::prefs::kSpaceRegistry);
++  prefs.registry()->RegisterListPref(stedding::prefs::kSpaceSessions);
++  SpaceRegistry registry(&prefs);
++  const SpaceId mail = registry.Add("Mail", SK_ColorBLUE);
++  const SpaceId docs = registry.Add("Docs", SK_ColorGREEN);
++  registry.Add("Home", SK_ColorRED);
++
++  const std::string work = registry.AddSession("Work");
++  ASSERT_TRUE(base::Token::FromString(work)) << work;
++  EXPECT_TRUE(registry.HasSessionRow(work));
++  EXPECT_FALSE(registry.NamesJar(work)) << "no Space is in it yet";
++  registry.SetSession(mail, work);
++  registry.SetSession(docs, work);
++
++  EXPECT_EQ(work, registry.Find(mail)->profile_id);
++  EXPECT_TRUE(registry.Find(mail)->isolated);
++  EXPECT_EQ(work, registry.Find(docs)->profile_id);
++  EXPECT_TRUE(registry.NamesJar(work));
++  EXPECT_TRUE(registry.ANameOtherThan(mail, work));
++  ASSERT_EQ(1u, registry.Sessions().size());
++  EXPECT_EQ("Work", registry.Sessions()[0].name);
++  EXPECT_TRUE(registry.Sessions()[0].has_row);
++  EXPECT_THAT(registry.Sessions()[0].spaces, testing::ElementsAre(mail, docs));
++
++  registry.SetName(mail, "Letters");
++  EXPECT_EQ("Work", registry.FindSession(work)->name) << "chosen once";
++
++  // S7: Shared keeps the token, and the Space still names the jar.
++  registry.SetSession(docs, std::string());
++  EXPECT_FALSE(registry.Find(docs)->isolated);
++  EXPECT_EQ(work, registry.Find(docs)->profile_id);
++  EXPECT_THAT(registry.FindSession(work)->spaces,
++              testing::ElementsAre(mail, docs));
++}
++
++// sessions S37: a token with no row, which is every Independent session from
++// before this, is a session named after its Space, and nothing is written to
++// read it so. It follows the Space's name while it is that Space's alone. A
++// second Space joining writes the name down.
++TEST(SpaceRegistryTest, AnOldTokenIsASessionNamedAfterItsSpace) {
++  TestingPrefServiceSimple prefs;
++  prefs.registry()->RegisterListPref(stedding::prefs::kSpaceRegistry);
++  prefs.registry()->RegisterListPref(stedding::prefs::kSpaceSessions);
++  base::ListValue old;
++  base::DictValue space;
++  const std::string token = base::Token::CreateRandom().ToString();
++  const SpaceId id = SpaceId::GenerateNew();
++  space.Set("id", id.ToString());
++  space.Set("name", "Work");
++  space.Set("profile", token);
++  space.Set("isolated", true);
++  old.Append(std::move(space));
++  prefs.SetList(stedding::prefs::kSpaceRegistry, std::move(old));
++
++  SpaceRegistry registry(&prefs);
++  ASSERT_EQ(1u, registry.Sessions().size());
++  EXPECT_EQ(token, registry.Sessions()[0].id);
++  EXPECT_EQ("Work", registry.Sessions()[0].name);
++  EXPECT_FALSE(registry.Sessions()[0].has_row);
++  EXPECT_TRUE(prefs.GetList(stedding::prefs::kSpaceSessions).empty())
++      << "nothing is migrated";
++
++  registry.SetName(id, "Office");
++  EXPECT_EQ("Office", registry.Sessions()[0].name);
++
++  const SpaceId joined = registry.Add("Mail", SK_ColorBLUE);
++  registry.SetSession(joined, token);
++  EXPECT_TRUE(registry.HasSessionRow(token));
++  registry.SetName(id, "Elsewhere");
++  EXPECT_EQ("Office", registry.FindSession(token)->name);
++}
++
++// sessions S37: what the list keeps is one line of text, not too long, and
++// never the name of another session.
++TEST(SpaceRegistryTest, ASessionNameIsTrimmedCappedAndUnique) {
++  TestingPrefServiceSimple prefs;
++  prefs.registry()->RegisterListPref(stedding::prefs::kSpaceRegistry);
++  prefs.registry()->RegisterListPref(stedding::prefs::kSpaceSessions);
++  SpaceRegistry registry(&prefs);
++  const auto name_of = [&](const std::string& id) {
++    return registry.FindSession(id)->name;
++  };
++  EXPECT_EQ("Work", name_of(registry.AddSession("  Work\n")));
++  EXPECT_EQ("Work 2", name_of(registry.AddSession("Work")));
++  EXPECT_EQ("WORK 3", name_of(registry.AddSession("WORK")));
++  EXPECT_EQ("Session", name_of(registry.AddSession("   ")));
++  EXPECT_EQ(64u, name_of(registry.AddSession(std::string(100, 'x'))).size());
++  // A Space's own session holds its name as well.
++  const SpaceId home = registry.Add("Home", SK_ColorBLUE);
++  registry.EnsureIsolated(home);
++  EXPECT_EQ("Home 2", name_of(registry.AddSession("Home")));
++}
++
++// sessions S37: the sessions list survives a restart, and a row keeps the
++// name it has when one is asked for again (S50, S51). A row that is not a
++// session is left out.
++TEST(SpaceRegistryTest, ASessionRoundTrips) {
++  TestingPrefServiceSimple prefs;
++  prefs.registry()->RegisterListPref(stedding::prefs::kSpaceRegistry);
++  prefs.registry()->RegisterListPref(stedding::prefs::kSpaceSessions);
++  const std::string other = base::Token::CreateRandom().ToString();
++  std::string work;
++  {
++    SpaceRegistry registry(&prefs);
++    registry.Add("Home", SK_ColorBLUE);
++    work = registry.AddSession("Work");
++    registry.EnsureSessionRow(other, "Other");
++    registry.EnsureSessionRow(other, "Renamed elsewhere");
++    registry.EnsureSessionRow("not-a-token", "Nothing");
++  }
++  SpaceRegistry again(&prefs);
++  EXPECT_EQ("Work", again.FindSession(work)->name);
++  EXPECT_EQ("Other", again.FindSession(other)->name);
++  EXPECT_FALSE(again.FindSession("not-a-token"));
++  EXPECT_EQ(2u, again.Sessions().size());
++  again.ForgetSession(other);
++  EXPECT_FALSE(again.HasSessionRow(other));
++  EXPECT_EQ(1u, SpaceRegistry(&prefs).Sessions().size());
++}
++
++// sessions S43: the last Space leaving a session leaves it with its name, its
++// own session's too, so it stays a choice and the collection keeps its jar.
++TEST(SpaceRegistryTest, TheLastSpaceLeavingKeepsTheSession) {
++  TestingPrefServiceSimple prefs;
++  prefs.registry()->RegisterListPref(stedding::prefs::kSpaceRegistry);
++  prefs.registry()->RegisterListPref(stedding::prefs::kSpaceSessions);
++  SpaceRegistry registry(&prefs);
++  const SpaceId work = registry.Add("Work", SK_ColorBLUE);
++  registry.EnsureIsolated(work);
++  const std::string own = registry.Find(work)->profile_id;
++  const std::string personal = registry.AddSession("Personal");
++  ASSERT_FALSE(registry.HasSessionRow(own));
++
++  registry.SetSession(work, personal);
++  EXPECT_EQ(personal, registry.Find(work)->profile_id);
++  EXPECT_FALSE(registry.NamesJar(own));
++  ASSERT_TRUE(registry.FindSession(own));
++  EXPECT_EQ("Work", registry.FindSession(own)->name);
++  EXPECT_TRUE(registry.FindSession(own)->spaces.empty());
++  EXPECT_THAT(stedding::SpacePartitionNames(prefs),
++              testing::UnorderedElementsAre(own, personal));
++
++  registry.SetSession(work, own);
++  EXPECT_EQ(own, registry.Find(work)->profile_id);
++  EXPECT_TRUE(registry.Find(work)->isolated);
++}
++
+ }  // namespace
+ }  // namespace spaces
+diff --git a/chrome/browser/ui/stedding/stedding_prefs.cc b/chrome/browser/ui/stedding/stedding_prefs.cc
+index 012c0f119702e..62418b08ad7aa 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs.cc
++++ b/chrome/browser/ui/stedding/stedding_prefs.cc
+@@ -40,6 +40,7 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
+   registry->RegisterIntegerPref(kToolbarFieldWidth, kToolbarFieldWidthDefault);
+   registry->RegisterBooleanPref(kBookmarksConverted, false);
+   registry->RegisterListPref(kSpaceRegistry);
++  registry->RegisterListPref(kSpaceSessions);
+   registry->RegisterBooleanPref(kLittleEnabled, true);
+   registry->RegisterBooleanPref(kLittleAsPeek, false);
+   registry->RegisterIntegerPref(kLittleWidth, 0);
+diff --git a/chrome/browser/ui/stedding/stedding_prefs.h b/chrome/browser/ui/stedding/stedding_prefs.h
+index 6639c71ff7f32..51a0358cc5924 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs.h
++++ b/chrome/browser/ui/stedding/stedding_prefs.h
+@@ -83,6 +83,10 @@ inline constexpr char kLittleWidth[] = "stedding.little.width";
+ inline constexpr char kLittleHeight[] = "stedding.little.height";
+ // windows G3: the profile's Space list (ADR 0016).
+ inline constexpr char kSpaceRegistry[] = "stedding.spaces.registry";
++// sessions S37 (ADR 0032): the sessions that have a name of their own, one
++// dict per session, `id` its jar's token and `name` the name chosen once. A
++// token with no row is a session named after the Space that holds it.
++inline constexpr char kSpaceSessions[] = "stedding.spaces.sessions";
+ // import I14: the bookmarks became pins; the bar and the star stay hidden.
+ inline constexpr char kBookmarksConverted[] = "stedding.bookmarks.converted";
+ // privacy Q4: Global Privacy Control, in local state because it becomes a
+diff --git a/chrome/browser/ui/stedding/stedding_prefs_unittest.cc b/chrome/browser/ui/stedding/stedding_prefs_unittest.cc
+index 1a6fd3b282cf3..e5bd43b54b06f 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs_unittest.cc
++++ b/chrome/browser/ui/stedding/stedding_prefs_unittest.cc
+@@ -46,6 +46,9 @@ TEST(SteddingPrefsTest, EveryPreferenceRegistersWithItsDefault) {
+     ASSERT_TRUE(service.FindPreference(name)) << name;
+     EXPECT_FALSE(service.GetBoolean(name)) << name;
+   }
++  // sessions S37: no session has a name of its own on a fresh profile.
++  ASSERT_TRUE(service.FindPreference(kSpaceSessions));
++  EXPECT_TRUE(service.GetList(kSpaceSessions).empty());
+   // sidebar-panels Pn14: History and Downloads open in the sidebar on a
+   // fresh profile.
+   ASSERT_TRUE(service.FindPreference(kSidebarLibraryPanels));
+diff --git a/chrome/common/stedding/space_partitions.cc b/chrome/common/stedding/space_partitions.cc
+index 9b9c0d1850561..095c5bbc89969 100644
+--- a/chrome/common/stedding/space_partitions.cc
++++ b/chrome/common/stedding/space_partitions.cc
+@@ -36,11 +36,29 @@ std::vector<std::string> SpacePartitionNames(const base::ListValue& registry) {
+   return names;
+ }
+ 
++std::vector<std::string> SpacePartitionNames(const base::ListValue& registry,
++                                             const base::ListValue& sessions) {
++  std::vector<std::string> names = SpacePartitionNames(registry);
++  for (const base::Value& item : sessions) {
++    const base::DictValue* const session = item.GetIfDict();
++    const std::string* const name = session ? session->FindString("id") : nullptr;
++    if (name && !name->empty() && !std::ranges::contains(names, *name)) {
++      names.push_back(*name);
++    }
++  }
++  return names;
++}
++
+ std::vector<std::string> SpacePartitionNames(const PrefService& prefs) {
+   if (!prefs.FindPreference(kSpaceRegistryPref)) {
+     return {};
+   }
+-  return SpacePartitionNames(prefs.GetList(kSpaceRegistryPref));
++  // A preference a test's service does not have names nothing.
++  const base::ListValue none;
++  return SpacePartitionNames(prefs.GetList(kSpaceRegistryPref),
++                             prefs.FindPreference(kSpaceSessionsPref)
++                                 ? prefs.GetList(kSpaceSessionsPref)
++                                 : none);
+ }
+ 
+ }  // namespace stedding
+diff --git a/chrome/common/stedding/space_partitions.h b/chrome/common/stedding/space_partitions.h
+index f7af84530d391..f9c463fec5e4b 100644
+--- a/chrome/common/stedding/space_partitions.h
++++ b/chrome/common/stedding/space_partitions.h
+@@ -29,6 +29,12 @@ inline constexpr char kSpacePartitionDomain[] = "spaces";
+ // turned on for it.
+ inline constexpr char kSpaceRegistryPref[] = "stedding.spaces.registry";
+ 
++// The profile preference that holds the sessions with a name of their own, the
++// same name as stedding::prefs::kSpaceSessions: a list with one dict per
++// session, whose "id" string is a jar name. A session no Space uses any more
++// is named here alone (ADR 0032, docs/features/sessions.md S43, S44).
++inline constexpr char kSpaceSessionsPref[] = "stedding.spaces.sessions";
++
+ // <profile_path>/Storage/ext/spaces, the one directory under which every
+ // Space's jar lives. Chromium's storage-partition garbage collection keeps an
+ // entry of Storage/ext only when a loaded partition or an allowlisted path is
+@@ -47,6 +53,11 @@ bool IsSpacePartitionPath(const base::FilePath& relative_partition_path);
+ // isolation is on now or not, in registry order and without repeats.
+ std::vector<std::string> SpacePartitionNames(const base::ListValue& registry);
+ 
++// The jars `registry` names, then those `sessions` names that it does not, in
++// that order and without repeats (sessions S44).
++std::vector<std::string> SpacePartitionNames(const base::ListValue& registry,
++                                             const base::ListValue& sessions);
++
+ // The same, read from the profile's `prefs`. Empty when the preference is not
+ // registered there, as in a profile type that has no Spaces.
+ std::vector<std::string> SpacePartitionNames(const PrefService& prefs);

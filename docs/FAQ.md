@@ -121,7 +121,8 @@ unpins it. Essentials take no folders.
 
 **Can essentials belong to one Space?**
 In a Space with an **Independent session**, yes. A tab you add to the essentials there
-is that Space’s own, stays signed in with the Space, and shows in that Space alone.
+is that Space’s own, stays signed in with the Space, and shows in that Space alone, or
+in every Space of its session when several share one.
 That Space shows its own essentials and not the shared ones, unless every Space has
 its own session, in which case the shared essentials show in each. In a Space that
 shares the session, essentials are shared, as in Arc. For a tab that belongs to one
@@ -245,6 +246,16 @@ passwords stay shared. **Clear Independent Session** on the same menu signs that
 Space out of everything. Settings → Stedding → Spaces → **Give every new Space its
 own session** does it for every Space you add, and asks whether to turn it on for
 the Spaces you already have.
+
+**Can several Spaces share one sign-in?**
+Yes. Open a Space's **Edit Space…**, or its row in Settings → Stedding → Spaces, and
+choose its **Session**: Shared, a session you already have, or **New session…**, which
+asks for a name. Three Work Spaces can share a session called Work and two Personal
+Spaces one called Personal. Spaces in one session share sign-ins, site data and their
+own essentials. Changing a Space's session moves its tabs and signs nothing out of the
+session it left: the sign-ins stay until you clear them. **Clear Independent Session**
+signs every Space in the session out, and says which they are. Deleting a Space erases
+its session only when no other Space uses it, and asks first.
 
 **Is there sync? Can I sync without an account?**
 There is no account. Settings → Stedding → Sync and import → **Sync through a

@@ -445,6 +445,32 @@ Spec: [passkeys.md](passkeys.md). On the signed build, not a test copy, with a f
 |---|---|---|
 | 2026-11-07 | Notarized build of the 0.4.0 beta 13 work, Mac | `ps_signed`'s release half, `ps_available` (`true`, and `false` on the released beta 12) and `ps_dialog`, which found "Your Chrome profile" and the fix for it. `ps_touch` needs the owner's finger: not run. |
 
+## Spaces that share a session
+
+The live check of [sessions.md](sessions.md) S38–S46: one site, signed in once, in the Spaces of one session.
+
+### Before the run
+
+- A build and a fresh profile with four Spaces, Home, Mail, Docs and Third, and a page that sets a cookie.
+
+### The checks
+
+| Id | Do | Expect |
+|---|---|---|
+| SS1 | Choose "New session…" for Mail, in Edit Space, name it Work, and choose Work for Docs on its row in Settings | Both wear the mark, and its tooltip names the session and the other Space |
+| SS2 | Sign in on the page in Mail, and open the page in Docs, Third and Home | Docs is signed in, Third and Home are not |
+| SS3 | Quit and open Stedding | Mail and Docs are in Work, Docs is still signed in, and the essentials pinned in one show in both |
+| SS4 | Move Docs to Shared, answer the question, and open the page in Mail | Docs' page reloads signed out, Mail is still signed in |
+| SS5 | Delete Docs after moving it back, and read the question | It says Work stays and who keeps it, and Mail is still signed in |
+| SS6 | Move Mail to a new session | Settings lists Work with Delete Session…, and choosing Work again brings the sign-in back |
+
+### Runs
+
+| Date | Build | Result |
+|---|---|---|
+| 2026-11-10 | `win-release` of the series after 0.4.0 beta 17 with S-272 (Chromium 157.0.8103.51), Windows, real pointer and keyboard through `tooling\win\drive.ps1` | SS1–SS6 pass. SS1 found the title row's tooltip saying "Essentials here are this Space's own" on a Space whose session another Space shares (sessions S48); fixed, and on the next build it reads "Essentials here are the session's, in each of its Spaces". The questions read as S40, S41 and S45 say. |
+| 2026-11-11 | `release` of the same series with that fix, Mac, a re-identified copy, real pointer and keyboard through `tooling/drive-window.py` | SS1–SS6 pass, the tooltip as fixed. The copy ran in a narrow window, as two firewall alerts for its connections sat over the middle of the screen. |
+
 ## The tests beside the script
 
 The script is what a person sees. These browser tests drive the same paths through the window, so a sweep finds a regression before the next run (BACKLOG `S-173`):

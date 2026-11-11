@@ -163,7 +163,11 @@ A Space with an independent session keeps its cookies, cache and site data in
 its own jar on this disk (`features/sessions.md`). **Delete browsing data**,
 `chrome.browsingData` and deleting one site's data reach every Space's jar,
 with the same time range and the same sites (sessions S24). **Clear
-Independent Session** empties that Space's jar. Deleting the Space deletes
+Independent Session** empties that jar, for every Space that shares it. Several
+Spaces can share one session and so one jar. A jar stays while any Space names
+it, and also after its last Space has moved to another session: Settings →
+Stedding → Spaces lists such a session with **Delete Session…**, and **Delete
+browsing data** reaches it (sessions S43–S45). Deleting the Space deletes
 the jar.
 
 An independent session keeps sign-ins apart, not permissions. A site's
@@ -266,7 +270,8 @@ service of our own is out of scope on the way to 1.0
 The sidebar travels as a file (`features/sidebar-file.md`). **Export Space…**
 writes one Space and **Export all Spaces…** writes every Space, to Downloads.
 **Import sidebar…** reads either file. The file holds each Space's name, icon,
-colours and whether it has its own session, and the addresses and titles of
+colours, whether it has its own session, and, for a session with a name, that
+name and its random id, and the addresses and titles of
 its pins, folders, essentials and open tabs. It never holds history, cookies,
 passwords, extensions or anything in a Space's own session. Stedding sends the
 file nowhere.
@@ -275,7 +280,8 @@ Sync through a folder is off by default. It is not a sync service. Each
 computer writes a file into a folder the user picks and reads the other
 computers' files from it. The user's own sync tool or shared drive carries
 them. Stedding makes no network request for it. The file holds Spaces (name,
-icon, colours, order, whether the Space has its own session), pins (home
+icon, colours, order, whether the Space has its own session, and a named
+session's name and random id), pins (home
 address and the user's own name), pinned folders, essentials, a random install
 id (16 hex characters) and the computer's name ("Mac" or "Windows PC" plus
 four characters of that id, or a name the user typed). It never holds open

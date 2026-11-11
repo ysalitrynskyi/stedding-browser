@@ -2,6 +2,30 @@
 
 What was built, newest first. Nothing here is needed to do a task: `AGENTS.md` carries what is true now, `BACKLOG.md` the order of work, `PLAN.md` the owner's decisions. This file was the "State of the project" section of `AGENTS.md` until 2026-09-30. This log starts at 2026-10-15. Closed work from before that is the table in [docs/history/archive.md](history/archive.md).
 
+## 2026-11-11 -- Spaces that share a session join the series (S-272)
+
+Several Spaces can now be on one named session, as several Arc Spaces are on one profile
+(GitHub issues 8 and 99; ADR 0034, accepted by the owner on 2026-11-10 once every check passed).
+It is patches 0177–0179 on Chromium 157.0.8103.51, for the next release.
+
+The checks, on the branch's final tree: the unit tests and the whole browser suite on the Mac's
+release and DCHECK builds (979 browser tests); on the PC the whole suite on release, DCHECK and
+ASan, whose only failures were S-458's at 150% and a test helper that looked for the cookie
+store where Windows does not keep it, fixed; then the session, jar, sync and mark tests twice on
+each build. Acceptance SS1–SS6 ran with real input on both platforms (`docs/features/acceptance.md`).
+On Windows it found the title row's tooltip calling a shared session's essentials "this Space's
+own"; it now says they are the session's, in each of its Spaces, and the new test was seen red
+without the fix. The Mac's run went to a narrow window, since two firewall alerts for the test
+copy's connections sat over the middle of the screen and the driver will not press through
+another app's window.
+
+The same night: S-461 was the tests', two drags across windows that ran in the parallel leg, now
+in the serial one; a screenshot test's single time-out did not reproduce in 50 runs (S-466); the
+PC driver now presses only where the browser under test is, after a click on a row scrolled out
+of view landed on the taskbar; and after the person logged out and in, a full Mac browser leg left
+three windows in WindowServer, not thousands (S-464). GitHub issue 100 became S-465 for the owner,
+and issue 90's new report is in S-450.
+
 ## 2026-11-10 -- The Mac's login session went down under the tests' windows
 
 At 20:31, during the `mac-checks` browser leg for shared sessions (S-272), WindowServer

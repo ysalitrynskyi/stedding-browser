@@ -205,12 +205,14 @@ a `+` (`features/sidebar.md` Y44). The Library is not this foot (§9).
   site storage, so the same site can be signed in with different accounts in different
   Spaces of one window. Opt-in per Space; off, Spaces share the profile's jar.
   Extensions, settings, history and saved passwords stay on the profile. A Chromium
-  `StoragePartition`, not a profile (ADR 0019; `features/sessions.md`). Binding two
-  Spaces to one jar, or giving a Space its own extensions, needs a later ADR (`S-272`).
+  `StoragePartition`, not a profile (ADR 0019; `features/sessions.md`). Several Spaces
+  can share one session, named once and chosen in Edit Space and on the Space's row in
+  Settings, so three Work Spaces sign in as one account and two Personal Spaces as
+  another (ADR 0034). Giving a Space its own extensions needs a later ADR.
   A Space with its own session is marked wherever Stedding names it as a place to go:
   a cookie on its chip and after its name (`features/sessions.md` S32, S34,
-  `features/spaces.md` B38). Its essentials are its own and stay in its session (S8,
-  ADR 0028).
+  `features/spaces.md` B38). Its essentials are its own and stay in its session, and
+  the Spaces of one session share them (S8, S47, ADR 0028).
 - **Move tabs between Spaces** **[1.0]** — the command bar's "Move Tab to [Space]", the
   tab menu, `⌥⇧⌘←/→`, or a drag onto a Space icon (`features/spaces.md` B12, B22).
 - **Air Traffic Control** **[1.0]** — Stedding's routing: rules sending a site, a part

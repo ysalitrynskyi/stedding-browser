@@ -20,6 +20,7 @@ without touching; this one touches, so it is guarded:
 
   * Input goes only while the foreground window belongs to the browser this script
     started. Anything else in front (the operator's terminal, a dialog): nothing is sent.
+    A click, a drag or a wheel goes only where a window of that browser is under the point.
   * The operator's own input is seen through GetLastInputInfo. If the last event was not
     this script's and is under six seconds old, it waits (up to two minutes), then
     refuses. Keys are never mixed into somebody's typing.
@@ -75,6 +76,8 @@ public static class StedDrive {
   [DllImport("user32.dll")] public static extern void mouse_event(uint flags, int dx, int dy, int data, UIntPtr extra);
   [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
   [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X, Y; }
+  [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(POINT p);
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
   [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);
   [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
@@ -252,6 +255,23 @@ function Drive-WaitOwnerIdle([int]$MaxSeconds = 120) {
   while (Drive-OwnerActive) { if ((Get-Date) -gt $until) { return $false }; Start-Sleep -Milliseconds 500 }
   return $true
 }
+# Whether the window under a screen point is one of the browser under test's: the main window, a
+# menu or a dialog of its process. A point outside them -- an element scrolled out of the page's
+# view, whose bounds lie below the screen -- would put the press on whatever is there: on
+# 2026-11-10 a click at y 4548 was clamped to the screen's edge and landed on the taskbar.
+function Drive-PointIsBrowser([int]$x, [int]$y) {
+  $pt = New-Object StedDrive+POINT; $pt.X = $x; $pt.Y = $y
+  $h = [StedDrive]::WindowFromPoint($pt)
+  if ($h -eq [IntPtr]::Zero) { return $false }
+  $p = 0; [void][StedDrive]::GetWindowThreadProcessId($h, [ref]$p)
+  return ([uint32]$p -eq $script:Drive.Pid)
+}
+function Drive-GuardPoint([int]$x, [int]$y) {
+  if (Drive-PointIsBrowser $x $y) { return $true }
+  Drive-Log "REFUSED: $x,$y is not over the browser under test"
+  return $false
+}
+
 function Drive-Guard {
   if (-not (Drive-WaitOwnerIdle 120)) { Drive-Log 'REFUSED: the operator has been at the keyboard or pointer for two minutes'; return $false }
   if (-not (Drive-ForegroundIsBrowser)) { Drive-Log 'REFUSED: the foreground window is not the browser under test'; return $false }
@@ -292,6 +312,7 @@ function Drive-Key([byte]$Vk, [switch]$Up) {
 function Drive-Click([int]$x, [int]$y, [string]$Button = 'left', [string]$Mods = '') {
   if ($script:Drive.Trace) { Drive-Log "  click $Button at $x,$y $Mods" }
   if (-not (Drive-Guard)) { return $false }
+  if (-not (Drive-GuardPoint $x $y)) { return $false }
   Drive-Move $x $y; Start-Sleep -Milliseconds 120
   $down = if ($Button -eq 'right') { 0x0008 } else { 0x0002 }
   $up = if ($Button -eq 'right') { 0x0010 } else { 0x0004 }
@@ -309,6 +330,7 @@ function Drive-Click([int]$x, [int]$y, [string]$Button = 'left', [string]$Mods =
 function Drive-Drag([int]$x1, [int]$y1, [int]$x2, [int]$y2, [int]$Steps = 25, [int]$HoldMs = 350) {
   if ($script:Drive.Trace) { Drive-Log "  drag $x1,$y1 to $x2,$y2" }
   if (-not (Drive-Guard)) { return $false }
+  if (-not (Drive-GuardPoint $x1 $y1) -or -not (Drive-GuardPoint $x2 $y2)) { return $false }
   Drive-Move $x1 $y1; Start-Sleep -Milliseconds 150
   [StedDrive]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero); Start-Sleep -Milliseconds 120
   for ($i = 1; $i -le $Steps; $i++) {
@@ -325,6 +347,7 @@ function Drive-Drag([int]$x1, [int]$y1, [int]$x2, [int]$y2, [int]$Steps = 25, [i
 
 function Drive-Scroll([int]$x, [int]$y, [int]$Clicks) {
   if (-not (Drive-Guard)) { return $false }
+  if (-not (Drive-GuardPoint $x $y)) { return $false }
   Drive-Move $x $y; Start-Sleep -Milliseconds 100
   [StedDrive]::mouse_event(0x0800, 0, 0, (120 * $Clicks), [UIntPtr]::Zero)
   Start-Sleep -Milliseconds 300

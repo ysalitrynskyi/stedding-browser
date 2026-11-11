@@ -327,6 +327,28 @@ test_leftovers() {
   done | sort
 }
 
+# WindowServer keeps the windows the Mac's browser tests leave behind until the person
+# logs out. At about 17,900 it restarted, and the whole login session went with it: every
+# app quit (2026-11-10, docs/HANDOFF.md trap 147). A full browser leg added about 2,400.
+# So a Mac browser leg starts only below STEDDING_MAX_WINDOWS, and each run says what it
+# added. Sets WINDOWS_NOW; returns 1 over the limit, 0 elsewhere or when the count cannot
+# be read (said once).
+WINDOWS_NOW=""
+windows_ok() {
+  [ "$(uname -s)" = Darwin ] || return 0
+  local count
+  if ! count="$("$STEDDING_ROOT/tooling/window-count" 2>/dev/null)"; then
+    warn "could not read WindowServer's window count (tooling/window-count, trap 147)"
+    WINDOWS_NOW=""
+    return 0
+  fi
+  WINDOWS_NOW="$count"
+  if [ "$count" -gt "${STEDDING_MAX_WINDOWS:-12000}" ]; then
+    warn "WindowServer holds $count windows, over ${STEDDING_MAX_WINDOWS:-12000}: the person logs out and in before more Mac browser tests (trap 147)"
+    return 1
+  fi
+}
+
 cmd_build() {
   if is_windows; then
     die "build with tooling\\win\\build.ps1 (docs/HANDOFF.md, \"The Windows build\"); tooling/dev test takes --no-build here"
@@ -597,6 +619,8 @@ cmd_test() {
   # legs: most of it STEDDING_BROWSER_JOBS at a time, then SERIAL_BROWSER_TESTS one
   # at a time. A filter given on the command line runs one at a time.
   if [ -n "$browser" ]; then
+    windows_ok || die "no browser test ran: WindowServer is near the count that ends the login session (trap 147)"
+    local windows_start="$WINDOWS_NOW"
     # A cursor resting where test windows open fails the hover and edge tests
     # (docs/HANDOFF.md, trap 78); the script leaves it alone while it is in use.
     if is_windows; then
@@ -629,11 +653,26 @@ cmd_test() {
       elif [ "$(uname -s)" = Darwin ]; then
         "$STEDDING_ROOT/tooling/park-cursor" || true
       fi
-      # shellcheck disable=SC2086  # one flag or none
-      run_leg stedding_browser_tests "$SERIAL_BROWSER_TESTS" --test-launcher-jobs=1 $BROWSER_SCALE_FLAGS || status=$?
+      if windows_ok; then
+        # shellcheck disable=SC2086  # one flag or none
+        run_leg stedding_browser_tests "$SERIAL_BROWSER_TESTS" --test-launcher-jobs=1 $BROWSER_SCALE_FLAGS || status=$?
+      else
+        warn "the serial leg did not run (trap 147)"
+        status=1
+      fi
     else
       # shellcheck disable=SC2086  # one flag or none
       run_leg stedding_browser_tests "$browser" --test-launcher-jobs=1 $BROWSER_SCALE_FLAGS || status=$?
+    fi
+    if [ -n "$windows_start" ]; then
+      windows_ok || true
+    fi
+    if [ -n "$windows_start" ] && [ -n "$WINDOWS_NOW" ]; then
+      log "WindowServer windows: $windows_start before, $WINDOWS_NOW after (trap 147)"
+      if [ $((WINDOWS_NOW - windows_start)) -gt 500 ]; then
+        warn "this run left $((WINDOWS_NOW - windows_start)) windows in WindowServer; the most by owner:"
+        "$STEDDING_ROOT/tooling/window-count" --owners 5 >&2 || true
+      fi
     fi
   fi
 

@@ -1,0 +1,139 @@
+#!/usr/bin/env bash
+# What this project's builds, tests and releases left on the Mac: processes still running
+# from the Chromium output directory, local servers started for a check, mounted disk
+# images, temporary files, and WindowServer's window count (docs/HANDOFF.md, trap 147).
+# Run it when a build, a sweep or a release is done. Windows has tooling\win\leftovers.ps1.
+#
+#   tooling/leftovers           lists them; exits 1 when there is anything to clear
+#   tooling/leftovers --clean   ends and deletes them, then lists what is left
+#
+# Never touched: a Stedding started from anywhere but the output directory (the person's
+# own browser runs from /Applications or dist/), a server that does not name this project
+# in its folder or command line, and anything at all while a build or another tooling
+# command runs: it would be that run's. WindowServer's count only goes down when the
+# person logs out and in, so it is reported, never acted on.
+set -euo pipefail
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=./lib.sh
+. "$(cd "$(dirname "$0")" && pwd)/lib.sh"
+
+[ "$(uname -s)" = Darwin ] || die "macOS only; on Windows run tooling\\win\\leftovers.ps1"
+
+clean=0
+case "${1:-}" in
+  --clean) clean=1 ;;
+  '') ;;
+  *) die "tooling/leftovers [--clean]" ;;
+esac
+
+OUT_DIR="$CHROMIUM_SRC/out/"
+TMP="${TMPDIR:-/tmp}"
+TMP="${TMP%/}"
+
+# Another tooling command, or a build, owns whatever it has running.
+busy() {
+  pgrep -f "siso ninja -C $OUT_DIR" >/dev/null 2>&1 && return 0
+  pgrep -f "autoninja -C out/" >/dev/null 2>&1 && return 0
+  ps -axo pid=,command= | awk -v self=$$ '$1 != self' |
+    grep -E '(^|[ /])tooling/[a-z][a-z_.-]*( |$)' | grep -v -E 'tooling/leftovers( |$)' |
+    grep -q .
+}
+
+# pid<TAB>command of every process whose executable is in the output directory, or in a
+# stedding-* folder of the temporary directory (a test copy made for a check): test
+# binaries, browsers run from a build, their helpers and crash handlers.
+out_processes() {
+  ps -axo pid=,command= | while read -r pid command; do
+    case "$command" in
+      "$OUT_DIR"* | "$TMP/stedding-"* | "/private$TMP/stedding-"*)
+        printf '%s\t%s\n' "$pid" "${command:0:160}" ;;
+    esac
+  done
+}
+
+# pid<TAB>port<TAB>folder of each local Python or Node server that names this project
+# (a sign-in page, a feed, a site preview made for a check).
+servers() {
+  lsof -nP -iTCP -sTCP:LISTEN -Fpcn 2>/dev/null | awk '
+    /^p/ { pid = substr($0, 2) }
+    /^c/ { cmd = substr($0, 2) }
+    /^n/ { if (cmd ~ /^([Pp]ython|node)/) { n = split($0, a, ":"); print pid "\t" a[n] } }' |
+    sort -u | while IFS=$'\t' read -r pid port; do
+      local folder command
+      folder="$(lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1)"
+      command="$(ps -o command= -p "$pid" 2>/dev/null || true)"
+      if printf '%s %s' "$folder" "$command" | grep -qi stedding; then
+        printf '%s\t%s\t%s\n' "$pid" "$port" "$folder"
+      fi
+    done
+}
+
+# Mount points of Stedding disk images.
+images() {
+  hdiutil info 2>/dev/null | awk '$NF ~ /^\/Volumes\/Stedding/ { print $NF }' | sort -u
+}
+
+# Temporary files and folders: siso's logs, the tests' scoped folders, and every
+# stedding-* name the tooling makes with mktemp.
+temp_paths() {
+  find "$TMP" -mindepth 1 -maxdepth 1 -user "$(id -u)" \( -name 'siso.*' -o -name 'scoped_dir*' \
+    -o -name '.org.chromium.Chromium.*' -o -name 'stedding-*' \) -print 2>/dev/null || true
+}
+
+report() {
+  local found=0 list
+  list="$(out_processes)"
+  if [ -n "$list" ]; then
+    found=1
+    warn "running from $OUT_DIR:"
+    printf '%s\n' "$list" | sed 's/^/     /' >&2
+  fi
+  list="$(servers)"
+  if [ -n "$list" ]; then
+    found=1
+    warn "local servers for this project (pid, port, folder):"
+    printf '%s\n' "$list" | sed 's/^/     /' >&2
+  fi
+  list="$(images)"
+  if [ -n "$list" ]; then
+    found=1
+    warn "mounted Stedding disk images:"
+    printf '%s\n' "$list" | sed 's/^/     /' >&2
+  fi
+  list="$(temp_paths)"
+  if [ -n "$list" ]; then
+    found=1
+    local size
+    size="$(printf '%s\n' "$list" | tr '\n' '\0' | xargs -0 du -sk 2>/dev/null |
+      awk '{s += $1} END {printf "%.1f", s / 1048576}')"
+    warn "$(printf '%s\n' "$list" | wc -l | tr -d ' ') temporary files and folders in $TMP, $size GB"
+  fi
+  local windows
+  if windows="$("$STEDDING_ROOT/tooling/window-count" 2>/dev/null)"; then
+    if [ "$windows" -gt "${STEDDING_MAX_WINDOWS:-12000}" ]; then
+      found=1
+      warn "WindowServer holds $windows windows: ask the person to log out and in before more browser tests"
+    else
+      log "WindowServer holds $windows windows"
+    fi
+  else
+    warn "could not read WindowServer's window count"
+  fi
+  if [ "$found" -eq 0 ]; then
+    log "nothing left over"
+  fi
+  return "$found"
+}
+
+if [ "$clean" -eq 1 ]; then
+  busy && die "a build or another tooling command is running; what it has running is its own. Nothing ended or deleted"
+  out_processes | cut -f1 | xargs kill 2>/dev/null || true
+  servers | cut -f1 | xargs kill 2>/dev/null || true
+  images | while IFS= read -r volume; do hdiutil detach -quiet "$volume" || true; done
+  sleep 2
+  out_processes | cut -f1 | xargs kill -9 2>/dev/null || true
+  temp_paths | while IFS= read -r path; do rm -rf "$path"; done
+elif busy; then
+  log "a build or another tooling command is running: what follows may be its own"
+fi
+report

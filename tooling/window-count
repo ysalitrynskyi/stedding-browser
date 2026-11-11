@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# How many windows WindowServer holds for this login session (macOS), and who owns them.
+#
+#   tooling/window-count             the total, one number
+#   tooling/window-count --owners [N]  the N processes with the most windows (default 10)
+#
+# The total is WindowServer's own count, the one that took the session down at about
+# 17,900 on 2026-11-10 (docs/HANDOFF.md, trap 147). WindowServer logs it when a client's
+# connection closes, so this opens and closes one connection (an osascript that starts
+# AppKit and quits) and reads that line back. No window opens. It prints nothing and
+# exits 1 when the line cannot be read.
+set -euo pipefail
+
+[ "$(uname -s)" = Darwin ] || { echo "tooling/window-count: macOS only" >&2; exit 2; }
+
+if [ "${1:-}" = "--owners" ]; then
+  source_file="$(cd "$(dirname "$0")" && pwd)/window-count.swift"
+  cache="${XDG_CACHE_HOME:-$HOME/Library/Caches}/stedding-tooling"
+  binary="$cache/window-count-$(shasum -a 256 "$source_file" | cut -c1-12)"
+  if [ ! -x "$binary" ]; then
+    mkdir -p "$cache"
+    xcrun swiftc -O -swift-version 5 -o "$binary.tmp" "$source_file" >&2
+    mv "$binary.tmp" "$binary"
+  fi
+  exec "$binary" "${2:-10}"
+fi
+
+osascript -l JavaScript -e 'ObjC.import("AppKit"); $.NSApplication.sharedApplication; 1' \
+  >/dev/null 2>&1 &
+pid=$!
+wait "$pid" || true
+count=""
+for _ in 1 2 3; do
+  sleep 0.5
+  count="$(/usr/bin/log show --last 20s --style compact --predicate \
+    "process == \"WindowServer\" AND eventMessage CONTAINS \"PID $pid \" AND eventMessage CONTAINS \"totalWindowCount\"" \
+    2>/dev/null | sed -n 's/.*totalWindowCount=\([0-9][0-9]*\).*/\1/p' | tail -1)" || true
+  [ -z "$count" ] || break
+done
+[ -n "$count" ] || exit 1
+printf '%s\n' "$count"

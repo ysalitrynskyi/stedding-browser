@@ -31,7 +31,7 @@ The traps follow. 28 is retired. Read the one for the topic in front of you, not
 
 | Topic | Traps |
 |---|---|
-| Building, disk, rebuild cost | 1, 16, 19, 23, 44, 45, 53, 54, 57, 70, 73, 74, 83, 89, 90, 100, 123, 144, 146 |
+| Building, disk, rebuild cost, what a run leaves behind | 1, 16, 19, 23, 44, 45, 53, 54, 57, 70, 73, 74, 83, 89, 90, 100, 123, 144, 146, 147 |
 | The working loop and the series | 5, 9, 13, 14, 17, 22, 50, 51, 89, 92, 139 |
 | Driving and capturing the window | 3, 7, 10, 11, 12, 15, 18, 24, 27, 29, 30, 36, 37, 52, 56, 59, 61, 63, 64, 65, 76, 82, 93, 94, 95, 96, 103, 105, 107, 116, 121, 130, 132, 133, 136, 137, 142 |
 | What a test can and cannot prove | 2, 4, 31, 46, 48, 51, 52, 55, 56, 58, 59, 60, 66, 68, 69, 72, 75, 77, 78, 79, 80, 81, 84, 86, 87, 88, 91, 98, 99, 101, 102, 104, 106, 107, 110, 111, 112, 113, 114, 115, 119, 120, 126, 127, 138, 141, 145 |
@@ -991,6 +991,22 @@ Two switches do the same for windows. `--stedding-welcome[=<step>]` forces the w
     (`.git/objects/info/alternates`): move it, and rewrite those paths, as
     `tooling/sync-chromium` says when it finds the old place. A sync that fails is not a
     synced tree: read the line before "apply".
+147. **Mac browser tests leave windows in WindowServer, and at about 17,900 it ends the login
+    session.** WindowServer counts every window of the session, and its count went down only
+    when the person logged out: the windows outlived the test processes, which closed owning
+    0 to 5 each. On 2026-11-10 it sat near 14,250 from earlier days' runs, a release browser
+    leg added about 2,400, and part of a `mac-checks` leg took it to 17,903. WindowServer then
+    restarted with no crash report, which logs the person out and quits every app, their own
+    Stedding too. Before that the person's interface lagged. `tooling/window-count` reads the
+    count without opening a window (`--owners` lists who holds the most). `tooling/dev`
+    starts a Mac browser leg only under `STEDDING_MAX_WINDOWS` (12,000), checks again
+    before the serial leg, and says how many windows each run added, naming the owners
+    when it is over 500. Over the limit, the person logs out and in; nothing else lowers
+    it. When a build, a sweep or a release is done, `tooling/leftovers --clean` (the PC:
+    `tooling\win\leftovers.ps1 -Clean`) ends what is still running from the output
+    directory, the local servers a check started, and mounted images, deletes siso's logs
+    (2.8 GB on the Mac and 8 GB on the PC that night) and the tooling's temporary files,
+    and on the PC the one-time scheduled tasks that ran a script from `%TEMP%`.
 ## The Windows build
 
 Git for Windows runs the bash tooling. PowerShell runs the rest. The toolchain is the installed Visual Studio (`DEPOT_TOOLS_WIN_TOOLCHAIN=0`, set by the scripts). Three variables name the machine's paths, so none is in the repo: `STEDDING_CHROMIUM_SRC` (the checkout's `src`), `STEDDING_DEPOT_TOOLS` when depot_tools is not already on `PATH`, and `STEDDING_VPYTHON_ROOT`, a short directory for vpython's venv (trap 34). The bash tooling takes the checkout as `CHROMIUM_ROOT`, the folder that holds `src`, as a POSIX path.
@@ -1081,6 +1097,8 @@ A newer Windows build installs over an older one as an ordinary upgrade, includi
 | stedding.dev | its Rebuild workflow reads GitHub's latest release, and older main releases for a platform that one lacks (ADR 0031: side releases are never read); `publish-release` starts it, and it runs every six hours | `gh workflow run rebuild.yml -R ysalitrynskyi/stedding.dev` |
 | stedding.dev's page after an update (`/thanks/updated/`) | what the release brought, each change with a capture and where its setting is: an entry in that repository's `src/data/whats-new.mjs` and its captures in `assets/whats-new/<tag>/`, pushed before the release; `publish-release` refuses a tag without one (the owner, 2026-11-02: people who update never read the notes) | the captures, from the release's own build, dark, window only (that repository's `README.md`, "What's new after an update") |
 | The Homebrew cask (`ysalitrynskyi/homebrew-stedding`, `Casks/stedding.rb`) | its Bump workflow reads the release marked latest and the DMG's `.sha256`; `publish-release` starts it once the Mac image is in, and it runs every six hours. A release with no Mac image yet changes nothing | `gh workflow run bump.yml -R ysalitrynskyi/homebrew-stedding` |
+
+Then nothing of the release's builds, tests and checks is left running or on disk: `tooling/leftovers --clean` on the Mac and `tooling\win\leftovers.ps1 -Clean` on the PC both end with "nothing left over" (trap 147).
 
 Within the hour, the home page's download section should name the release, and this should carry its version:
 

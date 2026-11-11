@@ -2,6 +2,24 @@
 
 What was built, newest first. Nothing here is needed to do a task: `AGENTS.md` carries what is true now, `BACKLOG.md` the order of work, `PLAN.md` the owner's decisions. This file was the "State of the project" section of `AGENTS.md` until 2026-09-30. This log starts at 2026-10-15. Closed work from before that is the table in [docs/history/archive.md](history/archive.md).
 
+## 2026-11-10 -- The Mac's login session went down under the tests' windows
+
+At 20:31, during the `mac-checks` browser leg for shared sessions (S-272), WindowServer
+restarted with no crash report. That logs the person out, and every app on the owner's Mac quit.
+The Mac had not rebooted: it had been up 19 days. WindowServer's own count stood at 17,903
+windows. It had sat near 14,250 from 18:00 to 19:40, from earlier days' runs, and the release
+browser leg added about 2,400. Test processes closed owning 0 to 5 windows each, so something
+else keeps them (S-464). After logging back in the count was 151 and the owner's lag was gone.
+
+`tooling/window-count` reads the count without opening a window. `tooling/dev` refuses a Mac
+browser leg over 12,000, checks again before the serial leg, and says what each run added
+(trap 147). `tooling/leftovers` and `tooling\win\leftovers.ps1` list and clear what jobs left:
+that night 2.8 GB of siso logs on the Mac and 8 GB on the PC, three local servers alive for up
+to 17 days, test temp, and 60 one-time scheduled tasks on the PC. Running it also found 64
+empty mount folders that `tooling/publish-appcast` left, one per run; it now removes its own.
+Both machines ended with "nothing left over". The guard was seen refusing a leg at a limit of
+100 and running none of its tests. A full browser leg has not run through it yet.
+
 ## 2026-11-10 -- after beta 17: the Mac's owed checks, Cmd-D in a private window, S-463
 
 The plan's second and third items, with the machines free for the evening. On the Mac, with the

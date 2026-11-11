@@ -68,6 +68,11 @@ before a release (`PLAN.md`, "When an item is done", rule 4).
   tests run, minutes to go).
 - **A wait that is not a build** (a suite, a sync) has the same shape: start it
   detached, and wait on its finish line.
+- **A finished job leaves nothing behind.** When a build, a sweep or a release is done,
+  `tooling/leftovers --clean` on the Mac and `tooling\win\leftovers.ps1 -Clean` on the PC
+  end with "nothing left over". On the Mac a browser leg starts only while WindowServer
+  holds under 12,000 windows; past about 17,900 it ends the person's login session
+  (trap 147).
 
 On Windows, `tooling/dev` runs each test binary under `timeout` for
 `STEDDING_TEST_BUDGET_S` seconds (900 by default). That parent is also what lets the

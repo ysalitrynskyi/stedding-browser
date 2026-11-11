@@ -26,8 +26,9 @@ of view landed on the taskbar; and after the person logged out and in, a full Ma
 three windows in WindowServer, not thousands (S-464). GitHub issue 100 became S-465 for the owner,
 and issue 90's new report is in S-450.
 
-After the merge, at 100% scale on the PC, the whole suite on the final tree passed on the DCHECK
-and ASan builds: 1,496 unit and 925 browser tests on each. S-340 closed on the release builds with
+After the merge, on the final tree: the PC's DCHECK and ASan builds at 100% scale each passed 925
+browser tests and, with the merged list of unit-test fixtures, 1,510 unit tests; the Mac's release
+build passed 1,522 unit and 979 browser tests, and its DCHECK build 1,522 unit tests. S-340 closed on the release builds with
 real input: while a pin asks *Leave site?*, the Mac begins no quit and Windows, which disables the
 window, begins no close; Leave sends the pin home, the next close or quit goes through at once,
 and nothing wedged. On the Mac, S-338's reopened tab, blob page and View Source stayed in their

@@ -1,0 +1,48 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Thu, 12 Nov 2026 18:33:13 -0500
+Subject: fix: a passkey check pending at shutdown no longer outlives its
+ profile
+
+On Windows the passwords page asks whether the system holds passkeys. When
+that has not been cached, Chromium's CredentialPresenceCacher waits for
+webauthn.dll's list in a reply bound to the check. It keeps the profile as a
+raw pointer and removes itself as the profile's observer when destroyed, and
+it is told when the profile goes away, but it never registered as an
+observer. A check still pending when the profile was destroyed kept a
+dangling pointer: at shutdown the reply was destroyed after the profile and
+RemoveObserver() read freed memory (an access violation in
+FindWordsTest.ArcsWordsFindASpacesSession, about one run in three), and a
+reply that ran after a profile was deleted wrote to that profile's prefs. It
+now registers in its constructor. The next milestone has the same code.
+
+Why: BACKLOG S-472, found while moving the pin to M157's newest point
+release; the same crash was seen once on the pin before it.
+Removable when: upstream registers the observer.
+---
+ .../webauthn/local_credential_management_win.cc      | 12 +++++++++++-
+ 1 file changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/chrome/browser/webauthn/local_credential_management_win.cc b/chrome/browser/webauthn/local_credential_management_win.cc
+index 150ed1f9ecb5c..56abd569d045b 100644
+--- a/chrome/browser/webauthn/local_credential_management_win.cc
++++ b/chrome/browser/webauthn/local_credential_management_win.cc
+@@ -54,7 +54,17 @@ class CredentialPresenceCacher : public ProfileObserver {
+       base::OnceCallback<void(
+           std::optional<std::vector<device::DiscoverableCredentialMetadata>>)>
+           callback)
+-      : profile_(profile), callback_(std::move(callback)) {}
++      : profile_(profile), callback_(std::move(callback)) {
++    // Stedding (BACKLOG S-472): the destructor and OnProfileWillBeDestroyed()
++    // expect this observer to be registered, and it never was. A check still
++    // pending when the profile went away kept a dangling `profile_`: at
++    // shutdown the pending reply was destroyed after the profile and
++    // RemoveObserver() read freed memory, and a reply that ran wrote to the
++    // freed profile's prefs.
++    if (profile_) {
++      profile_->AddObserver(this);
++    }
++  }
+ 
+   ~CredentialPresenceCacher() override {
+     if (profile_) {

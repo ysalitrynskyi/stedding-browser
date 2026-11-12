@@ -2,6 +2,33 @@
 
 What was built, newest first. Nothing here is needed to do a task: `AGENTS.md` carries what is true now, `BACKLOG.md` the order of work, `PLAN.md` the owner's decisions. This file was the "State of the project" section of `AGENTS.md` until 2026-09-30. This log starts at 2026-10-15. Closed work from before that is the table in [docs/history/archive.md](history/archive.md).
 
+## 2026-11-12 -- The pin move's Windows half, and a crash at shutdown (S-472)
+
+The owner approved moving the pin to 157.0.8103.79 (GitHub issue 110) for when the Mac is
+free, and asked for everything to be prepared meanwhile. The PC went first.
+
+- `tooling/update-pin --to 157.0.8103.79 --apply` in the PC's repo copy synced the point
+  release in about three minutes, and the whole series applied to it with no conflict. The pin
+  change stays uncommitted there until the Mac's own move. `apply-patches` first refused: the
+  series had come to the PC by bundle, so its record of the last export was stale. The branch
+  was checked to be the exported tip and the apply forced.
+- A full win-release build took 149 minutes. Its unit suite passed (1,511 tests). Of the
+  browser suite (934 tests), the serial leg passed, and two tests did not in the parallel leg:
+  `SidebarPanelsTest.TheDownloadsPanelFollowsAndActsOnEachDownload`, which waits for a copied
+  file on the clipboard and then passed five times of five alone, and
+  `FindWordsTest.ArcsWordsFindASpacesSession`, which crashed at shutdown.
+- That crash was S-472, in Chromium itself: a passkey check left pending when the profile went
+  away, by an object that handles the profile's destruction but never registered for it (patch
+  0180). It crashed 8 times in 22 runs on .79 and had once on .51, on 2026-11-10; with the fix,
+  0 times in 20.
+
+- With 0180 in, the whole browser suite ran again on .79: everything passed but
+  `SidebarSyncPlaceTest.AnOwnFileGoneIsWrittenAgain/WebDav`, which timed out at 31 seconds in
+  the parallel leg, had passed in the run before, and passed five times of five alone (0.7
+  seconds each).
+
+Not done here: the Mac's half of the move, its suites, and the release.
+
 ## 2026-11-12 -- After beta 18: password managers in a peek (S-469), and the row in full screen (S-471)
 
 The owner asked for the open issues, discussions and new comments to be reviewed and their bugs

@@ -13,17 +13,17 @@ Why: the owner's look on the Mac, 2026-11-06 (BACKLOG S-423, toolbar T60).
 Removable when: fold it into the patch that made the circle, once the Mac's
 series matches this one.
 ---
- .../theme/page_theme_color_controller.cc      |  31 ++-
- .../ui/stedding/theme/page_top_color.cc       |  30 +++
- .../ui/stedding/theme/page_top_color.h        |  15 ++
- .../stedding/theme/page_top_color_unittest.cc |  28 +++
+ .../theme/page_theme_color_controller.cc      |  37 ++-
+ .../ui/stedding/theme/page_top_color.cc       |  30 ++
+ .../ui/stedding/theme/page_top_color.h        |  15 +
+ .../stedding/theme/page_top_color_unittest.cc |  28 ++
  .../toolbar/stedding_lit_toolbar_button.cc    |  16 +-
  .../toolbar/stedding_lit_toolbar_button.h     |   4 +-
- .../test/stedding/address_band_browsertest.cc | 217 +++++++++++++++++-
- 7 files changed, 321 insertions(+), 20 deletions(-)
+ .../test/stedding/address_band_browsertest.cc | 256 +++++++++++++++++-
+ 7 files changed, 366 insertions(+), 20 deletions(-)
 
 diff --git a/chrome/browser/ui/stedding/theme/page_theme_color_controller.cc b/chrome/browser/ui/stedding/theme/page_theme_color_controller.cc
-index 342f8b191a577..bfd1eaceb4245 100644
+index 342f8b191a577..d09ca41245a53 100644
 --- a/chrome/browser/ui/stedding/theme/page_theme_color_controller.cc
 +++ b/chrome/browser/ui/stedding/theme/page_theme_color_controller.cc
 @@ -23,6 +23,7 @@
@@ -47,7 +47,7 @@ index 342f8b191a577..bfd1eaceb4245 100644
   private:
    explicit PageTopSample(content::Page& page) : PageUserData(page) {}
  
-@@ -744,7 +751,29 @@ void PageThemeColorController::TakeTopRead(
+@@ -744,7 +751,35 @@ void PageThemeColorController::TakeTopRead(
    if (!sample) {
      return;
    }
@@ -66,10 +66,16 @@ index 342f8b191a577..bfd1eaceb4245 100644
 +  // look, so the row keeps the colour it took from the page until a read
 +  // finds something else. A page that changed its declared colour or its
 +  // background meanwhile, as one switching to its own dark theme does, is
-+  // read as it is.
++  // read as it is. So is a page whose new edge is its own background or its
++  // declared colour, one that has turned grey (a read can come back after the
++  // page changed and still show it as it was).
++  const auto is = [&](const std::optional<SkColor>& declared) {
++    return declared && PageColorsMatch(*read, *declared);
++  };
 +  const bool dimmed_by_itself =
 +      sample->color && read && sample->theme_color == theme_color &&
-+      sample->background == background && IsDimmedEdge(*sample->color, *read);
++      sample->background == background && !is(background) &&
++      !is(theme_color) && IsDimmedEdge(*sample->color, *read);
 +  if (!dimmed_by_itself) {
 +    sample->color = read;
 +  }
@@ -262,7 +268,7 @@ index f6aa0d91bfd40..5726d229ac40e 100644
  
   protected:
 diff --git a/chrome/test/stedding/address_band_browsertest.cc b/chrome/test/stedding/address_band_browsertest.cc
-index cf8d78c87d162..3368a63817953 100644
+index cf8d78c87d162..53b3bcf73e067 100644
 --- a/chrome/test/stedding/address_band_browsertest.cc
 +++ b/chrome/test/stedding/address_band_browsertest.cc
 @@ -45,6 +45,9 @@
@@ -318,7 +324,7 @@ index cf8d78c87d162..3368a63817953 100644
  #include "ui/views/view_utils.h"
  #include "ui/views/widget/native_widget.h"
  #include "ui/views/widget/widget.h"
-@@ -1336,6 +1347,66 @@ IN_PROC_BROWSER_TEST_F(PageColourRowTest, TheRowFollowsADarkenedPage) {
+@@ -1336,6 +1347,105 @@ IN_PROC_BROWSER_TEST_F(PageColourRowTest, TheRowFollowsADarkenedPage) {
    }
  }
  
@@ -382,10 +388,49 @@ index cf8d78c87d162..3368a63817953 100644
 +      base::RepeatingCallback<void(base::OnceClosure)>());
 +}
 +
++// toolbar T62: a page that turns its own background grey is not a page under
++// a dark layer, even when the read of it as it was comes back after the
++// change. `PageColourRowTest.TheLitCircleSitsInsideTheRow` met that on
++// Windows on 2026-11-11: a white page made grey kept a white row.
++IN_PROC_BROWSER_TEST_F(PageColourRowTest, APageTurnedGreyIsNotADimmingLayer) {
++  constexpr SkColor kGrey = SkColorSetRGB(0x99, 0x99, 0x99);
++  stedding::SetDarkPagesOn(browser()->GetProfile(), false);
++  ASSERT_TRUE(ui_test_utils::NavigateToURL(
++      browser(), GURL("data:text/html,<body style='margin:0;background:"
++                      "white'><p>A plain page</p></body>")));
++  ASSERT_TRUE(WaitForTheRow(SK_ColorWHITE));
++
++  std::vector<base::OnceClosure> held;
++  row()->HoldTopReadsForTesting(base::BindLambdaForTesting(
++      [&](base::OnceClosure take) { held.push_back(std::move(take)); }));
++  // A read of the page while it is white, held until the page is grey.
++  content::SimulateMouseClickAt(page(), 0, blink::WebMouseEvent::Button::kLeft,
++                                gfx::Point(200, 200));
++  ASSERT_TRUE(base::test::RunUntil([&]() { return held.size() == 1u; }))
++      << "no read after the click";
++  ASSERT_TRUE(content::ExecJs(
++      page(), "document.documentElement.style.background = 'rgb(153, 153, 153)';"
++              "document.body.style.background = 'rgb(153, 153, 153)';"));
++  ASSERT_TRUE(base::test::RunUntil([&]() {
++    const std::optional<SkColor> background = page()->GetBackgroundColor();
++    return background && stedding::PageColorsMatch(*background, kGrey);
++  })) << "the page never said it is grey";
++  std::move(held[0]).Run();
++  // The read the change asked for, made once the first is back.
++  ASSERT_TRUE(base::test::RunUntil([&]() { return held.size() >= 2u; }))
++      << "no read after the change";
++  row()->HoldTopReadsForTesting(
++      base::RepeatingCallback<void(base::OnceClosure)>());
++  for (size_t i = 1; i < held.size(); ++i) {
++    std::move(held[i]).Run();
++  }
++  EXPECT_TRUE(WaitForTheRow(kGrey)) << "the grey page was taken for a dimming";
++}
++
  // dark-pages Dk8: a tab in the background when the switch changes keeps no
  // edge read of its page as it was. Its top edge, a pale orange, was read
  // while it was shown; the switch is turned on in another tab; shown again,
-@@ -2457,9 +2528,8 @@ IN_PROC_BROWSER_TEST_F(PageColourRowTest, TheLitCircleSitsInsideTheRow) {
+@@ -2457,9 +2567,8 @@ IN_PROC_BROWSER_TEST_F(PageColourRowTest, TheLitCircleSitsInsideTheRow) {
    views::View* const back = view()->toolbar_button_provider()->GetBackButton();
    ASSERT_TRUE(back);
    // A neighbour's hover circle: its ink drop's highlight path.
@@ -397,7 +442,7 @@ index cf8d78c87d162..3368a63817953 100644
  
    for (const auto scheme : {ThemeService::BrowserColorScheme::kLight,
                              ThemeService::BrowserColorScheme::kDark}) {
-@@ -2487,13 +2557,13 @@ IN_PROC_BROWSER_TEST_F(PageColourRowTest, TheLitCircleSitsInsideTheRow) {
+@@ -2487,13 +2596,13 @@ IN_PROC_BROWSER_TEST_F(PageColourRowTest, TheLitCircleSitsInsideTheRow) {
        const auto check = [&](stedding::LitToolbarButton* button,
                               std::string_view name) {
          SCOPED_TRACE(name);
@@ -416,7 +461,7 @@ index cf8d78c87d162..3368a63817953 100644
          EXPECT_LT(circle.width(), hover.width())
              << "as large as a neighbour's hover circle";
          EXPECT_GE(on_screen.y() - toolbar.y(), 5)
-@@ -2505,7 +2575,8 @@ IN_PROC_BROWSER_TEST_F(PageColourRowTest, TheLitCircleSitsInsideTheRow) {
+@@ -2505,7 +2614,8 @@ IN_PROC_BROWSER_TEST_F(PageColourRowTest, TheLitCircleSitsInsideTheRow) {
          // The icon's box, the only child the button lays out with no text.
          for (const views::View* const child : button->children()) {
            if (child->GetVisible() && !child->bounds().IsEmpty()) {
@@ -426,7 +471,7 @@ index cf8d78c87d162..3368a63817953 100644
                  << "the icon is off the circle's middle";
            }
          }
-@@ -2580,4 +2651,132 @@ IN_PROC_BROWSER_TEST_F(AddressBandTest, TheAddressKeepsItsPlaceWhenEdited) {
+@@ -2580,4 +2690,132 @@ IN_PROC_BROWSER_TEST_F(AddressBandTest, TheAddressKeepsItsPlaceWhenEdited) {
        << "the address is not gathered on the middle after the edit";
  }
  

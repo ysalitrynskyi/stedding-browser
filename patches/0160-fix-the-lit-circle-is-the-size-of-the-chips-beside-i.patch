@@ -13,11 +13,182 @@ Why: the owner's look on the Mac, 2026-11-06 (BACKLOG S-423, toolbar T60).
 Removable when: fold it into the patch that made the circle, once the Mac's
 series matches this one.
 ---
+ .../theme/page_theme_color_controller.cc      |  31 ++-
+ .../ui/stedding/theme/page_top_color.cc       |  30 +++
+ .../ui/stedding/theme/page_top_color.h        |  15 ++
+ .../stedding/theme/page_top_color_unittest.cc |  28 +++
  .../toolbar/stedding_lit_toolbar_button.cc    |  16 +-
  .../toolbar/stedding_lit_toolbar_button.h     |   4 +-
- .../test/stedding/address_band_browsertest.cc | 155 +++++++++++++++++-
- 3 files changed, 156 insertions(+), 19 deletions(-)
+ .../test/stedding/address_band_browsertest.cc | 217 +++++++++++++++++-
+ 7 files changed, 321 insertions(+), 20 deletions(-)
 
+diff --git a/chrome/browser/ui/stedding/theme/page_theme_color_controller.cc b/chrome/browser/ui/stedding/theme/page_theme_color_controller.cc
+index 342f8b191a577..bfd1eaceb4245 100644
+--- a/chrome/browser/ui/stedding/theme/page_theme_color_controller.cc
++++ b/chrome/browser/ui/stedding/theme/page_theme_color_controller.cc
+@@ -23,6 +23,7 @@
+ #include "components/viz/common/frame_sinks/copy_output_result.h"
+ #include "content/public/browser/page.h"
+ #include "content/public/browser/page_user_data.h"
++#include "content/public/browser/render_frame_host.h"
+ #include "content/public/browser/visibility.h"
+ #include "content/public/browser/web_contents.h"
+ #include "third_party/blink/public/common/web_preferences/web_preferences.h"
+@@ -43,6 +44,12 @@ class PageTopSample : public content::PageUserData<PageTopSample> {
+   // The edge's colour, or nothing when the edge is not one colour.
+   std::optional<SkColor> color;
+ 
++  // T62: the page's declared colour and background when the edge was last
++  // read. A page that changes either has changed its look, and its next
++  // read is taken as it is.
++  std::optional<SkColor> theme_color;
++  std::optional<SkColor> background;
++
+  private:
+   explicit PageTopSample(content::Page& page) : PageUserData(page) {}
+ 
+@@ -744,7 +751,29 @@ void PageThemeColorController::TakeTopRead(
+   if (!sample) {
+     return;
+   }
+-  sample->color = UniformTopEdgeColor(result.value().bitmap);
++  const std::optional<SkColor> read =
++      UniformTopEdgeColor(result.value().bitmap);
++  content::WebContents* const owner =
++      content::WebContents::FromRenderFrameHost(&page->GetMainDocument());
++  const std::optional<SkColor> theme_color =
++      owner ? owner->GetThemeColor() : std::nullopt;
++  const std::optional<SkColor> background =
++      owner ? owner->GetBackgroundColor() : std::nullopt;
++  // T62 (BACKLOG S-468, GitHub issue 101): a page that puts a dark layer over
++  // itself, under a dialog or a profile card, darkens its whole top edge
++  // evenly, and the row would go gray with it. The page has not changed its
++  // look, so the row keeps the colour it took from the page until a read
++  // finds something else. A page that changed its declared colour or its
++  // background meanwhile, as one switching to its own dark theme does, is
++  // read as it is.
++  const bool dimmed_by_itself =
++      sample->color && read && sample->theme_color == theme_color &&
++      sample->background == background && IsDimmedEdge(*sample->color, *read);
++  if (!dimmed_by_itself) {
++    sample->color = read;
++  }
++  sample->theme_color = theme_color;
++  sample->background = background;
+   content::WebContents* const contents = web_contents();
+   if (contents && &contents->GetPrimaryPage() == page.get()) {
+     Refresh();
+diff --git a/chrome/browser/ui/stedding/theme/page_top_color.cc b/chrome/browser/ui/stedding/theme/page_top_color.cc
+index f8a45088e4f85..32b5b1058ac37 100644
+--- a/chrome/browser/ui/stedding/theme/page_top_color.cc
++++ b/chrome/browser/ui/stedding/theme/page_top_color.cc
+@@ -5,6 +5,8 @@
+ #include "chrome/browser/ui/stedding/theme/page_top_color.h"
+ 
+ #include <algorithm>
++#include <array>
++#include <cmath>
+ #include <cstdlib>
+ #include <vector>
+ 
+@@ -102,4 +104,32 @@ bool PageColorsMatch(SkColor a, SkColor b) {
+   return ChannelDistance(a, b) <= 2;
+ }
+ 
++bool IsDimmedEdge(SkColor before, SkColor after) {
++  const std::array<int, 3> was = {static_cast<int>(SkColorGetR(before)),
++                                  static_cast<int>(SkColorGetG(before)),
++                                  static_cast<int>(SkColorGetB(before))};
++  const std::array<int, 3> now = {static_cast<int>(SkColorGetR(after)),
++                                  static_cast<int>(SkColorGetG(after)),
++                                  static_cast<int>(SkColorGetB(after))};
++  // The share of light the layer lets through, from the brightest channel,
++  // where it is measured best.
++  const size_t brightest =
++      static_cast<size_t>(std::ranges::max_element(was) - was.begin());
++  if (was[brightest] < kPageDimMinBrightness) {
++    return false;
++  }
++  const double kept = static_cast<double>(now[brightest]) / was[brightest];
++  if (kept < kPageDimLeastKept || kept > kPageDimMostKept) {
++    return false;
++  }
++  const double slack = kPageDimSlack + kPageDimTintSlack * (1.0 - kept);
++  for (size_t channel = 0; channel < was.size(); ++channel) {
++    if (now[channel] > was[channel] ||
++        std::abs(now[channel] - was[channel] * kept) > slack) {
++      return false;
++    }
++  }
++  return true;
++}
++
+ }  // namespace stedding
+diff --git a/chrome/browser/ui/stedding/theme/page_top_color.h b/chrome/browser/ui/stedding/theme/page_top_color.h
+index a1c0c5ea4ec6d..558eb736cf96d 100644
+--- a/chrome/browser/ui/stedding/theme/page_top_color.h
++++ b/chrome/browser/ui/stedding/theme/page_top_color.h
+@@ -42,6 +42,21 @@ std::optional<SkColor> UniformTopEdgeColor(const SkBitmap& strip);
+ // other is not worth re-theming the window: every channel within two.
+ bool PageColorsMatch(SkColor a, SkColor b);
+ 
++// toolbar T62 (BACKLOG S-468, GitHub issue 101): whether `after` is `before`
++// under a dark layer the page put over itself, as a page does under its own
++// dialog: every channel darker by about the same share of its light, the
++// brightest channel keeping between kPageDimLeastKept and kPageDimMostKept of
++// it. `before` must be bright enough for a dimming to show (its brightest
++// channel kPageDimMinBrightness or more). The layer may be tinted: each
++// channel may stray from the shared share by kPageDimSlack plus
++// kPageDimTintSlack times the share taken away.
++inline constexpr int kPageDimMinBrightness = 48;
++inline constexpr double kPageDimLeastKept = 0.05;
++inline constexpr double kPageDimMostKept = 0.97;
++inline constexpr int kPageDimSlack = 8;
++inline constexpr int kPageDimTintSlack = 24;
++bool IsDimmedEdge(SkColor before, SkColor after);
++
+ }  // namespace stedding
+ 
+ #endif  // CHROME_BROWSER_UI_STEDDING_THEME_PAGE_TOP_COLOR_H_
+diff --git a/chrome/browser/ui/stedding/theme/page_top_color_unittest.cc b/chrome/browser/ui/stedding/theme/page_top_color_unittest.cc
+index 90e979ab7ab8b..3d685063e1041 100644
+--- a/chrome/browser/ui/stedding/theme/page_top_color_unittest.cc
++++ b/chrome/browser/ui/stedding/theme/page_top_color_unittest.cc
+@@ -103,6 +103,34 @@ TEST(PageTopColorTest, UniformEdge) {
+       << SkColorGetB(*edge);
+ }
+ 
++// toolbar T62 (BACKLOG S-468): a colour under a dark layer, black or tinted,
++// is the colour dimmed; another colour, a lighter one, one darkened unevenly,
++// or a change too small or too dark to tell is not.
++TEST(PageTopColorTest, ADarkLayerDimsTheEdgeEvenly) {
++  constexpr SkColor kWhite = SK_ColorWHITE;
++  constexpr SkColor kBlue = SkColorSetRGB(0x19, 0x76, 0xd2);
++  // Under black at 60%, at 85% and at 30%.
++  EXPECT_TRUE(IsDimmedEdge(kWhite, SkColorSetRGB(102, 102, 102)));
++  EXPECT_TRUE(IsDimmedEdge(kWhite, SkColorSetRGB(38, 38, 38)));
++  EXPECT_TRUE(IsDimmedEdge(kBlue, SkColorSetRGB(18, 83, 147)));
++  // Under a slate layer, rgba(15, 23, 42, 0.5).
++  EXPECT_TRUE(IsDimmedEdge(kWhite, SkColorSetRGB(135, 139, 148)));
++
++  EXPECT_FALSE(IsDimmedEdge(kBlue, SkColorSetRGB(0x38, 0x8e, 0x3c)))
++      << "another colour";
++  EXPECT_FALSE(IsDimmedEdge(SkColorSetRGB(102, 102, 102), kWhite))
++      << "lighter";
++  EXPECT_FALSE(IsDimmedEdge(kBlue, SkColorSetRGB(10, 83, 60)))
++      << "darkened unevenly: green kept far more of its light than blue";
++  EXPECT_FALSE(IsDimmedEdge(kWhite, SkColorSetRGB(250, 250, 250)))
++      << "too small a change to be a layer";
++  EXPECT_FALSE(IsDimmedEdge(kWhite, SkColorSetRGB(6, 6, 6)))
++      << "black, as a page turned dark is";
++  EXPECT_FALSE(IsDimmedEdge(SkColorSetRGB(30, 30, 30),
++                            SkColorSetRGB(15, 15, 15)))
++      << "too dark a colour for a dimming to show";
++}
++
+ // A sample a step away from the last is not a new colour for the window.
+ TEST(PageTopColorTest, ColoursTwoStepsApartMatch) {
+   EXPECT_TRUE(PageColorsMatch(SkColorSetRGB(10, 20, 30),
 diff --git a/chrome/browser/ui/views/toolbar/stedding_lit_toolbar_button.cc b/chrome/browser/ui/views/toolbar/stedding_lit_toolbar_button.cc
 index 0170153b317ee..c57c1f1ebd54f 100644
 --- a/chrome/browser/ui/views/toolbar/stedding_lit_toolbar_button.cc
@@ -91,7 +262,7 @@ index f6aa0d91bfd40..5726d229ac40e 100644
  
   protected:
 diff --git a/chrome/test/stedding/address_band_browsertest.cc b/chrome/test/stedding/address_band_browsertest.cc
-index cf8d78c87d162..550584780241a 100644
+index cf8d78c87d162..3368a63817953 100644
 --- a/chrome/test/stedding/address_band_browsertest.cc
 +++ b/chrome/test/stedding/address_band_browsertest.cc
 @@ -45,6 +45,9 @@
@@ -123,7 +294,23 @@ index cf8d78c87d162..550584780241a 100644
  #include "chrome/browser/ui/views/animations/tab_strip_animations.h"
  #include "chrome/browser/ui/views/controls/hover_button.h"
  #include "chrome/browser/ui/views/extensions/extensions_menu_button.h"
-@@ -173,6 +181,7 @@
+@@ -127,6 +135,7 @@
+ #include "extensions/test/test_extension_dir.h"
+ #include "net/dns/mock_host_resolver.h"
+ #include "net/test/embedded_test_server/embedded_test_server.h"
++#include "third_party/blink/public/common/input/web_mouse_event.h"
+ #include "third_party/blink/public/common/web_preferences/web_preferences.h"
+ #include "third_party/skia/include/core/SkBitmap.h"
+ #include "third_party/skia/include/core/SkColor.h"
+@@ -148,6 +157,7 @@
+ #include "ui/gfx/animation/animation_test_api.h"
+ #include "ui/gfx/canvas.h"
+ #include "ui/gfx/color_utils.h"
++#include "ui/gfx/geometry/point.h"
+ #include "ui/gfx/geometry/rect.h"
+ #include "ui/gfx/geometry/rect_conversions.h"
+ #include "ui/gfx/geometry/skia_conversions.h"
+@@ -173,6 +183,7 @@
  #include "ui/views/view.h"
  #include "ui/views/view_class_properties.h"
  #include "ui/views/controls/focus_ring.h"
@@ -131,7 +318,74 @@ index cf8d78c87d162..550584780241a 100644
  #include "ui/views/view_utils.h"
  #include "ui/views/widget/native_widget.h"
  #include "ui/views/widget/widget.h"
-@@ -2457,9 +2466,8 @@ IN_PROC_BROWSER_TEST_F(PageColourRowTest, TheLitCircleSitsInsideTheRow) {
+@@ -1336,6 +1347,66 @@ IN_PROC_BROWSER_TEST_F(PageColourRowTest, TheRowFollowsADarkenedPage) {
+   }
+ }
+ 
++// toolbar T62 (BACKLOG S-468, GitHub issue 101): a page that dims itself
++// under its own dialog leaves the row its colour. The header is blue; a click
++// puts a dark layer over the whole page, as Discord's profile card does, and
++// the row stays blue; it stays blue when the layer goes, and a later click
++// that turns the header green still turns the row green.
++IN_PROC_BROWSER_TEST_F(PageColourRowTest, APagesOwnDimmingLeavesTheRowAlone) {
++  constexpr SkColor kBlue = SkColorSetRGB(0x19, 0x76, 0xd2);
++  constexpr SkColor kGreen = SkColorSetRGB(0x38, 0x8e, 0x3c);
++  stedding::SetDarkPagesOn(browser()->GetProfile(), false);
++  ASSERT_TRUE(ui_test_utils::NavigateToURL(
++      browser(),
++      GURL("data:text/html,<body style='margin:0'>"
++           "<div id=h style='height:60px;background:%231976d2'></div>"
++           "<p>A header, and a dialog over a dark layer</p><script>"
++           "let clicks=0;addEventListener('mousedown',()=>{++clicks;"
++           "if(clicks==1){const d=document.createElement('div');d.id='dim';"
++           "d.style='position:fixed;inset:0;background:rgba(0,0,0,0.6)';"
++           "document.body.append(d);}"
++           "if(clicks==2){document.getElementById('dim').remove();}"
++           "if(clicks==3){document.getElementById('h').style.background="
++           "'%23388e3c';}});</script></body>")));
++  ASSERT_TRUE(WaitForTheRow(kBlue)) << "the header's blue colours the row";
++
++  int reads = 0;
++  row()->HoldTopReadsForTesting(
++      base::BindLambdaForTesting([&](base::OnceClosure take) {
++        std::move(take).Run();
++        ++reads;
++      }));
++  // A click asks for three reads of the edge (T31); two of them are made
++  // well after the page has painted what the click changed.
++  const auto click = [&]() {
++    const int before = reads;
++    content::SimulateMouseClickAt(page(), 0,
++                                  blink::WebMouseEvent::Button::kLeft,
++                                  gfx::Point(200, 200));
++    return base::test::RunUntil([&]() { return reads >= before + 2; });
++  };
++  {
++    SCOPED_TRACE("the page's dark layer");
++    ASSERT_TRUE(click()) << "the edge was not read after the click";
++    ASSERT_EQ(true, content::EvalJs(page(), "!!document.getElementById('dim')"));
++    EXPECT_TRUE(WaitForTheRow(kBlue)) << "the row went dark with the page";
++  }
++  {
++    SCOPED_TRACE("the layer goes");
++    ASSERT_TRUE(click()) << "the edge was not read after the click";
++    ASSERT_EQ(false,
++              content::EvalJs(page(), "!!document.getElementById('dim')"));
++    EXPECT_TRUE(WaitForTheRow(kBlue));
++  }
++  {
++    SCOPED_TRACE("the header changes colour");
++    ASSERT_TRUE(click()) << "the edge was not read after the click";
++    EXPECT_TRUE(WaitForTheRow(kGreen)) << "a real change is still followed";
++  }
++  row()->HoldTopReadsForTesting(
++      base::RepeatingCallback<void(base::OnceClosure)>());
++}
++
+ // dark-pages Dk8: a tab in the background when the switch changes keeps no
+ // edge read of its page as it was. Its top edge, a pale orange, was read
+ // while it was shown; the switch is turned on in another tab; shown again,
+@@ -2457,9 +2528,8 @@ IN_PROC_BROWSER_TEST_F(PageColourRowTest, TheLitCircleSitsInsideTheRow) {
    views::View* const back = view()->toolbar_button_provider()->GetBackButton();
    ASSERT_TRUE(back);
    // A neighbour's hover circle: its ink drop's highlight path.
@@ -143,7 +397,7 @@ index cf8d78c87d162..550584780241a 100644
  
    for (const auto scheme : {ThemeService::BrowserColorScheme::kLight,
                              ThemeService::BrowserColorScheme::kDark}) {
-@@ -2487,13 +2495,13 @@ IN_PROC_BROWSER_TEST_F(PageColourRowTest, TheLitCircleSitsInsideTheRow) {
+@@ -2487,13 +2557,13 @@ IN_PROC_BROWSER_TEST_F(PageColourRowTest, TheLitCircleSitsInsideTheRow) {
        const auto check = [&](stedding::LitToolbarButton* button,
                               std::string_view name) {
          SCOPED_TRACE(name);
@@ -162,7 +416,7 @@ index cf8d78c87d162..550584780241a 100644
          EXPECT_LT(circle.width(), hover.width())
              << "as large as a neighbour's hover circle";
          EXPECT_GE(on_screen.y() - toolbar.y(), 5)
-@@ -2505,7 +2513,8 @@ IN_PROC_BROWSER_TEST_F(PageColourRowTest, TheLitCircleSitsInsideTheRow) {
+@@ -2505,7 +2575,8 @@ IN_PROC_BROWSER_TEST_F(PageColourRowTest, TheLitCircleSitsInsideTheRow) {
          // The icon's box, the only child the button lays out with no text.
          for (const views::View* const child : button->children()) {
            if (child->GetVisible() && !child->bounds().IsEmpty()) {
@@ -172,7 +426,7 @@ index cf8d78c87d162..550584780241a 100644
                  << "the icon is off the circle's middle";
            }
          }
-@@ -2580,4 +2589,132 @@ IN_PROC_BROWSER_TEST_F(AddressBandTest, TheAddressKeepsItsPlaceWhenEdited) {
+@@ -2580,4 +2651,132 @@ IN_PROC_BROWSER_TEST_F(AddressBandTest, TheAddressKeepsItsPlaceWhenEdited) {
        << "the address is not gathered on the middle after the edit";
  }
  

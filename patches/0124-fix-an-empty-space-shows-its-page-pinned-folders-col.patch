@@ -49,6 +49,7 @@ Removable when: never as behaviour.
  chrome/browser/ui/stedding/empty_space.cc     |  19 +++-
  chrome/browser/ui/stedding/empty_space.h      |   9 ++
  .../ui/stedding/tab_numbers_unittest.cc       |   6 +-
+ chrome/browser/ui/toasts/toast_view.cc        |   9 +-
  .../ui/views/tabs/vertical/sidebar_address.cc |  33 ++++++
  .../ui/views/tabs/vertical/sidebar_address.h  |   9 ++
  .../pwa_install_page_action.cc                |  11 +-
@@ -62,12 +63,12 @@ Removable when: never as behaviour.
  .../stedding/isolation_mark_browsertest.cc    |   4 +
  chrome/test/stedding/peek_browsertest.cc      |  14 ++-
  .../test/stedding/pinned_run_browsertest.cc   |  24 ++++
- chrome/test/stedding/restore_browsertest.cc   |  12 +-
+ chrome/test/stedding/restore_browsertest.cc   |  37 +++++-
  .../stedding/sidebar_address_browsertest.cc   |  78 +++++++++++++
  .../stedding/site_controls_browsertest.cc     |  15 +++
  .../test/stedding/space_switch_browsertest.cc |  16 ++-
  .../bookmarks/browser/bookmark_utils.cc       |   6 +-
- 25 files changed, 502 insertions(+), 65 deletions(-)
+ 26 files changed, 535 insertions(+), 66 deletions(-)
 
 diff --git a/chrome/browser/resources/stedding_space/app.ts b/chrome/browser/resources/stedding_space/app.ts
 index fb513bd223b22..916176b32b208 100644
@@ -543,6 +544,26 @@ index 04ceb43a25e33..4d437f9c96e8a 100644
    EXPECT_NE(numbered.end(), std::ranges::find(numbered, in_work));
    for (tabs::TabInterface* tab : at_home) {
      EXPECT_EQ(numbered.end(), std::ranges::find(numbered, tab));
+diff --git a/chrome/browser/ui/toasts/toast_view.cc b/chrome/browser/ui/toasts/toast_view.cc
+index d5e86e139814c..0db574bfed879 100644
+--- a/chrome/browser/ui/toasts/toast_view.cc
++++ b/chrome/browser/ui/toasts/toast_view.cc
+@@ -282,7 +282,14 @@ void ToastView::Init() {
+       action_button_->SetPreferredSize(
+           gfx::Size(action_button_->GetPreferredSize().width(), 28));
+     }
+-    action_button_->GetViewAccessibility().SetRole(ax::mojom::Role::kAlert);
++    // Stedding (tabs R25, S-467): the action is a button to assistive
++    // technology too. Chromium names it an alert, which the Mac reads as a
++    // group that VoiceOver does not call a button; the toast's window is
++    // already the alert that announces the line.
++    action_button_->GetViewAccessibility().SetRole(
++        base::FeatureList::IsEnabled(stedding::kArcStyleWindow)
++            ? ax::mojom::Role::kButton
++            : ax::mojom::Role::kAlert);
+     action_button_->SetProperty(views::kElementIdentifierKey,
+                                 kToastActionButton);
+     action_button_->SetAppearDisabledInInactiveWidget(false);
 diff --git a/chrome/browser/ui/views/tabs/vertical/sidebar_address.cc b/chrome/browser/ui/views/tabs/vertical/sidebar_address.cc
 index e9b95c9612022..120ec0d63aaa0 100644
 --- a/chrome/browser/ui/views/tabs/vertical/sidebar_address.cc
@@ -973,10 +994,56 @@ index 09e58f733c313..d6e259ee0945a 100644
          << "the session would keep the Space's page";
    }
 diff --git a/chrome/test/stedding/restore_browsertest.cc b/chrome/test/stedding/restore_browsertest.cc
-index 86bf1b8ddbad2..dc1f4462bb505 100644
+index 86bf1b8ddbad2..737699b057f54 100644
 --- a/chrome/test/stedding/restore_browsertest.cc
 +++ b/chrome/test/stedding/restore_browsertest.cc
-@@ -3463,15 +3463,17 @@ IN_PROC_BROWSER_TEST_F(RestoredVerbsTest,
+@@ -137,6 +137,8 @@
+ #include "net/dns/mock_host_resolver.h"
+ #include "net/test/embedded_test_server/embedded_test_server.h"
+ #include "third_party/skia/include/core/SkColor.h"
++#include "ui/accessibility/ax_enums.mojom.h"
++#include "ui/accessibility/ax_node_data.h"
+ #include "ui/base/l10n/l10n_util.h"
+ #include "ui/base/page_transition_types.h"
+ #include "ui/base/window_open_disposition.h"
+@@ -145,6 +147,7 @@
+ #include "ui/events/keycodes/keyboard_codes.h"
+ #include "ui/events/types/event_type.h"
+ #include "ui/gfx/geometry/point.h"
++#include "ui/views/accessibility/view_accessibility.h"
+ #include "ui/views/bubble/bubble_dialog_delegate_view.h"
+ #include "ui/views/controls/button/md_text_button.h"
+ #include "ui/views/controls/label.h"
+@@ -3209,6 +3212,28 @@ IN_PROC_BROWSER_TEST_F(UndoCloseTest, AFolderTabAndASplitPaneComeBackInPlace) {
+   }
+ }
+ 
++// R25, S-467: assistive technology reads the toast's Undo as a button named
++// by its text, so VoiceOver and Narrator call it one; the toast's window
++// stays the alert that announces the line.
++IN_PROC_BROWSER_TEST_F(UndoCloseTest, TheToastsUndoIsAButton) {
++  Open("a.test");
++  OpenTitled("b.test");
++  chrome::ExecuteCommand(browser(), IDC_CLOSE_TAB);  // ⌘W
++  ASSERT_NO_FATAL_FAILURE(
++      WaitForUndoToast(u"“Title Of Awesomeness” closed"));
++
++  toasts::ToastView* const view = toasts()->GetToastViewForTesting();
++  ASSERT_TRUE(view);
++  views::MdTextButton* const undo = view->action_button_for_testing();
++  ASSERT_TRUE(undo);
++  ui::AXNodeData data;
++  undo->GetViewAccessibility().GetAccessibleNodeData(&data);
++  EXPECT_EQ(ax::mojom::Role::kButton, data.role);
++  EXPECT_EQ(undo->GetText(),
++            data.GetString16Attribute(ax::mojom::StringAttribute::kName));
++  EXPECT_EQ(ax::mojom::Role::kAlert, view->GetAccessibleWindowRole());
++}
++
+ // R26, R30: the sweep, a page closing itself and a window closing are
+ // recorded but get no toast. A close the user makes afterwards names only
+ // its own tab. With "Offer Undo after closing tabs" off, that close shows
+@@ -3463,15 +3488,17 @@ IN_PROC_BROWSER_TEST_F(RestoredVerbsTest,
    tabs()->SetTabPinned(0, true);
    stedding::SetTabName(browser(), tabs()->GetTabAtIndex(0), u"Mail");
  

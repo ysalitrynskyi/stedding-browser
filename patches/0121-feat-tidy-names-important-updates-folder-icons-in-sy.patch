@@ -49,8 +49,10 @@ Chromium's own tests cover the chooser in Stedding's window layouts.
  .../browser/ui/spaces/arc_sidebar_importer.h  |   3 +
  chrome/browser/ui/spaces/sidebar_backup.cc    |   7 +
  .../ui/spaces/sidebar_backup_unittest.cc      |  19 +-
- .../browser/ui/spaces/sidebar_sync_apply.cc   |   7 +
+ .../browser/ui/spaces/sidebar_sync_apply.cc   |  14 +-
  chrome/browser/ui/spaces/sidebar_sync_file.cc |   1 +
+ .../browser/ui/spaces/sidebar_sync_ledger.h   |   4 +
+ .../browser/ui/spaces/sidebar_sync_service.cc |   3 +
  .../browser/ui/spaces/sidebar_sync_state.cc   |   5 +-
  .../browser/ui/spaces/sidebar_sync_tracker.cc |   2 +
  .../ui/spaces/sidebar_sync_unittest.cc        |  53 +++
@@ -85,10 +87,11 @@ Chromium's own tests cover the chooser in Stedding's window layouts.
  chrome/test/stedding/BUILD.gn                 |  11 +
  .../stedding/device_picker_browsertest.cc     | 114 +++++++
  .../stedding/settings_spaces_browsertest.cc   |   8 +-
+ .../test/stedding/sidebar_sync_browsertest.cc |  62 ++++
  .../test/stedding/tidy_names_browsertest.cc   | 192 +++++++++++
  chrome/test/stedding/updates_browsertest.cc   |  91 +++++
  components/infobars/core/infobar_delegate.h   |   2 +
- 47 files changed, 1540 insertions(+), 15 deletions(-)
+ 50 files changed, 1614 insertions(+), 17 deletions(-)
  create mode 100644 chrome/browser/ui/stedding/important_update_bar.cc
  create mode 100644 chrome/browser/ui/stedding/important_update_bar.h
  create mode 100644 chrome/browser/ui/stedding/tidy_names.cc
@@ -349,7 +352,7 @@ index 30d938ffc1380..019b440f1981f 100644
    }
    EXPECT_EQ(before.essentials.size(), after->essentials.size());
 diff --git a/chrome/browser/ui/spaces/sidebar_sync_apply.cc b/chrome/browser/ui/spaces/sidebar_sync_apply.cc
-index 79f3bab4af372..edc1f7461497e 100644
+index 79f3bab4af372..5914a3262766a 100644
 --- a/chrome/browser/ui/spaces/sidebar_sync_apply.cc
 +++ b/chrome/browser/ui/spaces/sidebar_sync_apply.cc
 @@ -345,6 +345,12 @@ class Applier {
@@ -365,7 +368,22 @@ index 79f3bab4af372..edc1f7461497e 100644
        return;
      }
    }
-@@ -567,6 +573,7 @@ class Applier {
+@@ -407,9 +413,12 @@ class Applier {
+       return;
+     }
+     // Sync put it here and it was never opened: Recently Closed, so
+-    // Shift-Cmd-T brings it back.
++    // Shift-Cmd-T brings it back. Unloaded still, or loaded only because sync
++    // brought it on screen (S-342): a tab loaded otherwise, as the other pane
++    // of a split, was used.
++    const bool shown_by_sync = ledger_->shown_unopened.erase(id) > 0;
+     if (ledger_->inserted_unopened.erase(id) &&
+-        tab->GetContents()->WasDiscarded()) {
++        (shown_by_sync || tab->GetContents()->WasDiscarded())) {
+       strip->CloseWebContentsAt(index,
+                                 TabCloseTypes::CLOSE_CREATE_HISTORICAL_TAB);
+       ++out_->applied;
+@@ -567,6 +576,7 @@ class Applier {
          return false;
        }
        made->SetTitle(desired_->records.at(chain[i]).Get(kFieldTitle));
@@ -385,6 +403,35 @@ index 5fee1233746b4..869baf4d919df 100644
      for (const std::string& child : state.ChildrenOf(id)) {
        const Record& child_record = state.records.at(child);
        if (child_record.kind == Kind::kTab &&
+diff --git a/chrome/browser/ui/spaces/sidebar_sync_ledger.h b/chrome/browser/ui/spaces/sidebar_sync_ledger.h
+index 69555ced7643e..b06fd72c60580 100644
+--- a/chrome/browser/ui/spaces/sidebar_sync_ledger.h
++++ b/chrome/browser/ui/spaces/sidebar_sync_ledger.h
+@@ -113,6 +113,10 @@ struct Ledger {
+   std::map<std::string, PeerStat> peers;
+   // Sf21: the tabs sync put here that have not been opened here.
+   std::set<std::string> inserted_unopened;
++  // Sf21 (BACKLOG S-342): of those, the ones sync itself brought on screen
++  // while it applied a change, which loaded there. Not written to disk: after
++  // a restart they are unloaded again.
++  std::set<std::string> shown_unopened;
+   // Sf17, Sf14: items another computer added that wait for a window.
+   std::set<std::string> pending_adds;
+   // Sf24: a Space whose own session this computer keeps as it is ("Not on
+diff --git a/chrome/browser/ui/spaces/sidebar_sync_service.cc b/chrome/browser/ui/spaces/sidebar_sync_service.cc
+index 07a197d96da39..93d87aff71dce 100644
+--- a/chrome/browser/ui/spaces/sidebar_sync_service.cc
++++ b/chrome/browser/ui/spaces/sidebar_sync_service.cc
+@@ -857,6 +857,9 @@ void SidebarSyncService::OnActiveTabChanged(tabs::TabInterface* tab) {
+   const std::string id = sidebar_sync::SyncIdOfTab(tab, Resolved());
+   if (!id.empty() && !applying_) {
+     ledger_->inserted_unopened.erase(id);
++    ledger_->shown_unopened.erase(id);
++  } else if (!id.empty() && ledger_->inserted_unopened.contains(id)) {
++    ledger_->shown_unopened.insert(id);
+   }
+   // Sf21, Sf25: what waited for the user to leave a tab applies now.
+   if (deferred_ > 0 && !applying_) {
 diff --git a/chrome/browser/ui/spaces/sidebar_sync_state.cc b/chrome/browser/ui/spaces/sidebar_sync_state.cc
 index e9565769ca2e6..b0fb7ddf79b95 100644
 --- a/chrome/browser/ui/spaces/sidebar_sync_state.cc
@@ -2163,6 +2210,95 @@ index 56c8e106e8d41..20147308bcd90 100644
        EXPECT_EQ(false,
                  content::EvalJs(
                      page, content::JsReplace("chrome.settingsPrivate.getPref($1)"
+diff --git a/chrome/test/stedding/sidebar_sync_browsertest.cc b/chrome/test/stedding/sidebar_sync_browsertest.cc
+index 89f278041b1b1..5fa7aa49c2cd7 100644
+--- a/chrome/test/stedding/sidebar_sync_browsertest.cc
++++ b/chrome/test/stedding/sidebar_sync_browsertest.cc
+@@ -30,8 +30,11 @@
+ #include "base/values.h"
+ #include "build/build_config.h"
+ #include "chrome/browser/prefs/session_startup_pref.h"
++#include "chrome/browser/sessions/tab_restore_service_factory.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "components/prefs/pref_service.h"
++#include "components/sessions/core/tab_restore_service.h"
++#include "chrome/browser/ui/browser_commands.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/spaces/arc_sidebar_importer.h"
+ #include "chrome/browser/ui/spaces/sidebar_ids.h"
+@@ -48,6 +51,7 @@
+ #include "chrome/browser/ui/spaces/space_registry_factory.h"
+ #include "chrome/browser/ui/stedding/stedding_prefs.h"
+ #include "chrome/browser/ui/stedding/tab_parents.h"
++#include "chrome/browser/ui/tabs/tab_enums.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "chrome/common/chrome_paths.h"
+ #include "chrome/test/base/in_process_browser_test.h"
+@@ -1224,6 +1228,64 @@ IN_PROC_BROWSER_TEST_F(SidebarSyncTest,
+   EXPECT_TRUE(service()->ledger_for_testing()->inserted_unopened.contains(pin));
+ }
+ 
++// Sf21 (BACKLOG S-342): the pin that applying a Space deletion brought on
++// screen loads there, and is still not opened by that: when the other
++// computer then removes it, it goes into Recently Closed. The removal also
++// wanted the tab unloaded, so it left the pin open as an ordinary tab.
++IN_PROC_BROWSER_TEST_F(SidebarSyncTest,
++                       APinSyncShowedGoesToRecentlyClosedWhenRemoved) {
++  const std::string home = base::Token::CreateRandom().ToString();
++  const std::string doomed = base::Token::CreateRandom().ToString();
++  const std::string pin = NewTabId();
++  const int64_t start = NowMs();
++  const sb::Stamp stamp{start, kPeer};
++  sb::State peer = PeerState(home, {pin}, start, "Home");
++  sb::Record space(sb::Kind::kSpace);
++  space.f[sb::kFieldName] = sb::Field{"Doomed", stamp};
++  space.f[sb::kFieldColor] = sb::Field{"#3366FF", stamp};
++  space.f[sb::kFieldIsolated] = sb::Field{"0", stamp};
++  peer.records[doomed] = space;
++  peer.lists[sb::kSpacesList].order = {doomed, home};
++  WritePeer(peer, 1);
++  Join(/*combine=*/false);
++  tabs::TabInterface* const synced = TabWithToken(pin);
++  ASSERT_TRUE(synced);
++
++  ASSERT_TRUE(model().SetActiveSpace(SpaceOf(doomed)));
++  peer.records[doomed].del = sb::Stamp{start + 60'000, kPeer};
++  WritePeer(peer, 2);
++  Scan();
++  ASSERT_TRUE(service()->ResolveDecision(std::string("batch:") + kPeer,
++                                         "apply"));
++  ASSERT_TRUE(base::test::RunUntil(
++      [&] { return !registry().Find(SpaceOf(doomed)); }));
++  ASSERT_EQ(synced, tabs().GetActiveTab());
++  ASSERT_TRUE(base::test::RunUntil(
++      [&] { return !synced->GetContents()->WasDiscarded(); }))
++      << "the pin brought on screen did not load";
++  ASSERT_TRUE(service()->ledger_for_testing()->inserted_unopened.contains(pin));
++
++  // The user goes to another tab, so the removal does not wait for them.
++  chrome::NewTab(browser(), NewTabTypes::kNewTabCommand);
++  ASSERT_NE(synced, tabs().GetActiveTab());
++  sessions::TabRestoreService* const closed =
++      TabRestoreServiceFactory::GetForProfile(browser()->GetProfile());
++  ASSERT_TRUE(closed);
++  const size_t closed_before = closed->entries().size();
++
++  peer.records[pin].del = sb::Stamp{start + 120'000, kPeer};
++  WritePeer(peer, 3);
++  Scan();
++  if (Decision(std::string("batch:") + kPeer)) {
++    ASSERT_TRUE(service()->ResolveDecision(std::string("batch:") + kPeer,
++                                           "apply"));
++  }
++  EXPECT_TRUE(base::test::RunUntil([&] { return !TabWithToken(pin); }))
++      << "the removal left the pin open";
++  EXPECT_EQ(closed_before + 1, closed->entries().size())
++      << "the pin is not in Recently Closed";
++}
++
+ // Sf22: the backup taken before Apply holds the whole synced sidebar,
+ // pins in no window among them. It held the window in front alone.
+ IN_PROC_BROWSER_TEST_F(SidebarSyncTest,
 diff --git a/chrome/test/stedding/tidy_names_browsertest.cc b/chrome/test/stedding/tidy_names_browsertest.cc
 new file mode 100644
 index 0000000000000..ac1ad4cd10dc9

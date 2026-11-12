@@ -2,6 +2,33 @@
 
 What was built, newest first. Nothing here is needed to do a task: `AGENTS.md` carries what is true now, `BACKLOG.md` the order of work, `PLAN.md` the owner's decisions. This file was the "State of the project" section of `AGENTS.md` until 2026-09-30. This log starts at 2026-10-15. Closed work from before that is the table in [docs/history/archive.md](history/archive.md).
 
+## 2026-11-12 -- After beta 18: Copy Link on a page with no address (S-470)
+
+The owner asked for S-470, found that morning in beta 18's Mac acceptance, while they used the Mac,
+so it was built and tested on the PC and folded on the Mac with git alone. Copy Link took the
+address of whatever page had the focus, and three pages have an address the address row never
+shows: a split's "Choose a tab" pane, the new tab page (a private window's split opens one), and a
+Space's own page (tabs R66). On each, ⇧⌘C and ⌥⇧⌘C put that internal address on the clipboard and
+said "Link copied". Now such a page has no link (copy-link L9): the clipboard keeps what it held and
+no toast shows.
+
+- `CopyLinkTest.APageWithNoAddressHasNoLink` and `PinnedRunTest.ASpacesPageHasNoLinkToCopy` failed
+  first on Windows' release build, at every one of those pages, and passed three times of three
+  with the fix. The first version's check for no toast passed even before the fix, since a copy's
+  toast comes up after the copy; it now waits a second for one.
+- 55 browser tests that copy a link or use the same rows (`CopyLinkTest`, `PeekOverPageCopyTest`,
+  `PinnedRunTest`, `SidebarSelectionTest`, `CommandBarActionsTest`) and 31 unit tests passed.
+- Real keys on that build, through `tooling\win\drive.ps1`: Alt+Shift+N split the tab, and
+  Ctrl+Shift+C on the "Choose a tab" pane left the clipboard as it was; on a page it copied the
+  page's link. The same keys on the installed beta 18 copied
+  `chrome://tab-search.top-chrome/split_new_tab_page.html`. The first try was hollow: a fresh
+  profile's search engine choice took the keys. The rerun launched with
+  `--disable-search-engine-choice-screen`, as `run-mac.sh` does.
+- The fold into copy-link's own patch, 0016, conflicted with later patches on the same lines, so
+  the code is in 0057, with the Space page's part in 0123, and the tests in 0083 and 0156.
+
+Not checked: the Mac's build and its real keys, which wait for the Mac.
+
 ## 2026-11-12 -- 0.4.0 beta 18: Spaces that share a session, and four fixes
 
 The owner asked on the evening of 2026-11-11 for the optional fixes on the PC while they used the

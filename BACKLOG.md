@@ -26,7 +26,8 @@ betas 13 to 16, and what each of its items left is in its row.
 
 Chromium stays on 157.0.8103.51. M157's newest point release is 157.0.8103.79 on the Mac and
 Windows (`tooling/check-pin`, 2026-11-12; GitHub issue 110), a security fix with the deadline in
-`docs/ROADMAP.md` ("The quality bar"); the owner says when the pin moves.
+`docs/ROADMAP.md` ("The quality bar"). The owner approved the move on 2026-11-12, to run when
+they free the Mac; the Windows half may be built and tested before that.
 158.0.8127.18 is early stable at 0.5% of users, and the full rollout usually follows about a week
 after early stable. The move to 158, with Sparkle 2.10.1 (S-358), is a release of its own, when the
 owner says so.

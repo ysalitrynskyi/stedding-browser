@@ -37,7 +37,7 @@ The traps follow. 28 is retired. Read the one for the topic in front of you, not
 | What a test can and cannot prove | 2, 4, 31, 46, 48, 51, 52, 55, 56, 58, 59, 60, 66, 68, 69, 72, 75, 77, 78, 79, 80, 81, 84, 86, 87, 88, 91, 98, 99, 101, 102, 104, 106, 107, 110, 111, 112, 113, 114, 115, 119, 120, 126, 127, 138, 141, 145 |
 | Windows | 32, 34, 36, 38, 40, 42, 53, 54, 55, 56, 57, 59, 62, 67, 68, 69, 70, 71, 74, 91, 93, 98, 99, 100, 101, 103, 106, 111, 113, 114, 115, 116, 118, 121, 122, 125, 128, 143, 145 |
 | Release and signing | 44, 47, 49, 62, 85, 117, 118, 124, 129, 131, 140 |
-| Chromium's and the platforms' own behaviour to know | 6, 8, 20, 21, 25, 26, 33, 35, 39, 41, 43, 60, 72, 73, 92, 95, 97, 98, 104, 105, 107, 108, 109, 110, 111, 113, 122, 135 |
+| Chromium's and the platforms' own behaviour to know | 6, 8, 20, 21, 25, 26, 33, 35, 39, 41, 43, 60, 72, 73, 92, 95, 97, 98, 104, 105, 107, 108, 109, 110, 111, 113, 122, 135, 148 |
 
 ## Where things live
 
@@ -1007,6 +1007,18 @@ Two switches do the same for windows. `--stedding-welcome[=<step>]` forces the w
     directory, the local servers a check started, and mounted images, deletes siso's logs
     (2.8 GB on the Mac and 8 GB on the PC that night) and the tooling's temporary files,
     and on the PC the one-time scheduled tasks that ran a script from `%TEMP%`.
+
+148. **A page in no tab strip has none of the tab's helpers.** On desktop Chromium a tab's
+    `TabFeatures` makes much of what a page needs: `CoreTabHelper` (the page menu's Reload
+    is greyed without it), the favicon driver, and `extensions::TabHelper`, whose script
+    runner `scripting.executeScript` needs (without it the call answers "No tab with id").
+    `TabHelpers::AttachTabHelpers` alone does not make them. A page Stedding shows outside
+    the strip, such as the peek over the page, makes what it needs itself (patch 0176, the
+    way Chromium's document picture-in-picture host does), and code that observes such a
+    page must not assume any of them (`TabsEventRouter` guards the favicon driver). When the
+    page becomes a tab, `TabFeatures` finds them made and keeps them. Found 2026-11-12
+    (S-469): each missing helper showed only as the next failure of
+    `PeekOverPageTest.APasswordManagerFillsThePeeksPage`.
 ## The Windows build
 
 Git for Windows runs the bash tooling. PowerShell runs the rest. The toolchain is the installed Visual Studio (`DEPOT_TOOLS_WIN_TOOLCHAIN=0`, set by the scripts). Three variables name the machine's paths, so none is in the repo: `STEDDING_CHROMIUM_SRC` (the checkout's `src`), `STEDDING_DEPOT_TOOLS` when depot_tools is not already on `PATH`, and `STEDDING_VPYTHON_ROOT`, a short directory for vpython's venv (trap 34). The bash tooling takes the checkout as `CHROMIUM_ROOT`, the folder that holds `src`, as a POSIX path.

@@ -138,7 +138,9 @@ that owns its code (patches/README.md, the round-patch exception).
  .../bubble/download_toolbar_ui_controller.cc  | 104 +-
  .../bubble/download_toolbar_ui_controller.h   |  32 +-
  chrome/browser/ui/views/frame/BUILD.gn        |   2 +
- .../layout/stedding_browser_view_layout.cc    |  92 +-
+ .../layout/browser_view_tabbed_layout_impl.cc |  10 +
+ .../layout/browser_view_tabbed_layout_impl.h  |   5 +
+ .../layout/stedding_browser_view_layout.cc    | 102 +-
  .../layout/stedding_browser_view_layout.h     |   8 +
  .../frame/vertical_tab_strip_region_view.cc   |  31 +-
  chrome/browser/ui/views/peek/peek_unittest.cc |  28 -
@@ -212,7 +214,7 @@ that owns its code (patches/README.md, the round-patch exception).
  chrome/test/stedding/welcome_browsertest.cc   | 399 ++++++-
  .../stedding/window_buttons_browsertest.mm    | 436 +++++++-
  .../immersive_mode_controller_cocoa.mm        |  42 +
- 128 files changed, 11560 insertions(+), 775 deletions(-)
+ 130 files changed, 11585 insertions(+), 775 deletions(-)
  create mode 100644 chrome/test/stedding/branding_browsertest.cc
  create mode 100644 chrome/test/stedding/downloads_browsertest.cc
  create mode 100644 chrome/test/stedding/privacy_defaults_browsertest.cc
@@ -3541,8 +3543,45 @@ index 5f19513ff40d4..cddfccd30c2e0 100644
      "//chrome/browser/ui/views/toolbar",
      "//ui/gfx/geometry",
      "//ui/views",
+diff --git a/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc b/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
+index 1d74b200ce1db..180c7202a1a50 100644
+--- a/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
++++ b/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
+@@ -391,6 +391,16 @@ int BrowserViewTabbedLayoutImpl::GetHorizontalTabStripLeadingMargin(
+   return leading_margin;
+ }
+ 
++int BrowserViewTabbedLayoutImpl::SteddingVerticalTabStripColumn() const {
++  if (!layout_data_ ||
++      layout_data_->tab_strip_type != TabStripType::kVertical) {
++    return -1;
++  }
++  // The inset CalculateProposedLayout gives the page beside the strip.
++  return std::max(0, layout_data_->horizontal_layout.vertical_tab_strip_width -
++                         GetVerticalTabStripContentOverlap());
++}
++
+ int BrowserViewTabbedLayoutImpl::GetVerticalTabStripContentOverlap() const {
+ #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
+   // On fractional display scaling (e.g. 1.25x, 1.5x), overlap the content area
+diff --git a/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.h b/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.h
+index 462a89218b72f..6de32368bd2cc 100644
+--- a/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.h
++++ b/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.h
+@@ -48,6 +48,11 @@ class BrowserViewTabbedLayoutImpl : public BrowserViewLayoutImpl {
+       const BrowserLayoutParams& params) override;
+   void DoPostLayoutCleanup() override;
+ 
++  // Stedding (BACKLOG S-471): the vertical tab strip's column this layout
++  // pass gives the page beside it, in DIP: where the page starts past the
++  // strip. -1 before the pass's computations, or without a vertical strip.
++  int SteddingVerticalTabStripColumn() const;
++
+  private:
+   struct HorizontalLayout;
+   struct SeparatorInfo;
 diff --git a/chrome/browser/ui/views/frame/layout/stedding_browser_view_layout.cc b/chrome/browser/ui/views/frame/layout/stedding_browser_view_layout.cc
-index 8de8f3913850c..03d9499de6b22 100644
+index 8de8f3913850c..b286eb5b5dc74 100644
 --- a/chrome/browser/ui/views/frame/layout/stedding_browser_view_layout.cc
 +++ b/chrome/browser/ui/views/frame/layout/stedding_browser_view_layout.cc
 @@ -2,15 +2,18 @@
@@ -3652,7 +3691,7 @@ index 8de8f3913850c..03d9499de6b22 100644
    int strip_inset = 0;
    if (DrawsVerticalStrip(delegate())) {
      const ImmersiveModeController* const immersive =
-@@ -179,11 +238,16 @@ gfx::Rect SteddingBrowserViewLayout::CalculateTopContainerLayout(
+@@ -179,11 +238,26 @@ gfx::Rect SteddingBrowserViewLayout::CalculateTopContainerLayout(
        // A hidden sidebar is no column at all (sidebar Y19), though its
        // width of 0 reads like a strip not laid out yet, and it floats over
        // the page when it slides in.
@@ -3663,8 +3702,18 @@ index 8de8f3913850c..03d9499de6b22 100644
 -              : views().vertical_tab_strip_region_view->uncollapsed_width();
 +      const VerticalTabStripRegionView& strip =
 +          *views().vertical_tab_strip_region_view;
++      // BACKLOG S-471: otherwise the column this layout pass gives the
++      // strip, where the page beside it starts. The strip's own width is
++      // the last pass's, since this container is laid out before the
++      // window: after the sidebar's width changed (a drag on its edge, the
++      // last step of a motion) the row started that change's DIPs off the
++      // page, 8 DIP left of it in the owner's full screen (2026-11-12),
++      // until something laid the window out again.
++      const int column = SteddingVerticalTabStripColumn();
 +      if (strip.IsHiddenCompletely()) {
 +        strip_inset = 0;
++      } else if (column >= 0) {
++        strip_inset = column;
 +      } else if (DrawnWiderThanItsColumn(views(), strip)) {
 +        strip_inset = strip.CollapsedWidthNow();
 +      } else {
@@ -3674,7 +3723,7 @@ index 8de8f3913850c..03d9499de6b22 100644
        params.visual_client_area.Inset(gfx::Insets::TLBR(0, strip_inset, 0, 0));
      }
    }
-@@ -263,6 +327,11 @@ gfx::Rect SteddingBrowserViewLayout::CalculateTopContainerLayout(
+@@ -263,6 +337,11 @@ gfx::Rect SteddingBrowserViewLayout::CalculateTopContainerLayout(
    // toolbar's row of the overlay, over the strip's column, where the strip's
    // own top row would otherwise sit a second row down under an empty band; the
    // strip then keeps no top row. Everywhere else the copy is hidden.
@@ -3686,7 +3735,7 @@ index 8de8f3913850c..03d9499de6b22 100644
    if (views().top_container && views().vertical_tab_strip_region_view) {
      for (views::View* const child : views().top_container->children()) {
        auto* const toggle =
-@@ -274,7 +343,10 @@ gfx::Rect SteddingBrowserViewLayout::CalculateTopContainerLayout(
+@@ -274,7 +353,10 @@ gfx::Rect SteddingBrowserViewLayout::CalculateTopContainerLayout(
            layout.GetLayoutFor(views().toolbar);
        const bool show = strip_inset > 0 && toolbar &&
                          toolbar->visibility.value_or(false) &&

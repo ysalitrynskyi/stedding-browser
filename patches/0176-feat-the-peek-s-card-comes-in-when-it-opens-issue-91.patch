@@ -8,21 +8,37 @@ card is on screen while the page paints its first frame (motion O10). It
 follows "Animate the sidebar and overlays" and the system's Reduce Motion
 (motion O1); off, the card shows as it did. Closing is not animated.
 
-Why: GitHub issue 91. With no motion the card appeared in one frame once
-the page had painted, which read as slower than Arc's peek.
+Extensions reach the peek's page by its tab id (peek P24) and put their
+scripts in it as in a tab's page, and while the peek shows its page is the
+window's active tab to them (P26): the tabs API
+announces it when it opens and when it closes, and Open as Tab attaches it;
+a query for the active tab finds it in the pinned tab's place. F5, Cmd-R,
+the address row's reload button and the page's own menu reload the peek,
+not the pinned page under it (P25).
 
-Removable when: never; Stedding's own motion.
+Why: GitHub issue 91. With no motion the card appeared in one frame once
+the page had painted, which read as slower than Arc's peek. GitHub issue
+102: a password manager's popup and keys filled the pinned page under a
+peek, and after Open as Tab nothing until a reload; a reload reloaded the
+pinned page.
+
+Removable when: never; Stedding's own motion and peek.
 ---
  chrome/browser/extensions/BUILD.gn            |   4 +
+ .../browser/extensions/api/tabs/tabs_api.cc   |  72 +++-
+ .../extensions/api/tabs/tabs_event_router.cc  |  94 ++++-
+ .../extensions/api/tabs/tabs_event_router.h   |  25 +-
  .../browser/extensions/extension_tab_util.cc  |   9 +-
- chrome/browser/ui/stedding/BUILD.gn           |   9 ++
- .../ui/stedding/extension_visible_page.cc     |  16 +++
- .../ui/stedding/extension_visible_page.h      |  36 ++++++
- chrome/browser/ui/views/peek/BUILD.gn         |   2 +
- chrome/browser/ui/views/peek/peek_overlay.cc  |  32 ++++++
- chrome/browser/ui/views/peek/peek_overlay.h   |  24 +++-
- .../stedding/peek_over_page_browsertest.cc    | 105 ++++++++++++++++++
- 9 files changed, 235 insertions(+), 2 deletions(-)
+ .../render_view_context_menu.cc               |  12 +
+ chrome/browser/ui/browser_commands.cc         |  13 +
+ chrome/browser/ui/stedding/BUILD.gn           |  12 +
+ .../ui/stedding/extension_visible_page.cc     | 105 ++++++
+ .../ui/stedding/extension_visible_page.h      |  70 ++++
+ chrome/browser/ui/views/peek/BUILD.gn         |  14 +
+ chrome/browser/ui/views/peek/peek_overlay.cc  |  72 ++++
+ chrome/browser/ui/views/peek/peek_overlay.h   |  24 +-
+ .../stedding/peek_over_page_browsertest.cc    | 327 ++++++++++++++++++
+ 14 files changed, 827 insertions(+), 26 deletions(-)
  create mode 100644 chrome/browser/ui/stedding/extension_visible_page.cc
  create mode 100644 chrome/browser/ui/stedding/extension_visible_page.h
 
@@ -41,6 +57,321 @@ index 8f5ae8c9a383c..e210735e724d9 100644
      "//chrome/browser:browser_process",
      "//chrome/browser:browser_process_platform_part",
      "//chrome/browser:chrome_content_browser_client_parts",
+diff --git a/chrome/browser/extensions/api/tabs/tabs_api.cc b/chrome/browser/extensions/api/tabs/tabs_api.cc
+index 2378fcd5dab04..9f46c663accaa 100644
+--- a/chrome/browser/extensions/api/tabs/tabs_api.cc
++++ b/chrome/browser/extensions/api/tabs/tabs_api.cc
+@@ -35,6 +35,7 @@
+ #include "chrome/browser/translate/chrome_translate_client.h"
+ #include "chrome/browser/translate/translate_service.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/stedding/extension_visible_page.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+ #include "chrome/browser/ui/browser_window/public/create_browser_window.h"
+ #include "chrome/browser/ui/incognito_allowed_url.h"
+@@ -167,6 +168,45 @@ bool MatchesBool(const std::optional<bool>& boolean, bool value) {
+   return !boolean || *boolean == value;
+ }
+ 
++// Stedding (docs/features/peek.md P26, GitHub issue 102): whether `page`, the
++// page of a peek shown over a window's active tab, matches `query` in that
++// tab's place: no tab strip holds it, so it is in no group or split, and not
++// pinned, discarded or frozen; it is the active, highlighted tab. Its title,
++// address, state and sound are its own.
++bool PeekPageMatches(const api::tabs::Query::Params::QueryInfo& query,
++                     const Extension* extension,
++                     mojom::ContextType context,
++                     content::WebContents& page,
++                     const URLPatternSet& target_url_patterns) {
++  if (!MatchesBool(query.active, true) ||
++      !MatchesBool(query.highlighted, true) ||
++      !MatchesBool(query.pinned, false) ||
++      !MatchesBool(query.discarded, false) ||
++      !MatchesBool(query.frozen, false) ||
++      !MatchesBool(query.muted, page.IsAudioMuted()) ||
++      !MatchesBool(query.audible, page.IsCurrentlyAudible())) {
++    return false;
++  }
++  if ((query.group_id && *query.group_id != -1) ||
++      (query.split_view_id && *query.split_view_id != -1)) {
++    return false;
++  }
++  const ExtensionTabUtil::ScrubTabBehavior scrub =
++      ExtensionTabUtil::GetScrubTabBehavior(extension, context, &page);
++  if (query.title && !query.title->empty() &&
++      (scrub.committed_info == ExtensionTabUtil::kScrubTabFully ||
++       !base::MatchPattern(page.GetTitle(), base::UTF8ToUTF16(*query.title)))) {
++    return false;
++  }
++  if (!target_url_patterns.is_empty() &&
++      (scrub.committed_info == ExtensionTabUtil::kScrubTabFully ||
++       !target_url_patterns.MatchesURL(page.GetLastCommittedURL()))) {
++    return false;
++  }
++  return query.status == api::tabs::TabStatus::kNone ||
++         query.status == ExtensionTabUtil::GetLoadingStatus(&page);
++}
++
+ bool GetTabHandleById(int tab_id,
+                       content::BrowserContext& context,
+                       bool include_incognito,
+@@ -641,13 +681,35 @@ base::ListValue TabsQueryFunction::BuildTabList(
+       ::tabs::TabInterface* tab = tab_list->GetTab(i);
+       CHECK(tab);
+ 
+-      if (!MatchesTab(tab, url_patterns)) {
+-        continue;
++      // Stedding (docs/features/peek.md P26, GitHub issue 102): the page of a
++      // peek over the active tab's page is the window's active tab while it
++      // shows. A query for the active tab finds it in the pinned tab's
++      // place; a query that does not ask lists it after that tab. A password
++      // manager's popup and keys acted on the pinned page under the peek.
++      content::WebContents* const peek =
++          tab->IsActivated() ? stedding::ExtensionVisiblePage::PageShownOver(
++                                   tab->GetContents())
++                             : nullptr;
++      const bool peek_takes_its_place =
++          peek && query_info_.active.value_or(false);
++
++      if (!peek_takes_its_place && MatchesTab(tab, url_patterns)) {
++        result.Append(CreateTabObjectHelper(tab->GetContents(), extension(),
++                                            source_context_type(), browser, i)
++                          .ToValue());
+       }
+ 
+-      result.Append(CreateTabObjectHelper(tab->GetContents(), extension(),
+-                                          source_context_type(), browser, i)
+-                        .ToValue());
++      if (peek && PeekPageMatches(query_info_, extension(),
++                                  source_context_type(), *peek, url_patterns)) {
++        api::tabs::Tab page = CreateTabObjectHelper(
++            peek, extension(), source_context_type(), nullptr, -1);
++        page.index = i;
++        page.window_id = ExtensionTabUtil::GetWindowId(browser);
++        page.active = true;
++        page.selected = true;
++        page.highlighted = true;
++        result.Append(page.ToValue());
++      }
+     }
+   }
+   return result;
+diff --git a/chrome/browser/extensions/api/tabs/tabs_event_router.cc b/chrome/browser/extensions/api/tabs/tabs_event_router.cc
+index f6cff1cdba173..b6b379b2102a6 100644
+--- a/chrome/browser/extensions/api/tabs/tabs_event_router.cc
++++ b/chrome/browser/extensions/api/tabs/tabs_event_router.cc
+@@ -114,22 +114,31 @@ TabsEventRouter::TabEntry::TabEntry(TabsEventRouter& router,
+                                     content::WebContents& contents)
+     : WebContentsObserver(&contents),
+       router_(router) {
+-  // We should only get here for WebContents that are tabs.
+-  tabs::TabInterface* tab = tabs::TabInterface::GetFromContents(&contents);
+-  CHECK(tab);
+-
+-  pinned_state_subscription_ =
+-      tab->RegisterPinnedStateChanged(base::BindRepeating(
+-          &TabEntry::OnPinnedStateChanged, weak_factory_.GetWeakPtr()));
+-
+-  group_changed_subscription_ = tab->RegisterGroupChanged(base::BindRepeating(
+-      &TabEntry::OnGroupChanged, weak_factory_.GetWeakPtr()));
++  // We should only get here for WebContents that are tabs. Stedding
++  // (docs/features/peek.md P26): or for the page of a peek over a pinned
++  // tab's page, a tab to extensions though no tab strip holds it; it has no
++  // pin or group to follow until it becomes a tab (OnTabAdded).
++  tabs::TabInterface* tab = tabs::TabInterface::MaybeGetFromContents(&contents);
++  peek_page_ = !tab;
++  CHECK(tab || stedding::ExtensionVisiblePage::FromWebContents(&contents));
++
++  if (tab) {
++    pinned_state_subscription_ =
++        tab->RegisterPinnedStateChanged(base::BindRepeating(
++            &TabEntry::OnPinnedStateChanged, weak_factory_.GetWeakPtr()));
++
++    group_changed_subscription_ =
++        tab->RegisterGroupChanged(base::BindRepeating(
++            &TabEntry::OnGroupChanged, weak_factory_.GetWeakPtr()));
++  }
+ 
+-  auto* audible_helper = RecentlyAudibleHelper::FromWebContents(&contents);
+-  recently_audible_subscription_ =
+-      audible_helper->RegisterRecentlyAudibleChangedCallback(
+-          base::BindRepeating(&TabEntry::OnRecentlyAudibleStateChanged,
+-                              weak_factory_.GetWeakPtr()));
++  if (auto* audible_helper =
++          RecentlyAudibleHelper::FromWebContents(&contents)) {
++    recently_audible_subscription_ =
++        audible_helper->RegisterRecentlyAudibleChangedCallback(
++            base::BindRepeating(&TabEntry::OnRecentlyAudibleStateChanged,
++                                weak_factory_.GetWeakPtr()));
++  }
+ }
+ 
+ TabsEventRouter::TabEntry::~TabEntry() = default;
+@@ -225,10 +234,14 @@ TabsEventRouter::TabsEventRouter(Profile* profile) : profile_(profile) {
+   // are fully instantiated before those methods are called.
+   platform_delegate_.emplace(*this, *profile);
+ 
++  // Stedding (docs/features/peek.md P26): a peek's page over a pinned tab's.
++  stedding::ExtensionVisiblePage::AddObserver(this);
++
+   initialized_ = true;
+ }
+ 
+ TabsEventRouter::~TabsEventRouter() {
++  stedding::ExtensionVisiblePage::RemoveObserver(this);
+   performance_manager::PageLiveStateDecorator::RemoveAllPageObserver(this);
+ }
+ 
+@@ -252,8 +265,12 @@ void TabsEventRouter::TrackTabList(TabListInterface& tab_list) {
+ void TabsEventRouter::RegisterForTabNotifications(
+     content::WebContents& web_contents,
+     int tab_index) {
+-  favicon_scoped_observations_.AddObservation(
+-      favicon::ContentFaviconDriver::FromWebContents(&web_contents));
++  // Stedding (docs/features/peek.md P26): a peek's page has no favicon driver
++  // until a tab's features make one, when it becomes a tab.
++  if (auto* favicon_driver =
++          favicon::ContentFaviconDriver::FromWebContents(&web_contents)) {
++    favicon_scoped_observations_.AddObservation(favicon_driver);
++  }
+ 
+   // Some pages on Android (like the NTP) may not have a zoom controller.
+   if (auto* zoom_controller =
+@@ -282,7 +299,7 @@ void TabsEventRouter::UnregisterForTabNotifications(
+       favicon::ContentFaviconDriver::FromWebContents(&web_contents);
+   bool is_observing_favicon_driver =
+       favicon_scoped_observations_.IsObservingSource(favicon_driver);
+-  CHECK(is_observing_favicon_driver || !expect_registered);
++  CHECK(is_observing_favicon_driver || !expect_registered || !favicon_driver);
+   if (is_observing_favicon_driver) {
+     favicon_scoped_observations_.RemoveObservation(favicon_driver);
+   }
+@@ -433,6 +450,16 @@ void TabsEventRouter::OnTabAdded(TabListInterface& tab_list,
+ 
+   // Check if we've ever seen this tab.
+   TabEntry* tab_entry = GetTabEntry(*contents);
++  // Stedding (docs/features/peek.md P26): a peek's page kept as a tab (Open
++  // as Tab) was a tab to extensions already: it is attached here, and its
++  // entry now follows the tab's pin and group as well.
++  if (tab_entry && tab_entry->is_peek_page()) {
++    // The tab's features may have made a favicon driver the entry was made
++    // without.
++    UnregisterForTabNotifications(*contents, /*expect_registered=*/false);
++    RegisterForTabNotifications(*contents, index);
++    tab_entry = GetTabEntry(*contents);
++  }
+   if (tab_entry) {
+     // This is a known tab. Update the tab index and dispatch `onAttached`.
+     tab_entry->set_last_known_index(index);
+@@ -480,6 +507,12 @@ void TabsEventRouter::OnActiveTabChanged(TabListInterface& tab_list,
+                                          tabs::TabInterface* tab) {
+   content::WebContents* tab_contents = tab->GetContents();
+   CHECK(tab_contents);
++  DispatchTabActivatedEvents(*tab_contents);
++}
++
++void TabsEventRouter::DispatchTabActivatedEvents(
++    content::WebContents& contents) {
++  content::WebContents* const tab_contents = &contents;
+ 
+   base::ListValue args;
+   int tab_id = ExtensionTabUtil::GetTabId(tab_contents);
+@@ -511,6 +544,31 @@ void TabsEventRouter::OnActiveTabChanged(TabListInterface& tab_list,
+       std::move(on_activated_args), EventRouter::UserGestureState::kUnknown);
+ }
+ 
++void TabsEventRouter::OnPageShownOver(content::WebContents& page,
++                                      content::WebContents& tab_page) {
++  if (!profile_->IsSameOrParent(
++          Profile::FromBrowserContext(page.GetBrowserContext())) ||
++      GetTabEntry(page)) {
++    return;
++  }
++  RegisterForTabNotifications(page, api::tabs::TAB_INDEX_NONE);
++  DispatchTabCreatedEvent(&page, /*active=*/true);
++  DispatchTabActivatedEvents(page);
++}
++
++void TabsEventRouter::OnPageClosedOver(content::WebContents& page,
++                                       content::WebContents* tab_page) {
++  if (!GetTabEntry(page)) {
++    return;
++  }
++  DispatchTabRemovedEvent(page, /*is_window_closing=*/false);
++  tabs::TabInterface* const tab =
++      tab_page ? tabs::TabInterface::MaybeGetFromContents(tab_page) : nullptr;
++  if (tab && tab->IsActivated() && GetTabEntry(*tab_page)) {
++    DispatchTabActivatedEvents(*tab_page);
++  }
++}
++
+ void TabsEventRouter::OnTabRemoved(TabListInterface& tab_list,
+                                    tabs::TabInterface* tab,
+                                    TabRemovedReason removed_reason) {
+diff --git a/chrome/browser/extensions/api/tabs/tabs_event_router.h b/chrome/browser/extensions/api/tabs/tabs_event_router.h
+index 4d9294956f9d6..406f7a7682a73 100644
+--- a/chrome/browser/extensions/api/tabs/tabs_event_router.h
++++ b/chrome/browser/extensions/api/tabs/tabs_event_router.h
+@@ -19,6 +19,7 @@
+ #include "build/build_config.h"
+ #include "chrome/browser/tab_list/tab_list_interface.h"
+ #include "chrome/browser/tab_list/tab_list_interface_observer.h"
++#include "chrome/browser/ui/stedding/extension_visible_page.h"
+ #include "components/favicon/core/favicon_driver.h"
+ #include "components/favicon/core/favicon_driver_observer.h"
+ #include "components/performance_manager/public/decorators/page_live_state_decorator.h"
+@@ -57,7 +58,8 @@ namespace extensions {
+ class TabsEventRouter : public favicon::FaviconDriverObserver,
+                         public performance_manager::PageLiveStateObserver,
+                         public TabListInterfaceObserver,
+-                        public zoom::ZoomObserver {
++                        public zoom::ZoomObserver,
++                        public stedding::ExtensionVisiblePage::Observer {
+  public:
+   explicit TabsEventRouter(Profile* profile);
+   TabsEventRouter(const TabsEventRouter&) = delete;
+@@ -104,6 +106,10 @@ class TabsEventRouter : public favicon::FaviconDriverObserver,
+       last_known_index_ = last_known_index;
+     }
+ 
++    // Stedding (docs/features/peek.md P26): the page of a peek over a pinned
++    // tab's page, which no tab strip holds yet.
++    bool is_peek_page() const { return peek_page_; }
++
+    private:
+     // Called when the recently-audible state for the tab changed.
+     void OnRecentlyAudibleStateChanged(bool was_recently_audible);
+@@ -140,6 +146,8 @@ class TabsEventRouter : public favicon::FaviconDriverObserver,
+     // The most recent index we have associated with this tab.
+     int last_known_index_ = -1;
+ 
++    bool peek_page_ = false;
++
+     base::WeakPtrFactory<TabEntry> weak_factory_{this};
+   };
+ 
+@@ -186,6 +194,21 @@ class TabsEventRouter : public favicon::FaviconDriverObserver,
+   // Dispatches the `tabs.onDetached` event.
+   void DispatchTabDetachedEvent(content::WebContents& contents);
+ 
++  // Dispatches the events of `contents` becoming its window's active tab:
++  // `tabs.onActivated` and the deprecated two it replaced.
++  void DispatchTabActivatedEvents(content::WebContents& contents);
++
++  // stedding::ExtensionVisiblePage::Observer (docs/features/peek.md P26,
++  // GitHub issue 102): the page of a peek over a pinned tab's page is that
++  // window's active tab while it shows. Shown: `onCreated` and `onActivated`,
++  // then `onUpdated` as it loads. Closed: `onRemoved`, and the pinned tab
++  // active again. Open as Tab puts it in the strip, which is `onAttached`, as
++  // for a tab from another window (OnTabAdded).
++  void OnPageShownOver(content::WebContents& page,
++                       content::WebContents& tab_page) override;
++  void OnPageClosedOver(content::WebContents& page,
++                        content::WebContents* tab_page) override;
++
+   // The DispatchEvent methods forward events to the `profile`'s event router.
+   // The TabsEventRouterPlatformDelegate listens to events for all profiles,
+   // so we avoid duplication by dropping events destined for other profiles.
 diff --git a/chrome/browser/extensions/extension_tab_util.cc b/chrome/browser/extensions/extension_tab_util.cc
 index 20c6eaf85826a..a5470c37b1866 100644
 --- a/chrome/browser/extensions/extension_tab_util.cc
@@ -68,11 +399,72 @@ index 20c6eaf85826a..a5470c37b1866 100644
          return;
        }
  
+diff --git a/chrome/browser/renderer_context_menu/render_view_context_menu.cc b/chrome/browser/renderer_context_menu/render_view_context_menu.cc
+index 869f981cb52ad..4fc39a27e8b7c 100644
+--- a/chrome/browser/renderer_context_menu/render_view_context_menu.cc
++++ b/chrome/browser/renderer_context_menu/render_view_context_menu.cc
+@@ -4381,6 +4381,12 @@ void RenderViewContextMenu::ExecuteCommand(int id, int event_flags) {
+     }
+ 
+     case IDC_RELOAD:
++      // Stedding peek P25: the page of a peek over the page reloads itself.
++      if (stedding::PeekOverPageSourceOf(embedder_web_contents_)) {
++        embedder_web_contents_->GetController().Reload(
++            content::ReloadType::NORMAL, /*check_for_repost=*/true);
++        break;
++      }
+       chrome::Reload(GetBrowser(), WindowOpenDisposition::CURRENT_TAB);
+       break;
+ 
+@@ -4800,6 +4806,12 @@ bool RenderViewContextMenu::ShouldOpenTextQueryInLens() const {
+ bool RenderViewContextMenu::IsReloadEnabled() const {
+   CoreTabHelper* core_tab_helper =
+       CoreTabHelper::FromWebContents(embedder_web_contents_);
++  // Stedding peek P25: a peek's page is in no tab, so it found no window
++  // (and has no tab's helpers) and its Reload was greyed out; it reloads
++  // itself.
++  if (stedding::PeekOverPageSourceOf(embedder_web_contents_)) {
++    return true;
++  }
+   return core_tab_helper && chrome::CanReload(GetBrowser());
+ }
+ 
+diff --git a/chrome/browser/ui/browser_commands.cc b/chrome/browser/ui/browser_commands.cc
+index 88421fef9c9a0..635321c6dfd79 100644
+--- a/chrome/browser/ui/browser_commands.cc
++++ b/chrome/browser/ui/browser_commands.cc
+@@ -117,6 +117,7 @@
+ #include "chrome/browser/ui/stedding/copy_link.h"
+ #include "chrome/browser/ui/stedding/pin_lifecycle.h"
+ #include "chrome/browser/ui/stedding/little_window.h"
++#include "chrome/browser/ui/stedding/peek.h"
+ #include "chrome/browser/ui/stedding/tab_numbers.h"
+ #include "chrome/browser/ui/stedding/tab_parents.h"
+ #include "chrome/browser/ui/tab_contents/core_tab_helper.h"
+@@ -739,6 +740,18 @@ tabs::TabInterface* GetTabAndRevertIfNecessary(
+ void ReloadInternal(BrowserWindowInterface* browser,
+                     WindowOpenDisposition disposition,
+                     bool bypass_cache) {
++  // Stedding peek P25 (GitHub issue 102): the peek over the active tab's page
++  // takes the window's reload while it is open, as it takes Cmd-W. F5,
++  // Cmd-R and the address row's button reloaded the pinned page under it.
++  if (disposition == WindowOpenDisposition::CURRENT_TAB) {
++    if (WebContents* const peek = stedding::PeekOverPageOfActiveTab(browser)) {
++      peek->GetController().Reload(bypass_cache
++                                       ? content::ReloadType::BYPASSING_CACHE
++                                       : content::ReloadType::NORMAL,
++                                   /*check_for_repost=*/true);
++      return;
++    }
++  }
+   TabStripModel* const tab_strip_model = browser->GetTabStripModel();
+   tabs::TabInterface* const active_tab = tab_strip_model->GetActiveTab();
+ 
 diff --git a/chrome/browser/ui/stedding/BUILD.gn b/chrome/browser/ui/stedding/BUILD.gn
-index 4a4f11301ef0e..a12c4879a96c1 100644
+index 4a4f11301ef0e..cfc0c3bf374c3 100644
 --- a/chrome/browser/ui/stedding/BUILD.gn
 +++ b/chrome/browser/ui/stedding/BUILD.gn
-@@ -521,6 +521,15 @@ source_set("extension_keyword") {
+@@ -521,6 +521,18 @@ source_set("extension_keyword") {
    sources = [ "extension_keyword.cc" ]
  }
  
@@ -82,7 +474,10 @@ index 4a4f11301ef0e..a12c4879a96c1 100644
 +source_set("extension_visible_page") {
 +  public = [ "extension_visible_page.h" ]
 +  sources = [ "extension_visible_page.cc" ]
-+  public_deps = [ "//content/public/browser" ]
++  public_deps = [
++    "//base",
++    "//content/public/browser",
++  ]
 +}
 +
  # docs/features/updates.md Up24 (ADR 0031): the bar that says an important
@@ -90,32 +485,121 @@ index 4a4f11301ef0e..a12c4879a96c1 100644
  source_set("important_update_bar") {
 diff --git a/chrome/browser/ui/stedding/extension_visible_page.cc b/chrome/browser/ui/stedding/extension_visible_page.cc
 new file mode 100644
-index 0000000000000..ef1c0d3965a9d
+index 0000000000000..235a1848cc39e
 --- /dev/null
 +++ b/chrome/browser/ui/stedding/extension_visible_page.cc
-@@ -0,0 +1,16 @@
+@@ -0,0 +1,105 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
 +
 +#include "chrome/browser/ui/stedding/extension_visible_page.h"
 +
++#include "base/no_destructor.h"
++#include "base/observer_list.h"
++#include "content/public/browser/web_contents.h"
++
 +namespace stedding {
++
++namespace {
++
++base::ObserverList<ExtensionVisiblePage::Observer>& Observers() {
++  static base::NoDestructor<base::ObserverList<ExtensionVisiblePage::Observer>>
++      observers;
++  return *observers;
++}
++
++// P26: on a pinned tab's page, the page shown over it.
++class ShownOver : public content::WebContentsUserData<ShownOver> {
++ public:
++  ~ShownOver() override = default;
++
++  content::WebContents* page() const { return page_.get(); }
++
++ private:
++  ShownOver(content::WebContents* tab_page, content::WebContents& page)
++      : content::WebContentsUserData<ShownOver>(*tab_page),
++        page_(page.GetWeakPtr()) {}
++
++  base::WeakPtr<content::WebContents> page_;
++
++  friend WebContentsUserData;
++  WEB_CONTENTS_USER_DATA_KEY_DECL();
++};
++
++WEB_CONTENTS_USER_DATA_KEY_IMPL(ShownOver);
++
++}  // namespace
 +
 +ExtensionVisiblePage::ExtensionVisiblePage(content::WebContents* contents)
 +    : content::WebContentsUserData<ExtensionVisiblePage>(*contents) {}
 +
 +ExtensionVisiblePage::~ExtensionVisiblePage() = default;
 +
++// static
++void ExtensionVisiblePage::AddObserver(Observer* observer) {
++  Observers().AddObserver(observer);
++}
++
++// static
++void ExtensionVisiblePage::RemoveObserver(Observer* observer) {
++  Observers().RemoveObserver(observer);
++}
++
++// static
++void ExtensionVisiblePage::ShowOver(content::WebContents& page,
++                                    content::WebContents& tab_page) {
++  ExtensionVisiblePage* const mark =
++      ExtensionVisiblePage::GetOrCreateForWebContents(&page);
++  if (mark->over_.get() == &tab_page) {
++    return;
++  }
++  if (content::WebContents* const before = mark->over_.get()) {
++    before->RemoveUserData(ShownOver::UserDataKey());
++  }
++  mark->over_ = tab_page.GetWeakPtr();
++  tab_page.RemoveUserData(ShownOver::UserDataKey());
++  ShownOver::CreateForWebContents(&tab_page, page);
++  for (Observer& observer : Observers()) {
++    observer.OnPageShownOver(page, tab_page);
++  }
++}
++
++// static
++void ExtensionVisiblePage::StopShowingOver(content::WebContents& page,
++                                           bool kept) {
++  ExtensionVisiblePage* const mark = ExtensionVisiblePage::FromWebContents(&page);
++  if (!mark || !mark->over_) {
++    return;
++  }
++  content::WebContents* const tab_page = mark->over_.get();
++  mark->over_.reset();
++  tab_page->RemoveUserData(ShownOver::UserDataKey());
++  if (kept) {
++    return;
++  }
++  for (Observer& observer : Observers()) {
++    observer.OnPageClosedOver(page, tab_page);
++  }
++}
++
++// static
++content::WebContents* ExtensionVisiblePage::PageShownOver(
++    content::WebContents* tab_page) {
++  const ShownOver* const shown =
++      tab_page ? ShownOver::FromWebContents(tab_page) : nullptr;
++  return shown ? shown->page() : nullptr;
++}
++
 +WEB_CONTENTS_USER_DATA_KEY_IMPL(ExtensionVisiblePage);
 +
 +}  // namespace stedding
 diff --git a/chrome/browser/ui/stedding/extension_visible_page.h b/chrome/browser/ui/stedding/extension_visible_page.h
 new file mode 100644
-index 0000000000000..2397f3ecd50a0
+index 0000000000000..7ccd68532636f
 --- /dev/null
 +++ b/chrome/browser/ui/stedding/extension_visible_page.h
-@@ -0,0 +1,36 @@
+@@ -0,0 +1,70 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -123,6 +607,8 @@ index 0000000000000..2397f3ecd50a0
 +#ifndef CHROME_BROWSER_UI_STEDDING_EXTENSION_VISIBLE_PAGE_H_
 +#define CHROME_BROWSER_UI_STEDDING_EXTENSION_VISIBLE_PAGE_H_
 +
++#include "base/memory/weak_ptr.h"
++#include "base/observer_list_types.h"
 +#include "content/public/browser/web_contents_user_data.h"
 +
 +namespace stedding {
@@ -135,15 +621,47 @@ index 0000000000000..2397f3ecd50a0
 +// (ExtensionTabUtil::GetTabById), the way Chromium lets it reach a
 +// prerendered page: the page alone, in no window and at no index. The mark
 +// carries nothing; it is the page's leave to be found.
++//
++// P26 (GitHub issue 102): while it shows over the pinned tab's page, the page
++// is that window's active tab to extensions, as a peek in a window of its own
++// is: `tabs.query` for the active tab finds it in the pinned tab's place, and
++// the tabs API's events announce it (TabsEventRouter, an Observer here).
 +class ExtensionVisiblePage
 +    : public content::WebContentsUserData<ExtensionVisiblePage> {
 + public:
++  class Observer : public base::CheckedObserver {
++   public:
++    // `page` shows over `tab_page` now.
++    virtual void OnPageShownOver(content::WebContents& page,
++                                 content::WebContents& tab_page) = 0;
++    // `page` closed without becoming a tab; `tab_page`, if still there, is
++    // the window's active tab again.
++    virtual void OnPageClosedOver(content::WebContents& page,
++                                  content::WebContents* tab_page) = 0;
++  };
++
 +  ExtensionVisiblePage(const ExtensionVisiblePage&) = delete;
 +  ExtensionVisiblePage& operator=(const ExtensionVisiblePage&) = delete;
 +  ~ExtensionVisiblePage() override;
 +
++  static void AddObserver(Observer* observer);
++  static void RemoveObserver(Observer* observer);
++
++  // P26: `page` shows over `tab_page`, a pinned tab's page. Marks `page`
++  // as found by its tab id too.
++  static void ShowOver(content::WebContents& page,
++                       content::WebContents& tab_page);
++  // P26: `page` shows over no page any more: it closed, or it was `kept` as
++  // a tab of the window, which the tab strip announces itself.
++  static void StopShowingOver(content::WebContents& page, bool kept);
++  // P26: the page shown over `tab_page`, or null.
++  static content::WebContents* PageShownOver(content::WebContents* tab_page);
++
 + private:
 +  explicit ExtensionVisiblePage(content::WebContents* contents);
++
++  // The page this one shows over, while it does.
++  base::WeakPtr<content::WebContents> over_;
 +
 +  friend WebContentsUserData;
 +  WEB_CONTENTS_USER_DATA_KEY_DECL();
@@ -153,10 +671,19 @@ index 0000000000000..2397f3ecd50a0
 +
 +#endif  // CHROME_BROWSER_UI_STEDDING_EXTENSION_VISIBLE_PAGE_H_
 diff --git a/chrome/browser/ui/views/peek/BUILD.gn b/chrome/browser/ui/views/peek/BUILD.gn
-index c5f55cf5ea416..5cb838c749083 100644
+index c5f55cf5ea416..1cef32dd67d88 100644
 --- a/chrome/browser/ui/views/peek/BUILD.gn
 +++ b/chrome/browser/ui/views/peek/BUILD.gn
-@@ -29,7 +29,9 @@ source_set("peek") {
+@@ -2,6 +2,8 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
++import("//extensions/buildflags/buildflags.gni")
++
+ source_set("peek") {
+   public = [
+     "peek_navigation_throttle.h",
+@@ -29,16 +31,20 @@ source_set("peek") {
      "//chrome/browser/ui/navigator",
      "//chrome/browser/ui/spaces",
      "//chrome/browser/ui/stedding:copy_link",
@@ -166,8 +693,34 @@ index c5f55cf5ea416..5cb838c749083 100644
      "//chrome/browser/ui/stedding:pin_lifecycle",
      "//chrome/browser/ui/stedding:prefs",
      "//chrome/browser/ui/views/frame:browser_view_header",
+     "//chrome/browser/ui/views/picture_in_picture",
+     "//components/javascript_dialogs",
+     "//components/prefs",
++    "//components/sessions",
+     "//components/tabs:public",
+     "//components/vector_icons",
+     "//components/web_modal",
++    "//extensions/buildflags",
+     "//net",
+     "//third_party/blink/public/common:headers",
+     "//ui/base",
+@@ -47,6 +53,14 @@ source_set("peek") {
+     "//ui/views",
+     "//ui/views/controls/webview",
+   ]
++
++  if (enable_extensions_core) {
++    deps += [
++      "//chrome/browser/extensions",
++      "//extensions/browser",
++      "//extensions/common",
++    ]
++  }
+ }
+ 
+ source_set("unit_tests") {
 diff --git a/chrome/browser/ui/views/peek/peek_overlay.cc b/chrome/browser/ui/views/peek/peek_overlay.cc
-index 81fc8b80412f4..e1501a3f6aa87 100644
+index 81fc8b80412f4..88a85cc1f1cab 100644
 --- a/chrome/browser/ui/views/peek/peek_overlay.cc
 +++ b/chrome/browser/ui/views/peek/peek_overlay.cc
 @@ -26,6 +26,8 @@
@@ -179,7 +732,22 @@ index 81fc8b80412f4..e1501a3f6aa87 100644
  #include "chrome/browser/ui/stedding/little_window.h"
  #include "chrome/browser/ui/stedding/peek.h"
  #include "chrome/browser/ui/stedding/stedding_prefs.h"
-@@ -54,6 +56,7 @@
+@@ -40,6 +42,7 @@
+ #include "components/permissions/permission_recovery_success_rate_tracker.h"
+ #include "components/permissions/permission_request_manager.h"
+ #include "components/prefs/pref_service.h"
++#include "components/sessions/content/session_tab_helper.h"
+ #include "components/tabs/public/tab_interface.h"
+ #include "components/vector_icons/vector_icons.h"
+ #include "components/web_modal/web_contents_modal_dialog_manager.h"
+@@ -48,12 +51,14 @@
+ #include "content/public/browser/navigation_controller.h"
+ #include "content/public/browser/navigation_handle.h"
+ #include "content/public/browser/web_contents.h"
++#include "extensions/buildflags/buildflags.h"
+ #include "third_party/blink/public/common/input/web_input_event.h"
+ #include "third_party/blink/public/mojom/choosers/file_chooser.mojom.h"
+ #include "ui/base/accelerators/accelerator.h"
  #include "ui/base/l10n/l10n_util.h"
  #include "ui/base/metadata/metadata_impl_macros.h"
  #include "ui/base/ui_base_features.h"
@@ -187,18 +755,58 @@ index 81fc8b80412f4..e1501a3f6aa87 100644
  #include "ui/base/window_open_disposition.h"
  #include "ui/color/color_id.h"
  #include "ui/color/color_provider.h"
-@@ -524,6 +527,10 @@ bool PeekOverlay::Show() {
+@@ -80,6 +85,13 @@
+ #include "ui/views/widget/widget_delegate.h"
+ #include "url/gurl.h"
+ 
++#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
++#include "chrome/browser/extensions/api/web_navigation/web_navigation_tab_observer.h"
++#include "chrome/browser/extensions/tab_helper.h"
++#include "extensions/browser/view_type_utils.h"
++#include "extensions/common/mojom/view_type.mojom.h"
++#endif
++
+ namespace stedding {
+ 
+ namespace {
+@@ -524,6 +536,36 @@ bool PeekOverlay::Show() {
    // extensions -- whose delegate the peek is until it closes or becomes a
    // tab, when the window's tab features take over.
    TabHelpers::AttachTabHelpers(page_.get());
++#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
++  // P26 (GitHub issue 102): and what a tab's features give a page for
++  // extensions, as Chrome's own picture-in-picture page gets them. Without
++  // the extension tab helper the page has no script runner, so
++  // scripting.executeScript, which a password manager uses to put its fill
++  // script in, found no tab by the page's id. Kept as a tab, the page keeps
++  // them, and the tab's features find them made.
++  if (extensions::GetViewType(page_.get()) ==
++      extensions::mojom::ViewType::kInvalid) {
++    extensions::SetViewType(page_.get(),
++                            extensions::mojom::ViewType::kTabContents);
++  }
++  extensions::WebNavigationTabObserver::CreateForWebContents(page_.get());
++  extensions::TabHelper::CreateForWebContents(page_.get());
++#endif
 +  // P24 (BACKLOG S-469, GitHub issue 102): its extensions' content scripts
 +  // send as a tab, and an extension reaches the page by that tab's id to
 +  // answer them or fill its forms.
 +  ExtensionVisiblePage::CreateForWebContents(page_.get());
++  // P26 (GitHub issue 102): while it shows, the page is the window's active
++  // tab to extensions, in the pinned tab's window: a password manager's
++  // popup and keys fill it, and it is a tab they know when Open as Tab keeps
++  // it.
++  if (auto* const page_ids = sessions::SessionTabHelper::FromWebContents(
++          page_.get())) {
++    page_ids->SetWindowID(
++        sessions::SessionTabHelper::IdForWindowContainingTab(
++            source->GetContents()));
++  }
++  ExtensionVisiblePage::ShowOver(*page_, *source->GetContents());
    // P20 (BACKLOG S-376): these are the tab features' for a tab, and a peek is
    // none. With no manager a permission the page asked for was answered as an
    // ignored prompt. Kept as a tab, the page keeps them.
-@@ -580,10 +587,35 @@ bool PeekOverlay::Show() {
+@@ -580,10 +622,35 @@ bool PeekOverlay::Show() {
      return true;
    }
    view_->UpdateSplit(CanSplit());
@@ -234,6 +842,25 @@ index 81fc8b80412f4..e1501a3f6aa87 100644
  gfx::Rect PeekOverlay::PageBoundsInScreen() const {
    tabs::TabInterface* const source = source_.get();
    BrowserWindowInterface* const window =
+@@ -655,6 +722,8 @@ bool PeekOverlay::Promote(bool split) {
+     page->WasHidden();
+   }
+   view_->web_view()->SetWebContents(nullptr);
++  // P26: the window's tab strip announces the page to extensions now.
++  ExtensionVisiblePage::StopShowingOver(*page, /*kept=*/true);
+   // The pinned tab takes input again before the page arrives beside it.
+   Destroy();
+   Erase(this);
+@@ -681,6 +750,9 @@ void PeekOverlay::Destroy() {
+     observer.OnHostDestroying();
+   }
+   if (page_) {
++    // P26: closed, the page is gone to extensions, and the pinned tab is the
++    // window's active tab again.
++    ExtensionVisiblePage::StopShowingOver(*page_, /*kept=*/false);
+     if (auto* const modal =
+             web_modal::WebContentsModalDialogManager::FromWebContents(
+                 page_.get())) {
 diff --git a/chrome/browser/ui/views/peek/peek_overlay.h b/chrome/browser/ui/views/peek/peek_overlay.h
 index 794e283179532..2404b48e52f17 100644
 --- a/chrome/browser/ui/views/peek/peek_overlay.h
@@ -298,26 +925,42 @@ index 794e283179532..2404b48e52f17 100644
  };
  
 diff --git a/chrome/test/stedding/peek_over_page_browsertest.cc b/chrome/test/stedding/peek_over_page_browsertest.cc
-index ba63bbba809f6..247f6edb5d5f9 100644
+index ba63bbba809f6..8985b0bb46777 100644
 --- a/chrome/test/stedding/peek_over_page_browsertest.cc
 +++ b/chrome/test/stedding/peek_over_page_browsertest.cc
-@@ -26,6 +26,7 @@
+@@ -22,10 +22,13 @@
+ #include "base/files/file_path.h"
+ #include "base/files/scoped_temp_dir.h"
+ #include "base/strings/utf_string_conversions.h"
++#include "base/task/single_thread_task_runner.h"
+ #include "base/test/run_until.h"
  #include "base/test/test_future.h"
  #include "base/threading/thread_restrictions.h"
++#include "base/time/time.h"
  #include "chrome/app/chrome_command_ids.h"
 +#include "chrome/browser/extensions/chrome_test_extension_loader.h"
  #include "chrome/browser/profiles/profile.h"
  #include "chrome/browser/renderer_context_menu/render_view_context_menu_test_util.h"
  #include "chrome/browser/ui/browser_commands.h"
-@@ -63,6 +64,7 @@
+@@ -51,6 +54,7 @@
+ #include "components/permissions/permission_request_manager.h"
+ #include "components/permissions/test/permission_request_observer.h"
+ #include "components/prefs/pref_service.h"
++#include "components/sessions/content/session_tab_helper.h"
+ #include "components/tabs/public/tab_interface.h"
+ #include "components/input/native_web_keyboard_event.h"
+ #include "content/public/browser/context_menu_params.h"
+@@ -63,6 +67,9 @@
  #include "content/public/test/browser_test.h"
  #include "content/public/test/browser_test_utils.h"
  #include "content/public/test/test_navigation_observer.h"
++#include "extensions/browser/background_script_executor.h"
++#include "extensions/common/extension.h"
 +#include "extensions/test/test_extension_dir.h"
  #include "net/dns/mock_host_resolver.h"
  #include "net/test/embedded_test_server/embedded_test_server.h"
  #include "ui/gfx/canvas.h"
-@@ -76,6 +78,7 @@
+@@ -76,6 +83,7 @@
  #include "ui/events/keycodes/dom/dom_code.h"
  #include "ui/events/keycodes/dom/dom_key.h"
  #include "ui/events/keycodes/keyboard_codes.h"
@@ -325,7 +968,7 @@ index ba63bbba809f6..247f6edb5d5f9 100644
  #include "ui/views/controls/button/image_button.h"
  #include "ui/views/controls/label.h"
  #include "ui/views/controls/webview/webview.h"
-@@ -248,6 +251,53 @@ class PeekOverPageTest : public InProcessBrowserTest {
+@@ -248,6 +256,53 @@ class PeekOverPageTest : public InProcessBrowserTest {
    }
  };
  
@@ -379,7 +1022,73 @@ index ba63bbba809f6..247f6edb5d5f9 100644
  #if defined(USE_AURA)
  // tabs R67 (BACKLOG S-429, GitHub issue 82): a peek goes with its widget at
  // once. One closed as its tab comes back, so as its window shows, leaves the
-@@ -871,4 +921,59 @@ IN_PROC_BROWSER_TEST_F(PeekOverPageCopyTest, CopyLinkTakesThePeeksPage) {
+@@ -520,6 +575,65 @@ IN_PROC_BROWSER_TEST_F(PeekOverPageTest, OpenAsTabMovesThePageAsItIs) {
+   EXPECT_FALSE(stedding::PeekOverPageSourceOf(page));
+ }
+ 
++// P25 (GitHub issue 102): the peek over the page takes the window's reload
++// while it is open, as it takes Cmd-W: F5 and Cmd-R, with Shift too, the
++// address row's button and the page's own menu reload the peek's page. The
++// keys and the button reloaded the pinned page under it, and the menu's row
++// was greyed out.
++IN_PROC_BROWSER_TEST_F(PeekOverPageTest, AReloadTakesThePeekNotThePin) {
++  ASSERT_NO_FATAL_FAILURE(OpenPin(Url("b.test", "/title3.html")));
++  tabs::TabInterface* const pin = tab();
++  content::WebContents* const pinned_page = pin->GetContents();
++  ASSERT_TRUE(content::ExecJs(pinned_page, "window.kept = 1;"));
++  ClickLink();
++  stedding::PeekOverlay* const peek = WaitForPeek(pin);
++  ASSERT_TRUE(peek);
++  content::WebContents* const page = peek->page();
++
++  // `reload` reloads the peek's page; the pin stays as it was, and so does
++  // the peek.
++  const auto reloads_the_peek = [&](base::OnceClosure reload) {
++    ASSERT_TRUE(content::ExecJs(page, "window.kept = 1;"));
++    content::TestNavigationObserver reloaded(page);
++    std::move(reload).Run();
++    EXPECT_FALSE(pinned_page->IsLoading()) << "the pin under the peek reloads";
++    ASSERT_TRUE(page->IsLoading()) << "the peek's page does not reload";
++    reloaded.Wait();
++    EXPECT_EQ(false, content::EvalJs(page, "'kept' in window"))
++        << "the peek's page was not loaded again";
++    EXPECT_EQ(true, content::EvalJs(pinned_page, "'kept' in window"))
++        << "the pin under the peek was loaded again";
++    EXPECT_EQ(peek, stedding::PeekOverlay::ForSource(pin))
++        << "the reload closed the peek";
++  };
++  for (const int command : {IDC_RELOAD, IDC_RELOAD_BYPASSING_CACHE}) {
++    SCOPED_TRACE(testing::Message() << "command " << command);
++    reloads_the_peek(base::BindLambdaForTesting(
++        [&] { chrome::ExecuteCommand(browser(), command); }));
++  }
++  {
++    SCOPED_TRACE("the page's own menu");
++    content::ContextMenuParams params;
++    params.page_url = page->GetLastCommittedURL();
++    params.frame_url = params.page_url;
++    auto menu = std::make_unique<TestRenderViewContextMenu>(
++        *page->GetPrimaryMainFrame(), params);
++    menu->Init();
++    EXPECT_TRUE(menu->IsCommandIdEnabled(IDC_RELOAD)) << "greyed out";
++    reloads_the_peek(base::BindLambdaForTesting(
++        [&] { menu->ExecuteCommand(IDC_RELOAD, 0); }));
++  }
++  {
++    SCOPED_TRACE("the peek closed: the pin's page");
++    Press(peek->view()->close_button());
++    ASSERT_TRUE(WaitForNoPeek(pin));
++    content::TestNavigationObserver reloaded(pinned_page);
++    chrome::ExecuteCommand(browser(), IDC_RELOAD);
++    reloaded.Wait();
++    EXPECT_EQ(false, content::EvalJs(pinned_page, "'kept' in window"));
++  }
++}
++
+ // P20 (BACKLOG S-376): a page in a peek that asks for a permission gets the
+ // prompt, over the peek, for the page's own site, and the answer reaches the
+ // page. A peek's page had no one to ask: the request manager comes with a tab,
+@@ -871,4 +985,217 @@ IN_PROC_BROWSER_TEST_F(PeekOverPageCopyTest, CopyLinkTakesThePeeksPage) {
    }
  }
  
@@ -436,6 +1145,164 @@ index ba63bbba809f6..247f6edb5d5f9 100644
 +  ASSERT_TRUE(peek);
 +  EXPECT_EQ("answered", answer_in(peek->page()))
 +      << "the extension could not reach the peek's page by its tab id";
++}
++
++// P26 (GitHub issue 102): while a peek over the page shows, its page is the
++// window's active tab to extensions, as a peek in a window of its own is. A
++// password manager that knows the tabs from the tabs API's events, and finds
++// the tab to fill by asking for the active tab, fills the peek's page, and
++// after Open as Tab the same page with no reload. This extension does what
++// Bitwarden does: each frame's script asks at document_start for the fill
++// script, which the extension injects by the sender's tab id after tabs.get,
++// into a tab it has been told of; its key fills the window's active tab.
++// The key filled the pinned page under the peek, and after Open as Tab
++// nothing, until a reload.
++IN_PROC_BROWSER_TEST_F(PeekOverPageTest, APasswordManagerFillsThePeeksPage) {
++  extensions::TestExtensionDir dir;
++  dir.WriteManifest(R"({
++      "name": "Fills the active tab",
++      "version": "1",
++      "manifest_version": 3,
++      "background": {"service_worker": "background.js"},
++      "permissions": ["scripting", "tabs"],
++      "host_permissions": ["<all_urls>"],
++      "content_scripts": [{"matches": ["<all_urls>"], "js": ["trigger.js"],
++                           "run_at": "document_start", "all_frames": true}]
++  })");
++  dir.WriteFile(FILE_PATH_LITERAL("background.js"), R"(
++      const live = new Set();
++      const heard = [];
++      const ready = chrome.tabs.query({}).then(
++          tabs => tabs.forEach(tab => live.add(tab.id)));
++      chrome.tabs.onCreated.addListener(tab => {
++        live.add(tab.id);
++        heard.push('created');
++      });
++      chrome.tabs.onRemoved.addListener(id => {
++        live.delete(id);
++        heard.push('removed');
++      });
++      chrome.tabs.onAttached.addListener(() => heard.push('attached'));
++      const complete = new Set();
++      chrome.tabs.onUpdated.addListener((id, change) => {
++        if (change.status === 'complete') {
++          complete.add(id);
++        }
++      });
++      chrome.runtime.onMessage.addListener((message, sender) => {
++        if (message !== 'trigger' || !sender.tab) {
++          return;
++        }
++        (async () => {
++          await ready;
++          if (!live.has(sender.tab.id)) {
++            return;
++          }
++          const tab = await chrome.tabs.get(sender.tab.id);
++          const target = {tabId: tab.id, frameIds: [sender.frameId]};
++          await chrome.scripting.executeScript(
++              {target, files: ['fill.js'], injectImmediately: true});
++          await chrome.tabs.sendMessage(tab.id, 'start',
++                                        {frameId: sender.frameId});
++        })().catch(error => console.log('no fill script: ' + error.message));
++      });
++      self.fillActive = async () => {
++        await ready;
++        const [tab] = await chrome.tabs.query(
++            {active: true, windowId: chrome.windows.WINDOW_ID_CURRENT});
++        if (!tab || !live.has(tab.id)) {
++          return 'no tab it was told of';
++        }
++        try {
++          return (await chrome.tabs.sendMessage(tab.id, 'fill')) ||
++                 'no answer';
++        } catch (error) {
++          return 'no fill script';
++        }
++      };
++      self.told = () => heard.join(' ');
++      self.loaded = id => String(complete.has(id));
++  )");
++  dir.WriteFile(FILE_PATH_LITERAL("trigger.js"),
++                "chrome.runtime.sendMessage('trigger');");
++  dir.WriteFile(FILE_PATH_LITERAL("fill.js"), R"(
++      if (self.started === undefined) {
++        self.started = false;
++        chrome.runtime.onMessage.addListener((message, sender, reply) => {
++          if (message === 'start') {
++            self.started = true;
++          }
++          if (message === 'fill' && self.started) {
++            reply('filled ' + location.hostname);
++          }
++        });
++      }
++  )");
++  extensions::ChromeTestExtensionLoader loader(browser()->GetProfile());
++  scoped_refptr<const extensions::Extension> extension =
++      loader.LoadExtension(dir.UnpackedPath());
++  ASSERT_TRUE(extension);
++
++  const auto run = [&](const std::string& script) {
++    base::Value said = extensions::BackgroundScriptExecutor::ExecuteScript(
++        browser()->GetProfile(), extension->id(),
++        script + ".then(said => chrome.test.sendScriptResult(said));",
++        extensions::BackgroundScriptExecutor::ResultCapture::kSendScriptResult);
++    return said.is_string() ? said.GetString() : std::string("not a string");
++  };
++  // The extension's key, pressed until it says `expected`, for up to ten
++  // seconds: what it said last.
++  const auto press_fill = [&](const std::string& expected) {
++    std::string said;
++    for (int i = 0; i < 100; ++i) {
++      said = run("fillActive()");
++      if (said == expected) {
++        break;
++      }
++      base::RunLoop wait;
++      base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
++          FROM_HERE, wait.QuitClosure(), base::Milliseconds(100));
++      wait.Run();
++    }
++    return said;
++  };
++
++  ASSERT_NO_FATAL_FAILURE(OpenPin(Url("b.test", "/title2.html")));
++  tabs::TabInterface* const pin = tab();
++  ASSERT_EQ("filled a.test", press_fill("filled a.test"))
++      << "the extension does not fill a tab";
++  ClickLink();
++  stedding::PeekOverlay* const peek = WaitForPeek(pin);
++  ASSERT_TRUE(peek);
++  content::WebContents* const page = peek->page();
++  ASSERT_TRUE(content::ExecJs(page, "window.kept = 1;"));
++  EXPECT_EQ("filled b.test", press_fill("filled b.test"))
++      << "the key did not fill the peek's page";
++  EXPECT_EQ("true",
++            run(base::StringPrintf(
++                "Promise.resolve(loaded(%d))",
++                sessions::SessionTabHelper::IdForTab(page).id())))
++      << "no tabs.onUpdated said the peek's page had loaded";
++
++  Press(peek->view()->open_as_tab_button());
++  ASSERT_TRUE(WaitForNoPeek(pin));
++  ASSERT_EQ(page, contents());
++  EXPECT_EQ("filled b.test", press_fill("filled b.test"))
++      << "after Open as Tab the page did not fill";
++  EXPECT_EQ(1, content::EvalJs(page, "window.kept")) << "it loaded again";
++
++  // A peek closed is a tab removed.
++  tabs().ActivateTabAt(tabs().GetIndexOfTab(pin));
++  ClickLink();
++  stedding::PeekOverlay* const second = WaitForPeek(pin);
++  ASSERT_TRUE(second);
++  Press(second->view()->close_button());
++  ASSERT_TRUE(WaitForNoPeek(pin));
++  EXPECT_EQ("filled a.test", press_fill("filled a.test"))
++      << "with the peek closed the key did not fill the pinned page";
++  EXPECT_EQ("created created attached created removed",
++            run("Promise.resolve(told())"))
++      << "the tabs API told the extension otherwise";
 +}
 +
  }  // namespace

@@ -2,6 +2,38 @@
 
 What was built, newest first. Nothing here is needed to do a task: `AGENTS.md` carries what is true now, `BACKLOG.md` the order of work, `PLAN.md` the owner's decisions. This file was the "State of the project" section of `AGENTS.md` until 2026-09-30. This log starts at 2026-10-15. Closed work from before that is the table in [docs/history/archive.md](history/archive.md).
 
+## 2026-11-12 -- After beta 18: password managers in a peek (S-469), and the row in full screen (S-471)
+
+The owner asked for the open issues, discussions and new comments to be reviewed and their bugs
+fixed, with a screenshot of the address row in macOS full screen starting left of the page under
+it, while they used the Mac. So everything was built and tested on the PC and folded on the Mac
+with git alone.
+
+- S-469, GitHub issue 102's second report, on beta 18: Bitwarden still listed and filled the
+  pinned page under a peek; after Open as Tab its key filled nothing until a reload; F5 reloaded
+  the pinned page. The owner chose, that day, that an open peek is the window's active tab to
+  extensions (peek P26): the tabs API announces it when it opens and when it closes, Open as Tab
+  attaches it, and a query for the active tab finds it in the pinned tab's place. The page also
+  gets the extension helpers a tab's page has: without them `scripting.executeScript` answered
+  that no tab had its id. F5, Cmd-R, the row's button and the page's menu reload the peek (P25).
+  All in patch 0176.
+- `PeekOverPageTest.AReloadTakesThePeekNotThePin` and
+  `PeekOverPageTest.APasswordManagerFillsThePeeksPage` failed first on Windows' release build, as
+  the reporter saw it. Each fix was then seen to move the failure on: the menu's Reload needed no
+  tab's helper, the tabs API needed no favicon driver, the script needed the extension helpers,
+  and the test's own extension shadowed a function with an array. With all of it both tests passed
+  three times of three, with 143 browser tests of the peek, address-row, sidebar and Space suites
+  at scale 1 and 28 unit tests of the tabs API. Two of those browser tests,
+  `SidebarAddressTest`'s corner buttons, fail at the PC's own 150% scale, as S-458 says.
+- S-471 (patch 0071, toolbar T32): in full screen the row is in an overlay laid out before the
+  window, and it took the sidebar's width from the last layout, so after a change of that width it
+  stayed that many DIPs off the page. It now takes the column this layout gives the page.
+  `WindowButtonsTest.InFullScreenTheRowFollowsTheSidebarsWidthAtOnce` (patch 0120) runs on the Mac
+  alone and has not run yet.
+
+Not checked: Bitwarden itself; S-471's test, the Mac's build and its keys, which wait for the Mac.
+Not covered: `action.onClicked` and `commands.onCommand` still name the pinned tab.
+
 ## 2026-11-12 -- After beta 18: Copy Link on a page with no address (S-470)
 
 The owner asked for S-470, found that morning in beta 18's Mac acceptance, while they used the Mac,

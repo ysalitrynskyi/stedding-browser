@@ -2,6 +2,67 @@
 
 What was built, newest first. Nothing here is needed to do a task: `AGENTS.md` carries what is true now, `BACKLOG.md` the order of work, `PLAN.md` the owner's decisions. This file was the "State of the project" section of `AGENTS.md` until 2026-09-30. This log starts at 2026-10-15. Closed work from before that is the table in [docs/history/archive.md](history/archive.md).
 
+## 2026-11-12 -- 0.4.0 beta 18: Spaces that share a session, and four fixes
+
+The owner asked on the evening of 2026-11-11 for the optional fixes on the PC while they used the
+Mac, and for the release overnight, the Mac untouched until midnight. Each fix was built on the PC
+first, its test seen failing on `win-release` before the fix and passing after, then folded on the
+Mac's checkout with git alone, so the PC tested the series' own tree; the one change after it is a
+test's (below).
+
+- S-342, the sync review's last fault (patch 0121): a pin that applying a Space deletion brought on
+  screen, then removed on the other computer, stayed open instead of going to Recently Closed.
+- S-467 (patch 0124, tabs R25): Chromium gives the toast's action button the alert role, which the
+  Mac reads as a group, so VoiceOver did not call Undo a button. It is a button again with
+  Stedding's window; the toast's window stays the alert.
+- S-468, GitHub issue 101 (patch 0160, toolbar T62): a page that lays a dark layer over itself
+  under its own dialog no longer greys the address row. Reproduced on Windows: the header's blue
+  went to rgb(10, 47, 84). The owner chose to hold the colour. A read that finds the row's colour
+  darkened evenly, with the page's theme colour and background unchanged, is not taken.
+- S-469, GitHub issue 102, the page half (patch 0176, peek P24): an extension's answer to a
+  content script in a peek over the page found no tab, since no tab strip holds the peek's page.
+  Extensions now reach that page by its tab id, the way Chromium lets them reach a prerendered
+  page. The toolbar half, a toolbar button acting on the pinned tab under the peek, waits on the
+  owner.
+
+S-458 waits for the PC's own 4K display at 150%: over Remote Desktop the PC runs at 100%.
+
+The Mac took over at midnight, when the owner went to sleep:
+
+- The Mac's release build passed every suite. On its DCHECK build,
+  `SidebarSyncPlaceTest.AnErrorChangesNothing` timed out once in the parallel run and passed five
+  times of five alone. The test raced the service: a read the service had begun by itself, with
+  the 30-second timeout, reached the fake place just after the test set it to hang, and the
+  test's scan waited behind it (Sf13). One more scan after the short timeout is set, before the
+  hang, closes the race (patch 0164, the test only); the 44 tests of `SidebarSyncPlaceTest` then
+  passed three runs in a row.
+- On Windows' DCHECK build `CommandBarActionsTest.EveryListedRowRuns` failed once, late in the
+  serial leg, when a private window's navigation could not connect (`connect failed: 10055`, no
+  buffer space); it passed three times of three alone. AddressSanitizer found nothing.
+- S-467 on the Mac's release build, through the accessibility API, with Offer Undo turned on in a
+  test profile: the toast that reads "“Inbox” closed" holds an `AXButton` named Undo. The first
+  tries found no toast: ⌘T opens the command bar, so ⌘W closed the window's only tab; the check
+  now opens two pages at launch.
+- The first Mac acceptance run's copy, at a new path, asked the firewall about Chromium's time
+  query to clients2.google.com (trap 85), and the prompt over the screen stopped the driver at
+  the setup step. `run-mac.sh` now launches every part with that query and background
+  networking off, and the rerun used the one test-copy folder and id. The prompt itself was left
+  for the owner.
+
+- The rerun began at 06:46, once the prompt had been answered and the Mac left idle: the core
+  loop, the drags and the keyboard script, every part exit 0, on the notarized build. The captures
+  read as the steps say, but for the keyboard script's ⇧⌘C and the ⌃⌘N after it. A clipboard
+  manager running on the Mac takes ⇧⌘C from every app (trap 94): its window opened, and the ⌃⌘N
+  went to that window. Alone on the same copy, ⌃⌘N opened a split, and Copy Link in the menu
+  bar, whose key there reads ⇧⌘C, showed "Link copied". With the split's empty "Choose a tab"
+  pane in front, that copy was `chrome://tab-search.top-chrome/split_new_tab_page.html`, an
+  internal page's address: S-470, opened. Copying a link works as it did in beta 17.
+
+Checked: 1523 unit and 984 browser tests on the Mac, release and DCHECK; 1511 unit and 930
+browser tests on Windows, release, DCHECK and ASan. Acceptance on a copy of the notarized Mac
+build and on the installed Windows copy; the update from beta 17 through a local feed on both, and
+the Windows installer's upgrade, uninstall and fresh install.
+
 ## 2026-11-11 -- Spaces that share a session join the series (S-272)
 
 Several Spaces can now be on one named session, as several Arc Spaces are on one profile

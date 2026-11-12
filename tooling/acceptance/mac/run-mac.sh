@@ -27,7 +27,11 @@ REPO="${STEDDING_REPO:-$(cd "$HERE/../../.." 2>/dev/null && pwd -P)}"
 RUN="${RUN_DIR:-$HERE/runs/$(date +%Y%m%d-%H%M%S)}"
 URLS=()
 for name in a b c d e f; do URLS+=("file://$HERE/pages/$name.html"); done
-EXTRA=(--disable-search-engine-choice-screen)
+# No network beyond the pages: Chromium's time query to clients2.google.com, from a newly
+# signed copy, raises a firewall prompt that stays over the screen and stops the driver
+# (docs/HANDOFF.md trap 85).
+EXTRA=(--disable-search-engine-choice-screen --disable-features=NetworkTimeServiceQuerying
+  --disable-background-networking --disable-component-update)
 
 mode="${1:-}"
 app="${2:-}"

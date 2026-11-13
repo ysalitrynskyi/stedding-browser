@@ -40,6 +40,24 @@ one. The Mac was not free; everything was built and tested on the PC.
 Not done here: the Mac, where the Bookmarks menu's row should show a chord given to it, and the
 flow there.
 
+## 2026-11-13 -- A Space's session shows as a line in its colour (S-477)
+
+Issue 99's comment said the "Independent session" cookie no longer fits now that Spaces share
+named sessions. The owner picked from rendered options: a colour per session, a line under the
+chips of a session's Spaces, and a faint bridge across the Spaces between them.
+
+- Each named session keeps one of six colours as sessions are added. In the open sidebar the
+  line runs under its Spaces' chips; a second session that crosses the first runs a row lower.
+  In the rail, the title row, menus, the command bar, page info, Settings and the archive page a
+  disc in the colour takes the cookie's place (patch 0182).
+- Review before committing found the first palette too faint on light sidebars (1.2:1 for amber on
+  a light blue Space). Each colour now has a shade for light grounds and one for dark, each at
+  least 3:1, and a test holds it.
+- On win-release 174 unit tests and 111 browser tests passed, and the mark's tests on win-checks.
+
+Not done here: the words ("Independent session" for the session's name), which the owner sees
+first, and the Mac.
+
 ## 2026-11-13 -- The mini player's first slice (S-95)
 
 The owner asked for the next release to bring more of Arc, and chose to start the mini player with

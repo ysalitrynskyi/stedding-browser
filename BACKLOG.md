@@ -24,28 +24,20 @@ nothing published with it is in doubt (`PLAN.md` decision 21). An item that is n
 moves to the release after; it does not go out half-checked. The plan of 2026-11-06 went out in
 betas 13 to 16, and what each of its items left is in its row.
 
-Chromium stays on 157.0.8103.51. M157's newest point release is 157.0.8103.79 on the Mac and
-Windows (`tooling/check-pin`, 2026-11-12; GitHub issue 110), a security fix with the deadline in
-`docs/ROADMAP.md` ("The quality bar"). The owner approved the move on 2026-11-12, to run when
-they free the Mac; the Windows half may be built and tested before that.
+Chromium is on 157.0.8103.79, M157's newest point release at full rollout, since 0.4.0 beta 19
+(GitHub issue 110; the owner, 2026-11-12). 157.0.8103.80 was at 0.5% of users on 2026-11-12.
 158.0.8127.18 is early stable at 0.5% of users, and the full rollout usually follows about a week
 after early stable. The move to 158, with Sparkle 2.10.1 (S-358), is a release of its own, when the
 owner says so.
 
 In this order:
 
-1. **Released in 0.4.0 beta 18 on 2026-11-12:** S-272, Spaces that share one session (GitHub
-   issues 8 and 99; patches 0177–0179, ADR 0034), and the owner's optional fixes of 2026-11-11:
-   S-342's last sync fault (patch 0121), S-467, the toast's Undo as a button to VoiceOver (0124),
-   S-468, the row under a page's own dimming layer, GitHub issue 101 (0160, toolbar T62), and
-   S-469's page half, extensions reaching a peek's page, GitHub issue 102 (0176, peek P24).
-   **Fixed since, for the next release:** S-470, Copy Link on a page with no address to show (a
-   split's "Choose a tab" pane, the new tab page, a Space's own page; copy-link L9); S-469's rest,
-   GitHub issue 102's second report: an open peek is the window's active tab to extensions, so a
-   password manager fills it and fills it after Open as Tab (0176, peek P26), and a reload takes
-   the peek (P25); and S-471, the address row 8 DIP left of the page in macOS full screen (0071,
-   toolbar T32, its test in 0120). S-469's and S-470's fixes were tested on Windows' release
-   build. S-471's test runs on the Mac alone; it, the Mac's build and its keys are owed.
+1. **Released in 0.4.0 beta 19 on 2026-11-13:** Chromium 157.0.8103.79 (GitHub issue 110); S-469's
+   rest, GitHub issue 102's second report: an open peek is the window's active tab to extensions,
+   so a password manager fills it and fills it after Open as Tab, and a reload takes the peek
+   (0176, peek P25, P26); S-470, Copy Link on a page with no address (copy-link L9); S-472, a
+   crash at quit on Windows from Chromium's passkey check (0180). Open from that round: S-471
+   (not reproduced), S-473, S-474.
 2. **S-458 waits for the PC's own 4K display at 150%:** over Remote Desktop the PC runs at 100%.
 3. **The Mac's real-input checks still owed:** done on 2026-11-10 for little windows (S-157) and a
    pin's redirected link with the screenshot keys over a peek (S-93), both closed; the first found

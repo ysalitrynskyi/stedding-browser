@@ -2,6 +2,38 @@
 
 What was built, newest first. Nothing here is needed to do a task: `AGENTS.md` carries what is true now, `BACKLOG.md` the order of work, `PLAN.md` the owner's decisions. This file was the "State of the project" section of `AGENTS.md` until 2026-09-30. This log starts at 2026-10-15. Closed work from before that is the table in [docs/history/archive.md](history/archive.md).
 
+## 2026-11-13 -- 0.4.0 beta 19: Chromium 157.0.8103.79, and password managers in a peek
+
+The owner, on the evening of 2026-11-12: "you can use mac now, finish all and release". The Mac
+moved to the pin the PC had proved, both checkouts held one tree, and the gate ran on both
+machines overnight.
+
+- The Mac's half of the pin move: the point release synced and the series applied with no
+  conflict; the full release build took three hours twenty minutes at the Mac's own pace, past
+  `tooling/build-chromium`'s fifteen-minute budget, which the owner's "finish all" allowed. The pin
+  is its own commit (`85cfa61`, channel now stable) and the re-export another (`2120925`: only
+  index lines and offsets moved).
+- The DCHECK build on the PC caught a fault of patch 0176: closing a peek asked
+  `IsObservingSource()` about a favicon driver the peek's page does not have. Fixed and folded
+  (`fdd072e`); both machines rebuilt everything from that tree (`b46595c`).
+- Release suites: the Mac 1,523 unit and 989 browser tests passed; Windows 1,511 and 934 passed.
+  mac-checks: unit passed; four `AddressBandTest` tests timed out as the first of the parallel leg
+  and passed alone twice; no DCHECK. win-checks and win-asan: only S-458's two corner tests at
+  150%; no DCHECK, no dangling pointer, no AddressSanitizer report.
+- The Mac image signed, notarized and stapled; `verify-build` and `syspolicy_check` passed. On
+  Windows, beta 18 updated itself to beta 19 from a signed local feed and kept the sidebar's width;
+  upgrade, uninstall and reinstall passed. Acceptance on both (docs/features/acceptance.md).
+- S-470 on the Mac, through the menu bar on the signed copy: the "Choose a tab" pane left the
+  clipboard as it was; a page copied its link.
+- S-471 could not be proven: its test passed with and without the change, in fake and in real
+  full screen. Reopened; not in the notes.
+- S-474 found: on Windows a rename ended by a key leaves focus on a sidebar row about one run in
+  ten alone, with the window active. The code is the same as beta 18's; recorded, not fixed.
+- The site's entry for the page after an update shows a peek over a pinned page with a sign-in
+  form, taken from the release build over HTTPS with the address mapped to a free port.
+
+Not checked: Bitwarden itself (a test extension that fills as Bitwarden does was).
+
 ## 2026-11-12 -- The pin move's Windows half, and a crash at shutdown (S-472)
 
 The owner approved moving the pin to 157.0.8103.79 (GitHub issue 110) for when the Mac is

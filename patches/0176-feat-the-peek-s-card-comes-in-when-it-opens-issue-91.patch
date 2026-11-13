@@ -14,7 +14,8 @@ window's active tab to them (P26): the tabs API
 announces it when it opens and when it closes, and Open as Tab attaches it;
 a query for the active tab finds it in the pinned tab's place. A click on
 an extension's toolbar button, its popup and its own keys act on the
-peek's page as well, with the activeTab grant they bring. F5, Cmd-R,
+peek's page as well, with the activeTab grant they bring, and the button
+shows that page's icon, badge and title while the peek shows. F5, Cmd-R,
 the address row's reload button and the page's own menu reload the peek,
 not the pinned page under it (P25).
 
@@ -23,29 +24,30 @@ the page had painted, which read as slower than Arc's peek. GitHub issue
 102: a password manager's popup and keys filled the pinned page under a
 peek, and after Open as Tab nothing until a reload; a reload reloaded the
 pinned page. BACKLOG S-473: an extension's click with no popup and its keys
-still named the pinned tab, and granted it activeTab.
+still named the pinned tab, and granted it activeTab. BACKLOG S-476:
+the button still showed the pinned tab's count under the peek.
 
 Removable when: never; Stedding's own motion and peek.
 ---
  chrome/browser/extensions/BUILD.gn            |   4 +
  .../browser/extensions/api/tabs/tabs_api.cc   |  72 ++-
- .../extensions/api/tabs/tabs_event_router.cc  |  97 +++-
+ .../extensions/api/tabs/tabs_event_router.cc  |  97 ++-
  .../extensions/api/tabs/tabs_event_router.h   |  25 +-
  .../extension_keybinding_registry.cc          |   9 +
  .../browser/extensions/extension_tab_util.cc  |   9 +-
  .../render_view_context_menu.cc               |  12 +
  chrome/browser/ui/browser_commands.cc         |  13 +
  chrome/browser/ui/extensions/BUILD.gn         |   4 +
- .../extensions/extension_action_view_model.cc |  17 +-
- .../extensions/extension_action_view_model.h  |   4 +
+ .../extensions/extension_action_view_model.cc |  75 ++-
+ .../extensions/extension_action_view_model.h  |   9 +
  chrome/browser/ui/stedding/BUILD.gn           |  12 +
- .../ui/stedding/extension_visible_page.cc     | 105 ++++
- .../ui/stedding/extension_visible_page.h      |  70 +++
+ .../ui/stedding/extension_visible_page.cc     | 105 +++
+ .../ui/stedding/extension_visible_page.h      |  70 ++
  chrome/browser/ui/views/peek/BUILD.gn         |  14 +
  chrome/browser/ui/views/peek/peek_overlay.cc  |  72 +++
  chrome/browser/ui/views/peek/peek_overlay.h   |  24 +-
- .../stedding/peek_over_page_browsertest.cc    | 488 ++++++++++++++++++
- 18 files changed, 1023 insertions(+), 28 deletions(-)
+ .../stedding/peek_over_page_browsertest.cc    | 599 ++++++++++++++++++
+ 18 files changed, 1195 insertions(+), 30 deletions(-)
  create mode 100644 chrome/browser/ui/stedding/extension_visible_page.cc
  create mode 100644 chrome/browser/ui/stedding/extension_visible_page.h
 
@@ -515,10 +517,18 @@ index 05821ff3e76ea..8631baa9a36af 100644
      "//chrome/common",
      "//chrome/common:channel_info",
 diff --git a/chrome/browser/ui/extensions/extension_action_view_model.cc b/chrome/browser/ui/extensions/extension_action_view_model.cc
-index 40ad9f0570691..faabde7c0bda6 100644
+index 40ad9f0570691..de3f02ba5526d 100644
 --- a/chrome/browser/ui/extensions/extension_action_view_model.cc
 +++ b/chrome/browser/ui/extensions/extension_action_view_model.cc
-@@ -32,6 +32,7 @@
+@@ -13,6 +13,7 @@
+ #include "base/functional/bind.h"
+ #include "base/json/values_util.h"
+ #include "base/memory/ptr_util.h"
++#include "base/memory/raw_ref.h"
+ #include "base/metrics/histogram_functions.h"
+ #include "base/strings/strcat.h"
+ #include "base/strings/string_util.h"
+@@ -32,10 +33,12 @@
  #include "chrome/browser/ui/extensions/extension_popup_types.h"
  #include "chrome/browser/ui/extensions/extension_side_panel_utils.h"
  #include "chrome/browser/ui/extensions/icon_with_badge_image_source.h"
@@ -526,57 +536,186 @@ index 40ad9f0570691..faabde7c0bda6 100644
  #include "chrome/browser/ui/toolbar/toolbar_actions_model.h"
  #include "chrome/browser/ui/ui_features.h"
  #include "chrome/grit/generated_resources.h"
-@@ -470,7 +471,7 @@ void ExtensionActionViewModel::ExecuteUserAction(InvocationSource source) {
-     return;
-   }
- 
--  content::WebContents* const web_contents = GetCurrentWebContents();
-+  content::WebContents* const web_contents = GetActionWebContents();
-   if (!IsEnabled(web_contents)) {
-     // Close the extensions menu async, because closing the menu causes teardown
-     // that destroys `this`.
-@@ -615,6 +616,18 @@ void ExtensionActionViewModel::InspectPopup() {
-                ShowPopupCallback());
+ #include "components/sessions/content/session_tab_helper.h"
++#include "components/tabs/public/tab_interface.h"
+ #include "content/public/browser/web_contents.h"
+ #include "extensions/browser/extension_action.h"
+ #include "extensions/browser/extension_action_manager.h"
+@@ -235,6 +238,53 @@ std::unique_ptr<ExtensionActionViewModel> ExtensionActionViewModel::Create(
+       std::move(delegate)));
  }
  
-+// Stedding (docs/features/peek.md P26, BACKLOG S-473): while a peek shows
-+// over the active tab's page, its page is the window's active tab to
-+// extensions. A click on the action, its popup and the activeTab grant they
-+// bring are that page's; they were the pinned tab's under it. The button
-+// itself still shows the tab's state.
-+content::WebContents* ExtensionActionViewModel::GetActionWebContents() const {
-+  content::WebContents* const web_contents = GetCurrentWebContents();
++namespace {
++
++// Stedding (docs/features/peek.md P26; BACKLOG S-473, S-476): while a peek
++// shows over a tab's page, its page is the window's active tab to
++// extensions. What the action does -- a click, its popup, the activeTab
++// grant -- and what its button shows -- the icon, the badge, the title,
++// whether it is enabled -- are that page's. Both had been the pinned tab's:
++// the button showed the pinned page's count under the peek (GitHub issue
++// 102).
++content::WebContents* ShownPage(content::WebContents* web_contents) {
 +  content::WebContents* const peek =
 +      stedding::ExtensionVisiblePage::PageShownOver(web_contents);
 +  return peek ? peek : web_contents;
 +}
 +
++}  // namespace
++
++// P26 (BACKLOG S-476): a peek opening or closing changes the page the button
++// stands for while nothing about the extension changes, so nothing else
++// would repaint it. Kept as a tab (Open as Tab), the page becomes the
++// window's active tab, which repaints the button as any tab switch does.
++class ExtensionActionViewModel::PeekWatch
++    : public stedding::ExtensionVisiblePage::Observer {
++ public:
++  explicit PeekWatch(ExtensionActionViewModel& model) : model_(model) {
++    stedding::ExtensionVisiblePage::AddObserver(this);
++  }
++  PeekWatch(const PeekWatch&) = delete;
++  PeekWatch& operator=(const PeekWatch&) = delete;
++  ~PeekWatch() override {
++    stedding::ExtensionVisiblePage::RemoveObserver(this);
++  }
++
++  // stedding::ExtensionVisiblePage::Observer:
++  void OnPageShownOver(content::WebContents& page,
++                       content::WebContents& tab_page) override {
++    model_->OnPeekChanged(&tab_page);
++  }
++  void OnPageClosedOver(content::WebContents& page,
++                        content::WebContents* tab_page) override {
++    model_->OnPeekChanged(tab_page);
++  }
++
++ private:
++  const raw_ref<ExtensionActionViewModel> model_;
++};
++
+ ExtensionActionViewModel::ExtensionActionViewModel(
+     scoped_refptr<const extensions::Extension> extension,
+     BrowserWindowInterface* browser,
+@@ -252,6 +302,7 @@ ExtensionActionViewModel::ExtensionActionViewModel(
+   delegate_->AttachToModel(this);
+   command_service_observation_.Observe(
+       extensions::CommandService::Get(profile_));
++  peek_watch_ = std::make_unique<PeekWatch>(*this);
+ }
+ 
+ ExtensionActionViewModel::~ExtensionActionViewModel() {
+@@ -307,12 +358,13 @@ std::u16string ExtensionActionViewModel::GetActionTitle(
+   }
+ 
+   std::string title = extension_action_->GetTitle(
+-      sessions::SessionTabHelper::IdForTab(web_contents).id());
++      sessions::SessionTabHelper::IdForTab(ShownPage(web_contents)).id());
+   return base::UTF8ToUTF16(title);
+ }
+ 
+ std::u16string ExtensionActionViewModel::GetAccessibleName(
+     content::WebContents* web_contents) const {
++  web_contents = ShownPage(web_contents);
+   if (!ExtensionIsValid()) {
+     return std::u16string();
+   }
+@@ -355,6 +407,7 @@ std::u16string ExtensionActionViewModel::GetAccessibleName(
+ 
+ std::u16string ExtensionActionViewModel::GetTooltip(
+     content::WebContents* web_contents) const {
++  web_contents = ShownPage(web_contents);
+   // On Android, `web_contents` might be null for native pages, e.g. new tab.
+   // TODO(crbug.com/448420873): Remove this workaround once we ensure that
+   // `web_contents` is always non-null for all tabs.
+@@ -407,6 +460,7 @@ std::u16string ExtensionActionViewModel::GetTooltip(
+ 
+ bool ExtensionActionViewModel::IsEnabled(
+     content::WebContents* web_contents) const {
++  web_contents = ShownPage(web_contents);
+   if (!ExtensionIsValid()) {
+     return false;
+   }
+@@ -615,17 +669,28 @@ void ExtensionActionViewModel::InspectPopup() {
+                ShowPopupCallback());
+ }
+ 
++// Stedding (P26; BACKLOG S-473, S-476): the page of a peek over the active
++// tab's, while it shows (ShownPage).
  content::WebContents* ExtensionActionViewModel::GetCurrentWebContents() const {
    if (delegate_) {
      if (auto* web_contents = delegate_->GetActiveWebContents()) {
-@@ -755,7 +768,7 @@ void ExtensionActionViewModel::TriggerPopup(PopupShowAction show_action,
-     return;
+-      return web_contents;
++      return ShownPage(web_contents);
+     }
    }
+   tabs::TabInterface* tab = TabListInterface::From(browser_)->GetActiveTab();
+   if (!tab) {
+     return nullptr;
+   }
+-  return tab->GetContents();
++  return ShownPage(tab->GetContents());
++}
++
++void ExtensionActionViewModel::OnPeekChanged(content::WebContents* tab_page) {
++  tabs::TabInterface* const tab =
++      tab_page ? tabs::TabInterface::MaybeGetFromContents(tab_page) : nullptr;
++  if (tab && tab->GetBrowserWindowInterface() != browser_) {
++    return;
++  }
++  NotifyIconObservers();
+ }
  
--  content::WebContents* const web_contents = GetCurrentWebContents();
-+  content::WebContents* const web_contents = GetActionWebContents();
-   const int tab_id = sessions::SessionTabHelper::IdForTab(web_contents).id();
-   DCHECK(extension_action_->GetIsVisible(tab_id));
-   DCHECK(extension_action_->HasPopup(tab_id));
+ void ExtensionActionViewModel::NotifyIconObservers() {
+@@ -643,7 +708,7 @@ extensions::SitePermissionsHelper::SiteInteraction
+ ExtensionActionViewModel::GetSiteInteraction(
+     content::WebContents* web_contents) const {
+   return extensions::SitePermissionsHelper(profile_).GetSiteInteraction(
+-      *extension_, web_contents);
++      *extension_, ShownPage(web_contents));
+ }
+ 
+ bool ExtensionActionViewModel::ExtensionIsValid() const {
+@@ -673,6 +738,7 @@ bool ExtensionActionViewModel::GetExtensionCommand(
+ ToolbarActionViewModel::HoverCardState
+ ExtensionActionViewModel::GetHoverCardState(
+     content::WebContents* web_contents) const {
++  web_contents = ShownPage(web_contents);
+   if (!web_contents || !ExtensionIsValid()) {
+     HoverCardState state;
+     state.site_access = HoverCardState::SiteAccess::kExtensionDoesNotWantAccess;
+@@ -782,6 +848,7 @@ void ExtensionActionViewModel::CloseMenuTask() {
+ std::unique_ptr<IconWithBadgeImageSource>
+ ExtensionActionViewModel::GetIconImageSource(content::WebContents* web_contents,
+                                              const gfx::Size& size) {
++  web_contents = ShownPage(web_contents);
+   // `web_contents` may be null during tab closure or in tests.  Fall back on a
+   // generic color provider.
+   auto get_color_provider_callback = base::BindRepeating(
 diff --git a/chrome/browser/ui/extensions/extension_action_view_model.h b/chrome/browser/ui/extensions/extension_action_view_model.h
-index 7c34e1ab2b0c1..5d36d4001ad88 100644
+index 7c34e1ab2b0c1..a7f107a807711 100644
 --- a/chrome/browser/ui/extensions/extension_action_view_model.h
 +++ b/chrome/browser/ui/extensions/extension_action_view_model.h
-@@ -136,6 +136,10 @@ class ExtensionActionViewModel
+@@ -136,6 +136,11 @@ class ExtensionActionViewModel
    // Notifies observers that icon has been updated.
    void NotifyIconObservers();
  
-+  // Stedding (docs/features/peek.md P26, BACKLOG S-473): the page a click on
-+  // the action acts on: the active tab's, or the page of a peek over it.
-+  content::WebContents* GetActionWebContents() const;
++  // Stedding (docs/features/peek.md P26, BACKLOG S-476): a peek opened or
++  // closed over `tab_page`; the button shows the page it now stands for.
++  class PeekWatch;
++  void OnPeekChanged(content::WebContents* tab_page);
 +
    // extensions::ExtensionActionIconFactory::Observer:
    void OnIconUpdated() override;
+ 
+@@ -165,6 +170,10 @@ class ExtensionActionViewModel
+   // The extension ID.
+   extensions::ExtensionId extension_id_;
+ 
++  // Stedding (P26, BACKLOG S-476): repaints the button when a peek opens or
++  // closes over this window's tab.
++  std::unique_ptr<PeekWatch> peek_watch_;
++
+   // The extension associated with the action we're displaying.
+   scoped_refptr<const extensions::Extension> extension_;
  
 diff --git a/chrome/browser/ui/stedding/BUILD.gn b/chrome/browser/ui/stedding/BUILD.gn
 index 4a4f11301ef0e..cfc0c3bf374c3 100644
@@ -1043,7 +1182,7 @@ index 794e283179532..2404b48e52f17 100644
  };
  
 diff --git a/chrome/test/stedding/peek_over_page_browsertest.cc b/chrome/test/stedding/peek_over_page_browsertest.cc
-index ba63bbba809f6..daf6f71565094 100644
+index ba63bbba809f6..a3e1cf80c802a 100644
 --- a/chrome/test/stedding/peek_over_page_browsertest.cc
 +++ b/chrome/test/stedding/peek_over_page_browsertest.cc
 @@ -7,6 +7,7 @@
@@ -1090,7 +1229,7 @@ index ba63bbba809f6..daf6f71565094 100644
  #include "components/tabs/public/tab_interface.h"
  #include "components/input/native_web_keyboard_event.h"
  #include "content/public/browser/context_menu_params.h"
-@@ -63,6 +72,9 @@
+@@ -63,9 +72,16 @@
  #include "content/public/test/browser_test.h"
  #include "content/public/test/browser_test_utils.h"
  #include "content/public/test/test_navigation_observer.h"
@@ -1100,7 +1239,14 @@ index ba63bbba809f6..daf6f71565094 100644
  #include "net/dns/mock_host_resolver.h"
  #include "net/test/embedded_test_server/embedded_test_server.h"
  #include "ui/gfx/canvas.h"
-@@ -76,6 +88,7 @@
++#include "ui/gfx/image/image_skia.h"
++#include "ui/gfx/image/image_skia_rep.h"
++#include "ui/gfx/skia_util.h"
++#include "third_party/skia/include/core/SkBitmap.h"
+ #include "third_party/blink/public/common/input/web_input_event.h"
+ #include "ui/base/accelerators/accelerator.h"
+ #include "ui/base/clipboard/clipboard.h"
+@@ -76,6 +92,7 @@
  #include "ui/events/keycodes/dom/dom_code.h"
  #include "ui/events/keycodes/dom/dom_key.h"
  #include "ui/events/keycodes/keyboard_codes.h"
@@ -1108,7 +1254,7 @@ index ba63bbba809f6..daf6f71565094 100644
  #include "ui/views/controls/button/image_button.h"
  #include "ui/views/controls/label.h"
  #include "ui/views/controls/webview/webview.h"
-@@ -248,6 +261,53 @@ class PeekOverPageTest : public InProcessBrowserTest {
+@@ -248,6 +265,53 @@ class PeekOverPageTest : public InProcessBrowserTest {
    }
  };
  
@@ -1162,7 +1308,7 @@ index ba63bbba809f6..daf6f71565094 100644
  #if defined(USE_AURA)
  // tabs R67 (BACKLOG S-429, GitHub issue 82): a peek goes with its widget at
  // once. One closed as its tab comes back, so as its window shows, leaves the
-@@ -520,6 +580,65 @@ IN_PROC_BROWSER_TEST_F(PeekOverPageTest, OpenAsTabMovesThePageAsItIs) {
+@@ -520,6 +584,65 @@ IN_PROC_BROWSER_TEST_F(PeekOverPageTest, OpenAsTabMovesThePageAsItIs) {
    EXPECT_FALSE(stedding::PeekOverPageSourceOf(page));
  }
  
@@ -1228,7 +1374,7 @@ index ba63bbba809f6..daf6f71565094 100644
  // P20 (BACKLOG S-376): a page in a peek that asks for a permission gets the
  // prompt, over the peek, for the page's own site, and the answer reaches the
  // page. A peek's page had no one to ask: the request manager comes with a tab,
-@@ -871,4 +990,373 @@ IN_PROC_BROWSER_TEST_F(PeekOverPageCopyTest, CopyLinkTakesThePeeksPage) {
+@@ -871,4 +994,480 @@ IN_PROC_BROWSER_TEST_F(PeekOverPageCopyTest, CopyLinkTakesThePeeksPage) {
    }
  }
  
@@ -1599,6 +1745,113 @@ index ba63bbba809f6..daf6f71565094 100644
 +      << "the key did not act on the peek's page";
 +  EXPECT_EQ(peek, stedding::PeekOverlay::ForSource(pin))
 +      << "the key closed the peek";
++}
++
++// P26 (BACKLOG S-476, GitHub issue 102): while a peek shows, an extension's
++// button shows the peek's page's state -- its badge, its title, as for the
++// window's active tab -- from the moment the peek opens; when the peek closes,
++// the pinned tab's again; and after Open as Tab, the page's own. It showed
++// the pinned tab's: Bitwarden's count of the pinned page's logins under a
++// peek of another site.
++IN_PROC_BROWSER_TEST_F(PeekOverPageTest, AnActionsButtonShowsThePeeksPage) {
++  extensions::TestExtensionDir dir;
++  dir.WriteManifest(R"({
++      "name": "Counts per tab",
++      "version": "1",
++      "manifest_version": 3,
++      "background": {"service_worker": "background.js"},
++      "action": {}
++  })");
++  dir.WriteFile(FILE_PATH_LITERAL("background.js"), R"(
++      self.mark = (tabId, text) => Promise.all([
++        chrome.action.setBadgeText({tabId, text}),
++        chrome.action.setTitle({tabId, title: text}),
++      ]).then(() => 'marked');
++  )");
++  extensions::ChromeTestExtensionLoader loader(browser()->GetProfile());
++  scoped_refptr<const extensions::Extension> extension =
++      loader.LoadExtension(dir.UnpackedPath());
++  ASSERT_TRUE(extension);
++  ToolbarActionsModel* const actions =
++      ToolbarActionsModel::Get(browser()->GetProfile());
++  if (!actions->IsActionPinned(extension->id())) {
++    actions->SetActionVisibility(extension->id(), true);
++  }
++  ExtensionsToolbarDesktop* const container =
++      BrowserView::GetBrowserViewForBrowser(browser())
++          ->toolbar()
++          ->extensions_container_for_testing();
++  ASSERT_TRUE(container);
++  ToolbarActionView* button = nullptr;
++  ASSERT_TRUE(base::test::RunUntil([&]() {
++    button = container->GetViewForId(extension->id());
++    return button != nullptr;
++  })) << "the pinned extension has no button";
++
++  // Gives `page`'s tab id the badge and the title `text`.
++  const auto mark = [&](content::WebContents* page, const std::string& text) {
++    base::Value said = extensions::BackgroundScriptExecutor::ExecuteScript(
++        browser()->GetProfile(), extension->id(),
++        base::StringPrintf(
++            "mark(%d, '%s').then(said => chrome.test.sendScriptResult(said));",
++            sessions::SessionTabHelper::IdForTab(page).id(), text.c_str()),
++        extensions::BackgroundScriptExecutor::ResultCapture::kSendScriptResult);
++    EXPECT_EQ(base::Value("marked"), said);
++  };
++  // Whether the button reads `title` (its title, then what the extension may
++  // do on the page), within ten seconds.
++  const auto reads = [&](const std::u16string& title) {
++    return base::test::RunUntil([&]() {
++      return button->GetViewAccessibility().GetCachedName().starts_with(title);
++    });
++  };
++  // The button as drawn, its badge included.
++  const auto drawn = [&]() {
++    return button->GetImage(views::Button::STATE_NORMAL)
++        .GetRepresentation(1.0f)
++        .GetBitmap();
++  };
++
++  ASSERT_NO_FATAL_FAILURE(OpenPin(Url("b.test", "/title2.html")));
++  tabs::TabInterface* const pin = tab();
++  mark(pin->GetContents(), "pin");
++  ASSERT_TRUE(reads(u"pin")) << button->GetViewAccessibility().GetCachedName();
++  const SkBitmap with_the_pins = drawn();
++
++  ClickLink();
++  stedding::PeekOverlay* const peek = WaitForPeek(pin);
++  ASSERT_TRUE(peek);
++  EXPECT_TRUE(reads(u"Counts per tab"))
++      << "the peek's page has no title of its own, and the button still "
++         "reads "
++      << button->GetViewAccessibility().GetCachedName();
++  mark(peek->page(), "peek");
++  EXPECT_TRUE(reads(u"peek"))
++      << "the button shows the pinned tab's state: "
++      << button->GetViewAccessibility().GetCachedName();
++  EXPECT_FALSE(gfx::BitmapsAreEqual(with_the_pins, drawn()))
++      << "the button still draws the pinned tab's badge";
++
++  Press(peek->view()->close_button());
++  ASSERT_TRUE(WaitForNoPeek(pin));
++  EXPECT_TRUE(reads(u"pin"))
++      << "after the peek closed the button reads "
++      << button->GetViewAccessibility().GetCachedName();
++  EXPECT_TRUE(gfx::BitmapsAreEqual(with_the_pins, drawn()))
++      << "after the peek closed the button does not draw the pin's badge";
++
++  ClickLink();
++  stedding::PeekOverlay* const second = WaitForPeek(pin);
++  ASSERT_TRUE(second);
++  content::WebContents* const page = second->page();
++  mark(page, "kept");
++  ASSERT_TRUE(reads(u"kept"));
++  Press(second->view()->open_as_tab_button());
++  ASSERT_TRUE(WaitForNoPeek(pin));
++  ASSERT_EQ(page, contents()) << "Open as Tab did not make the page the tab";
++  EXPECT_TRUE(reads(u"kept"))
++      << "after Open as Tab the button reads "
++      << button->GetViewAccessibility().GetCachedName();
 +}
 +
  }  // namespace

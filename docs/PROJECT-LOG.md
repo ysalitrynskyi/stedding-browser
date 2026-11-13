@@ -2,6 +2,22 @@
 
 What was built, newest first. Nothing here is needed to do a task: `AGENTS.md` carries what is true now, `BACKLOG.md` the order of work, `PLAN.md` the owner's decisions. This file was the "State of the project" section of `AGENTS.md` until 2026-09-30. This log starts at 2026-10-15. Closed work from before that is the table in [docs/history/archive.md](history/archive.md).
 
+## 2026-11-13 -- An extension's button in a peek shows the peek's page (S-476, GitHub issue 102)
+
+The reporter of issue 102 confirmed beta 19 and sent a capture: Bitwarden's button counted the
+pinned Gmail tab's logins under a peek of another site. S-473 had sent the click to the peek's
+page and left the button on the pinned tab's state. The owner: "Yes, fix the count".
+
+- The button now reads every per-page state through the page shown over the tab: icon and badge,
+  title, enabled, tooltip and hover card. It repaints when a peek opens or closes over its
+  window's tab; after Open as Tab the page is the active tab and the button follows it as any tab
+  switch (patch 0176, peek P26).
+- `PeekOverPageTest.AnActionsButtonShowsThePeeksPage` failed before the change and passed three
+  times of three after it, on win-release and win-checks. The whole browser suite (940) passed
+  on win-release.
+
+Not done here: the Mac (not free).
+
 ## 2026-11-13 -- Bookmarks and the welcome flow from the keyboard (S-475, GitHub issue 112)
 
 A new user asked for a keyboard way to bookmark and to go through the welcome flow without the

@@ -38,7 +38,7 @@ In this order:
    (0176, peek P25, P26); S-470, Copy Link on a page with no address (copy-link L9); S-472, a
    crash at quit on Windows from Chromium's passkey check (0180). Open from that round: S-471
    (not reproduced). Fixed since, for the next release: S-473 and S-474; built since, from GitHub issue 112
-   with the owner's yes: S-475.
+   with the owner's yes: S-475; and S-476, an extension's button in a peek (GitHub issue 102).
 2. **S-458 waits for the PC's own 4K display at 150%:** over Remote Desktop the PC runs at 100%.
 3. **The Mac's real-input checks still owed:** done on 2026-11-10 for little windows (S-157) and a
    pin's redirected link with the screenshot keys over a peek (S-93), both closed; the first found

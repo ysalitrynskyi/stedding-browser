@@ -1,6 +1,6 @@
 # 0019 — Independent Space sessions are StoragePartitions, not Chrome profiles
 
-Status: Accepted. Amended by [ADR 0028](0028-a-spaces-own-essentials.md) (a Space with its own session has its own essentials), [ADR 0025](0025-apps-keep-their-spaces-session.md) (an app keeps that Space's jar) and [ADR 0034](0034-spaces-that-share-a-named-session.md), proposed 2026-11-05 (several Spaces can share one session).
+Status: Accepted. Amended by [ADR 0028](0028-a-spaces-own-essentials.md) (a Space with its own session has its own essentials), [ADR 0025](0025-apps-keep-their-spaces-session.md) (an app keeps that Space's jar) and [ADR 0034](0034-spaces-that-share-a-named-session.md), proposed 2026-11-05 (several Spaces can share one session). Since 2026-11-13 the product no longer says "Independent session": the menu's Clear Independent Session below is Clear Session Data… (ADR 0034, "The words"; `BACKLOG.md` S-477).
 Date: 2026-09-16
 
 ## Context

@@ -159,18 +159,18 @@ import.
 
 ## A Space's own cookies
 
-A Space with an independent session keeps its cookies, cache and site data in
+A Space with a session of its own keeps its cookies, cache and site data in
 its own jar on this disk (`features/sessions.md`). **Delete browsing data**,
 `chrome.browsingData` and deleting one site's data reach every Space's jar,
-with the same time range and the same sites (sessions S24). **Clear
-Independent Session** empties that jar, for every Space that shares it. Several
+with the same time range and the same sites (sessions S24). **Clear Session
+Data…** empties that jar, for every Space that shares it. Several
 Spaces can share one session and so one jar. A jar stays while any Space names
 it, and also after its last Space has moved to another session: Settings →
 Stedding → Spaces lists such a session with **Delete Session…**, and **Delete
 browsing data** reaches it (sessions S43–S45). Deleting the Space deletes
 the jar.
 
-An independent session keeps sign-ins apart, not permissions. A site's
+A Space's own session keeps sign-ins apart, not permissions. A site's
 permissions are the profile's, in every Space: camera, location and
 notifications, and the devices and files a site was allowed to use (a serial
 port, a USB or HID device, a Bluetooth device, a folder). A device a site
@@ -390,7 +390,7 @@ consequences:
 | Crash reports | None uploaded | — |
 | Update checks | On, on the Mac and on Windows. See "The update check". | Settings › Stedding › Updates |
 | Search engine | DuckDuckGo until the user chooses, at the welcome step or in Settings | Change any time |
-| Cookies per Space | Every Space shares the profile's jar | An independent session keeps its own cookies, cache and site data on this disk. Clear Independent Session empties it. Deleting the Space deletes it. Delete browsing data reaches it (`features/sessions.md`) |
+| Cookies per Space | Every Space shares the profile's jar | A Space's own session keeps its own cookies, cache and site data on this disk. Clear Session Data… empties it. Deleting the Space deletes it. Delete browsing data reaches it (`features/sessions.md`) |
 | Search suggestions | Off | Opt in |
 | Show Stedding's own error pages | On. A failed navigation does not ask a web service what to show | Turn off |
 | Third-party cookies | Blocked in normal windows | Allow per site, from the eye icon in the address row |

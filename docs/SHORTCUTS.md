@@ -104,7 +104,7 @@ Bookmark This Tab has no key, since ⌘D (Ctrl+D) pins the tab. It is a row of t
 
 Running an extension is ⌘E on the Mac, as in Arc, and Ctrl+Alt+E on Windows, where Ctrl+E stays the search key. Actions mode also lists each extension, **Show Media Controls** while something plays, and **View Site Information**.
 
-Independent session is not a shortcut. It is a check item on the Space chip menu, an **Independent Session** row in the command bar's actions mode, and a choice of session in Edit Space and on each Space in Settings → Stedding → Spaces. It is off at first.
+Choosing a Space's session is not a shortcut. It is the **Session** submenu on the Space menu (Shared, each session, **New Session…**), the **Choose This Space's Session…** row in the command bar's actions mode, which opens Edit Space on the session, and a choice of session in Edit Space and on each Space in Settings → Stedding → Spaces. Shared is the default.
 
 The tab-group chords are not bound. Those rows are absent from the short tab menus, which are on at first. Turning off Settings → Stedding → Pages and menus → Short context menus brings Chromium's menu back, still without those chords.
 

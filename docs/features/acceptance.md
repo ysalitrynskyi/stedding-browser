@@ -121,11 +121,11 @@ None recorded.
 
 ## The session mark
 
-The live checks [sessions.md](sessions.md) S32 and S34 and [spaces.md](spaces.md) B38 wait on: how the cookie mark looks and sounds, which no browser test sees.
+The live checks [sessions.md](sessions.md) S32 and S34 and [spaces.md](spaces.md) B38 wait on: how the session's mark, its line and its disc, looks and sounds, which no browser test sees.
 
 ### Before the run
 
-- An installed build and a fresh profile with three Spaces, Home, Work and Play; Work's Independent session on (its chip menu), a web page open in each Space.
+- An installed build and a fresh profile with three Spaces, Home, Work and Play; Work on a session of its own (its chip menu, Session → New Session…), a web page open in each Space.
 - On Windows, the display at 100% scaling for the 1x checks; on the Mac, a Retina display.
 - VoiceOver on the Mac, Narrator on Windows, for the last check.
 
@@ -133,11 +133,11 @@ The live checks [sessions.md](sessions.md) S32 and S34 and [spaces.md](spaces.md
 
 | Id | Do | Expect |
 |---|---|---|
-| `im_badge` | Look at Work's chip in the open sidebar and in the rail, in Light and in Dark (Settings → Appearance), with Work given each of the twelve Space colours, on screen and not. Then drag a tab over Work's chip, and rest the pointer on it. | The cookie reads as a cookie in a disc at the chip's bottom trailing corner, over the emoji and apart from it; Home and Play show none. The ring round the disc is the sidebar's ground: no halo of another colour under the drag's fill, the hover's fill or the sidebar's gradient. At 1x the cookie is not a blob. |
-| `im_title_row` | Switch to Work in the open sidebar and in the rail; hover the title row. | The cookie after Work's name, or the badge on its glyph in the rail. The tooltip is "Independent session: its own cookies and storage", then "Essentials here are this Space's own". In the rail, Work's name comes first. |
-| `im_menus` | Right-click a tab in Home: Move to Space, Always Open <site> in. Open the command bar (⇧⌘P, Ctrl+Shift+P) and type "move". | Work's rows wear the cookie and "Independent session" (on Windows after the row; on the Mac after the name, and the cookie only where the Mac's menus draw icons); Play's rows wear neither. The bar's "Move Tab to Work" row has the cookie after its text, quieter than the text. |
+| `im_badge` | Look at Work's chip in the open sidebar and in the rail, in Light and in Dark (Settings → Appearance), with Work given each of the twelve Space colours, on screen and not. Then drag a tab over Work's chip, and rest the pointer on it. | In the rail, a disc in the session's colour at the chip's bottom trailing corner, over the emoji and apart from it; in the open sidebar no badge, and a line in that colour under Work's chip; Home and Play show neither. The ring round the disc is the sidebar's ground: no halo of another colour under the drag's fill, the hover's fill or the sidebar's gradient. At 1x the disc is round, not a blob. |
+| `im_title_row` | Switch to Work in the open sidebar and in the rail; hover the title row. | The disc after Work's name, or the badge on its glyph in the rail. The tooltip is "Own session: sign-ins and site data apart from other Spaces", then "Essentials here are this Space's own". In the rail, Work's name comes first. |
+| `im_menus` | Right-click a tab in Home: Move to Space, Always Open <site> in. Open the command bar (⇧⌘P, Ctrl+Shift+P) and type "move". | Work's rows wear the disc and "Own session" (on Windows after the row; on the Mac after the name, and the disc only where the Mac's menus draw icons); Play's rows wear neither. The bar's "Move Tab to Work" row has the disc after its text. |
 | `im_pin` | In Work, on a page signed into a site, right-click the tab, Add to Essentials. Switch to Home, then back to Work. Quit and relaunch. | No toast, and the page stays signed in: the essential is Work's own (spaces B6, sessions S8). Home shows Home's essentials, not this one; Work shows it alone in its essentials row. After the relaunch it is back in Work's row, still signed in. |
-| `im_voice` | With VoiceOver or Narrator on, move to Work's chip, the title row, the bar's Move Tab to Work row and the tab menu's Work row. | Each is read once with its name, then "Independent session: its own cookies and storage"; the cookie itself is not read on its own. |
+| `im_voice` | With VoiceOver or Narrator on, move to Work's chip, the title row, the bar's Move Tab to Work row and the tab menu's Work row. | Each is read once with its name, then "Own session: sign-ins and site data apart from other Spaces"; the disc itself is not read on its own. |
 
 ### Runs
 
@@ -183,7 +183,7 @@ The live checks [web-apps.md](web-apps.md) cites: what its browser tests cannot 
 
 ### Before the run
 
-- An installed build, a fresh profile with two Spaces, Home and Work, and Work's Independent session on (its chip menu). The person's own Stedding is closed, or runs on another profile.
+- An installed build, a fresh profile with two Spaces, Home and Work, and Work on a session of its own (its chip menu, Session → New Session…). The person's own Stedding is closed, or runs on another profile.
 - Local pages on two hosts, so nothing waits on the network and the sessions can be told apart: `a.test/plain.html` (no manifest), `b.test/app/` (an installable manifest, two icons, a pale `theme-color`) and `b.test/whoami.html`, which sets a cookie on its first visit and shows which one it holds. Visit `whoami.html` once in Home and once in Work first, so each Space's session holds its own cookie.
 - On the Mac, the operator's yes for the install itself: it writes a launcher into `~/Applications/Stedding Apps.localized`, adds a tile to the Dock and restarts the Dock. The app's Uninstall at the end (`wa_uninstall`) takes both away again.
 
@@ -196,7 +196,7 @@ The live checks [web-apps.md](web-apps.md) cites: what its browser tests cannot 
 | `wa_win_install` | On Windows, in Work, open `a.test/plain.html` and choose the app menu's Save and Share → "Install page as app…"; then the same for `b.test/app/` ("Install <App>…"). | Chromium's dialogs and words; each app gets a Start menu entry in a "Stedding Apps" folder, a desktop shortcut, and a taskbar button of its own when it runs (Wa2, Wa8). |
 | `wa_app_light`, `wa_app_dark`, `wa_app_theme_color` | Open each app in Light and in Dark; `b.test/app/` with its `theme-color`, `a.test/plain.html` without one. Open its menu, and find on the page (⌘F, Ctrl+F). | The page runs edge to edge under Chromium's title bar: no sidebar, no Spaces, no address row, no mat or rounded card around the page; the find bar sits on the page's corner. The title bar takes the page's colour when it names one, else the window's ground, legible in both modes. The menu is Chromium's (App info, Copy URL, Open in Stedding, Uninstall…); on the Mac the menu bar has no Spaces menu and no Add to Dock (Wa9, Wa10, windows G7). |
 | `wa_session` | In the app made in Work, open `b.test/whoami.html`. Then the app's menu → Open in Stedding; then, from the page in Work, the address row's "Open in <App>" chip; then, in the app, a link to `a.test`. | The app's page holds Work's cookie, not Home's, from its first request. Open in Stedding puts the page in a tab of Work, on screen, not reloaded; the chip moves it back; the link leaving the app opens in a tab of Work (Wa11, Wa14). |
-| `wa_session_off` | Turn Work's Independent session off from its chip menu, with the app's window open; answer the question; open a new page of the app; turn the session on again. Then delete Work, with the app's window open. | The question names the app ("… will use the shared session while it is off."), even with no Work tab open. The open app window stays signed in as Work until it closes; a new page of the app holds the shared cookie; on again, Work's. Deleting Work names the app ("… will then use the shared session."), and Work's site data is erased only once the app's window has closed (Wa13; sessions S10, S17; spaces B5). |
+| `wa_session_off` | Move Work back to Shared from its chip menu (Session → Shared), with the app's window open; answer the question; open a new page of the app; choose Work's session again (Session → Work). Then delete Work, with the app's window open. | The question, "Move “Work” back to the shared session?", names the app ("… will use the shared session while it is off."), even with no Work tab open. The open app window stays signed in as Work until it closes; a new page of the app holds the shared cookie; back on Work's session, Work's. Deleting Work names the app ("… will then use the shared session."), and Work's site data is erased only once the app's window has closed (Wa13; sessions S10, S17; spaces B5). |
 | `wa_relaunch` | With the app's window open, open chrome://restart in a browser tab; after the restart close the app's window and press ⇧⌘T (Ctrl+Shift+T). Then, with the next launch set to continue where you left off, quit and start Stedding. | After the restart the app's window comes back, still in Work's session; ⇧⌘T brings it back the same way. That start restores the browser's windows and not the app's (Wa12). Note whether the archive page (⇧⌘P, "Show Archived Tabs") lists the app's page ([archive.md](archive.md), notes). |
 | `wa_launch_quit` | Quit Stedding. Launch an app from the Dock (the Mac) or the Start menu (Windows). | Stedding starts and opens the app's window. Write down whatever else opens, the browser's windows or not: Wa22 takes what the real build does. |
 | `wa_update` | With an app installed, update Stedding to the next release the way a user gets it (on the Mac through the feed, on Windows with the next installer over this one); launch the app afterwards. On Windows, then uninstall Stedding. | The app launches from its tile or shortcut after the update, with no launcher to rebuild by hand; on Windows the uninstall deletes the app's shortcuts (Wa16, Wa17). Needs two releases, so it runs with the next release. |
@@ -310,7 +310,7 @@ The live checks [site-controls.md](site-controls.md) Si11 and Si12 wait on, and 
 
 ### Before the run
 
-- An installed build; a profile with Home and Work, Work's Independent session on (its chip menu); a site you can sign in to, signed in from a tab in Work and from a tab in Home.
+- An installed build; a profile with Home and Work, Work on a session of its own (its chip menu, Session → New Session…); a site you can sign in to, signed in from a tab in Work and from a tab in Home.
 - One extension installed and not pinned; a page with a video; an https site that has never asked for the camera.
 - VoiceOver on the Mac, Narrator on Windows, for `sc_voice`.
 
@@ -323,7 +323,7 @@ The live checks [site-controls.md](site-controls.md) Si11 and Si12 wait on, and 
 | `sc_media` | On the video page open the panel, then play the video. Press Mute tab, then Picture in picture. | Picture in picture comes on as the video plays; Mute tab's words and icon flip and the panel stays; Picture in picture opens the floating window (Si4). |
 | `sc_zoom` | Press Zoom in twice, the percentage, Zoom out. Press ⌘+ (Ctrl++) with the panel open. | The buttons show 110%, 125%, 100%, 90%, and no zoom bubble. The key's own bubble still appears, and the percentage shows the new zoom (Si5). |
 | `sc_camera` | Open the panel on the https site. Turn the camera off, then look at Site settings. | Camera and Microphone rows though the site never asked; the choice shows in Site settings (Si6). |
-| `sc_session` | Open the panel on Work's page, then on Home's. | "Work · Independent session" with the cookie, its tooltip the mark's; "Shared session" (Si7). |
+| `sc_session` | Open the panel on Work's page, then on Home's. | "Work · Own session" with the disc in its session's colour, its tooltip the mark's; "Shared session" (Si7). |
 | `sc_clear` | On the signed-in site in Work, press Clear site data…, read the question, press Clear and Reload. Then show the same site in Home. | The question is "Clear data for <site>?" and begins "You will be signed out of <site> in Work." The page reloads signed out, with the toast "Site data cleared for <site>"; Home is still signed in (Si8). |
 | `sc_dark` | Turn "Dark pages" on in the panel, then turn "Darken <site>" off. Press ⌥⇧⌘D (Ctrl+Alt+Shift+D) with the panel open. | The moon turns on with the switch; the page darkens, then stays light. The chord turns "Dark pages" off and the "Darken <site>" row goes (Si9). |
 | `sc_extensions` | Press Extensions in the panel and pin the extension. Hide the row and do it again from View Site Information. | The menu opens from the extensions button; the pinned button shows in the row at once; with the row hidden, the menu opens at the card's top left (Si10). |

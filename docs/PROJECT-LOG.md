@@ -55,8 +55,13 @@ chips of a session's Spaces, and a faint bridge across the Spaces between them.
   least 3:1, and a test holds it.
 - On win-release 174 unit tests and 111 browser tests passed, and the mark's tests on win-checks.
 
-Not done here: the words ("Independent session" for the session's name), which the owner sees
-first, and the Mac.
+- The words followed, once the owner had read them: "Own session" or "Session: Clients" after a
+  Space's name, a Session submenu on the Space menu, Clear Session Data…, and the command bar's
+  Choose This Space's Session…, which opens Edit Space. 206 unit tests and 100 browser tests passed;
+  the whole browser suite ran 950 with one failure, a sidebar scroll test that passed 3 of 3 alone
+  with and without the change.
+
+Not done here: the Mac.
 
 ## 2026-11-13 -- The mini player's first slice (S-95)
 

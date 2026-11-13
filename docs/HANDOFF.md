@@ -676,7 +676,7 @@ Two switches do the same for windows. `--stedding-welcome[=<step>]` forces the w
     minor text or the accessible name, and `SetMenuItemIcon` draws a vector icon only under
     `features::IsMenuSimplificationEnabled()` (`initializeWithNewMenuIconScheme`) on macOS 26
     or later. `MarkSpaceItem` puts the words in the label on the Mac (`NameWithIsolationMark`,
-    "Work · Independent session") and in minor text elsewhere (sessions S32). A test that
+    "Work · Own session") and in minor text elsewhere (sessions S32). A test that
     compares a Space row's label to the bare name fails on the Mac.
 
 109. **Replacing a tab's contents closes a tab-scoped toast.**

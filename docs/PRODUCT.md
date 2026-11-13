@@ -81,7 +81,7 @@ a `+` (`features/sidebar.md` Y44). The Library is not this foot (§9).
   `⌘W`, the close button and a middle click close the pin (H9). A new pin joins the end of the run (H14).
 - **Favorites** **[1.0]** — Stedding's essentials: tabs visible in *every* Space, above
   the Space title, drawn as cards. Distinct from Pinned Tabs (`features/spaces.md` B6).
-  They are shared by every Space, except in a Space with an Independent session, whose
+  They are shared by every Space, except in a Space with a session of its own, whose
   essentials are its own. That Space shows no shared essential, unless every Space has
   its own session, when the shared ones show in each (`PLAN.md` decision 14; `S-254`,
   GitHub issue 8, ADR 0028). Arc's importer takes the first twelve (import I11), and
@@ -193,8 +193,8 @@ a `+` (`features/sidebar.md` Y44). The Library is not this foot (§9).
   opens its menu (Edit Space…, colour, rename, delete). Drag a Space icon, or Move
   Left / Move Right, to reorder (B27). Deleting a Space asks first. The question names
   the Space, how many tabs it holds and where they go; the tabs stay open and move
-  there. An independent session is wiped, and apps that keep it are named (B5, web
-  apps Wa13). Only the last Space cannot be deleted (`PLAN.md` decision 7).
+  there. A session no other Space uses is wiped with it, and apps that keep it are
+  named (B5, web apps Wa13). Only the last Space cannot be deleted (`PLAN.md` decision 7).
 - **Theme and icon** **[1.0]** — Edit Space, from the Space menu or Settings: any
   emoji, and any colour from a palette or a picker, one colour for both looks or one
   for each of the light and dark looks, tinting the sidebar. Light, dark or automatic
@@ -210,7 +210,8 @@ a `+` (`features/sidebar.md` Y44). The Library is not this foot (§9).
   Settings, so three Work Spaces sign in as one account and two Personal Spaces as
   another (ADR 0034). Giving a Space its own extensions needs a later ADR.
   A Space with its own session is marked wherever Stedding names it as a place to go:
-  a cookie on its chip and after its name (`features/sessions.md` S32, S34,
+  a line in its session's colour under its chip in the open sidebar, and a disc in that
+  colour on its glyph in the rail and after its name (`features/sessions.md` S32, S34,
   `features/spaces.md` B38). Its essentials are its own and stay in its session, and
   the Spaces of one session share them (S8, S47, ADR 0028).
 - **Move tabs between Spaces** **[1.0]** — the command bar's "Move Tab to [Space]", the
@@ -572,7 +573,7 @@ the corner radius (sidebar Y1); Comfortable is the match below.
 
 | Element | What it is |
 |---|---|
-| **Essentials** | The cards above all Spaces: visible whichever Space is active, except a Space with an Independent session, which shows only its own, unless every Space has its own session, when the shared ones show in each (ADR 0028) |
+| **Essentials** | The cards above all Spaces: visible whichever Space is active, except a Space with a session of its own, which shows only its own, unless every Space has its own session, when the shared ones show in each (ADR 0028) |
 | Space title | The active Space's icon and name, when there are two or more Spaces. It opens the Space menu (spaces B16) |
 | Space-pinned tabs | Ordinary rows, favicon and title, pinned within the current Space, and folders of them (folders F38) |
 | Clear line | A hairline with `Clear` at its right end, which closes the Space's unpinned tabs and leaves the pins (spaces B17, B20) |

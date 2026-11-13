@@ -120,14 +120,14 @@ and the folder stays a folder. **Unpin Folder**, or a drag back under the line,
 unpins it. Essentials take no folders.
 
 **Can essentials belong to one Space?**
-In a Space with an **Independent session**, yes. A tab you add to the essentials there
+In a Space with a session of its own, yes. A tab you add to the essentials there
 is that Space’s own, stays signed in with the Space, and shows in that Space alone, or
 in every Space of its session when several share one.
 That Space shows its own essentials and not the shared ones, unless every Space has
 its own session, in which case the shared essentials show in each. In a Space that
 shares the session, essentials are shared, as in Arc. For a tab that belongs to one
 Space, you can also pin it there (⌘D, Ctrl+D): pinned tabs are each Space’s own.
-Turning the Space’s session off makes its essentials its pinned tabs.
+Choosing **Shared** as the Space’s session makes its essentials its pinned tabs.
 
 **Where did the bookmark bar go?**
 Pinned tabs play its part. Imported bookmarks stay bookmarks, and ⇧⌘B (Ctrl+Shift+B)
@@ -232,28 +232,28 @@ to it. Typing "air traffic" in the command bar or in Settings' search finds it t
 
 **Can several Spaces use the same profile?**
 Yes, that is how it starts: every Space shares one profile and one session until you
-give it an Independent session. Several Spaces sharing one separate session, apart from
-the others, is built and not released yet (`S-272` in [BACKLOG.md](../BACKLOG.md)).
+give it a session of its own. Several Spaces can also share one session, apart from the
+others (**Can several Spaces share one sign-in?** below).
 
 **Can one Space hold tabs from different profiles?**
 No, and it is not planned. A Space has one session. Arc did not do this either.
 
 **Can I be signed into the same site twice?**
-Yes. Right-click a Space chip and turn on **Independent session**. That Space keeps
-its own cookies and site data, so another Space can use a different account. The
+Yes. Right-click a Space chip and choose **Session** → **New Session…**. That Space
+keeps its own cookies and site data, so another Space can use a different account. The
 essentials you add there are its own and use its session. Extensions, history and
-passwords stay shared. **Clear Independent Session** on the same menu signs that
-Space out of everything. Settings → Stedding → Spaces → **Give every new Space its
+passwords stay shared. **Clear Session Data…** on the same menu signs that Space out of
+everything. Settings → Stedding → Spaces → **Give every new Space its
 own session** does it for every Space you add, and asks whether to turn it on for
 the Spaces you already have.
 
 **Can several Spaces share one sign-in?**
 Yes. Open a Space's **Edit Space…**, or its row in Settings → Stedding → Spaces, and
 choose its **Session**: Shared, a session you already have, or **New session…**, which
-asks for a name. Three Work Spaces can share a session called Work and two Personal
+asks for a name. The **Session** submenu on a Space's menu has the same choices. Three Work Spaces can share a session called Work and two Personal
 Spaces one called Personal. Spaces in one session share sign-ins, site data and their
 own essentials. Changing a Space's session moves its tabs and signs nothing out of the
-session it left: the sign-ins stay until you clear them. **Clear Independent Session**
+session it left: the sign-ins stay until you clear them. **Clear Session Data…**
 signs every Space in the session out, and says which they are. Deleting a Space erases
 its session only when no other Space uses it, and asks first.
 

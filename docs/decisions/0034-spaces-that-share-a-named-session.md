@@ -1,6 +1,6 @@
 # 0034 — Spaces that share a named session
 
-Status: Accepted (the owner's yes to build it, 2026-11-05, and to take it into the next release once every check passed, 2026-11-10; `BACKLOG.md` S-272). Amends ADR 0019 ("Binding two Spaces to one jar ... needs a later ADR"), ADR 0028 (whose essentials a session has) and ADR 0029 (what sync carries of a session).
+Status: Accepted (the owner's yes to build it, 2026-11-05, and to take it into the next release once every check passed, 2026-11-10; `BACKLOG.md` S-272). Amends ADR 0019 ("Binding two Spaces to one jar ... needs a later ADR"), ADR 0028 (whose essentials a session has) and ADR 0029 (what sync carries of a session). "The words" below were amended on 2026-11-13 (`BACKLOG.md` S-477, GitHub issue 99).
 Date: 2026-11-05
 
 ## Context
@@ -38,6 +38,8 @@ A session id that arrives from outside (a sidebar file, a sync file) is taken on
 "Shared" is the profile's jar. A Space's session is otherwise named by its name. "Independent session" stays what it is on the Space menu, the command bar and the mark: this Space's session is on. "New session…" makes one. Clear Independent Session keeps its name.
 
 Settings' switch on each Space becomes the choice, because one switch cannot say which session. The Space menu's check item and the command bar's row stay: they turn the session the Space has on or off, or give it a new one named after it, as they always have.
+
+Amended 2026-11-13 (`BACKLOG.md` S-477, GitHub issue 99; the owner approved the words that day): "Independent session" is no longer shown. A Space alone on its session is marked "Own session", and a Space on a session other Spaces share "Session: Clients", the session's name. The Space menu's check item became a Session submenu (Shared, each session, New Session…), Clear Independent Session became Clear Session Data…, and the command bar's row became Choose This Space's Session…, which opens Edit Space on the session (`docs/features/sessions.md` S10, S13, S16, S48).
 
 ### What changes a Space's session
 

@@ -40,6 +40,25 @@ one. The Mac was not free; everything was built and tested on the PC.
 Not done here: the Mac, where the Bookmarks menu's row should show a chord given to it, and the
 flow there.
 
+## 2026-11-13 -- The mini player's first slice (S-95)
+
+The owner asked for the next release to bring more of Arc, and chose to start the mini player with
+Chromium's own picture-in-picture window.
+
+- With Settings › Stedding › Pages and menus › "Pop out a playing video when you leave its tab" on
+  (off by default), leaving a tab, or showing another Space, while its video plays with sound puts
+  the video in picture in picture; showing the tab again puts it back, playing on. The window's way
+  back to the tab shows the tab in its Space. A muted or paused video, sound alone and a split's
+  other pane stay put. The command bar has the switch, and "mini player" finds it (patch 0181).
+- Chromium's automatic picture in picture never fired for an ordinary video here: it waits for a
+  Safe Browsing check of the page, and Stedding has none (S-75).
+- On win-release the seven `MiniPlayerTest` tests passed three times of three, and the whole
+  browser suite (947) passed. The first run caught two faults of the change, both fixed: "picture
+  in picture" as a search word gave the bar a second row beside the key's, and the Settings page
+  could not read the new preference until it was on settingsPrivate's list.
+
+Not done here: the Mac, and a look on a real build with a real video.
+
 ## 2026-11-13 -- The row's bar in macOS full screen (S-471)
 
 The owner sent a full-screen capture from beta 19: the address row's bar still started left of the

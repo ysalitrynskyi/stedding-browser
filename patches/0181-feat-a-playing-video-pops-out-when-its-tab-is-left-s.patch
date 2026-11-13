@@ -1,0 +1,726 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Fri, 13 Nov 2026 12:03:36 -0500
+Subject: feat: a playing video pops out when its tab is left (S-95)
+
+With Settings > Stedding > Pages and menus > "Pop out a playing video
+when you leave its tab" on, off by default, leaving a tab whose page
+plays a video with sound puts the video in picture in picture, as the
+picture-in-picture key does, and showing the tab again puts it back in
+the page, playing on (docs/features/player.md Mp2, Mp4; settings T61).
+A muted or paused video, sound alone and a split's other pane on screen
+are not left. The command bar has the switch, and "mini player" finds
+it (Mp6).
+
+Why: GitHub discussion 104, Arc's mini player. Chromium's automatic
+picture in picture waits for a Safe Browsing check of the page, and
+Stedding has no Safe Browsing (BACKLOG S-75), so it never fired for an
+ordinary video.
+Removable when: never; Stedding's own player. Mp1 moves the video into
+the window's card in place of Chromium's window.
+---
+ .../api/settings_private/prefs_util.cc        |   3 +
+ .../stedding_page/stedding_page.html.ts       |   8 +
+ .../ui/browser_window/internal/BUILD.gn       |   1 +
+ .../internal/browser_window_features.cc       |   7 +
+ .../public/browser_window_features.h          |   3 +
+ chrome/browser/ui/stedding/BUILD.gn           |  19 ++
+ chrome/browser/ui/stedding/find_words.cc      |   3 +
+ chrome/browser/ui/stedding/stedding_prefs.cc  |   1 +
+ chrome/browser/ui/stedding/stedding_prefs.h   |   4 +
+ .../ui/stedding/stedding_prefs_unittest.cc    |   2 +-
+ chrome/browser/ui/stedding/video_pop_out.cc   | 141 +++++++++++
+ chrome/browser/ui/stedding/video_pop_out.h    |  67 ++++++
+ .../ui/views/commandbar/command_bar_view.cc   |   2 +
+ .../browser/ui/webui/settings/settings_ui.cc  |   7 +
+ chrome/test/stedding/BUILD.gn                 |   2 +
+ .../test/stedding/mini_player_browsertest.cc  | 218 ++++++++++++++++++
+ .../stedding/settings_spaces_browsertest.cc   |   2 +-
+ 17 files changed, 488 insertions(+), 2 deletions(-)
+ create mode 100644 chrome/browser/ui/stedding/video_pop_out.cc
+ create mode 100644 chrome/browser/ui/stedding/video_pop_out.h
+ create mode 100644 chrome/test/stedding/mini_player_browsertest.cc
+
+diff --git a/chrome/browser/extensions/api/settings_private/prefs_util.cc b/chrome/browser/extensions/api/settings_private/prefs_util.cc
+index b8da369acbbff..7bc749bee368e 100644
+--- a/chrome/browser/extensions/api/settings_private/prefs_util.cc
++++ b/chrome/browser/extensions/api/settings_private/prefs_util.cc
+@@ -461,6 +461,9 @@ const PrefsUtil::TypedPrefMap& PrefsUtil::GetAllowlistedKeys() {
+   // toolbar T55, settings T51 (BACKLOG S-392).
+   (*s_allowlist)[stedding::prefs::kCameraRowFullscreen] =
+       settings_api::PrefType::kBoolean;
++  // player Mp2, settings T61 (BACKLOG S-95).
++  (*s_allowlist)[stedding::prefs::kPlayerPopOut] =
++      settings_api::PrefType::kBoolean;
+ #if BUILDFLAG(IS_MAC)
+   // settings T60 (GitHub issue 88): the Mac menu's Warn Before Quitting, in
+   // local state, as a switch of the page too.
+diff --git a/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts b/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
+index 114dbe2247c68..4410a5b4b213c 100644
+--- a/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
++++ b/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
+@@ -747,6 +747,14 @@ export function getHtml(this: SettingsSteddingPageElement) {
+       label="$i18n{steddingConfirmToQuitLabel}"
+       sub-label="$i18n{steddingConfirmToQuitSubLabel}">
+   </settings-toggle-button>` : ''}
++  <settings-toggle-button
++      id="playerPopOut"
++      class="hr"
++      search-hint=" $i18n{steddingFindPlayerPopOut}"
++      pref-key="stedding.player.pop_out"
++      label="$i18n{steddingPlayerPopOutLabel}"
++      sub-label="$i18n{steddingPlayerPopOutSubLabel}">
++  </settings-toggle-button>
+   <settings-toggle-button
+       id="darkPages"
+       class="hr"
+diff --git a/chrome/browser/ui/browser_window/internal/BUILD.gn b/chrome/browser/ui/browser_window/internal/BUILD.gn
+index 284f430c14d27..8db0b29c71783 100644
+--- a/chrome/browser/ui/browser_window/internal/BUILD.gn
++++ b/chrome/browser/ui/browser_window/internal/BUILD.gn
+@@ -104,6 +104,7 @@ source_set("internal") {
+       "//chrome/browser/ui/stedding:address_row",
+       "//chrome/browser/ui/stedding:little_mark",
+       "//chrome/browser/ui/stedding:private_window",
++      "//chrome/browser/ui/stedding:video_pop_out",
+       "//chrome/browser/ui/stedding/theme",
+       "//chrome/browser/ui/bookmarks",
+       "//chrome/browser/ui/browser_active_state_manager",
+diff --git a/chrome/browser/ui/browser_window/internal/browser_window_features.cc b/chrome/browser/ui/browser_window/internal/browser_window_features.cc
+index 6c911960054f3..bdd4392ae1689 100644
+--- a/chrome/browser/ui/browser_window/internal/browser_window_features.cc
++++ b/chrome/browser/ui/browser_window/internal/browser_window_features.cc
+@@ -98,6 +98,7 @@
+ #include "chrome/browser/ui/stedding/little_mark.h"
+ #include "chrome/browser/ui/stedding/private_window.h"
+ #include "chrome/browser/ui/stedding/address_row.h"
++#include "chrome/browser/ui/stedding/video_pop_out.h"
+ #include "chrome/browser/ui/stedding/theme/page_theme_color_controller.h"
+ #include "chrome/browser/ui/sync/browser_synced_window_delegate.h"
+ #include "chrome/browser/ui/tabs/organizer/organizer_panel_controller.h"
+@@ -316,6 +317,12 @@ void BrowserWindowFeatures::Init(BrowserWindowInterface* browser) {
+         std::make_unique<stedding::PageThemeColorController>(*browser);
+   }
+ 
++  // player Mp2, Mp4 (BACKLOG S-95): a playing video pops out of a tab left
++  // in a tabbed window, a private one too.
++  if (browser->GetType() == BrowserWindowInterface::Type::TYPE_NORMAL) {
++    video_pop_out_ = std::make_unique<stedding::VideoPopOut>(*browser);
++  }
++
+   if (base::FeatureList::IsEnabled(features::kGlicActorUi) &&
+       features::kGlicActorUiBorderGlow.Get()) {
+     actor_border_view_controller_ =
+diff --git a/chrome/browser/ui/browser_window/public/browser_window_features.h b/chrome/browser/ui/browser_window/public/browser_window_features.h
+index 542b86dc50362..a30bae20ef3dc 100644
+--- a/chrome/browser/ui/browser_window/public/browser_window_features.h
++++ b/chrome/browser/ui/browser_window/public/browser_window_features.h
+@@ -121,6 +121,7 @@ class SpaceModel;
+ 
+ namespace stedding {
+ class AddressRow;
++class VideoPopOut;
+ class ClosedTabsUndo;
+ class PageThemeColorController;
+ class TabArchiver;
+@@ -361,6 +362,8 @@ class BrowserWindowFeatures {
+   // private V10 (GitHub issue 83): the address row's rules in a private or
+   // Guest window, which has no Space model to own them either.
+   std::unique_ptr<stedding::AddressRow> address_row_;
++  // player Mp2, Mp4 (BACKLOG S-95): a playing video pops out of a tab left.
++  std::unique_ptr<stedding::VideoPopOut> video_pop_out_;
+   std::unique_ptr<ActorBorderViewController> actor_border_view_controller_;
+   std::unique_ptr<ttc::AiOverlayDialogController> ai_overlay_dialog_controller_;
+ 
+diff --git a/chrome/browser/ui/stedding/BUILD.gn b/chrome/browser/ui/stedding/BUILD.gn
+index cfc0c3bf374c3..ed0b0571c96de 100644
+--- a/chrome/browser/ui/stedding/BUILD.gn
++++ b/chrome/browser/ui/stedding/BUILD.gn
+@@ -247,6 +247,25 @@ source_set("media_keys") {
+   ]
+ }
+ 
++# docs/features/player.md Mp2, Mp4 (BACKLOG S-95): a playing video pops out of
++# a tab left, and goes back when the tab shows again.
++source_set("video_pop_out") {
++  public = [ "video_pop_out.h" ]
++  sources = [ "video_pop_out.cc" ]
++  public_deps = [ "//chrome/browser/ui/tabs:tab_strip_model_observer" ]
++  deps = [
++    ":prefs",
++    "//base",
++    "//chrome/browser/profiles:profile",
++    "//chrome/browser/ui/browser_window",
++    "//chrome/browser/ui/tabs:tab_strip",
++    "//components/prefs",
++    "//components/tabs:public",
++    "//content/public/browser",
++    "//services/media_session/public/mojom",
++  ]
++}
++
+ # docs/features/commandbar.md K28 (BACKLOG S-116): the services' blank
+ # documents the command bar offers. Pure data, so it takes only //base.
+ # docs/features/settings.md T58, commandbar.md K39: the words another browser
+diff --git a/chrome/browser/ui/stedding/find_words.cc b/chrome/browser/ui/stedding/find_words.cc
+index 2eb143e2e23d4..a5df2e7886ed1 100644
+--- a/chrome/browser/ui/stedding/find_words.cc
++++ b/chrome/browser/ui/stedding/find_words.cc
+@@ -20,6 +20,9 @@ constexpr FindWords kFindWords[] = {
+      u"auto archive auto-archive"},
+     {u"Show the Address in the Sidebar", "sidebar", "steddingFindAddress",
+      u"url bar"},
++    // player Mp6 (BACKLOG S-95): Arc's name for it.
++    {u"Pop Out Playing Videos", "pages", "steddingFindPlayerPopOut",
++     u"mini player miniplayer"},
+ };
+ 
+ }  // namespace
+diff --git a/chrome/browser/ui/stedding/stedding_prefs.cc b/chrome/browser/ui/stedding/stedding_prefs.cc
+index 62418b08ad7aa..cb094d7f5a538 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs.cc
++++ b/chrome/browser/ui/stedding/stedding_prefs.cc
+@@ -118,6 +118,7 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
+   registry->RegisterBooleanPref(kSpacesOwnSession, false);
+   registry->RegisterBooleanPref(kFullscreenHint, false);
+   registry->RegisterBooleanPref(kCameraRowFullscreen, false);
++  registry->RegisterBooleanPref(kPlayerPopOut, false);
+   registry->RegisterBooleanPref(kTabsTidyTitles, false);
+   registry->RegisterBooleanPref(kDownloadsTidyNames, false);
+   registry->RegisterListPref(kArcImportedIds);
+diff --git a/chrome/browser/ui/stedding/stedding_prefs.h b/chrome/browser/ui/stedding/stedding_prefs.h
+index 51a0358cc5924..35216a596912d 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs.h
++++ b/chrome/browser/ui/stedding/stedding_prefs.h
+@@ -311,6 +311,10 @@ inline constexpr char kFullscreenHint[] = "stedding.window.fullscreen_hint";
+ // 2026-11-03).
+ inline constexpr char kCameraRowFullscreen[] =
+     "stedding.window.camera_row_fullscreen";
++// player Mp2, settings T61 (BACKLOG S-95): leaving a tab whose page plays a
++// video with sound puts the video in picture in picture, and showing the tab
++// puts it back. Off by default (the owner, discussion 104).
++inline constexpr char kPlayerPopOut[] = "stedding.player.pop_out";
+ // tabs R65, sidebar-panels Pn17, settings T52, T53 (BACKLOG S-398): a pinned
+ // tab's row tidies its page's title, and a downloaded file whose name says
+ // nothing takes its page's title, by rules on the device (ADR 0020). Both off
+diff --git a/chrome/browser/ui/stedding/stedding_prefs_unittest.cc b/chrome/browser/ui/stedding/stedding_prefs_unittest.cc
+index e5bd43b54b06f..13783096bc08f 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs_unittest.cc
++++ b/chrome/browser/ui/stedding/stedding_prefs_unittest.cc
+@@ -42,7 +42,7 @@ TEST(SteddingPrefsTest, EveryPreferenceRegistersWithItsDefault) {
+         kSpaceNotices, kFullscreenHint, kNestChildTabs, kSpacesOwnSession,
+         kMarkDriftedPins, kSidebarAddressInSidebar, kCameraRowFullscreen,
+         kTabsTidyTitles, kDownloadsTidyNames, kLittleAsPeek,
+-        kCollapseKeepsOpenPins}) {
++        kCollapseKeepsOpenPins, kPlayerPopOut}) {
+     ASSERT_TRUE(service.FindPreference(name)) << name;
+     EXPECT_FALSE(service.GetBoolean(name)) << name;
+   }
+diff --git a/chrome/browser/ui/stedding/video_pop_out.cc b/chrome/browser/ui/stedding/video_pop_out.cc
+new file mode 100644
+index 0000000000000..f050a7d50036a
+--- /dev/null
++++ b/chrome/browser/ui/stedding/video_pop_out.cc
+@@ -0,0 +1,141 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/stedding/video_pop_out.h"
++
++#include <algorithm>
++#include <vector>
++
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/stedding/stedding_prefs.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "components/prefs/pref_service.h"
++#include "components/tabs/public/split_tab_data.h"
++#include "components/tabs/public/tab_interface.h"
++#include "content/public/browser/media_session.h"
++#include "content/public/browser/web_contents.h"
++#include "services/media_session/public/mojom/media_session.mojom.h"
++
++namespace stedding {
++
++namespace {
++
++using media_session::mojom::MediaAudioVideoState;
++using media_session::mojom::MediaPictureInPictureState;
++using media_session::mojom::MediaPlaybackState;
++using media_session::mojom::MediaSessionAction;
++
++bool ShowsPictureInPicture(content::WebContents* contents) {
++  return contents->HasPictureInPictureVideo() ||
++         contents->HasPictureInPictureDocument();
++}
++
++}  // namespace
++
++VideoPopOut::VideoPopOut(BrowserWindowInterface& browser) : browser_(browser) {
++  if (TabStripModel* const strip = browser.GetTabStripModel()) {
++    strip->AddObserver(this);
++  }
++}
++
++VideoPopOut::~VideoPopOut() = default;
++
++// static
++bool VideoPopOut::PlaysVideoWithSound(content::WebContents* contents) {
++  if (!contents || contents->IsAudioMuted() ||
++      ShowsPictureInPicture(contents)) {
++    return false;
++  }
++  // GetIfExists: asking creates no session for a page that never played.
++  content::MediaSession* const session =
++      content::MediaSession::GetIfExists(contents);
++  if (!session) {
++    return false;
++  }
++  const media_session::mojom::MediaSessionInfoPtr info =
++      session->GetMediaSessionInfoSync();
++  if (!info || info->playback_state != MediaPlaybackState::kPlaying ||
++      info->muted ||
++      info->picture_in_picture_state ==
++          MediaPictureInPictureState::kInPictureInPicture ||
++      !info->audio_video_states ||
++      !std::ranges::contains(*info->audio_video_states,
++                             MediaAudioVideoState::kAudioVideo)) {
++    return false;
++  }
++  // The signal Chromium's media controls draw their picture-in-picture
++  // button from, as the key reads it (Mp5).
++  return std::ranges::contains(session->GetMediaSessionActionsSync(),
++                               MediaSessionAction::kEnterPictureInPicture);
++}
++
++void VideoPopOut::OnTabStripModelChanged(
++    TabStripModel* tab_strip_model,
++    const TabStripModelChange& change,
++    const TabStripSelectionChange& selection) {
++  if (!selection.active_tab_changed()) {
++    return;
++  }
++  // Mp4: its tab is shown again, and the video goes back into the page,
++  // playing on.
++  if (popped_ && IsShown(popped_.get())) {
++    content::WebContents* const page = popped_.get();
++    popped_.reset();
++    if (ShowsPictureInPicture(page)) {
++      content::MediaSession::Get(page)->ExitPictureInPicture();
++    }
++  }
++  if (!IsOn()) {
++    return;
++  }
++  content::WebContents* const left = selection.old_contents;
++  if (!left || left == selection.new_contents || IsShown(left)) {
++    return;
++  }
++  // A tab being closed is not left: its page goes with it.
++  if (change.type() == TabStripModelChange::kRemoved) {
++    for (const TabStripModelChange::RemovedTab& removed :
++         change.GetRemove()->contents) {
++      if (removed.contents == left) {
++        return;
++      }
++    }
++  }
++  if (!PlaysVideoWithSound(left)) {
++    return;
++  }
++  content::MediaSession::Get(left)->EnterPictureInPicture();
++  popped_ = left->GetWeakPtr();
++}
++
++bool VideoPopOut::IsShown(content::WebContents* contents) const {
++  TabStripModel* const strip = browser_->GetTabStripModel();
++  tabs::TabInterface* const active = strip ? strip->GetActiveTab() : nullptr;
++  if (!active || !contents) {
++    return false;
++  }
++  if (active->GetContents() == contents) {
++    return true;
++  }
++  if (!active->IsSplit()) {
++    return false;
++  }
++  split_tabs::SplitTabData* const split =
++      strip->GetSplitData(*active->GetSplit());
++  if (!split) {
++    return false;
++  }
++  const std::vector<tabs::TabInterface*> panes = split->ListTabs();
++  return std::ranges::any_of(panes, [contents](tabs::TabInterface* pane) {
++    return pane->GetContents() == contents;
++  });
++}
++
++bool VideoPopOut::IsOn() const {
++  Profile* const profile = browser_->GetProfile();
++  return profile && profile->GetPrefs()->GetBoolean(prefs::kPlayerPopOut);
++}
++
++}  // namespace stedding
+diff --git a/chrome/browser/ui/stedding/video_pop_out.h b/chrome/browser/ui/stedding/video_pop_out.h
+new file mode 100644
+index 0000000000000..769e1a60a544b
+--- /dev/null
++++ b/chrome/browser/ui/stedding/video_pop_out.h
+@@ -0,0 +1,67 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_STEDDING_VIDEO_POP_OUT_H_
++#define CHROME_BROWSER_UI_STEDDING_VIDEO_POP_OUT_H_
++
++#include "base/memory/raw_ref.h"
++#include "base/memory/weak_ptr.h"
++#include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
++
++class BrowserWindowInterface;
++
++namespace content {
++class WebContents;
++}
++
++namespace stedding {
++
++// docs/features/player.md Mp2, Mp4 (BACKLOG S-95): with "Pop out a playing
++// video when you leave its tab" on (`stedding.player.pop_out`), leaving a
++// tab whose page plays a video with sound puts that video in picture in
++// picture, as the picture-in-picture key does (Mp5), and showing the tab
++// again puts it back in the page. Chromium's own automatic picture in
++// picture never fires for such a video here: it waits for a Safe Browsing
++// check of the page, and Stedding has none (BACKLOG S-75).
++//
++// One per tabbed window. It watches which tab is active: a tab chosen in the
++// strip, a Space shown (which shows another tab), a tab closed.
++class VideoPopOut : public TabStripModelObserver {
++ public:
++  explicit VideoPopOut(BrowserWindowInterface& browser);
++  VideoPopOut(const VideoPopOut&) = delete;
++  VideoPopOut& operator=(const VideoPopOut&) = delete;
++  ~VideoPopOut() override;
++
++  // Whether `contents` plays a video with sound that picture in picture can
++  // take now: playing, a player with both sound and picture, neither the tab
++  // nor the page muted, and the page's media session offering picture in
++  // picture. Not while the page already shows picture in picture.
++  static bool PlaysVideoWithSound(content::WebContents* contents);
++
++  // The page whose video this window popped out, while it is out.
++  content::WebContents* popped_out_for_testing() const {
++    return popped_.get();
++  }
++
++ private:
++  // TabStripModelObserver:
++  void OnTabStripModelChanged(
++      TabStripModel* tab_strip_model,
++      const TabStripModelChange& change,
++      const TabStripSelectionChange& selection) override;
++
++  // Whether `contents` is on screen in this window: the active tab's page,
++  // or the other pane of its split.
++  bool IsShown(content::WebContents* contents) const;
++
++  bool IsOn() const;
++
++  const raw_ref<BrowserWindowInterface> browser_;
++  base::WeakPtr<content::WebContents> popped_;
++};
++
++}  // namespace stedding
++
++#endif  // CHROME_BROWSER_UI_STEDDING_VIDEO_POP_OUT_H_
+diff --git a/chrome/browser/ui/views/commandbar/command_bar_view.cc b/chrome/browser/ui/views/commandbar/command_bar_view.cc
+index ecb3276d43cb7..4b943d84565f5 100644
+--- a/chrome/browser/ui/views/commandbar/command_bar_view.cc
++++ b/chrome/browser/ui/views/commandbar/command_bar_view.cc
+@@ -1522,6 +1522,8 @@ void CommandBarView::BuildActions() {
+           {stedding::prefs::kCameraRowFullscreen,
+            u"Use the row beside the camera in full screen"},
+ #endif
++          // player Mp2, Mp6 (BACKLOG S-95).
++          {stedding::prefs::kPlayerPopOut, u"Pop Out Playing Videos"},
+           {stedding::prefs::kNewTabShowHint,
+            u"Command-bar hint on the new tab page"},
+           {stedding::prefs::kNewTabShowShortcuts,
+diff --git a/chrome/browser/ui/webui/settings/settings_ui.cc b/chrome/browser/ui/webui/settings/settings_ui.cc
+index da2bd7b5e0da9..5bdc6614d8793 100644
+--- a/chrome/browser/ui/webui/settings/settings_ui.cc
++++ b/chrome/browser/ui/webui/settings/settings_ui.cc
+@@ -1764,6 +1764,13 @@ SettingsUI::SettingsUI(content::WebUI* web_ui)
+       "A tap of \u2318Q shows a reminder, and holding the keys quits. Off, "
+       "\u2318Q quits at once. The Stedding menu\u2019s Warn Before Quitting "
+       "is the same switch.");
++  // player Mp2, settings T61 (BACKLOG S-95).
++  html_source->AddString("steddingPlayerPopOutLabel",
++                         "Pop out a playing video when you leave its tab");
++  html_source->AddString(
++      "steddingPlayerPopOutSubLabel",
++      "A video playing with sound moves to a small window that stays on "
++      "top, and comes back when you return to its tab.");
+   html_source->AddString("steddingCameraRowFullscreenLabel",
+                          "Use the row beside the camera in full screen");
+   html_source->AddString(
+diff --git a/chrome/test/stedding/BUILD.gn b/chrome/test/stedding/BUILD.gn
+index 24271d8dfd80b..9346024ac761b 100644
+--- a/chrome/test/stedding/BUILD.gn
++++ b/chrome/test/stedding/BUILD.gn
+@@ -56,6 +56,7 @@ test("stedding_browser_tests") {
+     "make_app_browsertest.cc",
+     "make_app_quiet_browsertest.cc",
+     "media_keys_browsertest.cc",
++    "mini_player_browsertest.cc",
+     "motion_frames_browsertest.cc",
+     "peek_browsertest.cc",
+     "peek_over_page_browsertest.cc",
+@@ -223,6 +224,7 @@ test("stedding_browser_tests") {
+     "//components/subresource_filter/core/browser",
+     "//chrome/browser/ui/stedding:little_window",
+     "//chrome/browser/ui/stedding:media_keys",
++    "//chrome/browser/ui/stedding:video_pop_out",
+     "//chrome/browser/ui/stedding:motion",
+     # docs/features/sidebar-panels.md: the panels, the Trash's stand-in, the
+     # Archived row's glyph, a dangerous download and the clipboard's files.
+diff --git a/chrome/test/stedding/mini_player_browsertest.cc b/chrome/test/stedding/mini_player_browsertest.cc
+new file mode 100644
+index 0000000000000..0fa6494a40acf
+--- /dev/null
++++ b/chrome/test/stedding/mini_player_browsertest.cc
+@@ -0,0 +1,218 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++// docs/features/player.md Mp2, Mp4 (BACKLOG S-95): with "Pop out a playing
++// video when you leave its tab" on, a video playing with sound goes to
++// picture in picture when its tab is left, and back into the page when the
++// tab is shown again.
++
++#include <string>
++
++#include "base/command_line.h"
++#include "base/run_loop.h"
++#include "base/task/single_thread_task_runner.h"
++#include "base/test/run_until.h"
++#include "base/time/time.h"
++#include "chrome/browser/picture_in_picture/picture_in_picture_window_manager.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/spaces/space_model.h"
++#include "chrome/browser/ui/stedding/stedding_prefs.h"
++#include "chrome/browser/ui/stedding/video_pop_out.h"
++#include "chrome/browser/ui/tabs/split_tab_metrics.h"
++#include "chrome/browser/ui/tabs/tab_enums.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "chrome/test/base/in_process_browser_test.h"
++#include "chrome/test/base/ui_test_utils.h"
++#include "components/prefs/pref_service.h"
++#include "components/split_tabs/split_tab_visual_data.h"
++#include "components/tabs/public/tab_interface.h"
++#include "content/public/browser/web_contents.h"
++#include "content/public/test/browser_test.h"
++#include "content/public/test/browser_test_utils.h"
++#include "content/public/test/media_start_stop_observer.h"
++#include "media/base/media_switches.h"
++#include "net/test/embedded_test_server/embedded_test_server.h"
++#include "third_party/skia/include/core/SkColor.h"
++#include "ui/base/window_open_disposition.h"
++
++namespace {
++
++constexpr char kVideoPage[] = "/media/session/video-with-metadata.html";
++
++class MiniPlayerTest : public InProcessBrowserTest {
++ protected:
++  void SetUpCommandLine(base::CommandLine* command_line) override {
++    InProcessBrowserTest::SetUpCommandLine(command_line);
++    command_line->AppendSwitchASCII(
++        switches::kAutoplayPolicy,
++        switches::autoplay::kNoUserGestureRequiredPolicy);
++  }
++
++  void SetUpOnMainThread() override {
++    InProcessBrowserTest::SetUpOnMainThread();
++    ASSERT_TRUE(embedded_test_server()->Start());
++  }
++
++  TabStripModel* tabs() { return browser()->GetTabStripModel(); }
++  int Index(tabs::TabInterface* tab) { return tabs()->GetIndexOfTab(tab); }
++
++  void TurnOn() {
++    browser()->GetProfile()->GetPrefs()->SetBoolean(
++        stedding::prefs::kPlayerPopOut, true);
++  }
++
++  // A new tab on screen showing `path` from the test server, loaded.
++  tabs::TabInterface* Open(const std::string& path) {
++    EXPECT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
++        browser(), embedded_test_server()->GetURL(path),
++        WindowOpenDisposition::NEW_FOREGROUND_TAB,
++        ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
++    return tabs()->GetActiveTab();
++  }
++
++  // Plays the page's video, and waits until it counts as a video with sound
++  // that picture in picture can take: the session's state follows the player
++  // a moment later.
++  void Play(tabs::TabInterface* tab) {
++    content::MediaStartStopObserver started(
++        tab->GetContents(), content::MediaStartStopObserver::Type::kStart);
++    ASSERT_TRUE(content::ExecJs(tab->GetContents(), "play()"));
++    started.Wait();
++    ASSERT_TRUE(base::test::RunUntil([&]() {
++      return stedding::VideoPopOut::PlaysVideoWithSound(tab->GetContents());
++    })) << "the page never counted as playing a video with sound";
++  }
++
++  static bool Out(tabs::TabInterface* tab) {
++    return tab->GetContents()->HasPictureInPictureVideo();
++  }
++
++  static bool Paused(tabs::TabInterface* tab) {
++    return content::EvalJs(tab->GetContents(),
++                           "document.getElementById('video').paused")
++        .ExtractBool();
++  }
++
++  // Whether the video is still in its page a second later: a pop-out comes
++  // within a few turns of the loop.
++  static bool StaysIn(tabs::TabInterface* tab) {
++    base::RunLoop wait;
++    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
++        FROM_HERE, wait.QuitClosure(), base::Seconds(1));
++    wait.Run();
++    return !Out(tab);
++  }
++};
++
++// Mp2: off on a fresh profile, and while off nothing pops out.
++IN_PROC_BROWSER_TEST_F(MiniPlayerTest, OffByDefault) {
++  EXPECT_FALSE(browser()->GetProfile()->GetPrefs()->GetBoolean(
++      stedding::prefs::kPlayerPopOut));
++  tabs::TabInterface* const video = Open(kVideoPage);
++  ASSERT_NO_FATAL_FAILURE(Play(video));
++  Open("/title1.html");
++  EXPECT_TRUE(StaysIn(video)) << "a video popped out with the setting off";
++}
++
++// Mp2: on, leaving the tab pops the video out, and it keeps playing.
++IN_PROC_BROWSER_TEST_F(MiniPlayerTest, LeavingAPlayingVideoPopsItOut) {
++  TurnOn();
++  tabs::TabInterface* const video = Open(kVideoPage);
++  ASSERT_NO_FATAL_FAILURE(Play(video));
++  Open("/title1.html");
++  EXPECT_TRUE(base::test::RunUntil([&]() { return Out(video); }))
++      << "leaving the tab did not pop the video out";
++  EXPECT_FALSE(Paused(video));
++}
++
++// Mp4: showing the tab again puts the video back in the page, playing on.
++IN_PROC_BROWSER_TEST_F(MiniPlayerTest, ComingBackPutsItBack) {
++  TurnOn();
++  tabs::TabInterface* const video = Open(kVideoPage);
++  ASSERT_NO_FATAL_FAILURE(Play(video));
++  Open("/title1.html");
++  ASSERT_TRUE(base::test::RunUntil([&]() { return Out(video); }));
++  tabs()->ActivateTabAt(Index(video));
++  EXPECT_TRUE(base::test::RunUntil([&]() { return !Out(video); }))
++      << "the video stayed out after its tab came back";
++  EXPECT_FALSE(Paused(video)) << "the video stopped when it came back";
++}
++
++// Mp2: a muted tab and a paused video stay where they are.
++IN_PROC_BROWSER_TEST_F(MiniPlayerTest, AMutedOrPausedVideoStays) {
++  TurnOn();
++  {
++    SCOPED_TRACE("muted");
++    tabs::TabInterface* const video = Open(kVideoPage);
++    ASSERT_NO_FATAL_FAILURE(Play(video));
++    video->GetContents()->SetAudioMuted(true);
++    Open("/title1.html");
++    EXPECT_TRUE(StaysIn(video)) << "a muted video popped out";
++  }
++  {
++    SCOPED_TRACE("paused");
++    tabs::TabInterface* const video = Open(kVideoPage);
++    ASSERT_NO_FATAL_FAILURE(Play(video));
++    ASSERT_TRUE(content::ExecJs(video->GetContents(),
++                                "document.getElementById('video').pause()"));
++    ASSERT_TRUE(base::test::RunUntil([&]() {
++      return !stedding::VideoPopOut::PlaysVideoWithSound(video->GetContents());
++    }));
++    Open("/title1.html");
++    EXPECT_TRUE(StaysIn(video)) << "a paused video popped out";
++  }
++}
++
++// Mp2: a split's other pane is still on screen, so choosing it does not
++// leave the video's pane.
++IN_PROC_BROWSER_TEST_F(MiniPlayerTest, ASplitsOtherPaneIsNotLeft) {
++  TurnOn();
++  tabs::TabInterface* const page = Open("/title1.html");
++  tabs::TabInterface* const video = Open(kVideoPage);
++  ASSERT_NO_FATAL_FAILURE(Play(video));
++  tabs()->AddToNewSplit({Index(page)}, split_tabs::SplitTabVisualData(),
++                        split_tabs::SplitTabCreatedSource::kTabContextMenu);
++  ASSERT_TRUE(video->IsSplit() && page->IsSplit());
++  tabs()->ActivateTabAt(Index(page));
++  ASSERT_EQ(page, tabs()->GetActiveTab());
++  EXPECT_TRUE(StaysIn(video)) << "choosing the other pane popped it out";
++}
++
++// Mp2, Mp4: showing another Space leaves the tab; the window's way back to
++// the tab shows the tab in its Space, and the video goes back in.
++IN_PROC_BROWSER_TEST_F(MiniPlayerTest, BackToTabShowsItsSpace) {
++  TurnOn();
++  spaces::SpaceModel* const model = spaces::SpaceModel::From(browser());
++  ASSERT_TRUE(model);
++  const spaces::SpaceId home = model->active_id();
++  tabs::TabInterface* const video = Open(kVideoPage);
++  ASSERT_NO_FATAL_FAILURE(Play(video));
++  const spaces::SpaceId work = model->AddSpace("Work", SK_ColorBLUE)->id();
++  ASSERT_TRUE(model->SetActiveSpace(work));
++  ASSERT_TRUE(base::test::RunUntil([&]() { return Out(video); }))
++      << "showing another Space did not pop the video out";
++
++  PictureInPictureWindowManager::GetInstance()->FocusInitiator();
++  EXPECT_TRUE(base::test::RunUntil([&]() {
++    return model->active_id() == home && tabs()->GetActiveTab() == video;
++  })) << "back to the tab did not show it in its Space";
++  EXPECT_TRUE(base::test::RunUntil([&]() { return !Out(video); }))
++      << "the video stayed out once its tab showed";
++}
++
++// Mp4: closing the tab closes the window its video went to.
++IN_PROC_BROWSER_TEST_F(MiniPlayerTest, ClosingTheTabClosesThePlayer) {
++  TurnOn();
++  tabs::TabInterface* const video = Open(kVideoPage);
++  ASSERT_NO_FATAL_FAILURE(Play(video));
++  Open("/title1.html");
++  ASSERT_TRUE(base::test::RunUntil([&]() { return Out(video); }));
++  tabs()->CloseWebContentsAt(Index(video), TabCloseTypes::CLOSE_USER_GESTURE);
++  EXPECT_TRUE(base::test::RunUntil([&]() {
++    return !PictureInPictureWindowManager::GetInstance()->GetWebContents();
++  })) << "the player outlived its tab";
++}
++
++}  // namespace
+diff --git a/chrome/test/stedding/settings_spaces_browsertest.cc b/chrome/test/stedding/settings_spaces_browsertest.cc
+index 5c7d8bd7f8364..be20d3c235f95 100644
+--- a/chrome/test/stedding/settings_spaces_browsertest.cc
++++ b/chrome/test/stedding/settings_spaces_browsertest.cc
+@@ -533,7 +533,7 @@ IN_PROC_BROWSER_TEST_F(SettingsSpacesTest, ThePageBindsEveryControl) {
+          {"stedding.tabs.undo_toast", "stedding.spaces.notices",
+           "stedding.window.fullscreen_hint", "stedding.pins.mark_drifted",
+           "stedding.window.camera_row_fullscreen", "stedding.tabs.tidy_titles",
+-          "stedding.downloads.tidy_names"}) {
++          "stedding.downloads.tidy_names", "stedding.player.pop_out"}) {
+       EXPECT_EQ(false,
+                 content::EvalJs(
+                     page, content::JsReplace("chrome.settingsPrivate.getPref($1)"

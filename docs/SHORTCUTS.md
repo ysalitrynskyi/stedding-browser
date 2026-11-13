@@ -100,6 +100,8 @@ Stedding takes a few chords Chromium uses for other commands. The old command ke
 
 Muting a tab, collapsing every folder, picture in picture and clearing a site's cookies (⌃M, ⇧⌘E, ⌥⇧⌘P and ⌥⇧⌘R; Ctrl+M, Ctrl+Shift+E, Ctrl+Alt+Shift+P and Ctrl+Alt+Shift+R) take no Chromium chord on either platform.
 
+Bookmark This Tab has no key, since ⌘D (Ctrl+D) pins the tab. It is a row of the command bar's actions mode: type "Bookmark". To give it a key, add one to its row in Settings → Stedding → Shortcuts, under Page.
+
 Running an extension is ⌘E on the Mac, as in Arc, and Ctrl+Alt+E on Windows, where Ctrl+E stays the search key. Actions mode also lists each extension, **Show Media Controls** while something plays, and **View Site Information**.
 
 Independent session is not a shortcut. It is a check item on the Space chip menu, an **Independent Session** row in the command bar's actions mode, and a choice of session in Edit Space and on each Space in Settings → Stedding → Spaces. It is off at first.

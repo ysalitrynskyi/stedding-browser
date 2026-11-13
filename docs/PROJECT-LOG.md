@@ -2,6 +2,28 @@
 
 What was built, newest first. Nothing here is needed to do a task: `AGENTS.md` carries what is true now, `BACKLOG.md` the order of work, `PLAN.md` the owner's decisions. This file was the "State of the project" section of `AGENTS.md` until 2026-09-30. This log starts at 2026-10-15. Closed work from before that is the table in [docs/history/archive.md](history/archive.md).
 
+## 2026-11-13 -- Bookmarks and the welcome flow from the keyboard (S-475, GitHub issue 112)
+
+A new user asked for a keyboard way to bookmark and to go through the welcome flow without the
+pointer. The owner said yes. ⌘D (Ctrl+D) pins the tab, as in Arc, so Bookmark This Tab had no
+key, and Settings › Shortcuts lists only commands a shipped chord reaches, so it could not get
+one. The Mac was not free; everything was built and tested on the PC.
+
+- The command bar's actions mode lists "Bookmark This Tab" (commandbar K44). It bookmarks the
+  page and opens the bubble with the address row shown, with it hidden, and with the star gone
+  after Turn Bookmarks into Pinned Tabs.
+- The Shortcuts block has a row for it under Page, with no chord, that takes one as any row does
+  (shortcuts Z25). A catalog flag keeps such a row listed.
+- The welcome flow opens with its main button focused, so Enter goes from Get started to Finish,
+  and the arrows move within a group of choices; the button is not drawn as focused until a key
+  is pressed, so the flow looks as it did (welcome W21).
+- Five new or changed tests failed before the change and passed after it, three times of three,
+  on win-release and win-checks. The whole unit (1,512) and browser (939) suites passed on
+  win-release, and 41 command bar, welcome and shortcut tests on win-checks.
+
+Not done here: the Mac, where the Bookmarks menu's row should show a chord given to it, and the
+flow there.
+
 ## 2026-11-13 -- After beta 19: the page's focus after a rename on Windows (S-474), and extensions' clicks and keys in a peek (S-473)
 
 The release's after-steps were checked first: the site's download section and the Homebrew cask

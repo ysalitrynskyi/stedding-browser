@@ -21,11 +21,19 @@ Pane focus (F6): Chromium's own lookup of the window's contents view may
 find none, and the bubble search used it unchecked: an access violation on
 Windows. It is checked, as the same file does a few lines above.
 
+The page's focus (BACKLOG S-474): that lookup went through the element
+tracker, which counts a view only once its widget has said it is visible,
+and on Windows that can lag the window. While it did, focusing the page did
+nothing, and a rename ended by Enter or Escape left the keys on a sidebar
+row (tabs R14) in about one run in seven. The contents view is found
+whatever the tracker says; the view still takes focus only when drawn.
+
 Why: a review of the sidebar on the right (S-96) and of Export all Spaces
-(S-282).
+(S-282); a focus test that failed one run in seven on Windows (S-474).
 Removable when: never; to be folded into the patches that own the code.
 ---
- .../focus/browser_focus_controller_views.cc   |  12 +-
+ .../focus/browser_focus_controller_views.cc   |  31 ++-
+ .../ui/focus/browser_focus_controller_views.h |   2 +
  .../browser/ui/spaces/arc_sidebar_importer.cc | 218 ++++++++++++++----
  .../spaces/arc_sidebar_importer_unittest.cc   | 116 ++++++++++
  .../ui/spaces/sidebar_backup_unittest.cc      |  29 +++
@@ -33,16 +41,29 @@ Removable when: never; to be folded into the patches that own the code.
  .../frame/vertical_tab_strip_region_view.cc   |  47 ++--
  .../vertical_tab_strip_top_container.cc       |   7 +
  .../stedding/sidebar_forms_browsertest.cc     |  17 +-
- 8 files changed, 397 insertions(+), 63 deletions(-)
+ 9 files changed, 414 insertions(+), 67 deletions(-)
 
 diff --git a/chrome/browser/ui/focus/browser_focus_controller_views.cc b/chrome/browser/ui/focus/browser_focus_controller_views.cc
-index 22f7e9ce399f6..08cf5677d0ca4 100644
+index 22f7e9ce399f6..2704f727ceaa3 100644
 --- a/chrome/browser/ui/focus/browser_focus_controller_views.cc
 +++ b/chrome/browser/ui/focus/browser_focus_controller_views.cc
-@@ -97,12 +97,18 @@ bool BrowserFocusControllerViews::
+@@ -44,8 +44,7 @@ BrowserFocusControllerViews::BrowserFocusControllerViews(
+ BrowserFocusControllerViews::~BrowserFocusControllerViews() = default;
+ 
+ void BrowserFocusControllerViews::FocusWebContentsPane() {
+-  auto* multi_contents_view = views::AsViewClass<MultiContentsView>(
+-      GetViewForId(kMultiContentsViewElementId));
++  MultiContentsView* const multi_contents_view = GetMultiContentsView();
+   if (multi_contents_view) {
+     multi_contents_view->GetActiveContentsView()->RequestFocus();
+   }
+@@ -95,14 +94,19 @@ bool BrowserFocusControllerViews::
+         bubble = dialog;
+       }
      }
-     auto* multi_contents_view = views::AsViewClass<MultiContentsView>(
-         GetViewForId(kMultiContentsViewElementId));
+-    auto* multi_contents_view = views::AsViewClass<MultiContentsView>(
+-        GetViewForId(kMultiContentsViewElementId));
++    MultiContentsView* const multi_contents_view = GetMultiContentsView();
 +    // Stedding: the window may have no contents view to find, as
 +    // FocusWebContentsPane allows; F6 crashed here on Windows (2026-10-25).
 +    views::View* const toast_anchor =
@@ -61,6 +82,46 @@ index 22f7e9ce399f6..08cf5677d0ca4 100644
        if (view) {
          if (auto* dialog = view->GetProperty(views::kAnchoredDialogKey);
              dialog && !user_education::HelpBubbleView::IsHelpBubble(dialog)) {
+@@ -136,6 +140,19 @@ bool BrowserFocusControllerViews::
+   return false;
+ }
+ 
++// Stedding (BACKLOG S-474): the contents view whether or not the element
++// tracker counts it as shown. The tracker counts a view as shown once its
++// widget has said it is visible, and on Windows that state can lag the
++// window's own (ElementTrackerViews::IsWidgetVisible). While it did, the view
++// was not found and FocusWebContentsPane did nothing: a rename ended by Enter
++// or Escape left the keys on a sidebar row (tabs R14), in about one test run
++// in seven. RequestFocus() still refuses a view that is not drawn.
++MultiContentsView* BrowserFocusControllerViews::GetMultiContentsView() {
++  return views::ElementTrackerViews::GetInstance()
++      ->GetFirstMatchingViewAs<MultiContentsView>(
++          kMultiContentsViewElementId, browser_elements_->GetContext());
++}
++
+ views::View* BrowserFocusControllerViews::GetViewForId(
+     ui::ElementIdentifier element_id) {
+   ui::TrackedElement* element = browser_elements_->GetElement(element_id);
+diff --git a/chrome/browser/ui/focus/browser_focus_controller_views.h b/chrome/browser/ui/focus/browser_focus_controller_views.h
+index 796f8b0090a56..095eb33078461 100644
+--- a/chrome/browser/ui/focus/browser_focus_controller_views.h
++++ b/chrome/browser/ui/focus/browser_focus_controller_views.h
+@@ -10,6 +10,7 @@
+ #include "ui/base/interaction/element_identifier.h"
+ 
+ class BrowserElements;
++class MultiContentsView;
+ class Profile;
+ class ToolbarButtonProvider;
+ 
+@@ -37,6 +38,7 @@ class BrowserFocusControllerViews : public BrowserFocusController {
+ 
+  private:
+   views::View* GetViewForId(ui::ElementIdentifier element_id);
++  MultiContentsView* GetMultiContentsView();
+ 
+   const raw_ref<Profile> profile_;
+   const raw_ref<BrowserElements> browser_elements_;
 diff --git a/chrome/browser/ui/spaces/arc_sidebar_importer.cc b/chrome/browser/ui/spaces/arc_sidebar_importer.cc
 index 8d1a12e18eea9..3fe4f4c02ef30 100644
 --- a/chrome/browser/ui/spaces/arc_sidebar_importer.cc

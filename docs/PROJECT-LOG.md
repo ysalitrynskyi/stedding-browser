@@ -2,6 +2,21 @@
 
 What was built, newest first. Nothing here is needed to do a task: `AGENTS.md` carries what is true now, `BACKLOG.md` the order of work, `PLAN.md` the owner's decisions. This file was the "State of the project" section of `AGENTS.md` until 2026-09-30. This log starts at 2026-10-15. Closed work from before that is the table in [docs/history/archive.md](history/archive.md).
 
+## 2026-11-13 -- After beta 19: the page's focus after a rename on Windows (S-474)
+
+The release's after-steps were checked first: the site's download section and the Homebrew cask
+name beta 19 with the release's checksums, and both machines are clear of the round's leftovers.
+The Mac was not free, so every build and test ran on the PC.
+
+- S-474: on Windows a rename ended by Enter or Escape left the keys on a sidebar row about one
+  run in seven. Logging in the rename's end showed the cause in every failing run: the page was
+  focusable, the window active, and Chromium's lookup of the page's view, which goes through the
+  element tracker, found nothing, because the tracker had not counted the window as shown. The
+  view is now found whatever the tracker says (patch 0103). The test failed 12 of 80 runs alone
+  before and passed 150 of 150 after, on win-release; 29 sidebar, rename and focus tests passed.
+
+Not done here: the Mac (not free), and a look at the rename on a real build.
+
 ## 2026-11-13 -- 0.4.0 beta 19: Chromium 157.0.8103.79, and password managers in a peek
 
 The owner, on the evening of 2026-11-12: "you can use mac now, finish all and release". The Mac

@@ -40,6 +40,21 @@ one. The Mac was not free; everything was built and tested on the PC.
 Not done here: the Mac, where the Bookmarks menu's row should show a chord given to it, and the
 flow there.
 
+## 2026-11-13 -- The row's bar in macOS full screen (S-471)
+
+The owner sent a full-screen capture from beta 19: the address row's bar still started left of the
+page. From it and the owner's layout (sidebar on the left at 352, the row shown) the offset was
+6 pt, the card's gutter. The row's view was right all along; the bar the full-screen overlay
+paints ran to the edge of the view that holds the page's card, not to the card. Beta 19's change
+to the row's column had guessed another cause, and its test checked the row's view, so it passed
+either way.
+
+- The bar now starts at the card (patch 0120). A new test measures the painted bar against the
+  card in full screen: on the Mac's release build it failed before (352 against 358) and passed
+  three times of three after; the 16 window button tests passed.
+
+Not done here: a look at the real build in real full screen, which comes with the next release.
+
 ## 2026-11-13 -- After beta 19: the page's focus after a rename on Windows (S-474), and extensions' clicks and keys in a peek (S-473)
 
 The release's after-steps were checked first: the site's download section and the Homebrew cask

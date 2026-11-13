@@ -19,9 +19,11 @@ The Mac was not free, so every build and test ran on the PC.
   tab under it (patch 0176). Two new tests, each with an extension that has activeTab alone, failed
   before the change (the pinned tab, a.test) and passed three times of three after it (the peek's
   page, b.test); 75 related browser tests and 64 unit tests passed.
+- With both, on the PC: win-release's whole unit suite (1,511) and browser suite (936) passed, and
+  41 peek and sidebar tests on win-checks. The DCHECK build caught the new click test pinning an
+  extension Chromium had already pinned; the test now pins it only when it is not.
 
-Not done here: the Mac (not free), a look at either on a real build, and the whole browser suite
-with both.
+Not done here: the Mac (not free), and a look at either fix on a real build.
 
 ## 2026-11-13 -- 0.4.0 beta 19: Chromium 157.0.8103.79, and password managers in a peek
 

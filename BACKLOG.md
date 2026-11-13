@@ -30,6 +30,10 @@ Chromium is on 157.0.8103.79, M157's newest point release at full rollout, since
 after early stable. The move to 158, with Sparkle 2.10.1 (S-358), is a release of its own, when the
 owner says so.
 
+The owner, 2026-11-13: plan the next release and work on it, with more of what people leaving Arc
+expect, not only fixes. The features below come before the remaining checks, each built only to
+the quality bar and each visual choice shown to the owner as rendered options first.
+
 In this order:
 
 1. **Released in 0.4.0 beta 19 on 2026-11-13:** Chromium 157.0.8103.79 (GitHub issue 110); S-469's
@@ -39,19 +43,37 @@ In this order:
    crash at quit on Windows from Chromium's passkey check (0180). Open from that round: S-471
    (not reproduced). Fixed since, for the next release: S-473 and S-474; built since, from GitHub issue 112
    with the owner's yes: S-475; and S-476, an extension's button in a peek (GitHub issue 102).
-2. **S-458 waits for the PC's own 4K display at 150%:** over Remote Desktop the PC runs at 100%.
-3. **The Mac's real-input checks still owed:** done on 2026-11-10 for little windows (S-157) and a
+2. **The mini player's first slice (S-95, discussion 104):** a video playing with sound pops out when
+   its tab is left and goes back when the tab is shown again, as a setting, off by default (the
+   owner in discussion 104). It uses Chromium's own picture-in-picture window, which ⌥⇧⌘P already
+   opens (Mp5); the owner, 2026-11-13: "you can start with window". Chromium's automatic picture in
+   picture waits for a Safe Browsing check of the page, which Stedding has none of (S-75), so it
+   never fires for ordinary video. The player inside the window (Mp1) comes after, from rendered
+   options.
+3. **The background audio strip (S-95, Mp3):** a playing tab's title, play and pause, and back to
+   the tab at the sidebar's foot, as Arc has it. Rendered options for the owner first.
+4. **How a Space's session shows (S-477, GitHub issue 99):** "Independent session" is the wrong word
+   now that Spaces share named sessions. New words and a new mark, from rendered options the
+   owner picks.
+5. **Pins in every window (S-94's second slice, GitHub issue 111):** the spec and an ADR for the
+   owner's decision this release; the build after.
+6. **Live Folders for GitHub pull requests (S-478, discussion 106):** the spec and an ADR (how it
+   reads GitHub, what is fetched and when) for the owner; the build after.
+7. **Settings and the extension list in sync (S-479, GitHub issue 109):** waits on the owner's
+   decision.
+8. **S-458 waits for the PC's own 4K display at 150%:** over Remote Desktop the PC runs at 100%.
+9. **The Mac's real-input checks still owed:** done on 2026-11-10 for little windows (S-157) and a
    pin's redirected link with the screenshot keys over a peek (S-93), both closed; the first found
    ⌘D doing nothing in a private window on the Mac, fixed in patch 0170. Child tabs (S-92) were
    seen on the Mac on 2026-11-07, and their clipped favicon under a pinned parent is fixed (closed).
-4. **The tests:** S-458, the Windows geometry a DIP off at 150%. S-463, a Space switch's slide
+10. **The tests:** S-458, the Windows geometry a DIP off at 150%. S-463, a Space switch's slide
    on the PC, and S-461, the dragged row's copy, were the tests' and are closed.
    For each test, decide whether the product or the test is wrong, and fix that one.
 
 Then the gate. The release waits until every line of it has passed:
 
 - the suites on the shipping and DCHECK builds on both platforms, and ASan on Windows;
-- acceptance on both platforms, and an update from the installed beta 17 on both;
+- acceptance on both platforms, and an update from the installed beta 19 on both;
 - every changed state captured from the release build on both platforms, light and dark, and looked
   at against its spec;
 - the what's-new entry looked at as an updater sees it on the live page, each capture included, down
@@ -295,10 +317,13 @@ Rows the specs still leave open. M10 is in ROADMAP's order (ADR 0021).
 | S-61 | Keep-pile still planned | `docs/features/library.md`; `docs/features/player.md`; `docs/features/clipboard.md`; `docs/features/share-coat.md`; `docs/features/focus.md`; `docs/features/new-tab.md` | Shipped from patches 0047–0048, and cut in patch 0055 where the rows were withdrawn. Sf2, export of every Space, is built. Still planned: Library (Lb1–Lb7), the mini player (S-95), clipboard Cf3, share-coat Sc2, focus Fc3, new-tab N6–N8. |
 | S-90 | A second press in a web app reaches the browser | `docs/features/shortcuts.md` | In a web app that binds the same chord, the first press goes to the page and a second within a second goes to Stedding, with a hint the first time. Not built. |
 | S-96 | The sidebar on the right, what is left | `docs/features/sidebar.md` Y34–Y43 | Built in patch 0091, released in 0.3.0 beta 16. Left: Y42's Windows browser test (the caption buttons), Chromium's side panel where its own setting puts it, and the window gradient, the hover shadow and the glass frame, which do not mirror. The `sr_*` checks in `docs/features/acceptance.md` are not recorded. |
-| S-94 | A page open in another window | `docs/features/windows.md` G2, G12; `docs/features/commandbar.md` K43 | The first part is built, 2026-11-07 (`feat: a page open in another window asks where to show it`): a search in the bar lists the profile's other windows' tabs, and choosing one, or Chromium's "Switch to this tab" for a page in another window, asks: Show Here, Go to Window or Cancel. Seen on the Windows release build with the real pointer and keyboard: each of the three, from the bar and from the address field; Show Here took the first window's only tab, and that window closed. Left: ghost pins (G2), rows for another window's pins. A pin is a tab of one window today, so that needs its spec and an ADR before code. Chromium's tab search still jumps. Owed: the Mac. |
+| S-94 | A page open in another window | `docs/features/windows.md` G2, G12; `docs/features/commandbar.md` K43 | The first part is built, 2026-11-07 (`feat: a page open in another window asks where to show it`): a search in the bar lists the profile's other windows' tabs, and choosing one, or Chromium's "Switch to this tab" for a page in another window, asks: Show Here, Go to Window or Cancel. Seen on the Windows release build with the real pointer and keyboard: each of the three, from the bar and from the address field; Show Here took the first window's only tab, and that window closed. Left: ghost pins (G2), rows for another window's pins; GitHub issue 111 (2026-11-12) asks for the same, a new window with the first one's pins. A pin is a tab of one window today, so that needs its spec and an ADR before code. Chromium's tab search still jumps. Owed: the Mac. |
 | S-100 | Dark pages, the owner's row and the live captures | `docs/features/dark-pages.md` | The on/off switch, per-site exceptions, the moon, ⌥⇧⌘D and Settings are patch 0072. Left: Dk24's app-menu row, the owner's call, and the live captures the spec names (`dk_media`, `dk_print`). A follow-the-window mode waits on the owner. |
 | S-88 | Ad and tracker blocking, the later slices | `docs/features/blocker.md`; ADR 0030 | Phase 1 is patch 0098, off by default, released in 0.3.0 beta 16 (Bk1–Bk5, Bk7–Bk13). ADR 0030 is Proposed. Left: Bk6's live check, then element hiding, the blocked-page card, optional lists and a count (Bk20–Bk23). |
 | S-95 | The mini player | `docs/features/player.md` | Mp5, picture in picture, is built. Mp1–Mp4 are planned: a playing landscape video with sound follows into the sidebar when you leave its tab. |
+| S-477 | How a Space's session shows (GitHub issue 99) | `docs/features/sessions.md` S32–S34; `docs/features/spaces.md` | A comment on issue 99 after beta 18 (2026-11-12), and the owner's reply of 2026-11-13: with Spaces sharing named sessions, the "Independent session" dots and labels no longer say what a Space's session is. New words for the menus, Edit Space, Settings and the command bar, and a mark that names or colours the session. The owner approves the look: rendered options first. |
+| S-478 | Live Folders: a sidebar folder of GitHub pull requests (discussion 106) | `docs/PRODUCT.md` (Live Folders, post-1.0) | Asked 2026-11-10 by someone who used Arc's every day; the owner: planned, and sooner if it can be. Arc's folder holds the pull requests one opened, is assigned, is asked to review or is mentioned in, and drops merged and closed ones. Needs a spec and an ADR first: how Stedding reads GitHub (the Space's signed-in session or a token the user gives), what it fetches and how often, and that nothing goes anywhere but github.com. |
+| S-479 | Settings and the extension list in sync (GitHub issue 109) | `docs/features/sidebar-file.md` Sf36 | Asked 2026-11-12: sync brings the sidebar but leaves a new computer with no settings and no extensions. Sync carries the sidebar alone on purpose (Sf36). Waits on the owner (`PLAN.md` decision 16): Stedding's own settings in the same file, and the list of extensions to install from the Chrome Web Store, are the candidates; their data would not travel. |
 | S-282 | Sync through a folder, the rows not built | `docs/features/sidebar-file.md`; ADR 0029 | The first form is patch 0101 (Sf7–Sf41), released in 0.3.0 beta 16. Sf42, the folder note, is patch 0106. ADR 0029 is Proposed. Not built: Sf11 (a computer first seen later), Sf14 (launch after restore), Sf20, Sf21, Sf24, Sf25, Sf31. Sf16's order is applied to the windows for the Space list only. Sf28 names a conflicted copy and has no toast yet. The two-computer acceptance script has not been run. |
 | S-91 | Shortcuts the user can change, the ADR | `docs/features/shortcuts.md` Z10–Z22 | Built in patch 0100, released in 0.3.0 beta 16. The chords live in Local State under stable names. `docs/features/shortcuts.md` Decisions records that choice. There is no ADR for it. |
 | S-98 | History and Downloads panels, the live checks | `docs/features/sidebar-panels.md` Pn1–Pn16 | Built in patch 0099, released in 0.3.0 beta 16. Left: the `sp_*` checks in `docs/features/acceptance.md`, a drag of a file to the Finder and to Explorer, and the panel's minimum width in a capture. |

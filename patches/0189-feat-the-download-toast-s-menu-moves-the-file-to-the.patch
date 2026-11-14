@@ -1,0 +1,343 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Sat, 14 Nov 2026 17:26:43 -0500
+Subject: feat: the download toast's menu moves the file to the Trash (S-489)
+
+A new download shows Chromium's bubble from the downloads button, the
+toast Arc users know. Its row's menu opened the file or showed it in the
+Finder, and nothing put the file in the Trash or took it off the list
+without opening the Downloads panel. A finished download's menu there now
+has the panel's own verbs (sidebar-panels Pn9, Pn11): Move to Trash (Move
+to Recycle Bin on Windows), never deleted outright, after which the row
+reads as removed; and Remove from List, where the profile may delete
+history, which takes the download off the list and out of the history and
+leaves the file.
+
+The two are Stedding's ids outside DownloadCommands, so Chromium's
+metrics of the menu stay as they were. Linux, not shipped, has no Trash of
+Stedding's and offers Remove from List alone.
+
+Why: GitHub discussion 116; the owner asked for the requests that could
+ship in 0.5.1 (2026-11-14). Spec: sidebar-panels Pn19.
+Removable when: never; Stedding's own verbs in a Chromium menu.
+---
+ chrome/browser/download/BUILD.gn              |  12 ++-
+ .../download/download_ui_context_menu.cc      | 102 ++++++++++++++++++
+ .../download/download_ui_context_menu.h       |  10 ++
+ .../download_ui_context_menu_unittest.cc      |  71 ++++++++++++
+ 4 files changed, 193 insertions(+), 2 deletions(-)
+
+diff --git a/chrome/browser/download/BUILD.gn b/chrome/browser/download/BUILD.gn
+index 38400a295731d..e9f7af306a81c 100644
+--- a/chrome/browser/download/BUILD.gn
++++ b/chrome/browser/download/BUILD.gn
+@@ -322,7 +322,12 @@ source_set("impl") {
+ 
+   if (!is_android && !is_chromeos) {
+     sources += [ "download_ui_context_menu.cc" ]
+-    deps += [ "//chrome/browser/download/bubble" ]
++    deps += [
++      "//chrome/browser/download/bubble",
++
++      # Stedding, sidebar-panels Pn19: the bubble's Move to Trash.
++      "//chrome/browser/ui/stedding:file_trash",
++    ]
+   }
+ 
+   if (is_chromeos) {
+@@ -546,7 +551,10 @@ source_set("unit_tests") {
+ 
+   if (!is_android && !is_chromeos) {
+     sources += [ "download_ui_context_menu_unittest.cc" ]
+-    deps += [ "//chrome/browser/download/bubble:unit_tests" ]
++    deps += [
++      "//chrome/browser/download/bubble:unit_tests",
++      "//chrome/browser/ui/stedding:file_trash",
++    ]
+   }
+ 
+   if (is_chromeos) {
+diff --git a/chrome/browser/download/download_ui_context_menu.cc b/chrome/browser/download/download_ui_context_menu.cc
+index e14563b86d2c8..3d2847eb148aa 100644
+--- a/chrome/browser/download/download_ui_context_menu.cc
++++ b/chrome/browser/download/download_ui_context_menu.cc
+@@ -8,12 +8,20 @@
+ 
+ #include "base/metrics/histogram_functions.h"
+ #include "build/build_config.h"
++#include "chrome/browser/browser_process.h"
+ #include "chrome/browser/download/chrome_download_manager_delegate.h"
+ #include "chrome/browser/download/download_commands.h"
+ #include "chrome/browser/download/download_stats.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/profiles/profile_manager.h"
++#include "chrome/browser/ui/stedding/file_trash.h"
+ #include "chrome/grit/generated_resources.h"
+ #include "components/download/public/common/download_danger_type.h"
++#include "components/history/core/common/pref_names.h"
++#include "components/prefs/pref_service.h"
+ #include "components/vector_icons/vector_icons.h"
++#include "content/public/browser/download_item_utils.h"
++#include "content/public/browser/download_manager.h"
+ #include "content/public/common/content_features.h"
+ #include "extensions/common/extension.h"
+ #include "ui/base/l10n/l10n_util.h"
+@@ -23,6 +31,38 @@
+ 
+ using InsecureDownloadStatus = download::DownloadItem::InsecureDownloadStatus;
+ 
++namespace {
++
++// Stedding, Pn19: a finished download whose file is still where it was put,
++// the one Move to Trash may take.
++download::DownloadItem* SteddingFinishedFile(DownloadUIModel* download) {
++  download::DownloadItem* const item =
++      download ? download->GetDownloadItem() : nullptr;
++  if (!item || item->GetState() != download::DownloadItem::COMPLETE ||
++      item->GetFileExternallyRemoved() || item->GetTargetFilePath().empty()) {
++    return nullptr;
++  }
++  return item;
++}
++
++// Pn9: Remove from List where the profile may delete history.
++bool SteddingMayRemove(DownloadUIModel* download) {
++  download::DownloadItem* const item =
++      download ? download->GetDownloadItem() : nullptr;
++  content::BrowserContext* const context =
++      item ? content::DownloadItemUtils::GetBrowserContext(item) : nullptr;
++  return context &&
++         Profile::FromBrowserContext(context)->GetPrefs()->GetBoolean(
++             prefs::kAllowDeletingBrowserHistory);
++}
++
++bool IsSteddingCommand(int command_id) {
++  return command_id == DownloadUiContextMenu::kSteddingMoveToTrash ||
++         command_id == DownloadUiContextMenu::kSteddingRemoveFromList;
++}
++
++}  // namespace
++
+ DownloadUiContextMenu::~DownloadUiContextMenu() {
+   DetachFromDownloadItem();
+ }
+@@ -91,6 +131,12 @@ ui::SimpleMenuModel* DownloadUiContextMenu::GetMenuModel() {
+ }
+ 
+ bool DownloadUiContextMenu::IsCommandIdEnabled(int command_id) const {
++  if (command_id == kSteddingMoveToTrash) {
++    return SteddingFinishedFile(download_.get()) != nullptr;
++  }
++  if (command_id == kSteddingRemoveFromList) {
++    return download_ && download_->GetDownloadItem();
++  }
+   if (!download_commands_) {
+     return false;
+   }
+@@ -100,6 +146,9 @@ bool DownloadUiContextMenu::IsCommandIdEnabled(int command_id) const {
+ }
+ 
+ bool DownloadUiContextMenu::IsCommandIdChecked(int command_id) const {
++  if (IsSteddingCommand(command_id)) {
++    return false;
++  }
+   if (!download_commands_) {
+     return false;
+   }
+@@ -109,6 +158,12 @@ bool DownloadUiContextMenu::IsCommandIdChecked(int command_id) const {
+ }
+ 
+ bool DownloadUiContextMenu::IsCommandIdVisible(int command_id) const {
++  if (command_id == kSteddingRemoveFromList) {
++    return SteddingMayRemove(download_.get());
++  }
++  if (command_id == kSteddingMoveToTrash) {
++    return true;
++  }
+   if (!download_commands_) {
+     return false;
+   }
+@@ -118,6 +173,42 @@ bool DownloadUiContextMenu::IsCommandIdVisible(int command_id) const {
+ }
+ 
+ void DownloadUiContextMenu::ExecuteCommand(int command_id, int event_flags) {
++  if (command_id == kSteddingMoveToTrash) {
++    download::DownloadItem* const item = SteddingFinishedFile(download_.get());
++    if (!item) {
++      return;
++    }
++    // Pn11: off the UI thread, to the Trash or the Recycle Bin, never
++    // deleted outright. The download then finds its file gone and reads as
++    // removed, as one deleted by hand does.
++    void* const profile = Profile::FromBrowserContext(
++        content::DownloadItemUtils::GetBrowserContext(item));
++    stedding::MoveToTrashThen(
++        item->GetTargetFilePath(),
++        base::BindOnce(
++            [](void* profile, bool moved) {
++              ProfileManager* const profiles =
++                  g_browser_process->profile_manager();
++              if (!moved || !profiles || !profiles->IsValidProfile(profile)) {
++                return;
++              }
++              static_cast<Profile*>(profile)
++                  ->GetDownloadManager()
++                  ->CheckForHistoryFilesRemoval();
++            },
++            profile));
++    return;
++  }
++  if (command_id == kSteddingRemoveFromList) {
++    // Pn9: off the list and out of the history, as the Downloads page's
++    // Remove from List does; the file stays.
++    if (download::DownloadItem* const item =
++            download_ ? download_->GetDownloadItem() : nullptr;
++        item && SteddingMayRemove(download_.get())) {
++      item->Remove();
++    }
++    return;
++  }
+   if (!download_commands_) {
+     return;
+   }
+@@ -314,6 +405,17 @@ ui::SimpleMenuModel* DownloadUiContextMenu::GetFinishedMenuModel(
+     finished_download_menu_model_->AddItem(
+         DownloadCommands::SHOW_IN_FOLDER,
+         GetLabelForCommandId(DownloadCommands::SHOW_IN_FOLDER));
++    // Stedding, Pn19: the Downloads panel's verbs. Linux, which is not
++    // shipped, has no Trash of Stedding's (file_trash_other.cc).
++#if BUILDFLAG(IS_MAC)
++    finished_download_menu_model_->AddItem(kSteddingMoveToTrash,
++                                           u"Move to Trash");
++#elif BUILDFLAG(IS_WIN)
++    finished_download_menu_model_->AddItem(kSteddingMoveToTrash,
++                                           u"Move to Recycle Bin");
++#endif
++    finished_download_menu_model_->AddItem(kSteddingRemoveFromList,
++                                           u"Remove from List");
+     finished_download_menu_model_->AddSeparator(ui::NORMAL_SEPARATOR);
+   }
+ 
+diff --git a/chrome/browser/download/download_ui_context_menu.h b/chrome/browser/download/download_ui_context_menu.h
+index 3893bfab80da3..52351cc18c7c7 100644
+--- a/chrome/browser/download/download_ui_context_menu.h
++++ b/chrome/browser/download/download_ui_context_menu.h
+@@ -33,6 +33,14 @@ class DownloadUiContextMenu : public ui::SimpleMenuModel::Delegate {
+   // Called when download is destroyed.
+   void OnDownloadDestroyed();
+ 
++  // Stedding (sidebar-panels Pn19; GitHub discussion 116): the Downloads
++  // panel's verbs on a finished download (Pn9, Pn11) in the downloads
++  // bubble's menu too, so the toast a new download shows can put the file in
++  // the Trash or take it off the list, as Arc's did. Ids outside
++  // DownloadCommands, which the bubble's metrics count.
++  static constexpr int kSteddingMoveToTrash = 0x5354;
++  static constexpr int kSteddingRemoveFromList = 0x5355;
++
+  protected:
+   explicit DownloadUiContextMenu(base::WeakPtr<DownloadUIModel> download);
+ 
+@@ -55,6 +63,8 @@ class DownloadUiContextMenu : public ui::SimpleMenuModel::Delegate {
+   FRIEND_TEST_ALL_PREFIXES(DownloadUiContextMenuTest,
+                            InvalidDownloadWontCrashContextMenu);
+   FRIEND_TEST_ALL_PREFIXES(DownloadUiContextMenuTest, RecordCommandsEnabled);
++  FRIEND_TEST_ALL_PREFIXES(DownloadUiContextMenuTest,
++                           SteddingAFinishedDownloadsVerbs);
+ 
+   // Detaches self from |download_item_|. Called when the DownloadItem is
+   // destroyed or when this object is being destroyed.
+diff --git a/chrome/browser/download/download_ui_context_menu_unittest.cc b/chrome/browser/download/download_ui_context_menu_unittest.cc
+index 5386b2a97a159..e6863654d83e1 100644
+--- a/chrome/browser/download/download_ui_context_menu_unittest.cc
++++ b/chrome/browser/download/download_ui_context_menu_unittest.cc
+@@ -4,15 +4,25 @@
+ 
+ #include "chrome/browser/download/download_ui_context_menu.h"
+ 
++#include "base/files/file_path.h"
++#include "base/test/bind.h"
+ #include "base/test/metrics/histogram_tester.h"
++#include "build/build_config.h"
+ #include "chrome/browser/download/download_item_model.h"
+ #include "chrome/browser/download/download_stats.h"
++#include "chrome/browser/ui/stedding/file_trash.h"
++#include "chrome/test/base/testing_profile.h"
+ #include "components/download/public/common/mock_download_item.h"
++#include "components/history/core/common/pref_names.h"
++#include "components/prefs/pref_service.h"
++#include "content/public/browser/download_item_utils.h"
+ #include "content/public/test/browser_task_environment.h"
+ #include "testing/gtest/include/gtest/gtest.h"
++#include "ui/menus/simple_menu_model.h"
+ 
+ using testing::NiceMock;
+ using testing::Return;
++using testing::ReturnRefOfCopy;
+ 
+ class DownloadUiContextMenuTest : public testing::Test {
+  public:
+@@ -81,3 +91,64 @@ TEST_F(DownloadUiContextMenuTest, RecordCommandsEnabled) {
+       DownloadUiContextMenuAction::kLearnMoreInsecureDownloadEnabled, 1);
+   histogram_tester.ExpectTotalCount("Download.ContextMenuAction", 2);
+ }
++
++// Stedding, sidebar-panels Pn19 (GitHub discussion 116): the menu of a
++// finished download in the bubble, the toast a new download shows, offers
++// the Downloads panel's Move to Trash (Pn11) and Remove from List (Pn9).
++// The file goes to the Trash, never deleted outright; Remove from List takes
++// the download off the list and is offered only where the profile may
++// delete history; a file already gone cannot be moved.
++TEST_F(DownloadUiContextMenuTest, SteddingAFinishedDownloadsVerbs) {
++  TestingProfile profile;
++  NiceMock<download::MockDownloadItem> item;
++  content::DownloadItemUtils::AttachInfoForTesting(&item, &profile, nullptr);
++  const base::FilePath path(FILE_PATH_LITERAL("a-file.pdf"));
++  ON_CALL(item, GetState())
++      .WillByDefault(Return(download::DownloadItem::COMPLETE));
++  ON_CALL(item, GetTargetFilePath()).WillByDefault(ReturnRefOfCopy(path));
++  ON_CALL(item, GetFileExternallyRemoved()).WillByDefault(Return(false));
++  auto download = DownloadItemModel::Wrap(&item);
++  MakeContextMenu(download.get());
++  ui::SimpleMenuModel* const model = menu()->GetMenuModel();
++  ASSERT_TRUE(model);
++
++#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
++  ASSERT_TRUE(
++      model->GetIndexOfCommandId(DownloadUiContextMenu::kSteddingMoveToTrash))
++      << "no Move to Trash";
++  EXPECT_TRUE(
++      menu()->IsCommandIdEnabled(DownloadUiContextMenu::kSteddingMoveToTrash));
++  base::FilePath trashed;
++  stedding::SetMoveToTrashForTesting(
++      base::BindLambdaForTesting([&](const base::FilePath& file) {
++        trashed = file;
++        return true;
++      }));
++  menu()->ExecuteCommand(DownloadUiContextMenu::kSteddingMoveToTrash, 0);
++  RunUntilIdle();
++  stedding::SetMoveToTrashForTesting(
++      base::RepeatingCallback<bool(const base::FilePath&)>());
++  EXPECT_EQ(path, trashed) << "the file did not go to the Trash";
++#endif
++
++  ASSERT_TRUE(model->GetIndexOfCommandId(
++      DownloadUiContextMenu::kSteddingRemoveFromList))
++      << "no Remove from List";
++  EXPECT_TRUE(menu()->IsCommandIdVisible(
++      DownloadUiContextMenu::kSteddingRemoveFromList));
++  EXPECT_CALL(item, Remove()).Times(1);
++  menu()->ExecuteCommand(DownloadUiContextMenu::kSteddingRemoveFromList, 0);
++  testing::Mock::VerifyAndClearExpectations(&item);
++
++  profile.GetPrefs()->SetBoolean(prefs::kAllowDeletingBrowserHistory, false);
++  EXPECT_FALSE(menu()->IsCommandIdVisible(
++      DownloadUiContextMenu::kSteddingRemoveFromList))
++      << "offered where the profile may not delete history";
++  EXPECT_CALL(item, Remove()).Times(0);
++  menu()->ExecuteCommand(DownloadUiContextMenu::kSteddingRemoveFromList, 0);
++
++  ON_CALL(item, GetFileExternallyRemoved()).WillByDefault(Return(true));
++  EXPECT_FALSE(
++      menu()->IsCommandIdEnabled(DownloadUiContextMenu::kSteddingMoveToTrash))
++      << "a file already gone can be moved";
++}

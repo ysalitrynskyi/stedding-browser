@@ -1,0 +1,307 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Sat, 14 Nov 2026 17:26:43 -0500
+Subject: feat: Shift-click on any link opens it in a peek (S-488)
+
+A peek opened only for a link leaving a pinned tab's site. Shift-click on
+any link, from any tab of a normal window, to any site, now opens it in a
+peek over the page, as Arc's Shift-click does; a link that opens a page of
+its own (target=_blank) too. Chromium gave Shift-click a new window; the
+context menu's Open Link in New Window is the browser's own and keeps it.
+
+The decision is made where a pin's new-tab links already peek, at the top
+of Navigate(): a NEW_WINDOW link, renderer-initiated with the user's
+gesture, to an http(s) page, from a tab of the window's strip (not from a
+peek's own page), with the setting on. The peek is the same one a pin
+opens: its jar, its Open as Tab and Open in Split View.
+
+Settings > Stedding > Peek and little windows > "Shift-click a link to
+peek at it" (stedding.peek.shift_click), on by default; off, Shift-click
+opens a window again.
+
+Why: GitHub discussion 115; the owner asked for the requests that could
+ship in 0.5.1 (2026-11-14). Spec: peek P27, settings T63.
+Removable when: never; Stedding's own way to open a peek.
+---
+ .../api/settings_private/prefs_util.cc        |  3 +
+ .../stedding_page/stedding_page.html.ts       |  7 ++
+ chrome/browser/ui/stedding/stedding_prefs.cc  |  2 +
+ chrome/browser/ui/stedding/stedding_prefs.h   |  4 ++
+ .../ui/stedding/stedding_prefs_unittest.cc    |  3 +
+ chrome/browser/ui/views/peek/BUILD.gn         |  1 +
+ .../ui/views/peek/peek_navigation_throttle.cc | 53 +++++++++++----
+ .../browser/ui/webui/settings/settings_ui.cc  |  7 ++
+ .../stedding/peek_over_page_browsertest.cc    | 68 +++++++++++++++++++
+ 9 files changed, 133 insertions(+), 15 deletions(-)
+
+diff --git a/chrome/browser/extensions/api/settings_private/prefs_util.cc b/chrome/browser/extensions/api/settings_private/prefs_util.cc
+index 11cd6827fda52..653acbb78aa0d 100644
+--- a/chrome/browser/extensions/api/settings_private/prefs_util.cc
++++ b/chrome/browser/extensions/api/settings_private/prefs_util.cc
+@@ -376,6 +376,9 @@ const PrefsUtil::TypedPrefMap& PrefsUtil::GetAllowlistedKeys() {
+       settings_api::PrefType::kBoolean;
+   (*s_allowlist)[stedding::prefs::kPeekEnabled] =
+       settings_api::PrefType::kBoolean;
++  // peek P27, settings T63.
++  (*s_allowlist)[stedding::prefs::kPeekShiftClick] =
++      settings_api::PrefType::kBoolean;
+   (*s_allowlist)[stedding::prefs::kPeekStyle] =
+       settings_api::PrefType::kNumber;
+   (*s_allowlist)[stedding::prefs::kPeekEdge] =
+diff --git a/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts b/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
+index 474e3a725e261..b0c0e7c7f9425 100644
+--- a/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
++++ b/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
+@@ -485,6 +485,13 @@ export function getHtml(this: SettingsSteddingPageElement) {
+       label="$i18n{steddingPeekLabel}"
+       sub-label="$i18n{steddingPeekSubLabel}">
+   </settings-toggle-button>
++  <settings-toggle-button
++      id="peekShiftClick"
++      class="hr"
++      pref-key="stedding.peek.shift_click"
++      label="$i18n{steddingPeekShiftClickLabel}"
++      sub-label="$i18n{steddingPeekShiftClickSubLabel}">
++  </settings-toggle-button>
+   <div class="hr settings-box">
+     <div class="start" id="peekStyleLabel">
+       <div class="label">$i18n{steddingPeekStyleLabel}</div>
+diff --git a/chrome/browser/ui/stedding/stedding_prefs.cc b/chrome/browser/ui/stedding/stedding_prefs.cc
+index 0c87837d3996a..8e33159117dbb 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs.cc
++++ b/chrome/browser/ui/stedding/stedding_prefs.cc
+@@ -21,6 +21,8 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
+   // peek P10: on, the owner's choice once Peek was rebuilt on the little
+   // window (2026-10-25).
+   registry->RegisterBooleanPref(kPeekEnabled, true);
++  // peek P27: on, as Arc's Shift-click is (GitHub discussion 115).
++  registry->RegisterBooleanPref(kPeekShiftClick, true);
+   // peek P18: a click peeks until the user asks for a held press.
+   registry->RegisterIntegerPref(kPeekHoldDelayMs, 0);
+   registry->RegisterIntegerPref(kPeekStyle, kPeekStyleOverPage);
+diff --git a/chrome/browser/ui/stedding/stedding_prefs.h b/chrome/browser/ui/stedding/stedding_prefs.h
+index f2b067846d1fc..dff97b6a6c7f5 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs.h
++++ b/chrome/browser/ui/stedding/stedding_prefs.h
+@@ -25,6 +25,10 @@ inline constexpr char kNewTabShowShortcuts[] =
+     "stedding.new_tab.show_shortcuts";
+ // Links that leave a pinned tab's site open in a peek (peek P1, P10).
+ inline constexpr char kPeekEnabled[] = "stedding.peek.enabled";
++// peek P27 (GitHub discussion 115): Shift-click on a link, in any tab of a
++// normal window, opens it in a peek, as Arc does; off, Shift-click opens a
++// window, as in Chromium.
++inline constexpr char kPeekShiftClick[] = "stedding.peek.shift_click";
+ // peek P18: how long the mouse button must be held down on a link from a
+ // pinned tab for it to peek, in milliseconds; 0, a click peeks. The values
+ // Settings and the welcome flow offer.
+diff --git a/chrome/browser/ui/stedding/stedding_prefs_unittest.cc b/chrome/browser/ui/stedding/stedding_prefs_unittest.cc
+index 744f9b9d87037..51e5f677a74dd 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs_unittest.cc
++++ b/chrome/browser/ui/stedding/stedding_prefs_unittest.cc
+@@ -71,6 +71,9 @@ TEST(SteddingPrefsTest, EveryPreferenceRegistersWithItsDefault) {
+   // peek P18: a click peeks until the user asks for a held press.
+   ASSERT_TRUE(service.FindPreference(kPeekHoldDelayMs));
+   EXPECT_EQ(0, service.GetInteger(kPeekHoldDelayMs));
++  // peek P27: Shift-click peeks, as in Arc.
++  ASSERT_TRUE(service.FindPreference(kPeekShiftClick));
++  EXPECT_TRUE(service.GetBoolean(kPeekShiftClick));
+   // peek P20 (GitHub issue 62): a peek shows over the page.
+   ASSERT_TRUE(service.FindPreference(kPeekStyle));
+   EXPECT_EQ(kPeekStyleOverPage, service.GetInteger(kPeekStyle));
+diff --git a/chrome/browser/ui/views/peek/BUILD.gn b/chrome/browser/ui/views/peek/BUILD.gn
+index 1cef32dd67d88..273005cfd0346 100644
+--- a/chrome/browser/ui/views/peek/BUILD.gn
++++ b/chrome/browser/ui/views/peek/BUILD.gn
+@@ -36,6 +36,7 @@ source_set("peek") {
+     "//chrome/browser/ui/stedding:motion",
+     "//chrome/browser/ui/stedding:pin_lifecycle",
+     "//chrome/browser/ui/stedding:prefs",
++    "//chrome/browser/ui/tabs:tab_strip",
+     "//chrome/browser/ui/views/frame:browser_view_header",
+     "//chrome/browser/ui/views/picture_in_picture",
+     "//components/javascript_dialogs",
+diff --git a/chrome/browser/ui/views/peek/peek_navigation_throttle.cc b/chrome/browser/ui/views/peek/peek_navigation_throttle.cc
+index 793d585170ab5..b6fb97b96368a 100644
+--- a/chrome/browser/ui/views/peek/peek_navigation_throttle.cc
++++ b/chrome/browser/ui/views/peek/peek_navigation_throttle.cc
+@@ -25,6 +25,7 @@
+ #include "components/tabs/public/tab_interface.h"
+ // Out of order on purpose: keeps this hunk clear of the settings patch.
+ #include "chrome/browser/ui/navigator/browser_navigator_params.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "content/public/browser/navigation_handle.h"
+ #include "content/public/browser/navigation_throttle_registry.h"
+ #include "content/public/browser/web_contents.h"
+@@ -173,8 +174,15 @@ bool MaybePeekInsteadOfNewTab(NavigateParams* params) {
+   if (!params->source_contents || !params->url.is_valid()) {
+     return false;
+   }
++  // P27 (GitHub discussion 115): Shift-click, which Chromium gives a new
++  // window, peeks at any link from any tab, as Arc's does. The context
++  // menu's Open Link in New Window is the browser's, not the page's, and
++  // keeps its window.
++  const bool shift_click =
++      params->disposition == WindowOpenDisposition::NEW_WINDOW;
+   if (params->disposition != WindowOpenDisposition::NEW_FOREGROUND_TAB &&
+-      params->disposition != WindowOpenDisposition::NEW_BACKGROUND_TAB) {
++      params->disposition != WindowOpenDisposition::NEW_BACKGROUND_TAB &&
++      !shift_click) {
+     return false;
+   }
+   // P8: a page the source made itself (target=_blank, window.open) arrives
+@@ -195,24 +203,39 @@ bool MaybePeekInsteadOfNewTab(NavigateParams* params) {
+   if (!browser || browser->GetType() != BrowserWindowInterface::TYPE_NORMAL) {
+     return false;
+   }
+-  PeekSignals signals;
+-  signals.tab_is_pinned = IsPinnedAnywhere(tab);
+-  signals.renderer_initiated = true;
+   // A new tab asked for by a page is the user's doing or a popup; only the
+   // user's peeks (PLAN.md CMD-10). Script redirects are not this path.
+   const bool gesture =
+       made ? params->original_user_gesture : params->user_gesture;
+-  signals.link_click = gesture;
+-  signals.user_gesture = gesture;
+-  signals.source_active = tab->IsActivated();
+-  signals.is_post = params->post_data != nullptr;
+-  ReadSettings(params->source_contents, signals);
+-  // The pin's home site, not wherever it drifted to (pins H7).
+-  if (!ShouldPeek(
+-          signals,
+-          stedding::PinnedSiteFor(tab->GetBrowserWindowInterface(), tab),
+-          params->url)) {
+-    return false;
++  if (shift_click) {
++    // P27: the user's own Shift-click on a web link, from a tab of the
++    // window's strip -- not from a peek's page -- with the setting on.
++    if (!gesture || !params->url.SchemeIsHTTPOrHTTPS() ||
++        params->post_data != nullptr ||
++        browser->GetTabStripModel()->GetIndexOfWebContents(
++            params->source_contents) == TabStripModel::kNoTab ||
++        !Profile::FromBrowserContext(
++             params->source_contents->GetBrowserContext())
++             ->GetPrefs()
++             ->GetBoolean(stedding::prefs::kPeekShiftClick)) {
++      return false;
++    }
++  } else {
++    PeekSignals signals;
++    signals.tab_is_pinned = IsPinnedAnywhere(tab);
++    signals.renderer_initiated = true;
++    signals.link_click = gesture;
++    signals.user_gesture = gesture;
++    signals.source_active = tab->IsActivated();
++    signals.is_post = params->post_data != nullptr;
++    ReadSettings(params->source_contents, signals);
++    // The pin's home site, not wherever it drifted to (pins H7).
++    if (!ShouldPeek(
++            signals,
++            stedding::PinnedSiteFor(tab->GetBrowserWindowInterface(), tab),
++            params->url)) {
++      return false;
++    }
+   }
+   if (OpenerOverride()) {
+     OpenerOverride().Run(tab, params->url);
+diff --git a/chrome/browser/ui/webui/settings/settings_ui.cc b/chrome/browser/ui/webui/settings/settings_ui.cc
+index ef909c03d32ed..90b7df76546c0 100644
+--- a/chrome/browser/ui/webui/settings/settings_ui.cc
++++ b/chrome/browser/ui/webui/settings/settings_ui.cc
+@@ -856,6 +856,13 @@ SettingsUI::SettingsUI(content::WebUI* web_ui)
+       "steddingPeekSubLabel",
+       base::StrCat({"A link to another site opens over the window; ",
+                     key("\u2318O", "Ctrl+O"), " keeps it as a tab."}));
++  // peek P27, settings T63 (GitHub discussion 115).
++  html_source->AddString("steddingPeekShiftClickLabel",
++                         "Shift-click a link to peek at it");
++  html_source->AddString(
++      "steddingPeekShiftClickSubLabel",
++      "Any link, from any tab, opens over the window. Off, Shift-click opens "
++      "a new window.");
+   // peek P20, settings T46 (GitHub issue 62).
+   html_source->AddString("steddingPeekStyleLabel", "Show a peek");
+   html_source->AddString(
+diff --git a/chrome/test/stedding/peek_over_page_browsertest.cc b/chrome/test/stedding/peek_over_page_browsertest.cc
+index a3e1cf80c802a..15f082cb45df2 100644
+--- a/chrome/test/stedding/peek_over_page_browsertest.cc
++++ b/chrome/test/stedding/peek_over_page_browsertest.cc
+@@ -11,6 +11,7 @@
+ #include <ios>
+ #include <memory>
+ #include <string>
++#include <utility>
+ #include <variant>
+ #include <vector>
+ 
+@@ -1470,4 +1471,71 @@ IN_PROC_BROWSER_TEST_F(PeekOverPageTest, AnActionsButtonShowsThePeeksPage) {
+       << button->GetViewAccessibility().GetCachedName();
+ }
+ 
++// peek P27 (GitHub discussion 115): Shift-click on any link, from a tab that
++// is not pinned, to the same site or another, opens a peek over the page, as
++// Arc's does; a link that opens a page of its own (target=_blank) too. With
++// "Shift-click a link to peek at it" off, Shift-click opens a window, as in
++// Chromium.
++IN_PROC_BROWSER_TEST_F(PeekOverPageTest, AShiftClickPeeksFromAnyTab) {
++  ASSERT_TRUE(
++      ui_test_utils::NavigateToURL(browser(), Url("a.test", "/title1.html")));
++  ASSERT_TRUE(content::ExecJs(
++      contents(),
++      base::StringPrintf(
++          "for (const [id, to, target] of [['same', '%s', ''],"
++          "                                ['blank', '%s', '_blank']]) {"
++          "  const a = document.createElement('a');"
++          "  a.id = id; a.href = to; a.textContent = id;"
++          "  if (target) a.target = target;"
++          "  a.style = 'display:block;font-size:40px;padding:20px';"
++          "  document.body.prepend(a);"
++          "}",
++          Url("a.test", "/title2.html").spec().c_str(),
++          Url("b.test", "/title3.html").spec().c_str()),
++      content::EXECUTE_SCRIPT_NO_USER_GESTURE));
++  tabs::TabInterface* const source = tab();
++  ASSERT_FALSE(source->IsPinned());
++  const int windows = WindowCount();
++  const int tab_count = tabs().count();
++  // A real Shift-click, the user's own, in the middle of the link `id`.
++  const auto shift_click = [&](const char* id) {
++    const std::string box = base::StringPrintf(
++        "document.getElementById('%s').getBoundingClientRect()", id);
++    const int x =
++        content::EvalJs(contents(), "Math.round(" + box + ".left + 20)")
++            .ExtractInt();
++    const int y = content::EvalJs(contents(), "Math.round(" + box + ".top + " +
++                                                  box + ".height / 2)")
++                      .ExtractInt();
++    content::SimulateMouseClickAt(contents(), blink::WebInputEvent::kShiftKey,
++                                  blink::WebMouseEvent::Button::kLeft,
++                                  gfx::Point(x, y));
++  };
++  for (const auto& [id, to] :
++       {std::pair{"same", Url("a.test", "/title2.html")},
++        std::pair{"blank", Url("b.test", "/title3.html")}}) {
++    SCOPED_TRACE(id);
++    shift_click(id);
++    stedding::PeekOverlay* const peek = WaitForPeek(source);
++    ASSERT_TRUE(peek);
++    EXPECT_EQ(to, peek->page()->GetLastCommittedURL());
++    EXPECT_EQ(windows, WindowCount()) << "a window opened";
++    EXPECT_EQ(tab_count, tabs().count()) << "a tab opened";
++    EXPECT_EQ(Url("a.test", "/title1.html"), contents()->GetLastCommittedURL())
++        << "the tab followed the link";
++    Press(peek->view()->close_button());
++    ASSERT_TRUE(WaitForNoPeek(source));
++  }
++  {
++    SCOPED_TRACE("the setting off");
++    browser()->GetProfile()->GetPrefs()->SetBoolean(
++        stedding::prefs::kPeekShiftClick, false);
++    shift_click("same");
++    ASSERT_TRUE(ui_test_utils::WaitForBrowserToOpen())
++        << "Shift-click opened no window";
++    EXPECT_EQ(windows + 1, WindowCount());
++    EXPECT_FALSE(stedding::PeekOverlay::ForSource(source));
++  }
++}
++
+ }  // namespace

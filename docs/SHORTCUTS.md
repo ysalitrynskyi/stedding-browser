@@ -25,6 +25,7 @@ Keys: ⌘ Command, ⌥ Option, ⇧ Shift, ⌃ Control, ⇥ Tab.
 | In a little window or a peek: move the page into your window as a tab, as Open in Stedding or Open as Tab does. A new window opens when none is open | ⌘O | Ctrl+O |
 | In a little window or a peek: send the page into a split of your window (the page's menu, and on the Mac the File menu: Open in Split View). The page opens as its own tab when the tab it would join is an essential, already in a split, or outside the active Space, or when that window has no tab yet | ⇧⌘O | Ctrl+Shift+O |
 | In a little window or a peek: close it. The page gets Escape first when it uses that key | Esc | Esc |
+| Open a link in a peek, from any tab (Settings › Stedding › Peek and little windows › Shift-click a link to peek at it) | ⇧-click | Shift+click |
 
 In a private window, which has no Spaces, ⌥⌘→ / ⌥⌘← step through the tabs and ⌘D makes a bookmark, as in Chromium.
 

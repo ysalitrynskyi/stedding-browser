@@ -2,6 +2,43 @@
 
 What was built, newest first. Nothing here is needed to do a task: `AGENTS.md` carries what is true now, `BACKLOG.md` the order of work, `PLAN.md` the owner's decisions. This file was the "State of the project" section of `AGENTS.md` until 2026-09-30. This log starts at 2026-10-15. Closed work from before that is the table in [docs/history/archive.md](history/archive.md).
 
+## 2026-11-14 -- 0.5.0 prepared: the rail's dots in a grid, the sidebar's width on hover, a list that scrolls in every window
+
+The owner chose the rail's dot grid from the renders ("C") and, going to sleep, asked for the
+release to be prepared fully. The Mac was free for the night.
+
+- S-483 (sidebar Y56, patch 0187): past four Spaces the rail's stack is the active Space's chip,
+  then the other Spaces as dots two to a line in their order, then the "+". Six Spaces take 98
+  DIP from the chip to the "+" where the column of dots took 150. A tab dragged over the grid
+  lights the dot under the pointer in its cell, and the stack keeps its lead until the drag
+  leaves, so a switch on a rest does not move the Space switched to from under the pointer.
+- S-484 (sidebar Y57, GitHub discussion 117): expanded on hover from the rail, or slid in when
+  hidden, the sidebar took Chromium's default width of 352 DIP; it takes the width it has open.
+- S-480 (sidebar Y58), found by the gate: the list test failed 6 of 20 runs alone on the PC.
+  Logging showed why: Chromium scrolls a row into view only after the window's first showing,
+  which it learns from the widget's visibility change, and on Windows that call did not always
+  come; in such a window no row made active was ever scrolled into view. A visible widget now
+  counts as shown. A new test fails 3 of 3 without the fix and passes with it; the list test
+  then passed 50 of 50.
+- The pin stays on 157.0.8103.79: 157.0.8103.80 was still at 0.5% of users.
+- The gate, built as 0.5.0 on one tree on both machines, and again after S-480's fix
+  (`cbdbf9b`): on the Mac the release build's 1,545 unit and 1,020 browser tests (and 211
+  serial) passed but one timeout under load, which passed five of five alone (S-485); the DCHECK
+  build's passed whole. On Windows the release build's 1,533 unit and 964 browser tests (and 226
+  serial) passed whole. The DCHECK and ASan sweeps failed S-458's two corner tests, which read
+  the real pointer, as before beta 19; on the DCHECK build one of them also failed once in three
+  runs alone. The DCHECK sweep lost one sync test to Windows' socket exhaustion ("connect failed:
+  10055"), which passed three of three alone. No DCHECK, dangling pointer or AddressSanitizer
+  report.
+- On Windows, beta 19 updated itself to 0.5.0 from a signed local feed and kept the sidebar's
+  width; upgrade, uninstall and reinstall passed. Acceptance on both (docs/features/acceptance.md).
+- Captures of every changed state from the release build on both platforms, light and dark,
+  were looked at; the site's entry for the page after an update is pushed and stays hidden
+  until the release.
+
+Not done: the Mac image is not signed or notarized: Apple's notary service answers that an
+agreement must be accepted, which only the owner can do. Not published.
+
 ## 2026-11-13 -- Renamed pins keep their names through a file; the archive keeps little windows' links; the command bar finds any script (GitHub issue 114, S-159, S-158, S-164)
 
 The owner, the same evening: carry on with the plan, and the next release is 0.5.0 (`PLAN.md`

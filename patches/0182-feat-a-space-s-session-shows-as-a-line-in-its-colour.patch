@@ -39,9 +39,10 @@ Removable when: never; Stedding's own Spaces.
  chrome/browser/ui/archive/archived_tabs.h     |   6 +
  .../ui/browser_tab_menu_model_delegate.cc     |  44 ++-
  .../ui/browser_tab_menu_model_delegate.h      |   4 +
- chrome/browser/ui/spaces/BUILD.gn             |   5 +-
- chrome/browser/ui/spaces/isolation_mark.cc    |  74 ++++-
+ chrome/browser/ui/spaces/BUILD.gn             |  11 +-
+ chrome/browser/ui/spaces/isolation_mark.cc    |  80 ++++-
  chrome/browser/ui/spaces/isolation_mark.h     |  77 ++++-
+ .../browser/ui/spaces/isolation_mark_mac.mm   |  45 +++
  chrome/browser/ui/spaces/space_registry.cc    |   9 +
  chrome/browser/ui/spaces/space_registry.h     |   3 +
  .../ui/spaces/space_storage_partition.cc      | 103 ++++++-
@@ -80,11 +81,15 @@ Removable when: never; Stedding's own Spaces.
  .../browser/ui/webui/settings/settings_ui.cc  |  11 +-
  .../webui/settings/stedding_spaces_handler.cc |  26 +-
  .../stedding_archive_handler.cc               |  35 ++-
+ chrome/test/stedding/BUILD.gn                 |   3 +
  .../stedding/isolation_mark_browsertest.cc    | 287 ++++++++++++++++--
+ .../stedding/session_menus_mac_browsertest.mm | 204 +++++++++++++
  .../stedding/shared_session_browsertest.cc    |   2 +-
  .../stedding/sidebar_click_browsertest.cc     |  45 ++-
  chrome/test/stedding/space_jar_browsertest.cc | 152 ++++++++--
- 56 files changed, 1713 insertions(+), 413 deletions(-)
+ 59 files changed, 1977 insertions(+), 413 deletions(-)
+ create mode 100644 chrome/browser/ui/spaces/isolation_mark_mac.mm
+ create mode 100644 chrome/test/stedding/session_menus_mac_browsertest.mm
 
 diff --git a/chrome/app/stedding_strings.grdp b/chrome/app/stedding_strings.grdp
 index c1b5e9f2bad79..c41198a4aec19 100644
@@ -520,10 +525,10 @@ index 54c5e4723f2c3..4434ed16ee6ca 100644
    const SessionID session_id_;
    const raw_ptr<const Profile> profile_;
 diff --git a/chrome/browser/ui/spaces/BUILD.gn b/chrome/browser/ui/spaces/BUILD.gn
-index 3f51731eda9c2..0c77e3103ccf8 100644
+index 3f51731eda9c2..be2198237e7c2 100644
 --- a/chrome/browser/ui/spaces/BUILD.gn
 +++ b/chrome/browser/ui/spaces/BUILD.gn
-@@ -29,12 +29,13 @@ source_set("partition_domain") {
+@@ -29,14 +29,21 @@ source_set("partition_domain") {
  source_set("isolation_mark") {
    public = [ "isolation_mark.h" ]
    sources = [ "isolation_mark.cc" ]
@@ -538,12 +543,20 @@ index 3f51731eda9c2..0c77e3103ccf8 100644
 +    "//ui/color",
      "//ui/gfx",
    ]
++  if (is_mac) {
++    # The disc drawn in the native menu's own appearance: the Mac's menus
++    # refuse an image generator.
++    sources += [ "isolation_mark_mac.mm" ]
++    frameworks = [ "AppKit.framework" ]
++  }
  }
+ 
+ source_set("spaces") {
 diff --git a/chrome/browser/ui/spaces/isolation_mark.cc b/chrome/browser/ui/spaces/isolation_mark.cc
-index b79a53e3281cd..6c2b974fc8295 100644
+index b79a53e3281cd..36abf76ee1a7c 100644
 --- a/chrome/browser/ui/spaces/isolation_mark.cc
 +++ b/chrome/browser/ui/spaces/isolation_mark.cc
-@@ -4,31 +4,83 @@
+@@ -4,31 +4,89 @@
  
  #include "chrome/browser/ui/spaces/isolation_mark.h"
  
@@ -552,6 +565,7 @@ index b79a53e3281cd..6c2b974fc8295 100644
 +#include "base/functional/bind.h"
  #include "base/strings/strcat.h"
  #include "base/strings/string_util.h"
++#include "build/build_config.h"
 +#include "cc/paint/paint_flags.h"
  #include "chrome/grit/generated_resources.h"
 -#include "components/vector_icons/vector_icons.h"
@@ -605,6 +619,10 @@ index b79a53e3281cd..6c2b974fc8295 100644
 +                                     : kSessionColorsOnLight[index];
 +}
 +
++#if !BUILDFLAG(IS_MAC)
++// The Mac's is in isolation_mark_mac.mm: its native menus, every context menu
++// there, take an image or a vector icon and abort on an image generator
++// (ui/menus/cocoa/menu_controller.mm).
 +ui::ImageModel IsolationMarkImage(int slot, int size) {
 +  // Drawn when the menu shows, with the menu's own colours.
 +  return ui::ImageModel::FromImageGenerator(
@@ -619,6 +637,7 @@ index b79a53e3281cd..6c2b974fc8295 100644
 +          slot, size),
 +      gfx::Size(size, size));
  }
++#endif  // !BUILDFLAG(IS_MAC)
  
  std::u16string IsolationMarkName() {
    return l10n_util::GetStringUTF16(IDS_STEDDING_ISOLATION_MARK_NAME);
@@ -742,6 +761,57 @@ index 093a2a4cd1f3d..e78d4e9f0dc30 100644
  std::u16string IsolationMarkDescription();
  
  // sessions S48: what the mark means on a Space of a session others share:
+diff --git a/chrome/browser/ui/spaces/isolation_mark_mac.mm b/chrome/browser/ui/spaces/isolation_mark_mac.mm
+new file mode 100644
+index 0000000000000..73b33ef82d52a
+--- /dev/null
++++ b/chrome/browser/ui/spaces/isolation_mark_mac.mm
+@@ -0,0 +1,45 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/spaces/isolation_mark.h"
++
++#import <AppKit/AppKit.h>
++
++#include <algorithm>
++
++#include "skia/ext/skia_utils_mac.h"
++#include "ui/base/models/image_model.h"
++#include "ui/gfx/image/image.h"
++
++namespace spaces {
++
++// The Mac's native menus, which every context menu there is, take an image or
++// a vector icon and abort on an image generator
++// (ui/menus/cocoa/menu_controller.mm), so the disc is an image that AppKit
++// draws each time it shows it, in the appearance of what shows it: the
++// menu's, light or dark, as the generator elsewhere reads the menu's colours.
++ui::ImageModel IsolationMarkImage(int slot, int size) {
++  NSImage* const image = [NSImage
++       imageWithSize:NSMakeSize(size, size)
++             flipped:NO
++      drawingHandler:^BOOL(NSRect rect) {
++        NSAppearanceName const match = [NSAppearance.currentDrawingAppearance
++            bestMatchFromAppearancesWithNames:@[
++              NSAppearanceNameAqua, NSAppearanceNameDarkAqua
++            ]];
++        const bool dark = [match isEqualToString:NSAppearanceNameDarkAqua];
++        const CGFloat diameter = std::min<CGFloat>(
++            static_cast<CGFloat>(kIsolationMarkDisc), NSWidth(rect));
++        [skia::SkColorToSRGBNSColor(SessionColorForGround(
++            slot, dark ? SK_ColorBLACK : SK_ColorWHITE)) setFill];
++        [[NSBezierPath
++            bezierPathWithOvalInRect:NSMakeRect(NSMidX(rect) - diameter / 2,
++                                                NSMidY(rect) - diameter / 2,
++                                                diameter, diameter)] fill];
++        return YES;
++      }];
++  return ui::ImageModel::FromImage(gfx::Image(image));
++}
++
++}  // namespace spaces
 diff --git a/chrome/browser/ui/spaces/space_registry.cc b/chrome/browser/ui/spaces/space_registry.cc
 index 32d240b39cedc..e9af8439e89df 100644
 --- a/chrome/browser/ui/spaces/space_registry.cc
@@ -3059,6 +3129,27 @@ index 074f2a60fe915..667df29fa0e89 100644
        spaces.Append(std::move(entry));
      }
    }
+diff --git a/chrome/test/stedding/BUILD.gn b/chrome/test/stedding/BUILD.gn
+index 9346024ac761b..a821af271767b 100644
+--- a/chrome/test/stedding/BUILD.gn
++++ b/chrome/test/stedding/BUILD.gn
+@@ -406,6 +406,8 @@ test("stedding_browser_tests") {
+       "popup_over_full_screen_browsertest.mm",
+       "scroll_events_mac.h",
+       "scroll_events_mac.mm",
++      # sessions S32: the session disc in the Mac's own menus.
++      "session_menus_mac_browsertest.mm",
+       "shortcut_file_mac_browsertest.mm",
+       "space_keys_browsertest.mm",
+       "window_buttons_browsertest.mm",
+@@ -422,6 +424,7 @@ test("stedding_browser_tests") {
+       "//components/remote_cocoa/app_shim",
+       "//ui/base:test_support",
+       "//ui/gfx:test_support",
++      "//ui/menus",
+       # little E9: the system's light or dark, as a test sets it.
+       "//ui/native_theme:test_support",
+     ]
 diff --git a/chrome/test/stedding/isolation_mark_browsertest.cc b/chrome/test/stedding/isolation_mark_browsertest.cc
 index 53440d774ff0b..b1cf1003a0bb5 100644
 --- a/chrome/test/stedding/isolation_mark_browsertest.cc
@@ -3540,6 +3631,216 @@ index 53440d774ff0b..b1cf1003a0bb5 100644
        EXPECT_EQ(
            Says(),
            rows->session_row()->GetViewAccessibility().GetCachedDescription());
+diff --git a/chrome/test/stedding/session_menus_mac_browsertest.mm b/chrome/test/stedding/session_menus_mac_browsertest.mm
+new file mode 100644
+index 0000000000000..3cde826a2e880
+--- /dev/null
++++ b/chrome/test/stedding/session_menus_mac_browsertest.mm
+@@ -0,0 +1,204 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++// sessions S32, menus M1, M14: the Mac's own menus, which every context menu
++// there is, show a Space's session disc. 0.5.0 gave the disc as an image
++// generator, which the native menu refuses on purpose, so a right-click on a
++// link or on a tab ended the browser whenever another Space of the window had
++// a session of its own (BACKLOG S-486). These build the native menus from the
++// browser's own models, as a right-click does.
++
++#import <AppKit/AppKit.h>
++
++#include <array>
++#include <cstdint>
++#include <cstdlib>
++#include <ios>
++#include <memory>
++#include <optional>
++#include <string>
++
++#include "base/apple/scoped_cftyperef.h"
++#include "base/memory/raw_ptr.h"
++#include "base/strings/sys_string_conversions.h"
++#include "chrome/browser/renderer_context_menu/render_view_context_menu_test_util.h"
++#include "chrome/browser/ui/browser.h"
++#include "chrome/browser/ui/spaces/isolation_mark.h"
++#include "chrome/browser/ui/spaces/space.h"
++#include "chrome/browser/ui/spaces/space_model.h"
++#include "chrome/browser/ui/spaces/space_storage_partition.h"
++#include "chrome/browser/ui/stedding/stedding_command_ids.h"
++#include "chrome/browser/ui/tabs/tab_menu_model.h"
++#include "chrome/browser/ui/tabs/tab_menu_model_delegate.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "chrome/browser/ui/tabs/vertical_tab_strip_state_controller.h"
++#include "chrome/browser/ui/views/frame/browser_view.h"
++#include "chrome/test/base/in_process_browser_test.h"
++#include "chrome/test/base/ui_test_utils.h"
++#include "content/public/browser/context_menu_params.h"
++#include "content/public/browser/web_contents.h"
++#include "content/public/test/browser_test.h"
++#include "net/dns/mock_host_resolver.h"
++#include "net/test/embedded_test_server/embedded_test_server.h"
++#include "third_party/skia/include/core/SkColor.h"
++#include "ui/base/models/image_model.h"
++#include "ui/menus/cocoa/menu_controller.h"
++#include "ui/menus/simple_menu_model.h"
++#include "ui/views/test/views_test_utils.h"
++
++namespace {
++
++class ReadOnlyMenu : public ui::SimpleMenuModel::Delegate {
++ public:
++  void ExecuteCommand(int command_id, int event_flags) override {}
++};
++
++// The item of `menu`, at any depth, whose title starts with `title`.
++NSMenuItem* FindItem(NSMenu* menu, NSString* title) {
++  for (NSMenuItem* item in menu.itemArray) {
++    if ([item.title hasPrefix:title]) {
++      return item;
++    }
++    if (item.submenu) {
++      if (NSMenuItem* found = FindItem(item.submenu, title)) {
++        return found;
++      }
++    }
++  }
++  return nil;
++}
++
++// The colour at the middle of `image` drawn in `appearance`, into an sRGB
++// bitmap, so a disc filled with an sRGB colour reads as that colour.
++SkColor MiddleIn(NSImage* image, NSAppearanceName appearance) {
++  constexpr size_t kSide = 32;
++  std::array<uint8_t, kSide * kSide * 4> pixels = {};
++  base::apple::ScopedCFTypeRef<CGColorSpaceRef> srgb(
++      CGColorSpaceCreateWithName(kCGColorSpaceSRGB));
++  base::apple::ScopedCFTypeRef<CGContextRef> context(CGBitmapContextCreate(
++      pixels.data(), kSide, kSide, 8, kSide * 4, srgb.get(),
++      static_cast<CGBitmapInfo>(kCGImageAlphaPremultipliedLast)));
++  [[NSAppearance appearanceNamed:appearance]
++      performAsCurrentDrawingAppearance:^{
++        [NSGraphicsContext saveGraphicsState];
++        NSGraphicsContext.currentContext =
++            [NSGraphicsContext graphicsContextWithCGContext:context.get()
++                                                    flipped:NO];
++        [image drawInRect:NSMakeRect(0, 0, kSide, kSide)];
++        [NSGraphicsContext restoreGraphicsState];
++      }];
++  const size_t middle = ((kSide / 2) * kSide + kSide / 2) * 4;
++  return SkColorSetARGB(pixels[middle + 3], pixels[middle], pixels[middle + 1],
++                        pixels[middle + 2]);
++}
++
++// Whether `a` and `b` differ by at most a step of rounding in each channel.
++bool Near(SkColor a, SkColor b) {
++  return std::abs(static_cast<int>(SkColorGetA(a)) -
++                  static_cast<int>(SkColorGetA(b))) <= 2 &&
++         std::abs(static_cast<int>(SkColorGetR(a)) -
++                  static_cast<int>(SkColorGetR(b))) <= 2 &&
++         std::abs(static_cast<int>(SkColorGetG(a)) -
++                  static_cast<int>(SkColorGetG(b))) <= 2 &&
++         std::abs(static_cast<int>(SkColorGetB(a)) -
++                  static_cast<int>(SkColorGetB(b))) <= 2;
++}
++
++class SessionMenusMacTest : public InProcessBrowserTest {
++ protected:
++  void SetUpOnMainThread() override {
++    InProcessBrowserTest::SetUpOnMainThread();
++    host_resolver()->AddRule("*", "127.0.0.1");
++    ASSERT_TRUE(embedded_test_server()->Start());
++    tabs::VerticalTabStripStateController::From(browser())
++        ->SetVerticalTabsEnabled(true);
++    views::test::RunScheduledLayout(
++        BrowserView::GetBrowserViewForBrowser(browser())->GetWidget());
++    model_ = spaces::SpaceModel::From(browser());
++    ASSERT_TRUE(model_);
++    work_ = model_->AddSpace("Work", SK_ColorBLUE)->id();
++    model_->SetSpaceIsolated(work_, true);
++    ASSERT_TRUE(model_->SpaceIsIsolated(work_));
++    ASSERT_TRUE(ui_test_utils::NavigateToURL(
++        browser(),
++        embedded_test_server()->GetURL("home.test", "/title1.html")));
++  }
++
++  void TearDownOnMainThread() override {
++    model_ = nullptr;
++    InProcessBrowserTest::TearDownOnMainThread();
++  }
++
++  // The native menu built from `model`, as a right-click builds it, and as
++  // a menu that always draws its icons does: the first is what ended the
++  // browser, the second shows the disc on every macOS.
++  static NSMenuItem* WorkRowOfNativeMenus(ui::MenuModel* model) {
++    MenuControllerCocoa* const context =
++        [[MenuControllerCocoa alloc] initWithModel:model
++                                     isContextMenu:YES
++                                          delegate:nil];
++    EXPECT_TRUE(FindItem(context.menu, @"Work"));
++    MenuControllerCocoa* const drawn =
++        [[MenuControllerCocoa alloc] initWithModel:model
++                                     isContextMenu:NO
++                                          delegate:nil];
++    return FindItem(drawn.menu, @"Work");
++  }
++
++  raw_ptr<spaces::SpaceModel> model_ = nullptr;
++  spaces::SpaceId work_ = spaces::SpaceId::CreateEmpty();
++};
++
++IN_PROC_BROWSER_TEST_F(SessionMenusMacTest,
++                       TheMacsOwnMenusDrawTheSessionsDisc) {
++  {
++    SCOPED_TRACE("a link's menu: Open Link in Space");
++    content::WebContents* const page =
++        browser()->tab_strip_model()->GetActiveWebContents();
++    content::ContextMenuParams params;
++    params.page_url = page->GetLastCommittedURL();
++    params.frame_url = params.page_url;
++    params.link_url = embedded_test_server()->GetURL("b.test", "/title2.html");
++    params.unfiltered_link_url = params.link_url;
++    TestRenderViewContextMenu menu(*page->GetPrimaryMainFrame(), params);
++    menu.Init();
++    ASSERT_TRUE(
++        menu.GetMenuModelAndItemIndex(IDC_STEDDING_OPEN_LINK_IN_SPACE_FIRST))
++        << "no Open Link in Space row";
++    NSMenuItem* const row = WorkRowOfNativeMenus(
++        const_cast<ui::SimpleMenuModel*>(&menu.menu_model()));
++    ASSERT_TRUE(row);
++    EXPECT_TRUE(row.image) << "Work's row has no disc";
++  }
++  {
++    SCOPED_TRACE("a tab's menu: Move to Space");
++    ReadOnlyMenu commands;
++    TabStripModel* const tabs = browser()->tab_strip_model();
++    TabMenuModel menu(&commands, TabMenuModelDelegate::From(browser()), tabs,
++                      tabs->active_index());
++    ASSERT_TRUE(menu.GetIndexOfCommandId(
++        TabStripModel::CommandSteddingMoveToSpaceMenu));
++    NSMenuItem* const row = WorkRowOfNativeMenus(&menu);
++    ASSERT_TRUE(row);
++    EXPECT_TRUE(row.image) << "Work's row has no disc";
++  }
++  {
++    SCOPED_TRACE("the disc in the menu's own light or dark");
++    const int slot =
++        spaces::SessionSlotForSpace(model_->registry(), work_).value_or(0);
++    const ui::ImageModel disc = spaces::IsolationMarkImage(slot, 16);
++    ASSERT_TRUE(disc.IsImage()) << "the native menu refuses anything else";
++    NSImage* const image = disc.GetImage().ToNSImage();
++    const SkColor light = MiddleIn(image, NSAppearanceNameAqua);
++    const SkColor on_light = spaces::SessionColorForGround(slot, SK_ColorWHITE);
++    EXPECT_TRUE(Near(on_light, light))
++        << std::hex << light << " in light, not " << on_light;
++    const SkColor dark = MiddleIn(image, NSAppearanceNameDarkAqua);
++    const SkColor on_dark = spaces::SessionColorForGround(slot, SK_ColorBLACK);
++    EXPECT_TRUE(Near(on_dark, dark))
++        << std::hex << dark << " in dark, not " << on_dark;
++  }
++}
++
++}  // namespace
 diff --git a/chrome/test/stedding/shared_session_browsertest.cc b/chrome/test/stedding/shared_session_browsertest.cc
 index b48e5a9da684d..eccad5e31cbea 100644
 --- a/chrome/test/stedding/shared_session_browsertest.cc

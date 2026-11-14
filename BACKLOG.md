@@ -17,8 +17,9 @@ infrastructure, then features. A request in chat comes before this list. A spec 
 
 ### The next release
 
-It is **0.5.0** (`PLAN.md` decision 22; the owner, 2026-11-13). Before it is cut, `tooling/check-pin`
-again: 157.0.8103.80 was at 0.5% of users on 2026-11-13, and the pin follows it past 1%.
+**0.5.0 was released on 2026-11-14** (`PLAN.md` decision 22), with items 2 to 5 below. The next
+release has no number yet. Before it is cut, `tooling/check-pin` again: 157.0.8103.80 was still
+at 0.5% of users on 2026-11-14, and the pin follows it past 1%.
 
 0.4.0 beta 17 went out on 2026-11-10 with the bookmarks bar under a coloured address row
 (S-462, GitHub issue 98), the first item of that day's plan; the rest of it, below, carries to

@@ -2,7 +2,7 @@
 
 What was built, newest first. Nothing here is needed to do a task: `AGENTS.md` carries what is true now, `BACKLOG.md` the order of work, `PLAN.md` the owner's decisions. This file was the "State of the project" section of `AGENTS.md` until 2026-09-30. This log starts at 2026-10-15. Closed work from before that is the table in [docs/history/archive.md](history/archive.md).
 
-## 2026-11-14 -- 0.5.0 prepared: the rail's dots in a grid, the sidebar's width on hover, a list that scrolls in every window
+## 2026-11-14 -- 0.5.0: the rail's dots in a grid, the sidebar's width on hover, a list that scrolls in every window
 
 The owner chose the rail's dot grid from the renders ("C") and, going to sleep, asked for the
 release to be prepared fully. The Mac was free for the night.
@@ -36,8 +36,9 @@ release to be prepared fully. The Mac was free for the night.
   were looked at; the site's entry for the page after an update is pushed and stays hidden
   until the release.
 
-Not done: the Mac image is not signed or notarized: Apple's notary service answers that an
-agreement must be accepted, which only the owner can do. Not published.
+Apple's notary service refused requests until the owner accepted an updated agreement in the
+morning; the Mac image was then signed, notarized and stapled from the same build, and
+`verify-build` and `syspolicy_check` passed. Released as `v0.5.0` on 2026-11-14.
 
 ## 2026-11-13 -- Renamed pins keep their names through a file; the archive keeps little windows' links; the command bar finds any script (GitHub issue 114, S-159, S-158, S-164)
 

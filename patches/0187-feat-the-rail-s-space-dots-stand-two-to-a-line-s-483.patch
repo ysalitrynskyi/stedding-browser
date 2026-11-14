@@ -1,0 +1,921 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Fri, 13 Nov 2026 23:50:06 -0500
+Subject: feat: the rail's Space dots stand two to a line (S-483)
+
+docs/features/sidebar.md Y56, spaces B12. Past four Spaces the rail
+showed the other Spaces as a column of dots 18 DIP apart under and above
+the active chip, which took a lot of the rail's height. The active
+Space's chip now leads the stack and the other Spaces stand as dots two
+to a line under it, 4 DIP apart, in the order of the Spaces; the "+"
+stays under them. Six Spaces take 98 DIP from the chip to the "+" where
+they took 150.
+
+The rail lays the stack out with a layout of its own; the open row keeps
+its flex layout. A tab dragged over the grid lights the dot under the
+pointer by filling its cell, so nothing moves, and the stack keeps its
+lead until the drag leaves, so a switch on a rest does not move the Space
+switched to from under the pointer. A dot is not dragged to a new place
+in the grid; the Space menu still moves it.
+
+Why: the owner asked for more room in the rail and chose this form from
+renders (2026-11-13).
+Removable when: never; Stedding's own sidebar.
+---
+ .../ui/views/spaces/space_switcher_rules.cc   |  93 ++++++++-
+ .../ui/views/spaces/space_switcher_rules.h    |  53 +++++-
+ .../spaces/space_switcher_rules_unittest.cc   |  95 +++++++++-
+ .../ui/views/spaces/space_switcher_view.cc    | 178 +++++++++++++++---
+ .../ui/views/spaces/space_switcher_view.h     |   9 +
+ .../test/stedding/sidebar_rail_browsertest.cc | 132 +++++++++++++
+ chrome/test/stedding/tab_drop_browsertest.cc  | 110 +++++++++++
+ 7 files changed, 634 insertions(+), 36 deletions(-)
+
+diff --git a/chrome/browser/ui/views/spaces/space_switcher_rules.cc b/chrome/browser/ui/views/spaces/space_switcher_rules.cc
+index 91732c0ed9f30..5ebda5841cb2a 100644
+--- a/chrome/browser/ui/views/spaces/space_switcher_rules.cc
++++ b/chrome/browser/ui/views/spaces/space_switcher_rules.cc
+@@ -66,12 +66,58 @@ bool SwitcherStackOverflows(size_t chip_count) {
+   return chip_count > kSwitcherStackFullChips;
+ }
+ 
++std::vector<gfx::Rect> SwitcherStackPlaces(
++    const std::vector<SwitcherStackItem>& items,
++    int column_width) {
++  std::vector<gfx::Rect> places;
++  places.reserve(items.size());
++  int y = 0;
++  size_t i = 0;
++  while (i < items.size()) {
++    const SwitcherStackItem& item = items[i];
++    if (item.size.width() > kSwitcherGridCell) {
++      y += item.margin_above;
++      places.emplace_back((column_width - item.size.width()) / 2, y,
++                          item.size.width(), item.size.height());
++      y += item.size.height() + item.margin_below;
++      ++i;
++      continue;
++    }
++    size_t end = i;
++    while (end < items.size() && items[end].size.width() <= kSwitcherGridCell) {
++      ++end;
++    }
++    const size_t count = end - i;
++    y += item.margin_above;
++    for (size_t k = 0; k < count; ++k) {
++      const gfx::Size& size = items[i + k].size;
++      const int cell_x = count == 1
++                             ? (column_width - kSwitcherGridCell) / 2
++                             : column_width / 2 - kSwitcherGridCell +
++                                   static_cast<int>(k % 2) * kSwitcherGridCell;
++      const int cell_y = y + static_cast<int>(k / 2) * kSwitcherGridCell;
++      places.emplace_back(cell_x + (kSwitcherGridCell - size.width()) / 2,
++                          cell_y + (kSwitcherGridCell - size.height()) / 2,
++                          size.width(), size.height());
++    }
++    y += static_cast<int>((count + 1) / 2) * kSwitcherGridCell +
++         items[end - 1].margin_below;
++    i = end;
++  }
++  return places;
++}
++
+ int SwitcherStackHeight(const std::vector<int>& chip_widths) {
+-  int height = kSwitcherStackPad;
++  std::vector<SwitcherStackItem> items;
+   for (int width : chip_widths) {
+-    height += width + kSwitcherChipGap;
++    const int margin =
++        width <= kSwitcherGridCell ? kSwitcherGridMargin : kSwitcherChipGap / 2;
++    items.push_back({gfx::Size(width, width), margin, margin});
+   }
+-  return height + kSwitcherChip + kSwitcherChipGap;
++  items.push_back({gfx::Size(kSwitcherChip, kSwitcherChip),
++                   kSwitcherChipGap / 2, kSwitcherChipGap / 2});
++  const std::vector<gfx::Rect> places = SwitcherStackPlaces(items, 0);
++  return kSwitcherStackPad + places.back().bottom() + items.back().margin_below;
+ }
+ 
+ bool SwitcherChipVisible(bool hide_others, bool is_active) {
+@@ -126,6 +172,47 @@ std::optional<size_t> SwitcherChipForTabDrop(
+   return spans.size() - 1;
+ }
+ 
++std::optional<size_t> SwitcherChipForTabDropInStack(
++    const std::vector<gfx::Rect>& boxes,
++    int before,
++    int after,
++    const gfx::Point& point) {
++  // The lines, top to bottom: each box joins the line before while the two
++  // overlap down the stack. A dot lit for the drop fills its cell and stands
++  // 2 DIP higher than the dot beside it, on the same line.
++  std::vector<SwitcherSpan> lines;
++  std::vector<std::vector<size_t>> members;
++  for (size_t i = 0; i < boxes.size(); ++i) {
++    const gfx::Rect& box = boxes[i];
++    if (!lines.empty()) {
++      SwitcherSpan& line = lines.back();
++      const int line_end = line.start + line.extent;
++      if (box.y() < line_end && box.bottom() > line.start) {
++        const int start = std::min(line.start, box.y());
++        line.extent = std::max(line_end, box.bottom()) - start;
++        line.start = start;
++        members.back().push_back(i);
++        continue;
++      }
++    }
++    lines.push_back({box.y(), box.height()});
++    members.push_back({i});
++  }
++  const std::optional<size_t> line =
++      SwitcherChipForTabDrop(lines, before, after, point.y());
++  if (!line) {
++    return std::nullopt;
++  }
++  size_t nearest = members[*line].front();
++  for (size_t i : members[*line]) {
++    if (std::abs(boxes[i].CenterPoint().x() - point.x()) <
++        std::abs(boxes[nearest].CenterPoint().x() - point.x())) {
++      nearest = i;
++    }
++  }
++  return nearest;
++}
++
+ std::vector<int> SwitcherDragOffsets(const std::vector<SwitcherSpan>& spans,
+                                      size_t from,
+                                      int pointer) {
+diff --git a/chrome/browser/ui/views/spaces/space_switcher_rules.h b/chrome/browser/ui/views/spaces/space_switcher_rules.h
+index 34108c3d76099..11dc00336c2af 100644
+--- a/chrome/browser/ui/views/spaces/space_switcher_rules.h
++++ b/chrome/browser/ui/views/spaces/space_switcher_rules.h
+@@ -10,6 +10,10 @@
+ #include <string>
+ #include <vector>
+ 
++#include "ui/gfx/geometry/point.h"
++#include "ui/gfx/geometry/rect.h"
++#include "ui/gfx/geometry/size.h"
++
+ namespace spaces {
+ 
+ // The switcher row's metrics (space_switcher_view.cc): a chip, the gap
+@@ -83,8 +87,40 @@ int SwitcherChipWidth(bool overflow, bool active, bool row_hovered);
+ inline constexpr size_t kSwitcherStackFullChips = 4;
+ inline constexpr int kSwitcherStackPad = 8;
+ bool SwitcherStackOverflows(size_t chip_count);
+-// The stack's height for chips of `chip_widths` (kSwitcherChip or
+-// kSwitcherDot each) and the "+", every one with the gap around it.
++
++// sidebar Y56 (BACKLOG S-483; the owner chose it from renders, 2026-11-13):
++// at overflow the rail's dots stand two to a line, in cells kSwitcherGridCell
++// square, the lines a cell apart, so the stack of six Spaces is the active
++// chip, two lines of dots and the "+" where it was a column of five dots
++// 18 DIP apart. A run of dots keeps kSwitcherGridMargin above and below its
++// lines: with the 2 DIP a dot leaves in its cell and a chip's half gap, the
++// dots stand kSwitcherChipGap from the chips, as they did. A dot is any item
++// no wider than a cell: a dot lit for a tab's drop fills its cell (spaces
++// B12), so it grows without moving anything.
++inline constexpr int kSwitcherGridCell = 10;
++inline constexpr int kSwitcherGridMargin =
++    kSwitcherChipGap / 2 - (kSwitcherGridCell - kSwitcherDot) / 2;
++
++// An item of the rail's stack, in its order: its size and its margins along
++// the stack.
++struct SwitcherStackItem {
++  gfx::Size size;
++  int margin_above = 0;
++  int margin_below = 0;
++};
++
++// Where each item of a stack `column_width` wide stands, top to bottom: a
++// full chip or the "+" centred across the column, its margins above and
++// below it; a run of dots two to a line in reading order, a run of one dot
++// centred, each dot centred in its cell. Mirrored in a right-to-left UI by
++// the view, as every child is.
++std::vector<gfx::Rect> SwitcherStackPlaces(
++    const std::vector<SwitcherStackItem>& items,
++    int column_width);
++
++// The stack's height for chips of `chip_widths` (kSwitcherChip, or no wider
++// than kSwitcherGridCell for a dot) and the "+", every chip with half the gap
++// above and below it, every run of dots its margin, and kSwitcherStackPad.
+ int SwitcherStackHeight(const std::vector<int>& chip_widths);
+ 
+ // spaces B27: where a dragged chip lands -- the index of the chip whose
+@@ -128,6 +164,19 @@ std::optional<size_t> SwitcherChipForTabDrop(
+     int after,
+     int position);
+ 
++// sidebar Y56 (BACKLOG S-483): the chip of the rail's stack a tab dragged
++// over it would be dropped on, the stack's chips at `boxes`, top to bottom,
++// and the pointer at `point`, in the same coordinates. The line by `point`'s
++// y, as SwitcherChipForTabDrop finds a chip along the row, each line the
++// boxes that overlap down the stack and `before` and `after` the reach past
++// the first line and the last; then, in that line, the box whose centre is
++// nearest `point`'s x. A line of one chip takes the whole column, as before.
++std::optional<size_t> SwitcherChipForTabDropInStack(
++    const std::vector<gfx::Rect>& boxes,
++    int before,
++    int after,
++    const gfx::Point& point);
++
+ // While chip `from` is dragged with the pointer at `pointer` (same axis and
+ // coordinates), how far each chip is drawn from its place: the dragged chip
+ // follows the pointer and stays within the row, and the chips between its
+diff --git a/chrome/browser/ui/views/spaces/space_switcher_rules_unittest.cc b/chrome/browser/ui/views/spaces/space_switcher_rules_unittest.cc
+index c764af38b77c7..a3926647d98df 100644
+--- a/chrome/browser/ui/views/spaces/space_switcher_rules_unittest.cc
++++ b/chrome/browser/ui/views/spaces/space_switcher_rules_unittest.cc
+@@ -206,16 +206,105 @@ TEST(SwitcherRulesTest, StackOverflowsByCountAndMeasuresItself) {
+   // Three full chips and the plus: four rows of chip and gap, and the pad.
+   EXPECT_EQ(4 * (kSwitcherChip + kSwitcherChipGap) + kSwitcherStackPad,
+             SwitcherStackHeight({kSwitcherChip, kSwitcherChip, kSwitcherChip}));
+-  // The active chip full, six dots and the plus.
+-  EXPECT_EQ(2 * (kSwitcherChip + kSwitcherChipGap) +
+-                6 * (kSwitcherDot + kSwitcherChipGap) + kSwitcherStackPad,
++  // The active chip full, six dots and the plus: the dots two to a line,
++  // three lines of a cell, a margin above and below them (sidebar Y56).
++  EXPECT_EQ(2 * (kSwitcherChip + kSwitcherChipGap) + 3 * kSwitcherGridCell +
++                2 * kSwitcherGridMargin + kSwitcherStackPad,
+             SwitcherStackHeight({kSwitcherChip, kSwitcherDot, kSwitcherDot,
+                                  kSwitcherDot, kSwitcherDot, kSwitcherDot,
+                                  kSwitcherDot}));
++  // One dot alone is as tall as it was in the column: the dot and a half
++  // gap on each side.
++  EXPECT_EQ(kSwitcherDot + kSwitcherChipGap,
++            SwitcherStackHeight({kSwitcherDot}) - SwitcherStackHeight({}));
+   EXPECT_EQ(kSwitcherChip + kSwitcherChipGap + kSwitcherStackPad,
+             SwitcherStackHeight({}));
+ }
+ 
++// sidebar Y56 (BACKLOG S-483): at overflow the rail's dots stand two to a
++// line under the active chip, in reading order, kSwitcherChipGap from the
++// chips; a dot lit for a drop fills its cell and moves nothing; one dot
++// alone is centred.
++TEST(SwitcherRulesTest, TheRailsDotsStandTwoToALine) {
++  constexpr int kColumn = 24;
++  const SwitcherStackItem chip{gfx::Size(kSwitcherChip, kSwitcherChip),
++                               kSwitcherChipGap / 2, kSwitcherChipGap / 2};
++  const SwitcherStackItem dot{gfx::Size(kSwitcherDot, kSwitcherDot),
++                              kSwitcherGridMargin, kSwitcherGridMargin};
++  const std::vector<gfx::Rect> places =
++      SwitcherStackPlaces({chip, dot, dot, dot, dot, dot, chip}, kColumn);
++  ASSERT_EQ(7u, places.size());
++  EXPECT_EQ(gfx::Rect(0, 6, 24, 24), places[0]);
++  // The first line: 12 DIP under the chip, the two dots 4 apart about the
++  // column's centre.
++  EXPECT_EQ(gfx::Rect(4, 42, 6, 6), places[1]);
++  EXPECT_EQ(gfx::Rect(14, 42, 6, 6), places[2]);
++  EXPECT_EQ(places[1].bottom() + 4, places[3].y());
++  EXPECT_EQ(places[1].x(), places[3].x());
++  EXPECT_EQ(places[2].x(), places[4].x());
++  // The fifth dot starts the third line, on its first side.
++  EXPECT_EQ(places[1].x(), places[5].x());
++  EXPECT_EQ(places[3].bottom() + 4, places[5].y());
++  // The "+" 12 DIP under the last line.
++  EXPECT_EQ(places[5].bottom() + kSwitcherChipGap, places[6].y());
++  EXPECT_EQ(0, places[6].x());
++
++  // Lit, the second dot fills its cell, about the same centre; nothing else
++  // moves.
++  SwitcherStackItem lit = dot;
++  lit.size = gfx::Size(kSwitcherGridCell, kSwitcherGridCell);
++  const std::vector<gfx::Rect> lit_places =
++      SwitcherStackPlaces({chip, dot, lit, dot, dot, dot, chip}, kColumn);
++  EXPECT_EQ(places[2].CenterPoint(), lit_places[2].CenterPoint());
++  EXPECT_EQ(gfx::Size(kSwitcherGridCell, kSwitcherGridCell),
++            lit_places[2].size());
++  for (size_t i : {0u, 1u, 3u, 4u, 5u, 6u}) {
++    EXPECT_EQ(places[i], lit_places[i]) << i;
++  }
++
++  // One dot alone on the column's centre, as the column stood.
++  const std::vector<gfx::Rect> alone =
++      SwitcherStackPlaces({dot, chip, chip}, kColumn);
++  EXPECT_EQ(gfx::Rect(9, 6, 6, 6), alone[0]);
++  EXPECT_EQ(alone[0].bottom() + kSwitcherChipGap, alone[1].y());
++}
++
++// sidebar Y56 (BACKLOG S-483): over the rail's grid a tab drop goes by the
++// line, the gap between two lines split at its middle, then by the half of
++// the line; a line of one chip takes the whole column.
++TEST(SwitcherRulesTest, ATabDropOnTheRailsGridFindsTheLineThenTheSide) {
++  const std::vector<gfx::Rect> boxes = {
++      gfx::Rect(0, 6, 24, 24),  // the active chip
++      gfx::Rect(4, 42, 6, 6),   // the first line
++      gfx::Rect(14, 42, 6, 6),  //
++      gfx::Rect(4, 52, 6, 6),   // the second line
++      gfx::Rect(14, 52, 6, 6),  //
++      gfx::Rect(4, 62, 6, 6),   // the third, one dot
++  };
++  const auto at = [&](int x, int y) {
++    return SwitcherChipForTabDropInStack(boxes, 6, 4, gfx::Point(x, y));
++  };
++  EXPECT_EQ(0u, at(1, 18)) << "the chip, at the column's edge";
++  EXPECT_EQ(0u, at(20, 35)) << "above the first line's half of the gap";
++  EXPECT_EQ(1u, at(2, 37));
++  EXPECT_EQ(2u, at(22, 37));
++  EXPECT_EQ(1u, at(11, 45)) << "the left of the line's middle";
++  EXPECT_EQ(2u, at(13, 45));
++  EXPECT_EQ(3u, at(7, 50)) << "the lower half of the 4 DIP between lines";
++  EXPECT_EQ(1u, at(7, 49));
++  EXPECT_EQ(5u, at(23, 64)) << "a line of one dot takes the whole line";
++  EXPECT_EQ(5u, at(12, 71)) << "within the reach past the last line";
++  EXPECT_EQ(std::nullopt, at(12, 72)) << "the \"+\" takes no drop";
++  EXPECT_EQ(std::nullopt, at(12, 0));
++
++  // Lit, the right dot of the first line fills its cell: still one line.
++  std::vector<gfx::Rect> lit = boxes;
++  lit[2] = gfx::Rect(12, 40, 10, 10);
++  EXPECT_EQ(2u, SwitcherChipForTabDropInStack(lit, 6, 4, gfx::Point(20, 41)));
++  EXPECT_EQ(1u, SwitcherChipForTabDropInStack(lit, 6, 4, gfx::Point(6, 47)));
++  EXPECT_EQ(3u, SwitcherChipForTabDropInStack(lit, 6, 4, gfx::Point(6, 51)));
++}
++
+ // sessions S32, spaces B38 (GitHub issue 99, BACKLOG S-477): seven full
+ // chips, 12 apart, of Home, Work*, Personal+, Clients*, Play, Docs* and
+ // Family+ (* the session Work, + the session Personal). Work's line is on the
+diff --git a/chrome/browser/ui/views/spaces/space_switcher_view.cc b/chrome/browser/ui/views/spaces/space_switcher_view.cc
+index 646587f7b4c71..9197a0f058316 100644
+--- a/chrome/browser/ui/views/spaces/space_switcher_view.cc
++++ b/chrome/browser/ui/views/spaces/space_switcher_view.cc
+@@ -396,6 +396,43 @@ class SpaceChipButton : public views::LabelButton {
+ BEGIN_METADATA(SpaceChipButton)
+ END_METADATA
+ 
++// sidebar Y13, Y56 (BACKLOG S-483): the rail's stack, down the column in the
++// children's order, each where SwitcherStackPlaces puts it: a full chip and
++// the "+" centred with their margins above and below, the dots of a run two
++// to a line. A vertical FlexLayout stacked every dot on a line of its own.
++class SwitcherStackLayout : public views::LayoutManagerBase {
++ protected:
++  views::ProposedLayout CalculateProposedLayout(
++      const views::SizeBounds& size_bounds) const override {
++    std::vector<views::View*> children;
++    std::vector<SwitcherStackItem> items;
++    int widest = 0;
++    for (views::View* const child : host_view()->children()) {
++      if (!IsChildIncludedInLayout(child)) {
++        continue;
++      }
++      const gfx::Size size = child->GetPreferredSize({});
++      const gfx::Insets* const margins = child->GetProperty(views::kMarginsKey);
++      items.push_back({size, margins ? margins->top() : 0,
++                       margins ? margins->bottom() : 0});
++      children.push_back(child);
++      widest = std::max(widest, size.width());
++    }
++    const int width =
++        size_bounds.width().is_bounded() ? size_bounds.width().value() : widest;
++    const std::vector<gfx::Rect> places = SwitcherStackPlaces(items, width);
++    views::ProposedLayout layout;
++    int bottom = 0;
++    for (size_t i = 0; i < children.size(); ++i) {
++      layout.child_layouts.push_back(
++          {children[i], true, places[i], views::SizeBounds(places[i].size())});
++      bottom = std::max(bottom, places[i].bottom() + items[i].margin_below);
++    }
++    layout.host_size = gfx::Size(width, bottom);
++    return layout;
++  }
++};
++
+ }  // namespace
+ 
+ SpaceSwitcherView::SpaceSwitcherView(SpaceModel& model, BrowserWindowInterface& browser)
+@@ -497,13 +534,19 @@ void SpaceSwitcherView::ApplyForm() {
+   if (!icon_row_) {
+     return;
+   }
+-  if (auto* const row_layout =
+-          static_cast<views::FlexLayout*>(icon_row_->GetLayoutManager())) {
+-    row_layout->SetOrientation(collapsed_
+-                                   ? views::LayoutOrientation::kVertical
+-                                   : views::LayoutOrientation::kHorizontal);
+-    row_layout->SetInteriorMargin(
+-        collapsed_ ? gfx::Insets() : gfx::Insets::VH(0, kRowInset));
++  // sidebar Y56 (BACKLOG S-483): the rail stacks the chips by a layout of
++  // its own, which stands the dots two to a line; the open row is a flex
++  // row. The spacers keep their flex for when the row comes back.
++  if (collapsed_ != stack_layout_) {
++    stack_layout_ = collapsed_;
++    if (collapsed_) {
++      icon_row_->SetLayoutManager(std::make_unique<SwitcherStackLayout>());
++    } else {
++      icon_row_->SetLayoutManager(std::make_unique<views::FlexLayout>())
++          ->SetOrientation(views::LayoutOrientation::kHorizontal)
++          .SetCrossAxisAlignment(views::LayoutAlignment::kCenter)
++          .SetInteriorMargin(gfx::Insets::VH(0, kRowInset));
++    }
+   }
+   // No spacers in the rail: the column is one chip wide and the stack sizes
+   // itself.
+@@ -698,11 +741,20 @@ void SpaceSwitcherView::ApplyOverflow() {
+                                    : SwitcherRowFormAt(width(), chips_.size());
+   const bool overflow =
+       collapsed_ ? SwitcherStackOverflows(chips_.size()) : form.dots;
++  // sidebar Y56 (BACKLOG S-483): at overflow the rail is a grid -- one full
++  // chip, the active Space's, leads the stack, and every other chip is a
++  // dot, two to a line under it. While a tab is dragged over the stack the
++  // chip that led when the drag came keeps the lead and the rest stay dots:
++  // a switch on a rest (spaces B12) would move the chip it switched to up
++  // to the lead, out from under the pointer, which would then rest on
++  // another dot.
++  const bool grid = InRailGrid();
++  const SpaceId lead = grid_lead_.value_or(model_->active_id());
+   const int gap = form.gap;
+   chip_gap_ = gap;
+   const int chip_size = form.chip;
+   const int glyph_size = SwitcherGlyphSize(chip_size);
+-  if (!collapsed_) {
++  if (!collapsed_ && !stack_layout_) {
+     if (auto* const row_layout =
+             static_cast<views::FlexLayout*>(icon_row_->GetLayoutManager())) {
+       row_layout->SetInteriorMargin(
+@@ -756,8 +808,13 @@ void SpaceSwitcherView::ApplyOverflow() {
+     // tooltips name the Spaces there (sidebar Y13, Y14).
+     const int chip_width = SwitcherChipWidth(overflow, active || drop || kept,
+                                              row_hovered_ && !collapsed_);
+-    const bool dot = chip_width == kSwitcherDot;
+-    widths.push_back(dot ? kSwitcherDot : chip_size);
++    // In the grid a dot lit for a drop fills its cell and does not grow to
++    // a chip, so nothing in the stack moves under the pointer.
++    const bool dot =
++        grid ? chips_[i].second != lead : chip_width == kSwitcherDot;
++    const bool lit_dot = grid && dot && drop;
++    const int dot_size = lit_dot ? kSwitcherGridCell : kSwitcherDot;
++    widths.push_back(dot ? dot_size : chip_size);
+     chip->SetGlyphSize(glyph_size);
+     std::u16string text = dot ? std::u16string() : GlyphFor(space, model_index);
+     bool chord = false;
+@@ -786,8 +843,14 @@ void SpaceSwitcherView::ApplyOverflow() {
+     const int chord_extra =
+         chord ? std::max(0, chip->TextWidth() - chip_size) : 0;
+     const int full_width = chip_size + chord_extra + chord_extra % 2;
+-    chip->SetPreferredSize(dot ? gfx::Size(kSwitcherDot, kSwitcherDot)
++    chip->SetPreferredSize(dot ? gfx::Size(dot_size, dot_size)
+                                : gfx::Size(full_width, chip_size));
++    if (collapsed_) {
++      // A run of dots keeps its own margin; the lines stand a cell apart.
++      chip->SetProperty(
++          views::kMarginsKey,
++          gfx::Insets::VH(grid && dot ? kSwitcherGridMargin : kChipGap / 2, 0));
++    }
+     if (!dot) {
+       widest = std::max(widest, full_width);
+     }
+@@ -817,7 +880,7 @@ void SpaceSwitcherView::ApplyOverflow() {
+     const SkColor space_color = space.ColorFor(InDarkLook(*this));
+     if (dot) {
+       chip->SetBackground(
+-          views::CreateRoundedRectBackground(space_color, kSwitcherDot / 2));
++          views::CreateRoundedRectBackground(space_color, dot_size / 2));
+     } else if (drop) {
+       chip->SetBackground(views::CreateRoundedRectBackground(
+           SkColorSetA(space_color, kDropTargetAlpha), kDropTargetRadius));
+@@ -885,9 +948,29 @@ void SpaceSwitcherView::ApplyOverflow() {
+     // emoji wide cut the chord's ends off.
+     SetPreferredSize(gfx::Size(widest, SwitcherStackHeight(widths)));
+   }
++  // sidebar Y56: in the grid the leading chip comes first among the row's
++  // children, so the keys go through the chips as the stack draws them;
++  // anywhere else, the model's order.
++  if (leading_spacer_) {
++    size_t index = icon_row_->GetIndexOf(leading_spacer_).value_or(0) + 1;
++    for (const auto& [view, id] : chips_) {
++      if (grid && id == lead) {
++        icon_row_->ReorderChildView(view, index++);
++      }
++    }
++    for (const auto& [view, id] : chips_) {
++      if (!grid || id != lead) {
++        icon_row_->ReorderChildView(view, index++);
++      }
++    }
++  }
+   icon_row_->InvalidateLayout();
+ }
+ 
++bool SpaceSwitcherView::InRailGrid() const {
++  return collapsed_ && SwitcherStackOverflows(chips_.size());
++}
++
+ void SpaceSwitcherView::SetDropTarget(std::optional<SpaceId> id) {
+   if (drop_target_ == id) {
+     return;
+@@ -902,8 +985,13 @@ void SpaceSwitcherView::SetTabDragOverRow(bool over) {
+     return;
+   }
+   tab_drag_over_row_ = over;
+-  if (!over && !drag_kept_full_.empty()) {
++  // sidebar Y56: the grid keeps its lead while the drag lasts.
++  if (over && InRailGrid()) {
++    grid_lead_ = model_->active_id();
++  }
++  if (!over && (!drag_kept_full_.empty() || grid_lead_)) {
+     drag_kept_full_.clear();
++    grid_lead_.reset();
+     ApplyOverflow();
+   }
+ }
+@@ -1245,6 +1333,48 @@ std::optional<SpaceId> SpaceSwitcherView::SpaceAtScreenPoint(
+       !GetBoundsInScreen().Contains(point_in_screen)) {
+     return std::nullopt;
+   }
++  // The pointer, in the row's coordinates, mirrored back in a right-to-left
++  // UI as DragPosition does: the chips' bounds are not mirrored.
++  gfx::Point point = point_in_screen;
++  views::View::ConvertPointFromScreen(icon_row_, &point);
++  if (collapsed_) {
++    // sidebar Y56 (BACKLOG S-483): the rail's stack goes by the line, then
++    // by the side, where two dots share a line. Top to bottom, as laid out:
++    // the grid's leading chip is not the model's first.
++    std::vector<std::pair<views::View*, SpaceId>> laid_out;
++    for (const auto& chip : chips_) {
++      if (!chip.first->bounds().IsEmpty()) {
++        laid_out.push_back(chip);
++      }
++    }
++    std::ranges::stable_sort(laid_out, [](const auto& a, const auto& b) {
++      return a.first->y() < b.first->y();
++    });
++    std::vector<gfx::Rect> boxes;
++    for (const auto& chip : laid_out) {
++      boxes.push_back(chip.first->bounds());
++    }
++    // Half a gap past a chip, the margin past a run of dots (ApplyOverflow).
++    const auto reach = [&](const views::View* chip, bool leading) {
++      const gfx::Insets* const margins =
++          chip ? chip->GetProperty(views::kMarginsKey) : nullptr;
++      if (!margins) {
++        return chip_gap_ / 2;
++      }
++      return leading ? margins->top() : margins->bottom();
++    };
++    if (laid_out.empty()) {
++      return std::nullopt;
++    }
++    const std::optional<size_t> index = SwitcherChipForTabDropInStack(
++        boxes, reach(laid_out.front().first, true),
++        reach(laid_out.back().first, false),
++        gfx::Point(icon_row_->GetMirroredXInView(point.x()), point.y()));
++    if (!index) {
++      return std::nullopt;
++    }
++    return laid_out[*index].second;
++  }
+   // The chips as laid out, along the row's axis: one made since the last
+   // layout has no place yet (Rebuild gives a rebuilt chip its old one).
+   std::vector<SwitcherSpan> spans;
+@@ -1256,8 +1386,7 @@ std::optional<SpaceId> SpaceSwitcherView::SpaceAtScreenPoint(
+     if (bounds.IsEmpty()) {
+       continue;
+     }
+-    spans.push_back(collapsed_ ? SwitcherSpan{bounds.y(), bounds.height()}
+-                               : SwitcherSpan{bounds.x(), bounds.width()});
++    spans.push_back({bounds.x(), bounds.width()});
+     ids.push_back(id);
+     if (!first_chip) {
+       first_chip = view;
+@@ -1274,20 +1403,10 @@ std::optional<SpaceId> SpaceSwitcherView::SpaceAtScreenPoint(
+     if (!margins) {
+       return chip_gap_ / 2;
+     }
+-    if (collapsed_) {
+-      return leading ? margins->top() : margins->bottom();
+-    }
+     return leading ? margins->left() : margins->right();
+   };
+-  // The pointer, in the row's coordinates, mirrored back in a right-to-left
+-  // UI as DragPosition does: the chips' bounds are not mirrored.
+-  gfx::Point point = point_in_screen;
+-  views::View::ConvertPointFromScreen(icon_row_, &point);
+-  const int position =
+-      collapsed_ ? point.y() : icon_row_->GetMirroredXInView(point.x());
+-  // Stacked, half a gap above and below each chip is its margin (ApplyForm);
+-  // in the row, half of ApplyOverflow's gap on each side, less what a chord
+-  // takes.
++  const int position = icon_row_->GetMirroredXInView(point.x());
++  // Half of ApplyOverflow's gap on each side, less what a chord takes.
+   const std::optional<size_t> index =
+       SwitcherChipForTabDrop(spans, outer_margin(first_chip, true),
+                              outer_margin(last_chip, false), position);
+@@ -1351,8 +1470,11 @@ bool SpaceSwitcherView::HandleKeyEvent(views::Textfield* sender,
+ void SpaceSwitcherView::OnChipDragged(size_t chip_index,
+                                       const ui::MouseEvent& event) {
+   // One chip on show is nothing to reorder against (focus Fc1, share-coat Sc1).
++  // In the rail's grid the stack does not run in the model's order, its
++  // lead first: a dot is not dragged to a place there (sidebar Y56), and
++  // the Space menu's Move Up and Move Down still move it.
+   if (chip_index >= chips_.size() || model_->in_focus() ||
+-      model_->share_coat()) {
++      model_->share_coat() || InRailGrid()) {
+     return;
+   }
+   if (drag_chip_ != chip_index) {
+diff --git a/chrome/browser/ui/views/spaces/space_switcher_view.h b/chrome/browser/ui/views/spaces/space_switcher_view.h
+index 43d52133c6074..36f34f9ee0b03 100644
+--- a/chrome/browser/ui/views/spaces/space_switcher_view.h
++++ b/chrome/browser/ui/views/spaces/space_switcher_view.h
+@@ -208,6 +208,9 @@ class SpaceSwitcherView : public views::View,
+   // spaces B24-B26: at overflow the inactive chips are dots in their Space
+   // colour until the pointer rests on the row.
+   void ApplyOverflow();
++  // sidebar Y56 (BACKLOG S-483): the rail at overflow, where the dots stand
++  // two to a line under the leading chip.
++  bool InRailGrid() const;
+   void OnBoundsChanged(const gfx::Rect& previous_bounds) override;
+   void OnMouseEntered(const ui::MouseEvent& event) override;
+   void OnMouseExited(const ui::MouseEvent& event) override;
+@@ -290,6 +293,12 @@ class SpaceSwitcherView : public views::View,
+   // leaves.
+   bool tab_drag_over_row_ = false;
+   std::vector<SpaceId> drag_kept_full_;
++  // sidebar Y56: the chip that leads the rail's grid while a tab drag is
++  // over it, the active Space's when the drag came.
++  std::optional<SpaceId> grid_lead_;
++  // ApplyForm's: `icon_row_` lays out by the rail's stack layout, not the
++  // open row's flex.
++  bool stack_layout_ = false;
+   // The gap between two chips along the row's axis as ApplyOverflow last
+   // set it: half of it past each end of the chips takes a tab's drop.
+   int chip_gap_ = kSwitcherChipGap;
+diff --git a/chrome/test/stedding/sidebar_rail_browsertest.cc b/chrome/test/stedding/sidebar_rail_browsertest.cc
+index cc2b1f7401a00..03ec9ebcdde2d 100644
+--- a/chrome/test/stedding/sidebar_rail_browsertest.cc
++++ b/chrome/test/stedding/sidebar_rail_browsertest.cc
+@@ -29,6 +29,7 @@
+ #include "base/memory/scoped_refptr.h"
+ #include "base/run_loop.h"
+ #include "base/strings/strcat.h"
++#include "base/strings/string_number_conversions.h"
+ #include "base/strings/stringprintf.h"
+ #include "base/synchronization/lock.h"
+ #include "base/task/single_thread_task_runner.h"
+@@ -1723,6 +1724,137 @@ IN_PROC_BROWSER_TEST_F(SidebarRailTest, TheRailsColumnShowsWhatFitsIt) {
+   }
+ }
+ 
++// sidebar Y56 (BACKLOG S-483; the owner chose the form from renders,
++// 2026-11-13): past four Spaces the rail's dots stand two to a line under
++// the active Space's chip, which leads the stack wherever the Space stands
++// in the order. The dots keep the order, 12 DIP from the chips and 4 apart,
++// and the "+" stays full under them; each names its Space. A click on a dot
++// switches there, and that Space leads. The keys go through the chips as the
++// stack draws them; a dot dragged along the stack moves no Space. The open
++// row is in the order again, every chip in its place.
++IN_PROC_BROWSER_TEST_F(SidebarRailTest, TheRailsDotsStandTwoToALine) {
++  spaces::SpaceModel* const model = spaces::SpaceModel::From(browser());
++  ASSERT_TRUE(model);
++  while (model->size() < 6) {
++    model->AddSpace(base::StrCat({"S", base::NumberToString(model->size())}),
++                    SK_ColorBLUE);
++  }
++  std::vector<spaces::SpaceId> order;
++  for (const auto& space : model->spaces()) {
++    order.push_back(space->id());
++  }
++  ASSERT_TRUE(model->SetActiveSpace(order[2]));
++  controller()->RequestCollapse(true);
++  ASSERT_TRUE(base::test::RunUntil([&]() { return !Animating(); }));
++  ASSERT_TRUE(controller()->IsCollapsed());
++  views::Widget* const widget = browser_view()->GetWidget();
++  views::test::RunScheduledLayout(widget);
++  spaces::SpaceSwitcherView* const switcher =
++      stedding::test::FindView<spaces::SpaceSwitcherView>(region());
++  ASSERT_TRUE(switcher);
++  const auto chip = [&](const spaces::SpaceId& id) {
++    return switcher->ChipForTesting(id);
++  };
++  const auto box = [&](const spaces::SpaceId& id) {
++    views::View* const view = chip(id);
++    return view ? view->GetBoundsInScreen() : gfx::Rect();
++  };
++  const auto expect_the_grid = [&](const spaces::SpaceId& lead) {
++    views::test::RunScheduledLayout(widget);
++    const gfx::Rect lead_box = box(lead);
++    EXPECT_EQ(spaces::kSwitcherChip, lead_box.width()) << "the lead is a dot";
++    std::vector<gfx::Rect> dots;
++    for (const spaces::SpaceId& id : order) {
++      if (id != lead) {
++        dots.push_back(box(id));
++      }
++    }
++    ASSERT_EQ(5u, dots.size());
++    for (const gfx::Rect& dot : dots) {
++      EXPECT_EQ(spaces::kSwitcherDot, dot.width());
++    }
++    EXPECT_EQ(lead_box.bottom() + spaces::kSwitcherChipGap, dots[0].y())
++        << "the first line is not 12 DIP under the lead";
++    EXPECT_EQ(dots[0].y(), dots[1].y()) << "the first two are not a line";
++    EXPECT_EQ(dots[0].right() + 4, dots[1].x());
++    EXPECT_EQ(dots[2].y(), dots[3].y());
++    EXPECT_EQ(dots[0].bottom() + 4, dots[2].y());
++    EXPECT_EQ(dots[0].x(), dots[2].x());
++    EXPECT_EQ(dots[1].x(), dots[3].x());
++    EXPECT_EQ(dots[0].x(), dots[4].x()) << "the fifth dot is not on the left";
++    EXPECT_EQ(dots[2].bottom() + 4, dots[4].y());
++    // The grid is centred on the lead.
++    EXPECT_EQ(lead_box.CenterPoint().x(), (dots[0].x() + dots[1].right()) / 2);
++    views::Button* const add = FindButtonWithTooltip(region(), u"New Space");
++    ASSERT_TRUE(add);
++    EXPECT_EQ(dots[4].bottom() + spaces::kSwitcherChipGap,
++              add->GetBoundsInScreen().y())
++        << "the + is not 12 DIP under the last line";
++    EXPECT_EQ(spaces::kSwitcherChip, add->width());
++    // The column of dots was 18 DIP a dot; two lines of a cell and the
++    // margins now.
++    EXPECT_EQ(add->GetBoundsInScreen().bottom() - lead_box.y(),
++              2 * spaces::kSwitcherChip + spaces::kSwitcherChipGap +
++                  3 * spaces::kSwitcherGridCell +
++                  2 * spaces::kSwitcherGridMargin);
++    // The keys go through the lead first.
++    views::View* const row = chip(lead)->parent();
++    for (const spaces::SpaceId& id : order) {
++      if (id != lead) {
++        EXPECT_LT(row->GetIndexOf(chip(lead)), row->GetIndexOf(chip(id)));
++      }
++    }
++  };
++  {
++    SCOPED_TRACE("the third Space leads");
++    expect_the_grid(order[2]);
++    EXPECT_EQ(model->DisplayName(order[4]),
++              chip(order[4])->GetRenderedTooltipText(gfx::Point()))
++        << "a dot does not name its Space";
++  }
++  {
++    SCOPED_TRACE("a click on the fifth Space's dot");
++    stedding::test::ClickLeftMouse(widget, box(order[4]).CenterPoint());
++    ASSERT_EQ(order[4], model->active_id()) << "the click did not switch";
++    expect_the_grid(order[4]);
++  }
++  {
++    SCOPED_TRACE("a dot dragged down the stack");
++    const gfx::Point start = box(order[0]).CenterPoint();
++    const gfx::Point end = box(order[5]).CenterPoint() + gfx::Vector2d(0, 2);
++    stedding::test::SendLeftMouse(widget, ui::EventType::kMousePressed, start);
++    for (int step = 1; step <= 8; ++step) {
++      stedding::test::SendLeftMouse(
++          widget, ui::EventType::kMouseDragged,
++          start + gfx::Vector2d((end.x() - start.x()) * step / 8,
++                                (end.y() - start.y()) * step / 8));
++    }
++    stedding::test::SendLeftMouse(widget, ui::EventType::kMouseReleased, end);
++    base::RunLoop().RunUntilIdle();
++    std::vector<spaces::SpaceId> now;
++    for (const auto& space : model->spaces()) {
++      now.push_back(space->id());
++    }
++    EXPECT_EQ(order, now) << "a dot dragged in the grid moved its Space";
++    EXPECT_EQ(order[4], model->active_id());
++    expect_the_grid(order[4]);
++  }
++  {
++    SCOPED_TRACE("the open row");
++    controller()->RequestCollapse(false);
++    ASSERT_TRUE(base::test::RunUntil([&]() { return !Animating(); }));
++    views::test::RunScheduledLayout(widget);
++    views::View* const row = chip(order[0])->parent();
++    for (size_t i = 0; i + 1 < order.size(); ++i) {
++      EXPECT_LT(row->GetIndexOf(chip(order[i])),
++                row->GetIndexOf(chip(order[i + 1])));
++      EXPECT_LT(box(order[i]).x(), box(order[i + 1]).x());
++      EXPECT_EQ(box(order[i]).CenterPoint().y(),
++                box(order[i + 1]).CenterPoint().y());
++    }
++  }
++}
++
+ // The horizontal centre of `rect`, to the half DIP: a box an odd number of
+ // DIP wide centres between two.
+ double CentreX(const gfx::Rect& rect) {
+diff --git a/chrome/test/stedding/tab_drop_browsertest.cc b/chrome/test/stedding/tab_drop_browsertest.cc
+index 3db2a8cdbdbe4..c5dc9647206e8 100644
+--- a/chrome/test/stedding/tab_drop_browsertest.cc
++++ b/chrome/test/stedding/tab_drop_browsertest.cc
+@@ -16,6 +16,7 @@
+ 
+ #include <algorithm>
+ #include <initializer_list>
++#include <map>
+ #include <memory>
+ #include <optional>
+ #include <string>
+@@ -1240,6 +1241,115 @@ IN_PROC_BROWSER_TEST_F(TabDropTest,
+   }
+ }
+ 
++// sidebar Y56 (BACKLOG S-483), spaces B12: in the rail's grid a row
++// dragged over the stack lights the dot under the pointer in its place --
++// the right one of its line, here -- and the lit dot fills its cell without
++// moving any other chip. A rest on it switches the window there, and the
++// stack keeps its lead and every dot its place until the drag leaves: the
++// Space switched to does not move up to the lead from under the pointer.
++// After the drag the Space switched to leads.
++IN_PROC_BROWSER_TEST_F(TabDropTest, InTheRailsGridTheLitDotStaysInPlace) {
++  spaces::SpaceModel* const m = model();
++  ASSERT_TRUE(m);
++  const spaces::SpaceId home = m->active_id();
++  tabs::TabInterface* const dragged = Open("dragged-grid.test");
++  Open("stay-grid.test");
++  while (m->size() < 6) {
++    m->AddSpace(base::StrCat({"G", base::NumberToString(m->size())}),
++                SK_ColorGREEN);
++  }
++  std::vector<spaces::SpaceId> order;
++  for (const auto& space : m->spaces()) {
++    order.push_back(space->id());
++  }
++  ASSERT_EQ(home, order.front());
++  ASSERT_NO_FATAL_FAILURE(CollapseToTheRail());
++  views::test::RunScheduledLayout(widget());
++  spaces::SpaceSwitcherView* const switcher =
++      stedding::test::FindDrawnSwitcher(root());
++  ASSERT_TRUE(switcher);
++  const auto box = [&](const spaces::SpaceId& id) {
++    views::View* const chip = switcher->ChipForTesting(id);
++    return chip ? chip->GetBoundsInScreen() : gfx::Rect();
++  };
++  ASSERT_EQ(spaces::kSwitcherChip, box(home).width()) << "no lead";
++  ASSERT_EQ(spaces::kSwitcherDot, box(order[2]).width()) << "no grid";
++  ASSERT_EQ(box(order[1]).y(), box(order[2]).y()) << "no line of two";
++  const spaces::SpaceId lit = order[2];
++  std::map<spaces::SpaceId, gfx::Rect> before;
++  for (const spaces::SpaceId& id : order) {
++    before[id] = box(id);
++  }
++  const gfx::Point on_dot = box(lit).CenterPoint();
++  const gfx::Point from = RowCentre(dragged);
++  const auto others_in_place = [&]() {
++    std::vector<size_t> moved;
++    for (size_t i = 0; i < order.size(); ++i) {
++      if (order[i] != lit && box(order[i]) != before[order[i]]) {
++        moved.push_back(i);
++      }
++    }
++    return moved;
++  };
++
++  {
++    SCOPED_TRACE("lit in place");
++    PressAndMove(from, on_dot);
++    views::test::RunScheduledLayout(widget());
++    EXPECT_EQ(lit, switcher->drop_target_for_testing());
++    EXPECT_EQ(spaces::kSwitcherGridCell, box(lit).width())
++        << "the lit dot does not fill its cell";
++    EXPECT_EQ(on_dot, box(lit).CenterPoint()) << "the lit dot moved";
++    EXPECT_TRUE(others_in_place().empty())
++        << "a chip moved, first Space " << others_in_place().front();
++    // The line's other half is its left dot's.
++    const gfx::Point left_half(box(order[1]).CenterPoint().x() - 2, on_dot.y());
++    MoveHeld(on_dot, left_half);
++    views::test::RunScheduledLayout(widget());
++    EXPECT_EQ(order[1], switcher->drop_target_for_testing());
++    MoveHeld(left_half, on_dot);
++    views::test::RunScheduledLayout(widget());
++    EXPECT_EQ(lit, switcher->drop_target_for_testing());
++    MoveHeld(on_dot, from);
++    Release(from);
++    views::test::RunScheduledLayout(widget());
++    EXPECT_EQ(home, m->SpaceForTab(dragged));
++    EXPECT_EQ(spaces::kSwitcherDot, box(lit).width())
++        << "the lit dot stayed lit after the drag";
++  }
++  {
++    SCOPED_TRACE("a switch on a rest");
++    const base::AutoReset<base::TimeDelta> rest =
++        HoverDelay(base::Milliseconds(10));
++    // The first drag's drop slides the rows back into place; the press
++    // waits for them.
++    ASSERT_EQ(from, RowCentre(dragged));
++    PressAndMove(from, on_dot);
++    EXPECT_TRUE(base::test::RunUntil([&]() { return m->active_id() == lit; }))
++        << "a rest on the dot did not switch to its Space";
++  }
++  views::test::RunScheduledLayout(widget());
++  MoveHeld(on_dot, on_dot + gfx::Vector2d(1, 0));
++  views::test::RunScheduledLayout(widget());
++  EXPECT_EQ(lit, switcher->drop_target_for_testing())
++      << "the switch moved another chip under the pointer";
++  EXPECT_EQ(spaces::kSwitcherChip, box(home).width())
++      << "the lead changed under the drag";
++  EXPECT_EQ(on_dot, box(lit).CenterPoint()) << "the dot switched to moved";
++  EXPECT_TRUE(others_in_place().empty())
++      << "a chip moved after the switch, first Space "
++      << others_in_place().front();
++  MoveHeld(on_dot + gfx::Vector2d(1, 0), from);
++  Release(from);
++  views::test::RunScheduledLayout(widget());
++  EXPECT_EQ(lit, m->SpaceForTab(dragged));
++  EXPECT_EQ(spaces::kSwitcherChip, box(lit).width())
++      << "the Space switched to does not lead after the drag";
++  EXPECT_EQ(spaces::kSwitcherDot, box(home).width())
++      << "the Space left still leads after the drag";
++  EXPECT_LT(box(lit).y(), box(home).y());
++}
++
+ // BACKLOG S-139 (folders F20, F7): a row dropped where another Space's
+ // folder sits in the list joins no folder. The drop target looks only at the
+ // folders this Space draws, and the other Space's folder draws no header.

@@ -61,20 +61,24 @@ In this order:
 4. **How a Space's session shows (S-477, GitHub issue 99), built 2026-11-13 (patch 0182):** the
    line in the session's colour, and the words the owner approved that day, "Own session" and
    "Session: Clients" in place of "Independent session". Left: the Mac.
-5. **Pins in every window (S-94's second slice, GitHub issue 111):** proposed in ADR 0035
+5. **More room in the rail and the hover width, built 2026-11-13/14:** past four Spaces the rail's
+   dots stand two to a line under the active chip (S-483, sidebar Y56, patch 0187; the owner chose
+   "C" from renders), and the sidebar on hover takes the width it has open (S-484, GitHub
+   discussion 117, Y57). Left: the Mac.
+6. **Pins in every window (S-94's second slice, GitHub issue 111):** proposed in ADR 0035
    (2026-11-13): one record per pin for the profile and a tab of it in each window, as Arc does;
    waiting for the owner's decision; the build after.
-6. **Live Folders for GitHub pull requests (S-478, discussion 106):** proposed in ADR 0036
+7. **Live Folders for GitHub pull requests (S-478, discussion 106):** proposed in ADR 0036
    (2026-11-13): GitHub's API with a read-only token the person makes, not github.com's pages, which
    broke Arc's folder when GitHub changed them; waiting for the owner's decision; the build after.
-7. **Settings and the extension list in sync (S-479, GitHub issue 109):** waits on the owner's
+8. **Settings and the extension list in sync (S-479, GitHub issue 109):** waits on the owner's
    decision.
-8. **S-458 waits for the PC's own 4K display at 150%:** over Remote Desktop the PC runs at 100%.
-9. **The Mac's real-input checks still owed:** done on 2026-11-10 for little windows (S-157) and a
+9. **S-458 waits for the PC's own 4K display at 150%:** over Remote Desktop the PC runs at 100%.
+10. **The Mac's real-input checks still owed:** done on 2026-11-10 for little windows (S-157) and a
    pin's redirected link with the screenshot keys over a peek (S-93), both closed; the first found
    ⌘D doing nothing in a private window on the Mac, fixed in patch 0170. Child tabs (S-92) were
    seen on the Mac on 2026-11-07, and their clipped favicon under a pinned parent is fixed (closed).
-10. **The tests:** S-458, the Windows geometry a DIP off at 150%. S-463, a Space switch's slide
+11. **The tests:** S-458, the Windows geometry a DIP off at 150%. S-463, a Space switch's slide
    on the PC, and S-461, the dragged row's copy, were the tests' and are closed.
    For each test, decide whether the product or the test is wrong, and fix that one.
 

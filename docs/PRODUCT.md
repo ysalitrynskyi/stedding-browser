@@ -571,7 +571,7 @@ the corner radius (sidebar Y1); Comfortable is the match below.
 | Favicon | ~18, left inset ~28 | 18 (`tab_favicon_size`); 16 at Compact and Dense. In the rail, 22, and 20 at Compact and Dense (sidebar Y1, Y8) |
 | Active tab | a filled rounded rect, radius ~10, inset ~10 | radius 10 (`vertical_tab_corner_radius`); 8 and 6 at Compact and Dense (Y1) |
 | Essentials | a grid of cards at the very top, ~150×50, radius ~12, icon only | 50 tall at Comfortable (40 and 34 at Compact and Dense). Up to four on one row, each a quarter of the row at most; a lone card spans the row (Y33) |
-| Space switcher | at the bottom: ~24 icons, one per Space, and a trailing `+` | 24 DIP chips, 12 DIP apart. When they do not fit, the gaps close to 4 DIP, then the chips shrink to 16, then inactive chips become 6 DIP dots (`features/spaces.md` B11, B24) |
+| Space switcher | at the bottom: ~24 icons, one per Space, and a trailing `+` | 24 DIP chips, 12 DIP apart. When they do not fit, the gaps close to 4 DIP, then the chips shrink to 16, then inactive chips become 6 DIP dots (`features/spaces.md` B11, B24). In the rail, past four Spaces, the active chip leads and the dots stand two to a line under it (`features/sidebar.md` Y56) |
 
 ### Sidebar, top to bottom
 

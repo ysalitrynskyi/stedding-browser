@@ -10,23 +10,41 @@ RectF: the enclosing Rect would have painted 22.
 
 Why: the owner's look on the Mac, 2026-11-06 (BACKLOG S-423, toolbar T60).
 
+The same files carry two later rules for the row's page colour. A page that
+dims itself under its own dialog leaves the row its colour (toolbar T62,
+BACKLOG S-468, GitHub issue 101). And over a top edge of several colours, a
+page's declared colour -- its theme-color, else its background -- colours
+the row only when it shows along a third of that edge or more; otherwise the
+row is the window's own, and leaves a colour it had (toolbar T63, BACKLOG
+S-487). start.me declares a bright blue, #0093d5, over a start page whose top
+is a dark photograph, and the row stayed that blue (the owner, 2026-11-14).
+
 Removable when: fold it into the patch that made the circle, once the Mac's
-series matches this one.
+series matches this one; T62 and T63 belong in the patch that reads the
+page's top edge (toolbar T31).
 ---
- .../theme/page_theme_color_controller.cc      |  37 ++-
- .../ui/stedding/theme/page_top_color.cc       |  30 ++
- .../ui/stedding/theme/page_top_color.h        |  15 +
- .../stedding/theme/page_top_color_unittest.cc |  28 ++
+ .../theme/page_theme_color_controller.cc      |  82 ++++-
+ .../ui/stedding/theme/page_top_color.cc       |  68 +++-
+ .../ui/stedding/theme/page_top_color.h        |  36 +-
+ .../stedding/theme/page_top_color_unittest.cc |  63 ++++
  .../toolbar/stedding_lit_toolbar_button.cc    |  16 +-
  .../toolbar/stedding_lit_toolbar_button.h     |   4 +-
- .../test/stedding/address_band_browsertest.cc | 256 +++++++++++++++++-
- 7 files changed, 366 insertions(+), 20 deletions(-)
+ .../test/stedding/address_band_browsertest.cc | 309 +++++++++++++++++-
+ 7 files changed, 541 insertions(+), 37 deletions(-)
 
 diff --git a/chrome/browser/ui/stedding/theme/page_theme_color_controller.cc b/chrome/browser/ui/stedding/theme/page_theme_color_controller.cc
-index 342f8b191a577..d09ca41245a53 100644
+index 342f8b191a577..190b759e0814e 100644
 --- a/chrome/browser/ui/stedding/theme/page_theme_color_controller.cc
 +++ b/chrome/browser/ui/stedding/theme/page_theme_color_controller.cc
-@@ -23,6 +23,7 @@
+@@ -7,6 +7,7 @@
+ #include <algorithm>
+ #include <tuple>
+ #include <utility>
++#include <vector>
+ 
+ #include "base/functional/bind.h"
+ #include "base/no_destructor.h"
+@@ -23,6 +24,7 @@
  #include "components/viz/common/frame_sinks/copy_output_result.h"
  #include "content/public/browser/page.h"
  #include "content/public/browser/page_user_data.h"
@@ -34,10 +52,15 @@ index 342f8b191a577..d09ca41245a53 100644
  #include "content/public/browser/visibility.h"
  #include "content/public/browser/web_contents.h"
  #include "third_party/blink/public/common/web_preferences/web_preferences.h"
-@@ -43,6 +44,12 @@ class PageTopSample : public content::PageUserData<PageTopSample> {
+@@ -43,6 +45,17 @@ class PageTopSample : public content::PageUserData<PageTopSample> {
    // The edge's colour, or nothing when the edge is not one colour.
    std::optional<SkColor> color;
  
++  // T63: the edge as read when it is not one colour, to tell whether the
++  // page's declared colour shows along it. Empty when the edge is one colour
++  // or the read found nothing painted.
++  std::vector<SkColor> edge;
++
 +  // T62: the page's declared colour and background when the edge was last
 +  // read. A page that changes either has changed its look, and its next
 +  // read is taken as it is.
@@ -47,13 +70,93 @@ index 342f8b191a577..d09ca41245a53 100644
   private:
    explicit PageTopSample(content::Page& page) : PageUserData(page) {}
  
-@@ -744,7 +751,35 @@ void PageThemeColorController::TakeTopRead(
+@@ -74,8 +87,13 @@ constexpr base::TimeDelta kSampleTimeout = base::Seconds(1);
+ // T31, T3, Dk8: the colour of the row over `contents` -- its top edge's
+ // when the edge was read as one colour, else its declared theme colour, else
+ // its background -- and in `edge_read` whether the edge has been read at all.
++// T63: an edge read that is not one colour and does not show the declared
++// colour leaves the row the window's own, and says so in `ruled_out`: that
++// nothing is a finding, not a page still too new to have a colour.
+ std::optional<SkColor> PageColourOf(content::WebContents& contents,
+-                                    bool& edge_read) {
++                                    bool& edge_read,
++                                    bool& ruled_out) {
++  ruled_out = false;
+   const PageTopSample* const sample =
+       PageTopSample::GetForPage(contents.GetPrimaryPage());
+   edge_read = sample;
+@@ -95,7 +113,13 @@ std::optional<SkColor> PageColourOf(content::WebContents& contents,
+     return std::nullopt;
+   }
+   // The bar is an opaque surface.
+-  return SkColorSetA(*page, SK_AlphaOPAQUE);
++  const SkColor opaque = SkColorSetA(*page, SK_AlphaOPAQUE);
++  if (sample && !sample->edge.empty() &&
++      !EdgeShowsColor(sample->edge, opaque)) {
++    ruled_out = true;
++    return std::nullopt;
++  }
++  return opaque;
+ }
+ 
+ // toolbar T20: one of 16 levels per channel, the nearest -- 0x00, 0x11 ...
+@@ -442,6 +466,12 @@ void PageThemeColorController::OnDarkPagesChanged() {
+     if (sample && sample->color) {
+       sample->color =
+           ThemeColorUnderDarkPages(*sample->color, DarkPagesApplyTo(contents));
++    } else if (sample && !sample->edge.empty()) {
++      // T63: an edge of several colours is carried the same way, so the
++      // declared colour, darkened too, is still weighed against it.
++      for (SkColor& colour : sample->edge) {
++        colour = ThemeColorUnderDarkPages(colour, DarkPagesApplyTo(contents));
++      }
+     } else {
+       forget_sample(contents->GetPrimaryPage());
+     }
+@@ -511,7 +541,8 @@ void PageThemeColorController::Refresh() {
+     // so a white page gets a white bar and a dark page a dark one even
+     // without a <meta name="theme-color"> (T3).
+     bool sample = false;
+-    color = PageColourOf(*contents, sample);
++    bool ruled_out = false;
++    color = PageColourOf(*contents, sample, ruled_out);
+     // A reload: the new Page starts with no colour of its own, and it reports
+     // one only when it differs from the last colour the WebContents sent
+     // (WebContentsImpl::OnBackgroundColorChanged keeps that on the
+@@ -527,8 +558,9 @@ void PageThemeColorController::Refresh() {
+     // Page with no colour of its own keeps the row's even once the load has
+     // stopped: the end of a reload re-read a Page that had not been told its
+     // unchanged white, and the row went to the window's ground (toolbar
+-    // T21, 2026-10-18).
+-    if (color_ && shown_contents_.get() == contents &&
++    // T21, 2026-10-18). An edge read that rules the declared colour out
++    // (T63) is not such a gap: the row leaves the colour it had.
++    if (color_ && shown_contents_.get() == contents && !ruled_out &&
+         (!color || (contents->IsLoading() && !sample))) {
+       return;
+     }
+@@ -582,9 +614,11 @@ void PageThemeColorController::RefreshPartner() {
+   std::optional<SkColor> color;
+   if (contents) {
+     bool sample = false;
+-    color = PageColourOf(*contents, sample);
+-    // The rule the active page's colour keeps through a reload (T21).
+-    if (partner_color_ && partner_shown_.get() == contents &&
++    bool ruled_out = false;
++    color = PageColourOf(*contents, sample, ruled_out);
++    // The rule the active page's colour keeps through a reload (T21), and
++    // its exception (T63).
++    if (partner_color_ && partner_shown_.get() == contents && !ruled_out &&
+         (!color || (contents->IsLoading() && !sample))) {
+       return;
+     }
+@@ -744,7 +778,37 @@ void PageThemeColorController::TakeTopRead(
    if (!sample) {
      return;
    }
 -  sample->color = UniformTopEdgeColor(result.value().bitmap);
-+  const std::optional<SkColor> read =
-+      UniformTopEdgeColor(result.value().bitmap);
++  std::vector<SkColor> edge = TopEdgeSamples(result.value().bitmap);
++  const std::optional<SkColor> read = UniformEdgeColor(edge);
 +  content::WebContents* const owner =
 +      content::WebContents::FromRenderFrameHost(&page->GetMainDocument());
 +  const std::optional<SkColor> theme_color =
@@ -78,6 +181,8 @@ index 342f8b191a577..d09ca41245a53 100644
 +      !is(theme_color) && IsDimmedEdge(*sample->color, *read);
 +  if (!dimmed_by_itself) {
 +    sample->color = read;
++    // T63: kept only while the edge is not one colour.
++    sample->edge = read ? std::vector<SkColor>() : std::move(edge);
 +  }
 +  sample->theme_color = theme_color;
 +  sample->background = background;
@@ -85,19 +190,88 @@ index 342f8b191a577..d09ca41245a53 100644
    if (contents && &contents->GetPrimaryPage() == page.get()) {
      Refresh();
 diff --git a/chrome/browser/ui/stedding/theme/page_top_color.cc b/chrome/browser/ui/stedding/theme/page_top_color.cc
-index f8a45088e4f85..32b5b1058ac37 100644
+index f8a45088e4f85..9ddb44449baf1 100644
 --- a/chrome/browser/ui/stedding/theme/page_top_color.cc
 +++ b/chrome/browser/ui/stedding/theme/page_top_color.cc
-@@ -5,6 +5,8 @@
+@@ -5,6 +5,9 @@
  #include "chrome/browser/ui/stedding/theme/page_top_color.h"
  
  #include <algorithm>
 +#include <array>
 +#include <cmath>
++#include <cstddef>
  #include <cstdlib>
  #include <vector>
  
-@@ -102,4 +104,32 @@ bool PageColorsMatch(SkColor a, SkColor b) {
+@@ -32,10 +35,10 @@ U8CPU Median(std::vector<U8CPU> values) {
+ 
+ }  // namespace
+ 
+-std::optional<SkColor> UniformTopEdgeColor(const SkBitmap& strip) {
++std::vector<SkColor> TopEdgeSamples(const SkBitmap& strip) {
+   if (strip.drawsNothing() || strip.height() < 1 ||
+       strip.width() < kPageTopMinSamples) {
+-    return std::nullopt;
++    return {};
+   }
+   // The readback is in the colour space of the surface it was copied from,
+   // on a Mac the display's (Display P3 on its own screen), while the row is
+@@ -48,7 +51,7 @@ std::optional<SkColor> UniformTopEdgeColor(const SkBitmap& strip) {
+     if (!srgb.tryAllocPixels(
+             strip.info().makeColorSpace(SkColorSpace::MakeSRGB())) ||
+         !strip.readPixels(srgb.pixmap())) {
+-      return std::nullopt;
++      return {};
+     }
+     edge = &srgb;
+   }
+@@ -62,14 +65,22 @@ std::optional<SkColor> UniformTopEdgeColor(const SkBitmap& strip) {
+     }
+   }
+   if (transparent * 2 > edge->width()) {
+-    return std::nullopt;
++    return {};
+   }
+   std::vector<SkColor> samples;
+   samples.reserve(static_cast<size_t>(edge->width()));
+-  std::vector<U8CPU> reds, greens, blues;
+   for (int x = 0; x < edge->width(); ++x) {
+-    const SkColor sample = SkColorSetA(edge->getColor(x, 0), SK_AlphaOPAQUE);
+-    samples.push_back(sample);
++    samples.push_back(SkColorSetA(edge->getColor(x, 0), SK_AlphaOPAQUE));
++  }
++  return samples;
++}
++
++std::optional<SkColor> UniformEdgeColor(const std::vector<SkColor>& samples) {
++  if (samples.empty()) {
++    return std::nullopt;
++  }
++  std::vector<U8CPU> reds, greens, blues;
++  for (const SkColor sample : samples) {
+     reds.push_back(SkColorGetR(sample));
+     greens.push_back(SkColorGetG(sample));
+     blues.push_back(SkColorGetB(sample));
+@@ -98,8 +109,51 @@ std::optional<SkColor> UniformTopEdgeColor(const SkBitmap& strip) {
+                        static_cast<U8CPU>((blue + near / 2) / near));
+ }
+ 
++std::optional<SkColor> UniformTopEdgeColor(const SkBitmap& strip) {
++  return UniformEdgeColor(TopEdgeSamples(strip));
++}
++
++bool EdgeShowsColor(const std::vector<SkColor>& samples, SkColor colour) {
++  if (samples.empty()) {
++    return false;
++  }
++  const auto near = std::ranges::count_if(samples, [colour](SkColor sample) {
++    return ChannelDistance(sample, colour) <= kPageTopChannelTolerance;
++  });
++  return near * kPageTopDeclaredShare >=
++         static_cast<std::ptrdiff_t>(samples.size());
++}
++
+ bool PageColorsMatch(SkColor a, SkColor b) {
    return ChannelDistance(a, b) <= 2;
  }
  
@@ -131,10 +305,46 @@ index f8a45088e4f85..32b5b1058ac37 100644
 +
  }  // namespace stedding
 diff --git a/chrome/browser/ui/stedding/theme/page_top_color.h b/chrome/browser/ui/stedding/theme/page_top_color.h
-index a1c0c5ea4ec6d..558eb736cf96d 100644
+index a1c0c5ea4ec6d..749543e0c7cb4 100644
 --- a/chrome/browser/ui/stedding/theme/page_top_color.h
 +++ b/chrome/browser/ui/stedding/theme/page_top_color.h
-@@ -42,6 +42,21 @@ std::optional<SkColor> UniformTopEdgeColor(const SkBitmap& strip);
+@@ -6,6 +6,7 @@
+ #define CHROME_BROWSER_UI_STEDDING_THEME_PAGE_TOP_COLOR_H_
+ 
+ #include <optional>
++#include <vector>
+ 
+ #include "third_party/skia/include/core/SkColor.h"
+ 
+@@ -32,16 +33,47 @@ inline constexpr int kPageTopMinSamples = 8;
+ // from the median, and the edge is one colour when nine samples in ten are.
+ inline constexpr int kPageTopChannelTolerance = 10;
+ 
+-// The colour of `strip`'s first row when that row is one colour: the mean of
++// `strip`'s first row, one opaque sRGB colour per column; nothing for a strip
++// with fewer than kPageTopMinSamples columns, or one mostly unpainted (read
++// before the page drew it).
++std::vector<SkColor> TopEdgeSamples(const SkBitmap& strip);
++
++// The colour of an edge read as `samples` when it is one colour: the mean of
+ // the samples near the per-channel median, if nine in ten are near it, and
+ // nothing otherwise (a photograph, a gradient, a header of several colours),
+-// or for a strip with fewer than kPageTopMinSamples columns. Opaque.
++// or for no samples. Opaque.
++std::optional<SkColor> UniformEdgeColor(const std::vector<SkColor>& samples);
++
++// UniformEdgeColor of TopEdgeSamples.
+ std::optional<SkColor> UniformTopEdgeColor(const SkBitmap& strip);
+ 
++// toolbar T63: whether `colour` shows along an edge read as `samples` that is
++// not one colour: within kPageTopChannelTolerance of at least one sample in
++// kPageTopDeclaredShare. A page's declared colour can show
++// nowhere the row meets the page: start.me declares a bright blue, #0093d5,
++// over a start page whose top is a dark photograph (the owner, 2026-11-14).
++inline constexpr int kPageTopDeclaredShare = 3;
++bool EdgeShowsColor(const std::vector<SkColor>& samples, SkColor colour);
++
+ // Whether two row colours are close enough that changing from one to the
  // other is not worth re-theming the window: every channel within two.
  bool PageColorsMatch(SkColor a, SkColor b);
  
@@ -157,10 +367,18 @@ index a1c0c5ea4ec6d..558eb736cf96d 100644
  
  #endif  // CHROME_BROWSER_UI_STEDDING_THEME_PAGE_TOP_COLOR_H_
 diff --git a/chrome/browser/ui/stedding/theme/page_top_color_unittest.cc b/chrome/browser/ui/stedding/theme/page_top_color_unittest.cc
-index 90e979ab7ab8b..3d685063e1041 100644
+index 90e979ab7ab8b..9a8e06d74e86f 100644
 --- a/chrome/browser/ui/stedding/theme/page_top_color_unittest.cc
 +++ b/chrome/browser/ui/stedding/theme/page_top_color_unittest.cc
-@@ -103,6 +103,34 @@ TEST(PageTopColorTest, UniformEdge) {
+@@ -6,6 +6,7 @@
+ 
+ #include <optional>
+ #include <utility>
++#include <vector>
+ 
+ #include "testing/gtest/include/gtest/gtest.h"
+ #include "third_party/skia/include/core/SkBitmap.h"
+@@ -103,6 +104,68 @@ TEST(PageTopColorTest, UniformEdge) {
        << SkColorGetB(*edge);
  }
  
@@ -190,6 +408,40 @@ index 90e979ab7ab8b..3d685063e1041 100644
 +  EXPECT_FALSE(IsDimmedEdge(SkColorSetRGB(30, 30, 30),
 +                            SkColorSetRGB(15, 15, 15)))
 +      << "too dark a colour for a dimming to show";
++}
++
++// toolbar T63: a page's declared colour colours the row over an edge of
++// several colours only when it shows along a third of that edge or more. A
++// header of a logo on white still takes its white; a dark photograph under a
++// bright declared blue (start.me's #0093d5) takes none.
++TEST(PageTopColorTest, ADeclaredColourMustShowAlongTheEdge) {
++  constexpr SkColor kStartBlue = SkColorSetRGB(0x00, 0x93, 0xd5);
++  SkBitmap photo = Strip(240, SkColorSetRGB(40, 42, 46));
++  for (int x = 0; x < 240; x += 2) {
++    Paint(photo, x, x + 1, SkColorSetRGB(40 + x / 4, 44 + x / 5, 52 + x / 6));
++  }
++  const std::vector<SkColor> dark = TopEdgeSamples(photo);
++  ASSERT_EQ(240u, dark.size());
++  ASSERT_FALSE(UniformEdgeColor(dark)) << "the photograph read as one colour";
++  EXPECT_FALSE(EdgeShowsColor(dark, kStartBlue))
++      << "the declared blue is nowhere on the edge";
++
++  SkBitmap logo = Strip(240, SK_ColorWHITE);
++  Paint(logo, 20, 60, SkColorSetRGB(0xd9, 0x30, 0x25));  // a sixth: a logo
++  Paint(logo, 100, 200, SkColorSetRGB(0x20, 0x21, 0x24));
++  const std::vector<SkColor> header = TopEdgeSamples(logo);
++  ASSERT_FALSE(UniformEdgeColor(header));
++  EXPECT_TRUE(EdgeShowsColor(header, SK_ColorWHITE))
++      << "white is 100 of 240 samples";
++  EXPECT_TRUE(EdgeShowsColor(header, SkColorSetRGB(0x26, 0x24, 0x28)))
++      << "within the tolerance of the dark part";
++  EXPECT_FALSE(EdgeShowsColor(header, SkColorSetRGB(0xd9, 0x30, 0x25)))
++      << "the logo is a sixth of the edge, not a third";
++  EXPECT_FALSE(EdgeShowsColor({}, SK_ColorWHITE)) << "no read shows nothing";
++  EXPECT_TRUE(TopEdgeSamples(Strip(4, SK_ColorWHITE)).empty())
++      << "a strip too short to read";
++  EXPECT_TRUE(TopEdgeSamples(Strip(100, SK_ColorTRANSPARENT)).empty())
++      << "a strip not painted yet";
 +}
 +
  // A sample a step away from the last is not a new colour for the window.
@@ -268,7 +520,7 @@ index f6aa0d91bfd40..5726d229ac40e 100644
  
   protected:
 diff --git a/chrome/test/stedding/address_band_browsertest.cc b/chrome/test/stedding/address_band_browsertest.cc
-index cf8d78c87d162..53b3bcf73e067 100644
+index cf8d78c87d162..4fe3d0d6ec740 100644
 --- a/chrome/test/stedding/address_band_browsertest.cc
 +++ b/chrome/test/stedding/address_band_browsertest.cc
 @@ -45,6 +45,9 @@
@@ -324,7 +576,7 @@ index cf8d78c87d162..53b3bcf73e067 100644
  #include "ui/views/view_utils.h"
  #include "ui/views/widget/native_widget.h"
  #include "ui/views/widget/widget.h"
-@@ -1336,6 +1347,105 @@ IN_PROC_BROWSER_TEST_F(PageColourRowTest, TheRowFollowsADarkenedPage) {
+@@ -1336,6 +1347,158 @@ IN_PROC_BROWSER_TEST_F(PageColourRowTest, TheRowFollowsADarkenedPage) {
    }
  }
  
@@ -427,10 +679,63 @@ index cf8d78c87d162..53b3bcf73e067 100644
 +  EXPECT_TRUE(WaitForTheRow(kGrey)) << "the grey page was taken for a dimming";
 +}
 +
++// toolbar T63: over a top edge of several colours, the page's declared colour
++// colours the row only where it shows along that edge. start.me declares a
++// bright blue, #0093d5, over a start page whose top is a dark photograph: the
++// row stayed that blue, a colour the page never shows (the owner,
++// 2026-11-14). A declared white that is a good part of a mixed edge is still
++// taken.
++IN_PROC_BROWSER_TEST_F(PageColourRowTest,
++                       ADeclaredColourTheEdgeDoesNotShowLeavesTheRow) {
++  stedding::SetDarkPagesOn(browser()->GetProfile(), false);
++  int reads = 0;
++  row()->HoldTopReadsForTesting(
++      base::BindLambdaForTesting([&](base::OnceClosure take) {
++        std::move(take).Run();
++        ++reads;
++      }));
++  ASSERT_TRUE(ui_test_utils::NavigateToURL(
++      browser(),
++      GURL("data:text/html,<meta name=theme-color content='%230093d5'>"
++           "<body style='margin:0;background:%230093d5'>"
++           "<div style='height:120px;background:linear-gradient(90deg,"
++           "%23202226,%23705848 30%25,%23303438 60%25,%23a0a4a8)'></div>"
++           "<p>A photograph's top under a declared blue</p></body>")));
++  EXPECT_TRUE(base::test::RunUntil([&]() {
++    return reads >= 2 && row() && !row()->color();
++  })) << "the row is "
++      << (row() && row()->color()
++              ? color_utils::SkColorToRgbaString(*row()->color())
++              : std::string("no colour"))
++      << " over an edge that shows no blue";
++  const int before = reads;
++  content::SimulateMouseClickAt(page(), 0, blink::WebMouseEvent::Button::kLeft,
++                                gfx::Point(200, 200));
++  ASSERT_TRUE(base::test::RunUntil([&]() { return reads >= before + 2; }))
++      << "the edge was not read after the click";
++  EXPECT_FALSE(row()->color()) << "the declared blue came back";
++
++  const int before_white = reads;
++  ASSERT_TRUE(ui_test_utils::NavigateToURL(
++      browser(),
++      GURL("data:text/html,<meta name=theme-color content='white'>"
++           "<body style='margin:0;background:white'>"
++           "<div style='display:flex;height:60px'>"
++           "<div style='flex:1;background:white'></div>"
++           "<div style='flex:1;background:%23202124'></div></div>"
++           "<p>Half white, half dark</p></body>")));
++  ASSERT_TRUE(base::test::RunUntil([&]() { return reads >= before_white + 2; }))
++      << "the half and half page's edge was not read";
++  EXPECT_TRUE(WaitForTheRow(SK_ColorWHITE))
++      << "the declared white shows along half the edge";
++  row()->HoldTopReadsForTesting(
++      base::RepeatingCallback<void(base::OnceClosure)>());
++}
++
  // dark-pages Dk8: a tab in the background when the switch changes keeps no
  // edge read of its page as it was. Its top edge, a pale orange, was read
  // while it was shown; the switch is turned on in another tab; shown again,
-@@ -2457,9 +2567,8 @@ IN_PROC_BROWSER_TEST_F(PageColourRowTest, TheLitCircleSitsInsideTheRow) {
+@@ -2457,9 +2620,8 @@ IN_PROC_BROWSER_TEST_F(PageColourRowTest, TheLitCircleSitsInsideTheRow) {
    views::View* const back = view()->toolbar_button_provider()->GetBackButton();
    ASSERT_TRUE(back);
    // A neighbour's hover circle: its ink drop's highlight path.
@@ -442,7 +747,7 @@ index cf8d78c87d162..53b3bcf73e067 100644
  
    for (const auto scheme : {ThemeService::BrowserColorScheme::kLight,
                              ThemeService::BrowserColorScheme::kDark}) {
-@@ -2487,13 +2596,13 @@ IN_PROC_BROWSER_TEST_F(PageColourRowTest, TheLitCircleSitsInsideTheRow) {
+@@ -2487,13 +2649,13 @@ IN_PROC_BROWSER_TEST_F(PageColourRowTest, TheLitCircleSitsInsideTheRow) {
        const auto check = [&](stedding::LitToolbarButton* button,
                               std::string_view name) {
          SCOPED_TRACE(name);
@@ -461,7 +766,7 @@ index cf8d78c87d162..53b3bcf73e067 100644
          EXPECT_LT(circle.width(), hover.width())
              << "as large as a neighbour's hover circle";
          EXPECT_GE(on_screen.y() - toolbar.y(), 5)
-@@ -2505,7 +2614,8 @@ IN_PROC_BROWSER_TEST_F(PageColourRowTest, TheLitCircleSitsInsideTheRow) {
+@@ -2505,7 +2667,8 @@ IN_PROC_BROWSER_TEST_F(PageColourRowTest, TheLitCircleSitsInsideTheRow) {
          // The icon's box, the only child the button lays out with no text.
          for (const views::View* const child : button->children()) {
            if (child->GetVisible() && !child->bounds().IsEmpty()) {
@@ -471,7 +776,7 @@ index cf8d78c87d162..53b3bcf73e067 100644
                  << "the icon is off the circle's middle";
            }
          }
-@@ -2580,4 +2690,132 @@ IN_PROC_BROWSER_TEST_F(AddressBandTest, TheAddressKeepsItsPlaceWhenEdited) {
+@@ -2580,4 +2743,132 @@ IN_PROC_BROWSER_TEST_F(AddressBandTest, TheAddressKeepsItsPlaceWhenEdited) {
        << "the address is not gathered on the middle after the edit";
  }
  

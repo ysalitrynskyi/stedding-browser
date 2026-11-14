@@ -57,6 +57,7 @@ Over the sidebar, or over its icons, scroll sideways. With a wheel, and with a s
 | Split the current tab with a new one. ⌥⌘N does it too, unless Arc is running | ⌃⌘N | Alt+Shift+N |
 | Split with the page on screen: drag a tab onto the page's left or right half, and let go when that half lights | drag | drag |
 | Mute the tab or unmute it. A split's two panes go together | ⌃M | Ctrl+M |
+| Go to the tab playing sound in the background, the one the card above Archived shows, in its Space | ⌥⇧⌘M | Ctrl+Alt+Shift+M |
 | Reopen closed tabs, one at a time, each in its Space and folder. With Settings → Stedding → Tabs → Offer Undo after closing tabs on, the toast's Undo brings back a whole close | ⇧⌘T | Ctrl+Shift+T |
 | On a pinned tab, while Settings → Stedding → Tabs → "⌘W on a pinned tab puts it to sleep" is on (on Windows the row is "Ctrl+W on a pinned tab puts it to sleep"; it is on at first): unload it and send it back to its pinned page, keeping its place. The minus on an awake pin, a middle click, and the menu's Close do the same. A pin already asleep at that page shows an x that asks before removing it | ⌘W | Ctrl+W |
 
@@ -98,7 +99,7 @@ Stedding takes a few chords Chromium uses for other commands. The old command ke
 | ⇧⌘K / Ctrl+Shift+K | Clear the Space | unbound |
 | ⌘E | Run an extension | Use Selection for Find (keeps its Edit › Find menu row) |
 
-Muting a tab, collapsing every folder, picture in picture and clearing a site's cookies (⌃M, ⇧⌘E, ⌥⇧⌘P and ⌥⇧⌘R; Ctrl+M, Ctrl+Shift+E, Ctrl+Alt+Shift+P and Ctrl+Alt+Shift+R) take no Chromium chord on either platform.
+Muting a tab, going to the playing tab, collapsing every folder, picture in picture and clearing a site's cookies (⌃M, ⌥⇧⌘M, ⇧⌘E, ⌥⇧⌘P and ⌥⇧⌘R; Ctrl+M, Ctrl+Alt+Shift+M, Ctrl+Shift+E, Ctrl+Alt+Shift+P and Ctrl+Alt+Shift+R) take no Chromium chord on either platform.
 
 Bookmark This Tab has no key, since ⌘D (Ctrl+D) pins the tab. It is a row of the command bar's actions mode: type "Bookmark". To give it a key, add one to its row in Settings → Stedding → Shortcuts, under Page.
 

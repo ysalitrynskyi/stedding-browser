@@ -1,0 +1,2060 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Fri, 13 Nov 2026 19:56:34 -0500
+Subject: feat: a tab playing in the background shows a card in the sidebar
+ (S-95)
+
+A tab of the window that plays sound while it is not on screen shows a
+card at the sidebar's foot, above Archived: its favicon and title, play
+or pause, and stop (docs/features/player.md Mp3, Mp7). The card's body
+shows the tab in its Space. In the rail the card is the favicon above
+History, and a click pauses or plays (Mp8). Option-Shift-Cmd-M
+(Ctrl+Alt+Shift+M) shows the tab, and the command bar lists Go to,
+Pause or Play, and Stop while a card shows (Mp9, commandbar K45). On by
+default, with a setting and a command bar switch (Mp10, settings T62).
+Each tab's media session is watched through its MediaSessionObserver;
+the rules that pick the card's tab are a pure function with unit tests.
+VideoPopOut's on-screen test is shared.
+
+Why: Arc's media controls at the foot of the sidebar, the most asked-for
+part of its mini player (GitHub discussion 104). The owner chose the
+card from rendered options on 2026-11-13.
+Removable when: never; Stedding's own sidebar.
+---
+ chrome/browser/BUILD.gn                       |   1 +
+ .../api/settings_private/prefs_util.cc        |   3 +
+ .../browser/global_keyboard_shortcuts_mac.mm  |   3 +
+ .../stedding_page/stedding_page.html.ts       |   8 +
+ chrome/browser/ui/accelerator_table.cc        |   4 +
+ .../browser/ui/browser_command_controller.cc  |  11 +
+ .../ui/browser_window/internal/BUILD.gn       |   1 +
+ .../internal/browser_window_features.cc       |   3 +
+ .../public/browser_window_features.h          |   4 +
+ chrome/browser/ui/stedding/BUILD.gn           |  29 ++
+ chrome/browser/ui/stedding/audio_strip.cc     | 368 ++++++++++++++++++
+ chrome/browser/ui/stedding/audio_strip.h      | 137 +++++++
+ .../ui/stedding/audio_strip_unittest.cc       |  97 +++++
+ chrome/browser/ui/stedding/find_words.cc      |   3 +
+ .../browser/ui/stedding/shortcut_catalog.cc   |   3 +
+ .../ui/stedding/shortcut_catalog_unittest.cc  |   1 +
+ .../ui/stedding/stedding_command_ids.h        |   3 +
+ chrome/browser/ui/stedding/stedding_prefs.cc  |   1 +
+ chrome/browser/ui/stedding/stedding_prefs.h   |   4 +
+ .../ui/stedding/stedding_prefs_unittest.cc    |   3 +-
+ chrome/browser/ui/stedding/video_pop_out.cc   |   7 +-
+ chrome/browser/ui/stedding/video_pop_out.h    |   8 +-
+ chrome/browser/ui/views/commandbar/BUILD.gn   |   1 +
+ .../ui/views/commandbar/command_bar_view.cc   |  22 ++
+ chrome/browser/ui/views/frame/BUILD.gn        |  12 +-
+ .../ui/views/frame/audio_strip_view.cc        | 319 +++++++++++++++
+ .../browser/ui/views/frame/audio_strip_view.h |  82 ++++
+ .../frame/vertical_tab_strip_region_view.cc   |  32 ++
+ .../frame/vertical_tab_strip_region_view.h    |   9 +
+ .../browser/ui/webui/settings/settings_ui.cc  |   8 +
+ .../settings/stedding_shortcuts_handler.cc    |   3 +
+ .../stedding_shortcuts_handler_unittest.cc    |   2 +
+ chrome/test/stedding/BUILD.gn                 |   3 +
+ .../test/stedding/audio_strip_browsertest.cc  | 309 +++++++++++++++
+ .../stedding/settings_spaces_browsertest.cc   |   5 +
+ 35 files changed, 1504 insertions(+), 5 deletions(-)
+ create mode 100644 chrome/browser/ui/stedding/audio_strip.cc
+ create mode 100644 chrome/browser/ui/stedding/audio_strip.h
+ create mode 100644 chrome/browser/ui/stedding/audio_strip_unittest.cc
+ create mode 100644 chrome/browser/ui/views/frame/audio_strip_view.cc
+ create mode 100644 chrome/browser/ui/views/frame/audio_strip_view.h
+ create mode 100644 chrome/test/stedding/audio_strip_browsertest.cc
+
+diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
+index 8b9e200418e12..377a8f44180bd 100644
+--- a/chrome/browser/BUILD.gn
++++ b/chrome/browser/BUILD.gn
+@@ -3880,6 +3880,7 @@ source_set("browser") {
+       "//chrome/browser/ui/views/switcher",
+       "//chrome/browser/ui/stedding/screenshot",
+       "//chrome/browser/ui/stedding:copy_link",
++      "//chrome/browser/ui/stedding:audio_strip",
+       "//chrome/browser/ui/stedding:media_keys",
+       "//chrome/browser/ui/stedding:pin_lifecycle",
+       "//chrome/browser/ui/stedding:private_window",
+diff --git a/chrome/browser/extensions/api/settings_private/prefs_util.cc b/chrome/browser/extensions/api/settings_private/prefs_util.cc
+index 7bc749bee368e..11cd6827fda52 100644
+--- a/chrome/browser/extensions/api/settings_private/prefs_util.cc
++++ b/chrome/browser/extensions/api/settings_private/prefs_util.cc
+@@ -464,6 +464,9 @@ const PrefsUtil::TypedPrefMap& PrefsUtil::GetAllowlistedKeys() {
+   // player Mp2, settings T61 (BACKLOG S-95).
+   (*s_allowlist)[stedding::prefs::kPlayerPopOut] =
+       settings_api::PrefType::kBoolean;
++  // player Mp3, settings T62 (BACKLOG S-95).
++  (*s_allowlist)[stedding::prefs::kPlayerAudioStrip] =
++      settings_api::PrefType::kBoolean;
+ #if BUILDFLAG(IS_MAC)
+   // settings T60 (GitHub issue 88): the Mac menu's Warn Before Quitting, in
+   // local state, as a switch of the page too.
+diff --git a/chrome/browser/global_keyboard_shortcuts_mac.mm b/chrome/browser/global_keyboard_shortcuts_mac.mm
+index 8058089ddbaf7..c8ee32742f2c5 100644
+--- a/chrome/browser/global_keyboard_shortcuts_mac.mm
++++ b/chrome/browser/global_keyboard_shortcuts_mac.mm
+@@ -246,6 +246,9 @@ GetDefaultShortcutsNotPresentInMainMenu() {
+       // toggles picture in picture.
+       {false, false, true,  false, kVK_ANSI_M,            IDC_STEDDING_TOGGLE_TAB_MUTED},
+       {true,  true,  false, true,  kVK_ANSI_P,            IDC_STEDDING_TOGGLE_PICTURE_IN_PICTURE},
++      // Stedding player Mp9 (BACKLOG S-95): Option-Shift-Cmd-M shows the
++      // tab playing sound in the background.
++      {true,  true,  false, true,  kVK_ANSI_M,            IDC_STEDDING_GO_TO_PLAYING_TAB},
+       // Stedding folders F30: Shift-Cmd-E collapses every folder of the
+       // Space while one is open, else expands them all; no menu item.
+       {true,  true,  false, false, kVK_ANSI_E,            IDC_STEDDING_TOGGLE_ALL_FOLDERS},
+diff --git a/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts b/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
+index 8963ff63dce8d..474e3a725e261 100644
+--- a/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
++++ b/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
+@@ -756,6 +756,14 @@ export function getHtml(this: SettingsSteddingPageElement) {
+       label="$i18n{steddingPlayerPopOutLabel}"
+       sub-label="$i18n{steddingPlayerPopOutSubLabel}">
+   </settings-toggle-button>
++  <settings-toggle-button
++      id="playerAudioStrip"
++      class="hr"
++      search-hint=" $i18n{steddingFindPlayerAudioStrip}"
++      pref-key="stedding.player.audio_strip"
++      label="$i18n{steddingPlayerAudioStripLabel}"
++      sub-label="$i18n{steddingPlayerAudioStripSubLabel}">
++  </settings-toggle-button>
+   <settings-toggle-button
+       id="darkPages"
+       class="hr"
+diff --git a/chrome/browser/ui/accelerator_table.cc b/chrome/browser/ui/accelerator_table.cc
+index cd7cd65a5074e..47b2f560fc0ed 100644
+--- a/chrome/browser/ui/accelerator_table.cc
++++ b/chrome/browser/ui/accelerator_table.cc
+@@ -369,6 +369,10 @@ const AcceleratorMapping kSteddingCtrlAltAcceleratorMap[] = {
+     // table: a Ctrl+Alt row there fails GetAcceleratorList's check.
+     {ui::VKEY_P, kSteddingCtrlAlt | ui::EF_SHIFT_DOWN,
+      IDC_STEDDING_TOGGLE_PICTURE_IN_PICTURE},
++    // player Mp9 (BACKLOG S-95): the tab playing sound in the background,
++    // the Mac's Option-Shift-Cmd-M.
++    {ui::VKEY_M, kSteddingCtrlAlt | ui::EF_SHIFT_DOWN,
++     IDC_STEDDING_GO_TO_PLAYING_TAB},
+     // commandbar K24: beside Ctrl+R and Ctrl+Shift+R, the Mac's
+     // Option-Shift-Cmd-R.
+     {ui::VKEY_R, kSteddingCtrlAlt | ui::EF_SHIFT_DOWN,
+diff --git a/chrome/browser/ui/browser_command_controller.cc b/chrome/browser/ui/browser_command_controller.cc
+index fb8e7a90f697b..70f610de3e52a 100644
+--- a/chrome/browser/ui/browser_command_controller.cc
++++ b/chrome/browser/ui/browser_command_controller.cc
+@@ -97,6 +97,7 @@
+ #include "chrome/browser/ui/stedding/little_window.h"
+ #include "chrome/browser/ui/stedding/peek.h"
+ #include "chrome/browser/ui/stedding/make_app.h"
++#include "chrome/browser/ui/stedding/audio_strip.h"
+ #include "chrome/browser/ui/stedding/media_keys.h"
+ #include "chrome/browser/ui/stedding/screenshot/screenshot_capture.h"
+ #include "chrome/browser/ui/stedding/sidebar_panels.h"
+@@ -1043,6 +1044,14 @@ void BrowserCommandController::HandleCommandWithDisposition(
+     case IDC_STEDDING_TOGGLE_PICTURE_IN_PICTURE:
+       stedding::TogglePictureInPicture(browser_);
+       break;
++    // player Mp9 (BACKLOG S-95): the tab playing sound in the background, in
++    // its Space; nothing when no tab plays.
++    case IDC_STEDDING_GO_TO_PLAYING_TAB:
++      if (stedding::AudioStrip* const audio = stedding::AudioStrip::From(
++              browser_)) {
++        audio->ShowTab();
++      }
++      break;
+     // Stedding: Arc's keyboard for Spaces (docs/features/spaces.md B18-B22).
+     case IDC_STEDDING_SPACE_1:
+     case IDC_STEDDING_SPACE_2:
+@@ -2307,6 +2316,8 @@ void BrowserCommandController::InitCommandState() {
+                                          normal_window);
+   command_updater_->UpdateCommandEnabled(
+       IDC_STEDDING_TOGGLE_PICTURE_IN_PICTURE, normal_window);
++  command_updater_->UpdateCommandEnabled(IDC_STEDDING_GO_TO_PLAYING_TAB,
++                                         normal_window);
+   // Stedding commandbar K24: on for a web page alone; UpdateCommandsForTabState
+   // follows the active tab from here.
+   command_updater_->UpdateCommandEnabled(
+diff --git a/chrome/browser/ui/browser_window/internal/BUILD.gn b/chrome/browser/ui/browser_window/internal/BUILD.gn
+index 8db0b29c71783..4433573f760f6 100644
+--- a/chrome/browser/ui/browser_window/internal/BUILD.gn
++++ b/chrome/browser/ui/browser_window/internal/BUILD.gn
+@@ -104,6 +104,7 @@ source_set("internal") {
+       "//chrome/browser/ui/stedding:address_row",
+       "//chrome/browser/ui/stedding:little_mark",
+       "//chrome/browser/ui/stedding:private_window",
++      "//chrome/browser/ui/stedding:audio_strip",
+       "//chrome/browser/ui/stedding:video_pop_out",
+       "//chrome/browser/ui/stedding/theme",
+       "//chrome/browser/ui/bookmarks",
+diff --git a/chrome/browser/ui/browser_window/internal/browser_window_features.cc b/chrome/browser/ui/browser_window/internal/browser_window_features.cc
+index bdd4392ae1689..0f2491a203b2a 100644
+--- a/chrome/browser/ui/browser_window/internal/browser_window_features.cc
++++ b/chrome/browser/ui/browser_window/internal/browser_window_features.cc
+@@ -98,6 +98,7 @@
+ #include "chrome/browser/ui/stedding/little_mark.h"
+ #include "chrome/browser/ui/stedding/private_window.h"
+ #include "chrome/browser/ui/stedding/address_row.h"
++#include "chrome/browser/ui/stedding/audio_strip.h"
+ #include "chrome/browser/ui/stedding/video_pop_out.h"
+ #include "chrome/browser/ui/stedding/theme/page_theme_color_controller.h"
+ #include "chrome/browser/ui/sync/browser_synced_window_delegate.h"
+@@ -321,6 +322,8 @@ void BrowserWindowFeatures::Init(BrowserWindowInterface* browser) {
+   // in a tabbed window, a private one too.
+   if (browser->GetType() == BrowserWindowInterface::Type::TYPE_NORMAL) {
+     video_pop_out_ = std::make_unique<stedding::VideoPopOut>(*browser);
++    // player Mp3, Mp7-Mp9: the tab playing sound in the background.
++    audio_strip_ = std::make_unique<stedding::AudioStrip>(*browser);
+   }
+ 
+   if (base::FeatureList::IsEnabled(features::kGlicActorUi) &&
+diff --git a/chrome/browser/ui/browser_window/public/browser_window_features.h b/chrome/browser/ui/browser_window/public/browser_window_features.h
+index a30bae20ef3dc..9aa13b035a04d 100644
+--- a/chrome/browser/ui/browser_window/public/browser_window_features.h
++++ b/chrome/browser/ui/browser_window/public/browser_window_features.h
+@@ -122,6 +122,7 @@ class SpaceModel;
+ namespace stedding {
+ class AddressRow;
+ class VideoPopOut;
++class AudioStrip;
+ class ClosedTabsUndo;
+ class PageThemeColorController;
+ class TabArchiver;
+@@ -364,6 +365,9 @@ class BrowserWindowFeatures {
+   std::unique_ptr<stedding::AddressRow> address_row_;
+   // player Mp2, Mp4 (BACKLOG S-95): a playing video pops out of a tab left.
+   std::unique_ptr<stedding::VideoPopOut> video_pop_out_;
++  // player Mp3, Mp7-Mp9 (BACKLOG S-95): the tab playing sound in the
++  // background, for the sidebar's card, the command bar and the key.
++  std::unique_ptr<stedding::AudioStrip> audio_strip_;
+   std::unique_ptr<ActorBorderViewController> actor_border_view_controller_;
+   std::unique_ptr<ttc::AiOverlayDialogController> ai_overlay_dialog_controller_;
+ 
+diff --git a/chrome/browser/ui/stedding/BUILD.gn b/chrome/browser/ui/stedding/BUILD.gn
+index ed0b0571c96de..ef7f37e8b712d 100644
+--- a/chrome/browser/ui/stedding/BUILD.gn
++++ b/chrome/browser/ui/stedding/BUILD.gn
+@@ -266,6 +266,33 @@ source_set("video_pop_out") {
+   ]
+ }
+ 
++# docs/features/player.md Mp3, Mp7-Mp9 (BACKLOG S-95): the tab of a window
++# playing sound in the background, for the card at the sidebar's foot.
++source_set("audio_strip") {
++  public = [ "audio_strip.h" ]
++  sources = [ "audio_strip.cc" ]
++  public_deps = [
++    "//base",
++    "//chrome/browser/ui/tabs:tab_strip_model_observer",
++    "//components/prefs",
++    "//ui/base",
++    "//ui/base/unowned_user_data",
++  ]
++  deps = [
++    ":prefs",
++    ":video_pop_out",
++    "//chrome/browser/profiles:profile",
++    "//chrome/browser/ui:tab_ui_helper",
++    "//chrome/browser/ui/browser_window",
++    "//chrome/browser/ui/tabs:tab_strip",
++    "//components/tabs:public",
++    "//content/public/browser",
++    "//mojo/public/cpp/bindings",
++    "//services/media_session/public/cpp",
++    "//services/media_session/public/mojom",
++  ]
++}
++
+ # docs/features/commandbar.md K28 (BACKLOG S-116): the services' blank
+ # documents the command bar offers. Pure data, so it takes only //base.
+ # docs/features/settings.md T58, commandbar.md K39: the words another browser
+@@ -476,6 +503,7 @@ source_set("address_row") {
+   ]
+   deps = [
+     ":address_row_rules",
++    ":audio_strip",
+     ":local_pages",
+     ":prefs",
+     "//chrome/browser/profiles:profile",
+@@ -1055,6 +1083,7 @@ source_set("unit_tests") {
+   sources = [
+     "address_row_rules_unittest.cc",
+     "address_row_unittest.cc",
++    "audio_strip_unittest.cc",
+     "clean_link_unittest.cc",
+     "clean_links_throttle_unittest.cc",
+     "copy_link_unittest.cc",
+diff --git a/chrome/browser/ui/stedding/audio_strip.cc b/chrome/browser/ui/stedding/audio_strip.cc
+new file mode 100644
+index 0000000000000..19be9e2d58c53
+--- /dev/null
++++ b/chrome/browser/ui/stedding/audio_strip.cc
+@@ -0,0 +1,368 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/stedding/audio_strip.h"
++
++#include <algorithm>
++#include <vector>
++
++#include "base/callback_list.h"
++#include "base/functional/bind.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/stedding/stedding_prefs.h"
++#include "chrome/browser/ui/stedding/video_pop_out.h"
++#include "chrome/browser/ui/tab_ui_helper.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "components/prefs/pref_service.h"
++#include "components/tabs/public/tab_interface.h"
++#include "content/public/browser/media_session.h"
++#include "content/public/browser/web_contents.h"
++#include "content/public/browser/web_contents_observer.h"
++#include "mojo/public/cpp/bindings/receiver.h"
++#include "services/media_session/public/mojom/media_session.mojom.h"
++
++namespace stedding {
++
++namespace {
++
++using media_session::mojom::MediaAudioVideoState;
++using media_session::mojom::MediaPictureInPictureState;
++using media_session::mojom::MediaPlaybackState;
++using media_session::mojom::MediaSessionInfo;
++
++bool Eligible(const AudioStripTab& tab, std::optional<int> shown) {
++  return !tab.on_screen && !tab.muted && tab.controllable && !tab.popped_out &&
++         !tab.stopped && (tab.playing || shown == tab.id);
++}
++
++// Sound, or a session that says nothing of what it plays.
++bool HasSound(const MediaSessionInfo& info) {
++  if (!info.audio_video_states) {
++    return true;
++  }
++  return std::ranges::any_of(
++      *info.audio_video_states, [](MediaAudioVideoState state) {
++        return state == MediaAudioVideoState::kAudioOnly ||
++               state == MediaAudioVideoState::kAudioVideo;
++      });
++}
++
++}  // namespace
++
++std::optional<int> ChooseAudioStripTab(base::span<const AudioStripTab> tabs,
++                                       std::optional<int> shown) {
++  const AudioStripTab* best = nullptr;
++  for (const AudioStripTab& tab : tabs) {
++    if (Eligible(tab, shown) && (!best || tab.started > best->started)) {
++      best = &tab;
++    }
++  }
++  return best ? std::optional<int>(best->id) : std::nullopt;
++}
++
++// One tab's page and its media session, as the rules read them.
++class AudioStrip::TabWatch : public content::WebContentsObserver,
++                             public media_session::mojom::MediaSessionObserver {
++ public:
++  TabWatch(AudioStrip& strip, tabs::TabInterface& tab, int id)
++      : strip_(strip), tab_(tab), id_(id) {
++    ObservePage(tab.GetContents());
++    // The row's title or favicon changed; the card shows them too.
++    if (TabUIHelper* const helper = TabUIHelper::From(&tab)) {
++      ui_changed_ = helper->AddTabUIChangeCallback(base::BindRepeating(
++          [](TabWatch* watch) { watch->strip_->OnTabUIChanged(watch->id_); },
++          base::Unretained(this)));
++    }
++  }
++  TabWatch(const TabWatch&) = delete;
++  TabWatch& operator=(const TabWatch&) = delete;
++  ~TabWatch() override = default;
++
++  tabs::TabInterface& tab() const { return *tab_; }
++  int id() const { return id_; }
++  bool playing() const { return playing_; }
++  void set_stopped() { stopped_ = true; }
++
++  // A sleeping tab's page is replaced when it wakes, and the other way.
++  void ObservePage(content::WebContents* contents) {
++    receiver_.reset();
++    playing_ = controllable_ = session_muted_ = popped_out_ = false;
++    Observe(contents);
++    // GetIfExists: watching creates no session for a page that never played.
++    if (content::MediaSession* const session =
++            contents ? content::MediaSession::GetIfExists(contents) : nullptr) {
++      Listen(*session);
++    }
++  }
++
++  AudioStripTab Read(TabStripModel* strip) const {
++    content::WebContents* const contents = web_contents();
++    AudioStripTab tab;
++    tab.id = id_;
++    tab.on_screen = VideoPopOut::IsOnScreen(strip, contents);
++    tab.muted = session_muted_ || (contents && contents->IsAudioMuted());
++    tab.controllable = controllable_;
++    tab.playing = playing_;
++    tab.popped_out =
++        popped_out_ || (contents && contents->HasPictureInPictureVideo());
++    tab.stopped = stopped_;
++    tab.started = started_;
++    return tab;
++  }
++
++ private:
++  void Listen(content::MediaSession& session) {
++    receiver_.reset();
++    session.AddObserver(receiver_.BindNewPipeAndPassRemote());
++  }
++
++  // content::WebContentsObserver:
++  void MediaSessionCreated(content::MediaSession* session) override {
++    Listen(*session);
++  }
++  void DidUpdateAudioMutingState(bool muted) override { strip_->Update(); }
++  void MediaPictureInPictureChanged(bool is_picture_in_picture) override {
++    strip_->Update();
++  }
++  void WebContentsDestroyed() override {
++    receiver_.reset();
++    playing_ = controllable_ = false;
++    strip_->Update();
++  }
++
++  // media_session::mojom::MediaSessionObserver:
++  void MediaSessionInfoChanged(
++      media_session::mojom::MediaSessionInfoPtr info) override {
++    const bool was_playing = playing_;
++    controllable_ = info && info->is_controllable &&
++                    info->state != MediaSessionInfo::SessionState::kInactive;
++    playing_ = controllable_ &&
++               info->playback_state == MediaPlaybackState::kPlaying &&
++               HasSound(*info);
++    session_muted_ = info && info->muted;
++    popped_out_ = info && info->picture_in_picture_state ==
++                              MediaPictureInPictureState::kInPictureInPicture;
++    if (playing_ && !was_playing) {
++      started_ = strip_->NextStart();
++      stopped_ = false;
++    }
++    strip_->Update();
++  }
++  void MediaSessionMetadataChanged(
++      const std::optional<media_session::MediaMetadata>& metadata) override {}
++  void MediaSessionActionsChanged(
++      const std::vector<media_session::mojom::MediaSessionAction>& actions)
++      override {}
++  void MediaSessionImagesChanged(
++      const base::flat_map<media_session::mojom::MediaSessionImageType,
++                           std::vector<media_session::MediaImage>>& images)
++      override {}
++  void MediaSessionPositionChanged(
++      const std::optional<media_session::MediaPosition>& position) override {}
++
++  const raw_ref<AudioStrip> strip_;
++  const raw_ref<tabs::TabInterface> tab_;
++  const int id_;
++  bool playing_ = false;
++  bool controllable_ = false;
++  bool session_muted_ = false;
++  bool popped_out_ = false;
++  bool stopped_ = false;
++  uint64_t started_ = 0;
++  base::CallbackListSubscription ui_changed_;
++  mojo::Receiver<media_session::mojom::MediaSessionObserver> receiver_{this};
++};
++
++DEFINE_USER_DATA(AudioStrip);
++
++// static
++AudioStrip* AudioStrip::From(BrowserWindowInterface* browser) {
++  return browser ? Get(browser->GetUnownedUserDataHost()) : nullptr;
++}
++
++AudioStrip::AudioStrip(BrowserWindowInterface& browser)
++    : browser_(browser),
++      scoped_user_data_(browser.GetUnownedUserDataHost(), *this) {
++  if (Profile* const profile = browser.GetProfile()) {
++    registrar_.Init(profile->GetPrefs());
++    registrar_.Add(
++        prefs::kPlayerAudioStrip,
++        base::BindRepeating(&AudioStrip::Update, base::Unretained(this),
++                            /*changed=*/true));
++  }
++  if (TabStripModel* const strip = browser.GetTabStripModel()) {
++    strip->AddObserver(this);
++    for (int i = 0; i < strip->count(); ++i) {
++      Watch(strip->GetTabAtIndex(i));
++    }
++  }
++}
++
++AudioStrip::~AudioStrip() = default;
++
++void AudioStrip::AddObserver(Observer* observer) {
++  observers_.AddObserver(observer);
++}
++
++void AudioStrip::RemoveObserver(Observer* observer) {
++  observers_.RemoveObserver(observer);
++}
++
++tabs::TabInterface* AudioStrip::tab() const {
++  TabWatch* const watch = CardWatch();
++  return watch ? &watch->tab() : nullptr;
++}
++
++bool AudioStrip::playing() const {
++  TabWatch* const watch = CardWatch();
++  return watch && watch->playing();
++}
++
++std::u16string AudioStrip::title() const {
++  tabs::TabInterface* const card = tab();
++  const TabUIHelper* const helper = card ? TabUIHelper::From(card) : nullptr;
++  return helper ? helper->GetTitle() : std::u16string();
++}
++
++ui::ImageModel AudioStrip::favicon() const {
++  tabs::TabInterface* const card = tab();
++  TabUIHelper* const helper = card ? TabUIHelper::From(card) : nullptr;
++  return helper ? helper->GetFavicon() : ui::ImageModel();
++}
++
++bool AudioStrip::ShowTab() {
++  tabs::TabInterface* const card = tab();
++  TabStripModel* const strip = browser_->GetTabStripModel();
++  if (!card || !strip) {
++    return false;
++  }
++  const int index = strip->GetIndexOfTab(card);
++  if (index == TabStripModel::kNoTab) {
++    return false;
++  }
++  // The Space follows its active tab, so this shows the tab's Space too.
++  strip->ActivateTabAt(index);
++  return true;
++}
++
++void AudioStrip::PlayOrPause() {
++  tabs::TabInterface* const card = tab();
++  content::MediaSession* const session =
++      card ? content::MediaSession::GetIfExists(card->GetContents()) : nullptr;
++  if (!session) {
++    return;
++  }
++  if (playing()) {
++    session->Suspend(content::MediaSession::SuspendType::kUI);
++  } else {
++    session->Resume(content::MediaSession::SuspendType::kUI);
++  }
++}
++
++void AudioStrip::Stop() {
++  TabWatch* const watch = CardWatch();
++  if (!watch) {
++    return;
++  }
++  watch->set_stopped();
++  if (content::MediaSession* const session =
++          content::MediaSession::GetIfExists(watch->tab().GetContents())) {
++    session->Stop(content::MediaSession::SuspendType::kUI);
++  }
++  Update();
++}
++
++void AudioStrip::OnTabStripModelChanged(
++    TabStripModel* tab_strip_model,
++    const TabStripModelChange& change,
++    const TabStripSelectionChange& selection) {
++  switch (change.type()) {
++    case TabStripModelChange::kInserted:
++      for (const TabStripModelChange::ContentsWithIndex& inserted :
++           change.GetInsert()->contents) {
++        Watch(inserted.tab);
++      }
++      break;
++    case TabStripModelChange::kRemoved:
++      for (const TabStripModelChange::RemovedTab& removed :
++           change.GetRemove()->contents) {
++        Unwatch(removed.tab);
++      }
++      break;
++    case TabStripModelChange::kReplaced: {
++      const TabStripModelChange::Replace* const replace = change.GetReplace();
++      if (TabWatch* const watch = WatchOf(replace->tab)) {
++        watch->ObservePage(replace->new_contents);
++      }
++      break;
++    }
++    default:
++      break;
++  }
++  // A tab chosen, a Space shown, a split made or undone: what is on screen
++  // may have changed.
++  Update();
++}
++
++void AudioStrip::Watch(tabs::TabInterface* tab) {
++  if (!tab || watches_.contains(tab)) {
++    return;
++  }
++  watches_.emplace(tab, std::make_unique<TabWatch>(*this, *tab, ++next_id_));
++}
++
++void AudioStrip::Unwatch(tabs::TabInterface* tab) {
++  watches_.erase(tab);
++}
++
++AudioStrip::TabWatch* AudioStrip::WatchOf(tabs::TabInterface* tab) const {
++  const auto it = watches_.find(tab);
++  return it == watches_.end() ? nullptr : it->second.get();
++}
++
++AudioStrip::TabWatch* AudioStrip::CardWatch() const {
++  if (!card_) {
++    return nullptr;
++  }
++  for (const auto& [tab, watch] : watches_) {
++    if (watch->id() == *card_) {
++      return watch.get();
++    }
++  }
++  return nullptr;
++}
++
++void AudioStrip::OnTabUIChanged(int id) {
++  if (card_ == id) {
++    Update(/*changed=*/true);
++  }
++}
++
++void AudioStrip::Update(bool changed) {
++  std::optional<int> card;
++  Profile* const profile = browser_->GetProfile();
++  TabStripModel* const strip = browser_->GetTabStripModel();
++  if (profile && strip &&
++      profile->GetPrefs()->GetBoolean(prefs::kPlayerAudioStrip)) {
++    std::vector<AudioStripTab> tabs;
++    tabs.reserve(watches_.size());
++    for (const auto& [tab, watch] : watches_) {
++      tabs.push_back(watch->Read(strip));
++    }
++    card = ChooseAudioStripTab(tabs, card_);
++  }
++  const bool card_changed = card != card_;
++  card_ = card;
++  const bool playing = this->playing();
++  if (!card_changed && !changed && playing == card_playing_) {
++    return;
++  }
++  card_playing_ = playing;
++  for (Observer& observer : observers_) {
++    observer.OnAudioStripChanged();
++  }
++}
++
++}  // namespace stedding
+diff --git a/chrome/browser/ui/stedding/audio_strip.h b/chrome/browser/ui/stedding/audio_strip.h
+new file mode 100644
+index 0000000000000..836406e1a7369
+--- /dev/null
++++ b/chrome/browser/ui/stedding/audio_strip.h
+@@ -0,0 +1,137 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_STEDDING_AUDIO_STRIP_H_
++#define CHROME_BROWSER_UI_STEDDING_AUDIO_STRIP_H_
++
++#include <cstdint>
++#include <map>
++#include <memory>
++#include <optional>
++#include <string>
++
++#include "base/containers/span.h"
++#include "base/memory/raw_ref.h"
++#include "base/observer_list.h"
++#include "base/observer_list_types.h"
++#include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
++#include "components/prefs/pref_change_registrar.h"
++#include "ui/base/models/image_model.h"
++#include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
++
++class BrowserWindowInterface;
++
++namespace tabs {
++class TabInterface;
++}
++
++namespace stedding {
++
++// docs/features/player.md Mp3, Mp7 (BACKLOG S-95): what the rules need to
++// know of one tab of the window.
++struct AudioStripTab {
++  // Unique among the window's tabs while it lives.
++  int id = 0;
++  // The active tab, or the other pane of its split.
++  bool on_screen = false;
++  // The tab's sound is off, or every player of its page is muted.
++  bool muted = false;
++  // Its page has a media session that takes play and pause from outside.
++  bool controllable = false;
++  // Its media session plays something with sound.
++  bool playing = false;
++  // Its video is in picture in picture (Mp2).
++  bool popped_out = false;
++  // Stopped from the card, and has not played since.
++  bool stopped = false;
++  // When it last started to play, in the window's order; 0 for never.
++  uint64_t started = 0;
++};
++
++// Mp3, Mp7: the id of the tab the card shows, or nullopt for no card. A tab
++// that is not on screen, not muted, takes play and pause, is not popped out
++// and was not stopped has a card while it plays; `shown`, the tab whose card
++// shows now, keeps it while paused. Of those, the newest to start wins.
++std::optional<int> ChooseAudioStripTab(base::span<const AudioStripTab> tabs,
++                                       std::optional<int> shown);
++
++// docs/features/player.md Mp3, Mp7-Mp9 (BACKLOG S-95): the tab of a window
++// that plays sound in the background, for the card at its sidebar's foot,
++// the command bar's rows and ⌥⇧⌘M. One per tabbed window, found through the
++// window's user data. It watches each tab's media session.
++class AudioStrip : public TabStripModelObserver {
++ public:
++  DECLARE_USER_DATA(AudioStrip);
++
++  class Observer : public base::CheckedObserver {
++   public:
++    // The card's tab changed, or its title, favicon or playing state did.
++    virtual void OnAudioStripChanged() = 0;
++  };
++
++  // The strip of `browser`, or null for a window that has none.
++  static AudioStrip* From(BrowserWindowInterface* browser);
++
++  explicit AudioStrip(BrowserWindowInterface& browser);
++  AudioStrip(const AudioStrip&) = delete;
++  AudioStrip& operator=(const AudioStrip&) = delete;
++  ~AudioStrip() override;
++
++  void AddObserver(Observer* observer);
++  void RemoveObserver(Observer* observer);
++
++  // The tab the card shows, or null for no card. Null while the setting is
++  // off (`stedding.player.audio_strip`).
++  tabs::TabInterface* tab() const;
++  // Whether the card's page plays; false for a paused one.
++  bool playing() const;
++  // The card's title and favicon: its tab's row's.
++  std::u16string title() const;
++  ui::ImageModel favicon() const;
++
++  // Mp7, Mp9: shows the card's tab, in its Space. False with no card.
++  bool ShowTab();
++  // Mp7, Mp8: pauses the card's page, or plays it if paused.
++  void PlayOrPause();
++  // Mp7: stops the card's page; the card goes until the tab plays again.
++  void Stop();
++
++ private:
++  class TabWatch;
++  friend class TabWatch;
++
++  // TabStripModelObserver:
++  void OnTabStripModelChanged(
++      TabStripModel* tab_strip_model,
++      const TabStripModelChange& change,
++      const TabStripSelectionChange& selection) override;
++
++  void WatchAllTabs();
++  void Watch(tabs::TabInterface* tab);
++  void Unwatch(tabs::TabInterface* tab);
++  TabWatch* WatchOf(tabs::TabInterface* tab) const;
++  TabWatch* CardWatch() const;
++  // The row of the tab `id` changed its title or favicon.
++  void OnTabUIChanged(int id);
++
++  // Chooses the card's tab again and tells the observers when anything they
++  // show changed. `changed`: what they show changed in any case.
++  void Update(bool changed = false);
++  // A tab started to play: it is the newest.
++  uint64_t NextStart() { return ++starts_; }
++
++  const raw_ref<BrowserWindowInterface> browser_;
++  PrefChangeRegistrar registrar_;
++  std::map<tabs::TabInterface*, std::unique_ptr<TabWatch>> watches_;
++  int next_id_ = 0;
++  uint64_t starts_ = 0;
++  std::optional<int> card_;
++  bool card_playing_ = false;
++  base::ObserverList<Observer> observers_;
++  ui::ScopedUnownedUserData<AudioStrip> scoped_user_data_;
++};
++
++}  // namespace stedding
++
++#endif  // CHROME_BROWSER_UI_STEDDING_AUDIO_STRIP_H_
+diff --git a/chrome/browser/ui/stedding/audio_strip_unittest.cc b/chrome/browser/ui/stedding/audio_strip_unittest.cc
+new file mode 100644
+index 0000000000000..bfda0a89fed00
+--- /dev/null
++++ b/chrome/browser/ui/stedding/audio_strip_unittest.cc
+@@ -0,0 +1,97 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/stedding/audio_strip.h"
++
++#include <optional>
++#include <vector>
++
++#include "testing/gtest/include/gtest/gtest.h"
++
++namespace stedding {
++namespace {
++
++// A tab in the background that plays, took play and pause, and started
++// `started`-th.
++AudioStripTab Playing(int id, uint64_t started) {
++  AudioStripTab tab;
++  tab.id = id;
++  tab.controllable = true;
++  tab.playing = true;
++  tab.started = started;
++  return tab;
++}
++
++std::optional<int> Choose(const std::vector<AudioStripTab>& tabs,
++                          std::optional<int> shown) {
++  return ChooseAudioStripTab(tabs, shown);
++}
++
++// docs/features/player.md Mp3: no tab plays, no card; one does, its card.
++TEST(AudioStripRulesTest, APlayingTabInTheBackgroundHasTheCard) {
++  EXPECT_EQ(std::nullopt, Choose({}, std::nullopt));
++  AudioStripTab quiet = Playing(1, 0);
++  quiet.playing = false;
++  EXPECT_EQ(std::nullopt, Choose({quiet}, std::nullopt));
++  EXPECT_EQ(2, Choose({quiet, Playing(2, 1)}, std::nullopt));
++}
++
++// Mp3: a tab on screen, muted, popped out, stopped, or out of reach of play
++// and pause has no card.
++TEST(AudioStripRulesTest, NoCardForATabOnScreenMutedOrOutOfReach) {
++  AudioStripTab tab = Playing(1, 1);
++  tab.on_screen = true;
++  EXPECT_EQ(std::nullopt, Choose({tab}, std::nullopt)) << "on screen";
++  tab = Playing(1, 1);
++  tab.muted = true;
++  EXPECT_EQ(std::nullopt, Choose({tab}, std::nullopt)) << "muted";
++  tab = Playing(1, 1);
++  tab.popped_out = true;
++  EXPECT_EQ(std::nullopt, Choose({tab}, std::nullopt)) << "popped out";
++  tab = Playing(1, 1);
++  tab.stopped = true;
++  EXPECT_EQ(std::nullopt, Choose({tab}, std::nullopt)) << "stopped";
++  tab = Playing(1, 1);
++  tab.controllable = false;
++  EXPECT_EQ(std::nullopt, Choose({tab}, std::nullopt)) << "no play and pause";
++}
++
++// Mp7: the newest player takes the card.
++TEST(AudioStripRulesTest, TheNewestPlayerTakesTheCard) {
++  EXPECT_EQ(
++      3, Choose({Playing(1, 4), Playing(3, 9), Playing(2, 6)}, std::nullopt));
++  EXPECT_EQ(3, Choose({Playing(1, 4), Playing(3, 9)}, 1))
++      << "a card that plays does not keep the card from a newer player";
++}
++
++// Mp7: a paused tab keeps the card it has, and no other paused tab gets one.
++TEST(AudioStripRulesTest, APausedCardStaysUntilShownOrStopped) {
++  AudioStripTab paused = Playing(1, 5);
++  paused.playing = false;
++  EXPECT_EQ(1, Choose({paused}, 1));
++  EXPECT_EQ(std::nullopt, Choose({paused}, std::nullopt))
++      << "a tab left paused gets no card";
++  EXPECT_EQ(1, Choose({paused, Playing(2, 3)}, 1))
++      << "an older player does not take a paused card";
++  EXPECT_EQ(2, Choose({paused, Playing(2, 7)}, 1)) << "a newer player does";
++  paused.on_screen = true;
++  EXPECT_EQ(std::nullopt, Choose({paused}, 1)) << "shown, the card goes";
++  paused.on_screen = false;
++  paused.stopped = true;
++  EXPECT_EQ(std::nullopt, Choose({paused}, 1)) << "stopped, the card goes";
++}
++
++// Mp3: hundreds of tabs, one card, the newest player's.
++TEST(AudioStripRulesTest, HundredsOfTabsShowOneCard) {
++  std::vector<AudioStripTab> tabs;
++  for (int i = 1; i <= 400; ++i) {
++    AudioStripTab tab = Playing(i, static_cast<uint64_t>(i));
++    tab.playing = i % 3 == 0;
++    tabs.push_back(tab);
++  }
++  EXPECT_EQ(399, Choose(tabs, std::nullopt));
++}
++
++}  // namespace
++}  // namespace stedding
+diff --git a/chrome/browser/ui/stedding/find_words.cc b/chrome/browser/ui/stedding/find_words.cc
+index 8bb627c6a7740..a14f372d64b8b 100644
+--- a/chrome/browser/ui/stedding/find_words.cc
++++ b/chrome/browser/ui/stedding/find_words.cc
+@@ -24,6 +24,9 @@ constexpr FindWords kFindWords[] = {
+     // player Mp6 (BACKLOG S-95): Arc's name for it.
+     {u"Pop Out Playing Videos", "pages", "steddingFindPlayerPopOut",
+      u"mini player miniplayer"},
++    // player Mp10 (BACKLOG S-95): the card's other names.
++    {u"Show What\u2019s Playing in the Sidebar", "pages",
++     "steddingFindPlayerAudioStrip", u"now playing audio card"},
+ };
+ 
+ }  // namespace
+diff --git a/chrome/browser/ui/stedding/shortcut_catalog.cc b/chrome/browser/ui/stedding/shortcut_catalog.cc
+index 60fecfa1d13b3..337796f7e9029 100644
+--- a/chrome/browser/ui/stedding/shortcut_catalog.cc
++++ b/chrome/browser/ui/stedding/shortcut_catalog.cc
+@@ -273,6 +273,9 @@ constexpr Entry kEntries[] = {
+      kFixed | kHidden, IDC_CUT},
+     {"page-paste", IDC_CONTENT_CONTEXT_PASTE, u"Paste", Group::kTextEditing,
+      kFixed | kHidden, IDC_PASTE},
++    // player Mp9 (BACKLOG S-95). Z10: a new name goes at the end.
++    {"go-to-playing-tab", IDC_STEDDING_GO_TO_PLAYING_TAB,
++     u"Go to the tab playing sound in the background", Group::kTabs},
+ };
+ 
+ void AddUnique(std::vector<Chord>& chords, const Chord& chord) {
+diff --git a/chrome/browser/ui/stedding/shortcut_catalog_unittest.cc b/chrome/browser/ui/stedding/shortcut_catalog_unittest.cc
+index 5658c1b829691..ef477bf9b9436 100644
+--- a/chrome/browser/ui/stedding/shortcut_catalog_unittest.cc
++++ b/chrome/browser/ui/stedding/shortcut_catalog_unittest.cc
+@@ -149,6 +149,7 @@ TEST(ShortcutCatalogTest, NamesAreStable) {
+       "page-copy",
+       "page-cut",
+       "page-paste",
++      "go-to-playing-tab",
+   };
+   std::vector<std::string> names;
+   std::set<int> commands;
+diff --git a/chrome/browser/ui/stedding/stedding_command_ids.h b/chrome/browser/ui/stedding/stedding_command_ids.h
+index 66b0b544a6aa9..5d70718578b38 100644
+--- a/chrome/browser/ui/stedding/stedding_command_ids.h
++++ b/chrome/browser/ui/stedding/stedding_command_ids.h
+@@ -25,6 +25,9 @@ inline constexpr int IDC_STEDDING_NEW_BLANK_WINDOW = 55145;
+ // opt-shift-cmd-P toggles picture in picture.
+ inline constexpr int IDC_STEDDING_TOGGLE_TAB_MUTED = 55146;
+ inline constexpr int IDC_STEDDING_TOGGLE_PICTURE_IN_PICTURE = 55147;
++// player Mp9 (BACKLOG S-95): opt-shift-cmd-M shows the tab playing sound in
++// the background, the sidebar's audio card's.
++inline constexpr int IDC_STEDDING_GO_TO_PLAYING_TAB = 55160;
+ // folders F30: collapse or expand every folder of the Space.
+ inline constexpr int IDC_STEDDING_TOGGLE_ALL_FOLDERS = 55148;
+ // commandbar K24, sessions S27: the site's cookies cleared and the page
+diff --git a/chrome/browser/ui/stedding/stedding_prefs.cc b/chrome/browser/ui/stedding/stedding_prefs.cc
+index cb094d7f5a538..0c87837d3996a 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs.cc
++++ b/chrome/browser/ui/stedding/stedding_prefs.cc
+@@ -119,6 +119,7 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
+   registry->RegisterBooleanPref(kFullscreenHint, false);
+   registry->RegisterBooleanPref(kCameraRowFullscreen, false);
+   registry->RegisterBooleanPref(kPlayerPopOut, false);
++  registry->RegisterBooleanPref(kPlayerAudioStrip, true);
+   registry->RegisterBooleanPref(kTabsTidyTitles, false);
+   registry->RegisterBooleanPref(kDownloadsTidyNames, false);
+   registry->RegisterListPref(kArcImportedIds);
+diff --git a/chrome/browser/ui/stedding/stedding_prefs.h b/chrome/browser/ui/stedding/stedding_prefs.h
+index 35216a596912d..f2b067846d1fc 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs.h
++++ b/chrome/browser/ui/stedding/stedding_prefs.h
+@@ -315,6 +315,10 @@ inline constexpr char kCameraRowFullscreen[] =
+ // video with sound puts the video in picture in picture, and showing the tab
+ // puts it back. Off by default (the owner, discussion 104).
+ inline constexpr char kPlayerPopOut[] = "stedding.player.pop_out";
++// player Mp3, Mp7-Mp10, settings T62 (BACKLOG S-95): a tab playing sound in
++// the background shows a card at the sidebar's foot, to pause it, stop it or
++// go back to it. On by default, as Arc has it.
++inline constexpr char kPlayerAudioStrip[] = "stedding.player.audio_strip";
+ // tabs R65, sidebar-panels Pn17, settings T52, T53 (BACKLOG S-398): a pinned
+ // tab's row tidies its page's title, and a downloaded file whose name says
+ // nothing takes its page's title, by rules on the device (ADR 0020). Both off
+diff --git a/chrome/browser/ui/stedding/stedding_prefs_unittest.cc b/chrome/browser/ui/stedding/stedding_prefs_unittest.cc
+index 13783096bc08f..744f9b9d87037 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs_unittest.cc
++++ b/chrome/browser/ui/stedding/stedding_prefs_unittest.cc
+@@ -33,7 +33,8 @@ TEST(SteddingPrefsTest, EveryPreferenceRegistersWithItsDefault) {
+        {kNewTabShowHint, kNewTabShowShortcuts, kCopyStripTracking, kUiAnimate,
+         kShowLinkAddress, kPinsCloseSleeps, kMenusShort, kHoldCmdNumbers,
+         kDarkPagesButton, kBlockerButton, kMarkLocalTabs, kLittleEnabled,
+-        kCopyLinkButton, kPeekEnabled, kCtrlTabBackgroundTabs}) {
++        kCopyLinkButton, kPeekEnabled, kCtrlTabBackgroundTabs,
++        kPlayerAudioStrip}) {
+     ASSERT_TRUE(service.FindPreference(name)) << name;
+     EXPECT_TRUE(service.GetBoolean(name)) << name;
+   }
+diff --git a/chrome/browser/ui/stedding/video_pop_out.cc b/chrome/browser/ui/stedding/video_pop_out.cc
+index f050a7d50036a..566052977180b 100644
+--- a/chrome/browser/ui/stedding/video_pop_out.cc
++++ b/chrome/browser/ui/stedding/video_pop_out.cc
+@@ -111,7 +111,12 @@ void VideoPopOut::OnTabStripModelChanged(
+ }
+ 
+ bool VideoPopOut::IsShown(content::WebContents* contents) const {
+-  TabStripModel* const strip = browser_->GetTabStripModel();
++  return IsOnScreen(browser_->GetTabStripModel(), contents);
++}
++
++// static
++bool VideoPopOut::IsOnScreen(TabStripModel* strip,
++                             content::WebContents* contents) {
+   tabs::TabInterface* const active = strip ? strip->GetActiveTab() : nullptr;
+   if (!active || !contents) {
+     return false;
+diff --git a/chrome/browser/ui/stedding/video_pop_out.h b/chrome/browser/ui/stedding/video_pop_out.h
+index 769e1a60a544b..a995bbe89cd66 100644
+--- a/chrome/browser/ui/stedding/video_pop_out.h
++++ b/chrome/browser/ui/stedding/video_pop_out.h
+@@ -40,6 +40,11 @@ class VideoPopOut : public TabStripModelObserver {
+   // picture. Not while the page already shows picture in picture.
+   static bool PlaysVideoWithSound(content::WebContents* contents);
+ 
++  // Whether `contents` is on screen in the window of `strip`: the active
++  // tab's page, or the other pane of its split. The audio card (Mp3) reads
++  // it too.
++  static bool IsOnScreen(TabStripModel* strip, content::WebContents* contents);
++
+   // The page whose video this window popped out, while it is out.
+   content::WebContents* popped_out_for_testing() const {
+     return popped_.get();
+@@ -52,8 +57,7 @@ class VideoPopOut : public TabStripModelObserver {
+       const TabStripModelChange& change,
+       const TabStripSelectionChange& selection) override;
+ 
+-  // Whether `contents` is on screen in this window: the active tab's page,
+-  // or the other pane of its split.
++  // IsOnScreen() in this window.
+   bool IsShown(content::WebContents* contents) const;
+ 
+   bool IsOn() const;
+diff --git a/chrome/browser/ui/views/commandbar/BUILD.gn b/chrome/browser/ui/views/commandbar/BUILD.gn
+index d90b10ea30234..379b6858f73ba 100644
+--- a/chrome/browser/ui/views/commandbar/BUILD.gn
++++ b/chrome/browser/ui/views/commandbar/BUILD.gn
+@@ -45,6 +45,7 @@ source_set("commandbar") {
+     "//chrome/browser/ui/spaces",
+     "//chrome/browser/ui/stedding:prefs",
+     "//chrome/browser/ui/stedding:sleep_tabs",
++    "//chrome/browser/ui/stedding:audio_strip",
+     "//chrome/browser/ui/stedding:media_keys",
+     "//chrome/browser/ui/stedding:find_words",
+     "//chrome/browser/ui/stedding:new_documents",
+diff --git a/chrome/browser/ui/views/commandbar/command_bar_view.cc b/chrome/browser/ui/views/commandbar/command_bar_view.cc
+index 9bd93dbbef5f0..00515385b044e 100644
+--- a/chrome/browser/ui/views/commandbar/command_bar_view.cc
++++ b/chrome/browser/ui/views/commandbar/command_bar_view.cc
+@@ -63,6 +63,7 @@
+ #include "chrome/browser/ui/stedding/dark_pages.h"
+ #include "chrome/browser/ui/stedding/extension_keyword.h"
+ #include "chrome/browser/ui/stedding/make_app.h"
++#include "chrome/browser/ui/stedding/audio_strip.h"
+ #include "chrome/browser/ui/stedding/media_keys.h"
+ #include "chrome/browser/ui/stedding/new_documents.h"
+ #include "chrome/browser/ui/stedding/shortcut_overrides.h"
+@@ -1274,6 +1275,24 @@ void CommandBarView::BuildActions() {
+         break;
+     }
+   }
++  // player Mp9 (BACKLOG S-95): the tab playing sound in the background, while
++  // the sidebar's card shows it: go to it, pause or play it, stop it.
++  if (tabbed) {
++    if (stedding::AudioStrip* const audio =
++            stedding::AudioStrip::From(browser_);
++        audio && audio->tab()) {
++      command(IDC_STEDDING_GO_TO_PLAYING_TAB, u"Go to Playing Tab");
++      actions_.push_back(
++          {audio->playing() ? u"Pause Playing Tab" : u"Play Playing Tab",
++           std::u16string(),
++           base::BindRepeating(&stedding::AudioStrip::PlayOrPause,
++                               base::Unretained(audio)),
++           /*keeps_bar_open=*/false, /*key=*/u"play-or-pause-playing-tab"});
++      actions_.push_back({u"Stop Playing Tab", std::u16string(),
++                          base::BindRepeating(&stedding::AudioStrip::Stop,
++                                              base::Unretained(audio))});
++    }
++  }
+   // commandbar K31-K33, toolbar T13 (BACKLOG S-104): what the address row
+   // holds -- each extension action the toolbar offers on this tab, the media
+   // controls, the page's site information -- whether or not the row shows,
+@@ -1530,6 +1549,9 @@ void CommandBarView::BuildActions() {
+ #endif
+           // player Mp2, Mp6 (BACKLOG S-95).
+           {stedding::prefs::kPlayerPopOut, u"Pop Out Playing Videos"},
++          // player Mp3, Mp10.
++          {stedding::prefs::kPlayerAudioStrip,
++           u"Show What\u2019s Playing in the Sidebar"},
+           {stedding::prefs::kNewTabShowHint,
+            u"Command-bar hint on the new tab page"},
+           {stedding::prefs::kNewTabShowShortcuts,
+diff --git a/chrome/browser/ui/views/frame/BUILD.gn b/chrome/browser/ui/views/frame/BUILD.gn
+index e0bacee3537ea..d8d3d9ec90f2e 100644
+--- a/chrome/browser/ui/views/frame/BUILD.gn
++++ b/chrome/browser/ui/views/frame/BUILD.gn
+@@ -536,11 +536,17 @@ source_set("horizontal_tab_strip_region_view") {
+ }
+ 
+ source_set("vertical_tab_strip_region_view") {
+-  public = [ "vertical_tab_strip_region_view.h" ]
++  public = [
++    # docs/features/player.md Mp3, Mp8: its card's view, for its tests.
++    "audio_strip_view.h",
++    "vertical_tab_strip_region_view.h",
++  ]
+   sources = [
+     # docs/features/sidebar-panels.md: the panel in the sidebar's column.
+     "//chrome/browser/ui/stedding/sidebar_panels_view.cc",
+     "//chrome/browser/ui/stedding/sidebar_panels_view.h",
++    # docs/features/player.md Mp3, Mp8: the card of the tab playing sound.
++    "audio_strip_view.cc",
+     "vertical_tab_strip_region_view.cc",
+   ]
+   public_deps = [
+@@ -572,6 +578,10 @@ source_set("vertical_tab_strip_region_view") {
+     ":shadow",
+     # updates Up4: the pill at the sidebar's foot; private P1: the coat.
+     "//chrome/browser/ui/stedding:private_window",
++    # player Mp3, Mp7-Mp9: the tab playing sound in the background.
++    "//chrome/browser/ui/stedding:audio_strip",
++    "//components/vector_icons",
++    "//skia",
+     "//chrome/browser/ui/views/stedding:update_pill",
+     "//chrome/app:generated_resources",
+     "//chrome/browser/ui:browser_actions",
+diff --git a/chrome/browser/ui/views/frame/audio_strip_view.cc b/chrome/browser/ui/views/frame/audio_strip_view.cc
+new file mode 100644
+index 0000000000000..7ad511aefa1d3
+--- /dev/null
++++ b/chrome/browser/ui/views/frame/audio_strip_view.cc
+@@ -0,0 +1,319 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/views/frame/audio_strip_view.h"
++
++#include <memory>
++#include <string>
++#include <utility>
++
++#include "base/functional/bind.h"
++#include "base/strings/strcat.h"
++#include "cc/paint/paint_flags.h"
++#include "chrome/browser/ui/color/chrome_color_id.h"
++#include "chrome/browser/ui/stedding_ui_metrics.h"
++#include "chrome/browser/ui/views/tabs/common/sidebar_font.h"
++#include "components/vector_icons/vector_icons.h"
++#include "skia/ext/image_operations.h"
++#include "ui/accessibility/ax_enums.mojom.h"
++#include "ui/base/metadata/metadata_impl_macros.h"
++#include "ui/base/models/image_model.h"
++#include "ui/color/color_provider.h"
++#include "ui/gfx/canvas.h"
++#include "ui/gfx/font_list.h"
++#include "ui/gfx/geometry/point_f.h"
++#include "ui/gfx/geometry/rect_f.h"
++#include "ui/gfx/geometry/vector2d.h"
++#include "ui/gfx/image/image_skia_operations.h"
++#include "ui/gfx/paint_vector_icon.h"
++#include "ui/views/accessibility/view_accessibility.h"
++#include "ui/views/animation/ink_drop.h"
++#include "ui/views/background.h"
++#include "ui/views/border.h"
++#include "ui/views/controls/button/image_button.h"
++#include "ui/views/controls/button/image_button_factory.h"
++#include "ui/views/controls/button/label_button.h"
++#include "ui/views/layout/box_layout.h"
++#include "ui/views/view_class_properties.h"
++#include "ui/views/widget/widget.h"
++
++namespace stedding {
++
++namespace {
++
++// Mp3: a 44 DIP row, the card 38 DIP tall within it (the rendered option
++// the owner chose, 2026-11-13).
++constexpr int kCardRowHeight = 44;
++constexpr int kCardInset = 3;
++// The card's buttons: a 16 DIP glyph in a 24 DIP target, the stop's cross a
++// size down, as the rendered card drew them.
++constexpr int kButtonTarget = 24;
++constexpr int kPlayPauseGlyph = 16;
++constexpr int kStopGlyph = 14;
++constexpr int kButtonGap = 4;
++constexpr int kCardTrailingInset = 6;
++// Mp8: the rail's card, under the rail's other icons' rhythm.
++constexpr int kRailHeight = 36;
++
++constexpr ui::ColorId kCardFill = kColorTabBackgroundActiveFrameActive;
++constexpr ui::ColorId kCardFillInactive =
++    kColorTabBackgroundActiveFrameInactive;
++constexpr ui::ColorId kCardText = kColorTabForegroundActiveFrameActive;
++
++// The row's favicon at `size`, or a speaker where the page has none.
++ui::ImageModel CardFavicon(const ui::ImageModel& favicon, int size) {
++  if (favicon.IsEmpty()) {
++    return ui::ImageModel::FromVectorIcon(vector_icons::kVolumeUpIcon,
++                                          kCardText, size);
++  }
++  if (favicon.IsImage()) {
++    gfx::ImageSkia image = favicon.GetImage().AsImageSkia();
++    if (!image.isNull() && image.size() != gfx::Size(size, size)) {
++      image = gfx::ImageSkiaOperations::CreateResizedImage(
++          image, skia::ImageOperations::RESIZE_BEST, gfx::Size(size, size));
++    }
++    return ui::ImageModel::FromImageSkia(image);
++  }
++  return favicon;
++}
++
++// Mp7: the card's body, its favicon and title, a button that shows the tab.
++// Its title is drawn on the card's fill, so with no subpixel text, as the
++// sidebar's rows draw theirs.
++class CardBody : public views::LabelButton {
++  METADATA_HEADER(CardBody, views::LabelButton)
++
++ public:
++  explicit CardBody(PressedCallback callback)
++      : views::LabelButton(std::move(callback), std::u16string()) {
++    label()->SetSkipSubpixelRenderingOpacityCheck(true);
++    label()->SetSubpixelRenderingEnabled(false);
++  }
++
++  void SetFont(const gfx::FontList& font) { label()->SetFontList(font); }
++};
++
++BEGIN_METADATA(CardBody)
++END_METADATA
++
++std::u16string PlayOrPauseName(bool playing) {
++  return playing ? u"Pause" : u"Play";
++}
++
++}  // namespace
++
++// Mp8: the rail's card: the favicon, and at its corner a badge with what a
++// click does, pause or play.
++class AudioStripView::RailButton : public views::Button {
++  METADATA_HEADER(RailButton, views::Button)
++
++ public:
++  explicit RailButton(PressedCallback callback)
++      : views::Button(std::move(callback)) {
++    views::InkDrop::Get(this)->SetMode(views::InkDropHost::InkDropMode::ON);
++  }
++
++  void Set(ui::ImageModel favicon, bool playing) {
++    favicon_ = std::move(favicon);
++    playing_ = playing;
++    SchedulePaint();
++  }
++
++  // views::Button:
++  gfx::Size CalculatePreferredSize(
++      const views::SizeBounds& available_size) const override {
++    return gfx::Size(kRailHeight, kRailHeight);
++  }
++  void PaintButtonContents(gfx::Canvas* canvas) override {
++    const ui::ColorProvider* const colors = GetColorProvider();
++    if (!colors) {
++      return;
++    }
++    const int size = SidebarFaviconSize();
++    const gfx::Rect icon(width() / 2 - size / 2, height() / 2 - size / 2, size,
++                         size);
++    const gfx::ImageSkia image = CardFavicon(favicon_, size).Rasterize(colors);
++    if (!image.isNull()) {
++      canvas->DrawImageInt(image, 0, 0, image.width(), image.height(), icon.x(),
++                           icon.y(), size, size, /*filter=*/true);
++    }
++    // The badge: a disc in the text's colour, rimmed with the sidebar's
++    // ground so it stands off the favicon, the glyph cut in the ground.
++    const SkColor ground = colors->GetColor(ui::kColorFrameActive);
++    const SkColor ink = colors->GetColor(kCardText);
++    const gfx::PointF centre(icon.right(), icon.bottom());
++    cc::PaintFlags flags;
++    flags.setAntiAlias(true);
++    flags.setStyle(cc::PaintFlags::kFill_Style);
++    flags.setColor(ground);
++    canvas->DrawCircle(centre, 6.5f, flags);
++    flags.setColor(ink);
++    canvas->DrawCircle(centre, 5.0f, flags);
++    canvas->Save();
++    canvas->Translate(gfx::Vector2d(static_cast<int>(centre.x()) - 4,
++                                    static_cast<int>(centre.y()) - 4));
++    gfx::PaintVectorIcon(canvas,
++                         playing_ ? vector_icons::kPauseFilledIcon
++                                  : vector_icons::kPlayArrowFilledFlippableIcon,
++                         8, ground);
++    canvas->Restore();
++  }
++
++ private:
++  ui::ImageModel favicon_;
++  bool playing_ = false;
++};
++
++BEGIN_METADATA(AudioStripView, RailButton)
++END_METADATA
++
++AudioStripView::AudioStripView(AudioStrip& strip,
++                               Form form,
++                               int side_padding,
++                               int favicon_inset)
++    : strip_(strip), form_(form) {
++  SetLayoutManager(std::make_unique<views::BoxLayout>(
++      views::BoxLayout::Orientation::kHorizontal));
++  if (form_ == Form::kRail) {
++    auto* const layout = static_cast<views::BoxLayout*>(GetLayoutManager());
++    layout->set_main_axis_alignment(
++        views::BoxLayout::MainAxisAlignment::kCenter);
++    rail_button_ =
++        AddChildView(std::make_unique<RailButton>(base::BindRepeating(
++            &AudioStrip::PlayOrPause, base::Unretained(&strip))));
++  } else {
++    auto* const layout = static_cast<views::BoxLayout*>(GetLayoutManager());
++    layout->set_cross_axis_alignment(
++        views::BoxLayout::CrossAxisAlignment::kCenter);
++    SetBorder(
++        views::CreateEmptyBorder(gfx::Insets::VH(kCardInset, side_padding)));
++    // Mp7, Mp9: the body shows the tab, in its Space.
++    body_ = AddChildView(std::make_unique<CardBody>(base::BindRepeating(
++        base::IgnoreResult(&AudioStrip::ShowTab), base::Unretained(&strip))));
++    body_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
++    body_->SetBorder(views::CreateEmptyBorder(
++        gfx::Insets::TLBR(0, favicon_inset, 0, kButtonGap)));
++    body_->SetImageLabelSpacing(8);
++    body_->SetEnabledTextColors(kCardText);
++    body_->SetTextColor(views::Button::STATE_HOVERED, kCardText);
++    body_->SetTextColor(views::Button::STATE_PRESSED, kCardText);
++    body_->SetElideBehavior(gfx::ELIDE_TAIL);
++    body_->SetMinSize(gfx::Size(0, kCardRowHeight - 2 * kCardInset));
++    layout->SetFlexForView(body_, 1);
++    const auto make_button = [&](base::RepeatingClosure pressed) {
++      auto button = views::CreateVectorImageButton(
++          base::BindRepeating(std::move(pressed)));
++      button->SetPreferredSize(gfx::Size(kButtonTarget, kButtonTarget));
++      views::InkDrop::Get(button.get())->SetBaseColor(kCardText);
++      return AddChildView(std::move(button));
++    };
++    play_pause_ = make_button(base::BindRepeating(&AudioStrip::PlayOrPause,
++                                                  base::Unretained(&strip)));
++    play_pause_->SetProperty(views::kMarginsKey,
++                             gfx::Insets::TLBR(0, 0, 0, kButtonGap));
++    stop_ = make_button(
++        base::BindRepeating(&AudioStrip::Stop, base::Unretained(&strip)));
++    stop_->SetProperty(views::kMarginsKey,
++                       gfx::Insets::TLBR(0, 0, 0, kCardTrailingInset));
++    stop_->SetImageModel(views::Button::STATE_NORMAL,
++                         ui::ImageModel::FromVectorIcon(
++                             vector_icons::kCloseIcon, kCardText, kStopGlyph));
++    stop_->SetTooltipText(u"Stop");
++    stop_->GetViewAccessibility().SetName(u"Stop");
++  }
++  observation_.Observe(&strip);
++  Refresh();
++}
++
++AudioStripView::~AudioStripView() = default;
++
++void AudioStripView::SetRailForm(bool rail) {
++  rail_ = rail;
++  Refresh();
++}
++
++views::Button* AudioStripView::body_for_testing() const {
++  return body_;
++}
++
++views::Button* AudioStripView::play_pause_for_testing() const {
++  return play_pause_;
++}
++
++views::Button* AudioStripView::stop_for_testing() const {
++  return stop_;
++}
++
++views::Button* AudioStripView::rail_button_for_testing() const {
++  return rail_button_;
++}
++
++gfx::Size AudioStripView::CalculatePreferredSize(
++    const views::SizeBounds& available_size) const {
++  // The sidebar gives the row its width.
++  return gfx::Size(0, form_ == Form::kRail ? kRailHeight : kCardRowHeight);
++}
++
++void AudioStripView::OnPaint(gfx::Canvas* canvas) {
++  views::View::OnPaint(canvas);
++  if (form_ != Form::kCard) {
++    return;
++  }
++  const ui::ColorProvider* const colors = GetColorProvider();
++  if (!colors) {
++    return;
++  }
++  // Mp3: the selected row's fill and corners.
++  const bool active = !GetWidget() || GetWidget()->ShouldPaintAsActive();
++  cc::PaintFlags flags;
++  flags.setAntiAlias(true);
++  flags.setStyle(cc::PaintFlags::kFill_Style);
++  flags.setColor(colors->GetColor(active ? kCardFill : kCardFillInactive));
++  canvas->DrawRoundRect(gfx::RectF(GetContentsBounds()), SidebarCornerRadius(),
++                        flags);
++}
++
++void AudioStripView::OnAudioStripChanged() {
++  Refresh();
++}
++
++void AudioStripView::Refresh() {
++  const bool own_form = (form_ == Form::kRail) == rail_;
++  const bool has_tab = strip_->tab() != nullptr;
++  SetVisible(own_form && has_tab);
++  if (!has_tab) {
++    return;
++  }
++  const bool playing = strip_->playing();
++  const std::u16string title = strip_->title();
++  const std::u16string state = playing ? u"playing" : u"paused";
++  if (form_ == Form::kRail) {
++    rail_button_->Set(strip_->favicon(), playing);
++    rail_button_->SetTooltipText(
++        base::StrCat({title, u": ", PlayOrPauseName(playing)}));
++    rail_button_->GetViewAccessibility().SetName(
++        base::StrCat({PlayOrPauseName(playing), u" ", title}));
++    return;
++  }
++  body_->SetText(title);
++  body_->SetImageModel(views::Button::STATE_NORMAL,
++                       CardFavicon(strip_->favicon(), SidebarFaviconSize()));
++  static_cast<CardBody*>(body_.get())->SetFont(SidebarFont());
++  body_->SetTooltipText(title);
++  body_->GetViewAccessibility().SetName(base::StrCat({title, u", ", state}));
++  play_pause_->SetImageModel(
++      views::Button::STATE_NORMAL,
++      ui::ImageModel::FromVectorIcon(
++          playing ? vector_icons::kPauseFilledIcon
++                  : vector_icons::kPlayArrowFilledFlippableIcon,
++          kCardText, kPlayPauseGlyph));
++  play_pause_->SetTooltipText(PlayOrPauseName(playing));
++  play_pause_->GetViewAccessibility().SetName(PlayOrPauseName(playing));
++  SchedulePaint();
++}
++
++BEGIN_METADATA(AudioStripView)
++END_METADATA
++
++}  // namespace stedding
+diff --git a/chrome/browser/ui/views/frame/audio_strip_view.h b/chrome/browser/ui/views/frame/audio_strip_view.h
+new file mode 100644
+index 0000000000000..5cc276a26c2f1
+--- /dev/null
++++ b/chrome/browser/ui/views/frame/audio_strip_view.h
+@@ -0,0 +1,82 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_VIEWS_FRAME_AUDIO_STRIP_VIEW_H_
++#define CHROME_BROWSER_UI_VIEWS_FRAME_AUDIO_STRIP_VIEW_H_
++
++#include "base/memory/raw_ptr.h"
++#include "base/memory/raw_ref.h"
++#include "base/scoped_observation.h"
++#include "chrome/browser/ui/stedding/audio_strip.h"
++#include "ui/base/metadata/metadata_header_macros.h"
++#include "ui/views/view.h"
++
++namespace views {
++class Button;
++class ImageButton;
++class LabelButton;
++}  // namespace views
++
++namespace stedding {
++
++// docs/features/player.md Mp3, Mp7-Mp9 (BACKLOG S-95): the card at the
++// sidebar's foot for the tab of the window that plays sound in the
++// background. Two of them stand in each sidebar of Spaces, one per form:
++// `kCard`, the open sidebar's card above the archive line, its body showing
++// the tab, with play or pause and stop; `kRail`, the rail's favicon above
++// History, a click pausing or playing (Mp8). Each shows only in its own form
++// and while the window's AudioStrip has a tab.
++class AudioStripView : public views::View, public AudioStrip::Observer {
++  METADATA_HEADER(AudioStripView, views::View)
++
++ public:
++  enum class Form { kCard, kRail };
++
++  // `side_padding`: the open sidebar's padding from its edges, where the
++  // card's corners stand; `favicon_inset`: the rows' favicon inset in a row,
++  // where the card's favicon stands too.
++  AudioStripView(AudioStrip& strip,
++                 Form form,
++                 int side_padding,
++                 int favicon_inset);
++  AudioStripView(const AudioStripView&) = delete;
++  AudioStripView& operator=(const AudioStripView&) = delete;
++  ~AudioStripView() override;
++
++  // The sidebar is the rail, or open: the view shows only in its own form.
++  void SetRailForm(bool rail);
++
++  views::Button* body_for_testing() const;
++  views::Button* play_pause_for_testing() const;
++  views::Button* stop_for_testing() const;
++  views::Button* rail_button_for_testing() const;
++
++  // views::View:
++  gfx::Size CalculatePreferredSize(
++      const views::SizeBounds& available_size) const override;
++  void OnPaint(gfx::Canvas* canvas) override;
++
++ private:
++  class RailButton;
++
++  // AudioStrip::Observer:
++  void OnAudioStripChanged() override;
++
++  void Refresh();
++
++  const raw_ref<AudioStrip> strip_;
++  const Form form_;
++  bool rail_ = false;
++  // kCard.
++  raw_ptr<views::LabelButton> body_ = nullptr;
++  raw_ptr<views::ImageButton> play_pause_ = nullptr;
++  raw_ptr<views::ImageButton> stop_ = nullptr;
++  // kRail.
++  raw_ptr<RailButton> rail_button_ = nullptr;
++  base::ScopedObservation<AudioStrip, AudioStrip::Observer> observation_{this};
++};
++
++}  // namespace stedding
++
++#endif  // CHROME_BROWSER_UI_VIEWS_FRAME_AUDIO_STRIP_VIEW_H_
+diff --git a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+index d8013fb5a8df3..82ab1e1f063e0 100644
+--- a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
++++ b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+@@ -52,6 +52,7 @@
+ #include "chrome/browser/ui/spaces/space_commands.h"
+ #include "chrome/browser/ui/spaces/space_model.h"
+ #include "chrome/browser/ui/spaces/space_storage_partition.h"
++#include "chrome/browser/ui/stedding/audio_strip.h"
+ #include "chrome/browser/ui/stedding/downloads_nudge.h"
+ #include "chrome/browser/ui/stedding/little_window.h"
+ #include "chrome/browser/ui/stedding/motion.h"
+@@ -73,6 +74,7 @@
+ #include "chrome/browser/ui/ui_features.h"
+ #include "chrome/browser/ui/views/animations/tab_strip_animations.h"
+ #include "chrome/browser/ui/views/download/bubble/download_toolbar_ui_controller.h"
++#include "chrome/browser/ui/views/frame/audio_strip_view.h"
+ #include "chrome/browser/ui/views/frame/base_tab_strip_region_view.h"
+ #include "chrome/browser/ui/views/frame/browser_frame_view.h"
+ #include "chrome/browser/ui/views/frame/browser_view.h"
+@@ -787,6 +789,21 @@ VerticalTabStripRegionView::VerticalTabStripRegionView(
+         views::kFlexBehaviorKey,
+         views::FlexSpecification(views::MinimumFlexSizeRule::kPreferred,
+                                  views::MaximumFlexSizeRule::kPreferred));
++    // player Mp3 (BACKLOG S-95): the card of the tab playing sound in the
++    // background, above the archive line, its corners on the rows' edges and
++    // its favicon on their column.
++    stedding::AudioStrip* const audio_strip =
++        stedding::AudioStrip::From(browser_view->browser());
++    if (audio_strip) {
++      audio_card_ = content_area_view_->AddChildView(
++          std::make_unique<stedding::AudioStripView>(
++              *audio_strip, stedding::AudioStripView::Form::kCard,
++              region_horizontal_padding, kRowFaviconInset));
++      audio_card_->SetProperty(
++          views::kFlexBehaviorKey,
++          views::FlexSpecification(views::MinimumFlexSizeRule::kPreferred,
++                                   views::MaximumFlexSizeRule::kPreferred));
++    }
+     archive_line_ = content_area_view_->AddChildView(std::move(archive_line));
+     auto archived_row = std::make_unique<SidebarRowButton>(
+         base::BindRepeating(
+@@ -826,6 +843,14 @@ VerticalTabStripRegionView::VerticalTabStripRegionView(
+     history_row->SetTooltipText(kHistoryButtonName);
+     history_row->GetViewAccessibility().SetName(
+         std::u16string(kHistoryButtonName));
++    // player Mp8: in the rail, where the archive line stands upright, the
++    // card is its favicon above History, at the rail's foot.
++    if (audio_strip) {
++      audio_rail_ = archive_line_->AddChildView(
++          std::make_unique<stedding::AudioStripView>(
++              *audio_strip, stedding::AudioStripView::Form::kRail,
++              region_horizontal_padding, kRowFaviconInset));
++    }
+     history_button_ = archive_line_->AddChildView(std::move(history_row));
+     // updates Up3: "New Stedding Version Available", between the Archived
+     // row and the Space row, as Arc puts its own above the Spaces; hidden
+@@ -3865,6 +3890,13 @@ void VerticalTabStripRegionView::ApplyRailForm(bool rail) {
+           GetLayoutConstant(
+               LayoutConstant::kVerticalTabStripCollapsedVerticalPadding),
+           padding + rail_left_, 0, padding + rail_right_));
++  // player Mp3, Mp8: the card in the open sidebar, its favicon in the rail.
++  for (stedding::AudioStripView* const card : {audio_card_.get(),
++                                               audio_rail_.get()}) {
++    if (card) {
++      card->SetRailForm(rail_form_);
++    }
++  }
+   if (!arc_style) {
+     return;
+   }
+diff --git a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
+index 960a88ae8e14f..7fd93f69c95e8 100644
+--- a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
++++ b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
+@@ -56,6 +56,7 @@ class SpaceSwitcherView;
+ class SpaceTabVisibilityController;
+ }  // namespace spaces
+ namespace stedding {
++class AudioStripView;
+ class DownloadsNudge;
+ class SidebarPanelView;
+ }  // namespace stedding
+@@ -282,6 +283,10 @@ class VerticalTabStripRegionView final
+   // docs/features/sidebar-panels.md: the History button in the sidebar's
+   // bottom row (Pn15), and the panel open in the sidebar's column, if any.
+   views::View* history_button() { return history_button_; }
++  // docs/features/player.md Mp3, Mp8: the card of the tab playing sound in
++  // the background, open and in the rail; null in a window with no Spaces.
++  stedding::AudioStripView* audio_card_for_testing() { return audio_card_; }
++  stedding::AudioStripView* audio_rail_for_testing() { return audio_rail_; }
+   stedding::SidebarPanelView* sidebar_panel_view_for_testing() {
+     return sidebar_panel_view_;
+   }
+@@ -633,6 +638,10 @@ class VerticalTabStripRegionView final
+   raw_ptr<views::View> downloads_button_ = nullptr;
+   // docs/features/sidebar-panels.md Pn15: at the archive line's end.
+   raw_ptr<views::View> history_button_ = nullptr;
++  // docs/features/player.md Mp3, Mp8: above the archive line, open; above
++  // History, in the rail.
++  raw_ptr<stedding::AudioStripView> audio_card_ = nullptr;
++  raw_ptr<stedding::AudioStripView> audio_rail_ = nullptr;
+   // docs/features/sidebar-panels.md: the window's panels, in a window with
+   // Spaces; the panel open in the content area's column, if any; the hold
+   // that keeps a rail or a hidden sidebar slid out while one is open (Pn4);
+diff --git a/chrome/browser/ui/webui/settings/settings_ui.cc b/chrome/browser/ui/webui/settings/settings_ui.cc
+index 5edce95f3ba2f..ef909c03d32ed 100644
+--- a/chrome/browser/ui/webui/settings/settings_ui.cc
++++ b/chrome/browser/ui/webui/settings/settings_ui.cc
+@@ -1770,6 +1770,14 @@ SettingsUI::SettingsUI(content::WebUI* web_ui)
+       "steddingPlayerPopOutSubLabel",
+       "A video playing with sound moves to a small window that stays on "
+       "top, and comes back when you return to its tab.");
++  // player Mp3, settings T62 (BACKLOG S-95).
++  html_source->AddString(
++      "steddingPlayerAudioStripLabel",
++      "Show what\u2019s playing at the foot of the sidebar");
++  html_source->AddString(
++      "steddingPlayerAudioStripSubLabel",
++      "A tab playing sound in the background shows a card above Archived, "
++      "to pause it or go back to it.");
+   html_source->AddString("steddingCameraRowFullscreenLabel",
+                          "Use the row beside the camera in full screen");
+   html_source->AddString(
+diff --git a/chrome/browser/ui/webui/settings/stedding_shortcuts_handler.cc b/chrome/browser/ui/webui/settings/stedding_shortcuts_handler.cc
+index 1191820d9f223..0ab790f2005d5 100644
+--- a/chrome/browser/ui/webui/settings/stedding_shortcuts_handler.cc
++++ b/chrome/browser/ui/webui/settings/stedding_shortcuts_handler.cc
+@@ -242,6 +242,9 @@ std::vector<ShortcutGroup> ShortcutReference() {
+   // tabs R29 (BACKLOG S-122).
+   Add(tabs, IDC_STEDDING_TOGGLE_TAB_MUTED,
+       u"Mute the tab or unmute it; a split’s two panes go together");
++  // player Mp9 (BACKLOG S-95).
++  Add(tabs, IDC_STEDDING_GO_TO_PLAYING_TAB,
++      u"Go to the tab playing sound in the background");
+   // tabs R28: Chromium's Reopen Closed Tab, one entry at a time, into its
+   // Space and folder; the toast's Undo brings back a whole close (R27).
+   Add(tabs, IDC_RESTORE_TAB,
+diff --git a/chrome/browser/ui/webui/settings/stedding_shortcuts_handler_unittest.cc b/chrome/browser/ui/webui/settings/stedding_shortcuts_handler_unittest.cc
+index c58963fa82df6..f4539835d703b 100644
+--- a/chrome/browser/ui/webui/settings/stedding_shortcuts_handler_unittest.cc
++++ b/chrome/browser/ui/webui/settings/stedding_shortcuts_handler_unittest.cc
+@@ -84,6 +84,8 @@ TEST(ShortcutReferenceTest, EverySteddingCommandWithAnAcceleratorIsListed) {
+       // tabs R29, player Mp5 (BACKLOG S-122).
+       IDC_STEDDING_TOGGLE_TAB_MUTED,
+       IDC_STEDDING_TOGGLE_PICTURE_IN_PICTURE,
++      // player Mp9 (BACKLOG S-95).
++      IDC_STEDDING_GO_TO_PLAYING_TAB,
+       // dark-pages Dk18.
+       IDC_STEDDING_TOGGLE_DARK_PAGES,
+       // toolbar T39, shortcuts Z9 (BACKLOG S-104).
+diff --git a/chrome/test/stedding/BUILD.gn b/chrome/test/stedding/BUILD.gn
+index 9346024ac761b..161d3bef68c66 100644
+--- a/chrome/test/stedding/BUILD.gn
++++ b/chrome/test/stedding/BUILD.gn
+@@ -20,6 +20,7 @@ test("stedding_browser_tests") {
+     "address_band_browsertest.cc",
+     "app_jar_browsertest.cc",
+     "archive_sweep_browsertest.cc",
++    "audio_strip_browsertest.cc",
+     "blocker_browsertest.cc",
+     "branding_browsertest.cc",
+     "certificate_checks_browsertest.cc",
+@@ -224,6 +225,7 @@ test("stedding_browser_tests") {
+     "//components/subresource_filter/core/browser",
+     "//chrome/browser/ui/stedding:little_window",
+     "//chrome/browser/ui/stedding:media_keys",
++    "//chrome/browser/ui/stedding:audio_strip",
+     "//chrome/browser/ui/stedding:video_pop_out",
+     "//chrome/browser/ui/stedding:motion",
+     # docs/features/sidebar-panels.md: the panels, the Trash's stand-in, the
+@@ -262,6 +264,7 @@ test("stedding_browser_tests") {
+     "//chrome/browser/ui/views/frame:browser_view_header",
+     "//chrome/browser/ui/views/frame:browser_widget",
+     "//chrome/browser/ui/views/frame:contents_web_view",
++    "//chrome/browser/ui/views/frame:vertical_tab_strip_region_view",
+     "//chrome/browser/ui/views/infobars",
+     "//chrome/browser/ui/views/interaction",
+     "//chrome/browser/ui/views/page_action",
+diff --git a/chrome/test/stedding/audio_strip_browsertest.cc b/chrome/test/stedding/audio_strip_browsertest.cc
+new file mode 100644
+index 0000000000000..2d2a422561804
+--- /dev/null
++++ b/chrome/test/stedding/audio_strip_browsertest.cc
+@@ -0,0 +1,309 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++// docs/features/player.md Mp3, Mp7-Mp9 (BACKLOG S-95): a tab playing sound
++// in the background shows a card at the sidebar's foot, to go back to it,
++// pause or play it, or stop it; the rail shows its favicon, and
++// Option-Shift-Cmd-M (Ctrl+Alt+Shift+M) shows the tab.
++
++#include "chrome/browser/ui/stedding/audio_strip.h"
++
++#include <string>
++
++#include "base/command_line.h"
++#include "base/run_loop.h"
++#include "base/task/single_thread_task_runner.h"
++#include "base/test/run_until.h"
++#include "base/time/time.h"
++#include "chrome/app/chrome_command_ids.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/ui/browser_commands.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/spaces/space_model.h"
++#include "chrome/browser/ui/stedding/stedding_command_ids.h"
++#include "chrome/browser/ui/stedding/stedding_prefs.h"
++#include "chrome/browser/ui/stedding/video_pop_out.h"
++#include "chrome/browser/ui/tabs/split_tab_metrics.h"
++#include "chrome/browser/ui/tabs/tab_enums.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "chrome/browser/ui/tabs/vertical_tab_strip_state_controller.h"
++#include "chrome/browser/ui/views/frame/audio_strip_view.h"
++#include "chrome/browser/ui/views/frame/browser_view.h"
++#include "chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h"
++#include "chrome/browser/ui/views/test/vertical_tabs_browser_test_mixin.h"
++#include "chrome/test/base/in_process_browser_test.h"
++#include "chrome/test/base/ui_test_utils.h"
++#include "components/prefs/pref_service.h"
++#include "components/split_tabs/split_tab_visual_data.h"
++#include "components/tabs/public/tab_interface.h"
++#include "content/public/browser/web_contents.h"
++#include "content/public/test/browser_test.h"
++#include "content/public/test/browser_test_utils.h"
++#include "content/public/test/media_start_stop_observer.h"
++#include "media/base/media_switches.h"
++#include "net/test/embedded_test_server/embedded_test_server.h"
++#include "third_party/skia/include/core/SkColor.h"
++#include "ui/base/window_open_disposition.h"
++#include "ui/events/base_event_utils.h"
++#include "ui/events/event.h"
++#include "ui/events/event_constants.h"
++#include "ui/events/types/event_type.h"
++#include "ui/views/controls/button/button.h"
++#include "ui/views/test/button_test_api.h"
++#include "ui/views/test/views_test_utils.h"
++
++namespace {
++
++constexpr char kVideoPage[] = "/media/session/video-with-metadata.html";
++
++class AudioStripTest
++    : public VerticalTabsBrowserTestMixin<InProcessBrowserTest> {
++ protected:
++  void SetUpCommandLine(base::CommandLine* command_line) override {
++    VerticalTabsBrowserTestMixin<InProcessBrowserTest>::SetUpCommandLine(
++        command_line);
++    command_line->AppendSwitchASCII(
++        switches::kAutoplayPolicy,
++        switches::autoplay::kNoUserGestureRequiredPolicy);
++  }
++
++  void SetUpOnMainThread() override {
++    VerticalTabsBrowserTestMixin<InProcessBrowserTest>::SetUpOnMainThread();
++    ASSERT_TRUE(embedded_test_server()->Start());
++  }
++
++  TabStripModel* tabs() { return browser()->GetTabStripModel(); }
++  int Index(tabs::TabInterface* tab) { return tabs()->GetIndexOfTab(tab); }
++  stedding::AudioStrip* strip() {
++    return stedding::AudioStrip::From(browser());
++  }
++  BrowserView* browser_view() {
++    return BrowserView::GetBrowserViewForBrowser(browser());
++  }
++  stedding::AudioStripView* card() {
++    return browser_view()
++        ->vertical_tab_strip_region_view_for_testing()
++        ->audio_card_for_testing();
++  }
++  stedding::AudioStripView* rail() {
++    return browser_view()
++        ->vertical_tab_strip_region_view_for_testing()
++        ->audio_rail_for_testing();
++  }
++  void Layout() {
++    views::test::RunScheduledLayout(browser_view()->GetWidget());
++  }
++
++  // A new tab on screen showing `path` from the test server, loaded.
++  tabs::TabInterface* Open(const std::string& path) {
++    EXPECT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
++        browser(), embedded_test_server()->GetURL(path),
++        WindowOpenDisposition::NEW_FOREGROUND_TAB,
++        ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
++    return tabs()->GetActiveTab();
++  }
++
++  // Plays the page's video, with its sound, and waits until it plays.
++  void Play(tabs::TabInterface* tab) {
++    content::MediaStartStopObserver started(
++        tab->GetContents(), content::MediaStartStopObserver::Type::kStart);
++    ASSERT_TRUE(content::ExecJs(tab->GetContents(), "play()"));
++    started.Wait();
++  }
++
++  static bool Paused(tabs::TabInterface* tab) {
++    return content::EvalJs(tab->GetContents(),
++                           "document.getElementById('video').paused")
++        .ExtractBool();
++  }
++
++  // The card shows `tab`, drawn in the open sidebar.
++  bool CardShows(tabs::TabInterface* tab) {
++    Layout();
++    return strip()->tab() == tab && card() && card()->GetVisible() &&
++           card()->IsDrawn() && !card()->bounds().IsEmpty();
++  }
++  bool NoCard() {
++    Layout();
++    return !strip()->tab() && card() && !card()->GetVisible();
++  }
++
++  // A tab plays with its sound and another is shown: its card.
++  tabs::TabInterface* PlayInTheBackground() {
++    tabs::TabInterface* const video = Open(kVideoPage);
++    Play(video);
++    Open("/title1.html");
++    EXPECT_TRUE(base::test::RunUntil([&]() { return CardShows(video); }))
++        << "a tab playing in the background showed no card";
++    return video;
++  }
++
++  static void Click(views::Button* button) {
++    ASSERT_TRUE(button);
++    views::test::ButtonTestApi(button).NotifyClick(
++        ui::MouseEvent(ui::EventType::kMousePressed, gfx::Point(), gfx::Point(),
++                       ui::EventTimeForNow(), ui::EF_LEFT_MOUSE_BUTTON,
++                       ui::EF_LEFT_MOUSE_BUTTON));
++  }
++};
++
++// Mp3: a tab that plays and is left shows the card, with its title, and the
++// tab on screen has none.
++IN_PROC_BROWSER_TEST_F(AudioStripTest, ALeftTabThatPlaysShowsTheCard) {
++  ASSERT_TRUE(strip());
++  ASSERT_TRUE(card());
++  tabs::TabInterface* const video = Open(kVideoPage);
++  Play(video);
++  EXPECT_TRUE(NoCard()) << "the tab on screen showed a card";
++  Open("/title1.html");
++  EXPECT_TRUE(base::test::RunUntil([&]() { return CardShows(video); }));
++  EXPECT_TRUE(strip()->playing());
++  EXPECT_EQ(video->GetContents()->GetTitle(), strip()->title());
++  EXPECT_EQ(strip()->title(), card()->body_for_testing()->GetTooltipText());
++  EXPECT_EQ(u"Pause", card()->play_pause_for_testing()->GetTooltipText());
++}
++
++// Mp3: no card for a muted tab, or for one on screen in a split's other
++// pane.
++IN_PROC_BROWSER_TEST_F(AudioStripTest, NoCardForAMutedOrShownTab) {
++  tabs::TabInterface* const video = PlayInTheBackground();
++  video->GetContents()->SetAudioMuted(true);
++  EXPECT_TRUE(base::test::RunUntil([&]() { return NoCard(); }))
++      << "a muted tab kept its card";
++  video->GetContents()->SetAudioMuted(false);
++  EXPECT_TRUE(base::test::RunUntil([&]() { return CardShows(video); }))
++      << "unmuted, the card did not come back";
++
++  tabs::TabInterface* const page = tabs()->GetActiveTab();
++  tabs()->ActivateTabAt(Index(video));
++  tabs()->AddToNewSplit({Index(page)}, split_tabs::SplitTabVisualData(),
++                        split_tabs::SplitTabCreatedSource::kTabContextMenu);
++  ASSERT_TRUE(video->IsSplit() && page->IsSplit());
++  tabs()->ActivateTabAt(Index(page));
++  ASSERT_EQ(page, tabs()->GetActiveTab());
++  EXPECT_TRUE(base::test::RunUntil([&]() { return NoCard(); }))
++      << "a pane on screen showed a card";
++}
++
++// Mp3, settings T62: on by default; off, no card; on again, the card.
++IN_PROC_BROWSER_TEST_F(AudioStripTest, OffShowsNoCard) {
++  PrefService* const prefs = browser()->GetProfile()->GetPrefs();
++  EXPECT_TRUE(prefs->GetBoolean(stedding::prefs::kPlayerAudioStrip));
++  tabs::TabInterface* const video = PlayInTheBackground();
++  prefs->SetBoolean(stedding::prefs::kPlayerAudioStrip, false);
++  EXPECT_TRUE(NoCard()) << "the card stayed with the setting off";
++  prefs->SetBoolean(stedding::prefs::kPlayerAudioStrip, true);
++  EXPECT_TRUE(CardShows(video));
++}
++
++// Mp7: the card's body shows its tab, in its Space, and the card goes.
++IN_PROC_BROWSER_TEST_F(AudioStripTest, TheCardShowsItsTabInItsSpace) {
++  spaces::SpaceModel* const model = spaces::SpaceModel::From(browser());
++  ASSERT_TRUE(model);
++  const spaces::SpaceId home = model->active_id();
++  tabs::TabInterface* const video = Open(kVideoPage);
++  Play(video);
++  const spaces::SpaceId work = model->AddSpace("Work", SK_ColorBLUE)->id();
++  ASSERT_TRUE(model->SetActiveSpace(work));
++  ASSERT_TRUE(base::test::RunUntil([&]() { return CardShows(video); }))
++      << "another Space shown, the card did not show";
++
++  Click(card()->body_for_testing());
++  EXPECT_TRUE(base::test::RunUntil([&]() {
++    return model->active_id() == home && tabs()->GetActiveTab() == video;
++  })) << "the card did not show its tab in its Space";
++  EXPECT_TRUE(NoCard()) << "the card stayed while its tab showed";
++  EXPECT_FALSE(Paused(video));
++}
++
++// Mp7: pause keeps the card, with play; play plays; stop pauses the page and
++// takes the card away until the tab plays again.
++IN_PROC_BROWSER_TEST_F(AudioStripTest, PauseKeepsTheCardAndStopRemovesIt) {
++  tabs::TabInterface* const video = PlayInTheBackground();
++  Click(card()->play_pause_for_testing());
++  ASSERT_TRUE(base::test::RunUntil([&]() { return Paused(video); }))
++      << "pause did not pause the page";
++  EXPECT_TRUE(base::test::RunUntil([&]() { return !strip()->playing(); }));
++  EXPECT_TRUE(CardShows(video)) << "a paused card went";
++  EXPECT_EQ(u"Play", card()->play_pause_for_testing()->GetTooltipText());
++
++  Click(card()->play_pause_for_testing());
++  EXPECT_TRUE(base::test::RunUntil([&]() { return !Paused(video); }))
++      << "play did not play the page";
++  EXPECT_TRUE(base::test::RunUntil([&]() { return strip()->playing(); }));
++
++  Click(card()->stop_for_testing());
++  EXPECT_TRUE(NoCard()) << "stop left the card";
++  EXPECT_TRUE(base::test::RunUntil([&]() { return Paused(video); }))
++      << "stop did not pause the page";
++
++  // Played again from its page, the tab has its card back.
++  ASSERT_TRUE(content::ExecJs(video->GetContents(),
++                              "document.getElementById('video').play()"));
++  EXPECT_TRUE(base::test::RunUntil([&]() { return CardShows(video); }))
++      << "played again, the stopped tab got no card";
++}
++
++// Mp7: the newest player takes the card; closing it gives the card back to
++// the one still playing.
++IN_PROC_BROWSER_TEST_F(AudioStripTest, TheNewestPlayerTakesTheCard) {
++  tabs::TabInterface* const first = Open(kVideoPage);
++  Play(first);
++  tabs::TabInterface* const second = Open(kVideoPage);
++  Play(second);
++  Open("/title1.html");
++  EXPECT_TRUE(base::test::RunUntil([&]() { return CardShows(second); }));
++  tabs()->CloseWebContentsAt(Index(second), TabCloseTypes::CLOSE_USER_GESTURE);
++  EXPECT_TRUE(base::test::RunUntil([&]() { return CardShows(first); }))
++      << "the card did not pass to the tab still playing";
++}
++
++// Mp7: closing the card's tab or muting it takes the card away.
++IN_PROC_BROWSER_TEST_F(AudioStripTest, ClosingOrMutingRemovesTheCard) {
++  tabs::TabInterface* const video = PlayInTheBackground();
++  tabs()->CloseWebContentsAt(Index(video), TabCloseTypes::CLOSE_USER_GESTURE);
++  EXPECT_TRUE(base::test::RunUntil([&]() { return NoCard(); }))
++      << "the card outlived its tab";
++  tabs::TabInterface* const again = PlayInTheBackground();
++  again->GetContents()->SetAudioMuted(true);
++  EXPECT_TRUE(base::test::RunUntil([&]() { return NoCard(); }))
++      << "muting kept the card";
++}
++
++// Mp8: in the rail, the card is the favicon above History; a click pauses
++// or plays, and the open sidebar's card hides.
++IN_PROC_BROWSER_TEST_F(AudioStripTest, TheRailsCardPausesAndPlays) {
++  tabs::TabInterface* const video = PlayInTheBackground();
++  browser()->GetProfile()->GetPrefs()->SetInteger(
++      stedding::prefs::kSidebarClosedForm,
++      stedding::prefs::kSidebarClosedToIcons);
++  chrome::ExecuteCommand(browser(), IDC_TOGGLE_VERTICAL_TABS_COLLAPSE);
++  ASSERT_TRUE(base::test::RunUntil([&]() {
++    Layout();
++    return rail() && rail()->GetVisible() && rail()->IsDrawn();
++  })) << "the rail showed no card";
++  EXPECT_FALSE(card()->GetVisible()) << "the open card showed in the rail";
++  views::Button* const button = rail()->rail_button_for_testing();
++  EXPECT_EQ(strip()->title() + u": Pause", button->GetTooltipText());
++  Click(button);
++  EXPECT_TRUE(base::test::RunUntil([&]() { return Paused(video); }));
++  EXPECT_TRUE(base::test::RunUntil([&]() {
++    return button->GetTooltipText() == strip()->title() + u": Play";
++  }));
++  Click(button);
++  EXPECT_TRUE(base::test::RunUntil([&]() { return !Paused(video); }));
++}
++
++// Mp9: the key shows the playing tab; with no card it does nothing.
++IN_PROC_BROWSER_TEST_F(AudioStripTest, TheKeyShowsThePlayingTab) {
++  tabs::TabInterface* const page = tabs()->GetActiveTab();
++  chrome::ExecuteCommand(browser(), IDC_STEDDING_GO_TO_PLAYING_TAB);
++  EXPECT_EQ(page, tabs()->GetActiveTab()) << "no card, and the key moved";
++  tabs::TabInterface* const video = PlayInTheBackground();
++  chrome::ExecuteCommand(browser(), IDC_STEDDING_GO_TO_PLAYING_TAB);
++  EXPECT_EQ(video, tabs()->GetActiveTab());
++  EXPECT_TRUE(NoCard());
++}
++
++}  // namespace
+diff --git a/chrome/test/stedding/settings_spaces_browsertest.cc b/chrome/test/stedding/settings_spaces_browsertest.cc
+index be20d3c235f95..5b2dbda101b63 100644
+--- a/chrome/test/stedding/settings_spaces_browsertest.cc
++++ b/chrome/test/stedding/settings_spaces_browsertest.cc
+@@ -562,6 +562,11 @@ IN_PROC_BROWSER_TEST_F(SettingsSpacesTest, ThePageBindsEveryControl) {
+                         page, "chrome.settingsPrivate.getPref("
+                               "'stedding.toolbar.copy_link_button')"
+                               ".then(pref => pref.value)"));
++    // player Mp3, settings T62: the audio card is on, as Arc has it.
++    EXPECT_EQ(true, content::EvalJs(
++                        page, "chrome.settingsPrivate.getPref("
++                              "'stedding.player.audio_strip')"
++                              ".then(pref => pref.value)"));
+   }
+   {
+     SCOPED_TRACE("archive menu is Never through 7 days");

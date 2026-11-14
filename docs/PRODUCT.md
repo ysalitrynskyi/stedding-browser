@@ -374,9 +374,13 @@ no spec row yet).
 
 - **Picture-in-picture** **[1.0]** — `⌥⇧⌘P` (Ctrl+Alt+Shift+P on Windows) puts the
   page's video in Chromium's picture-in-picture window and brings it back
-  (`features/player.md` Mp5). A player clipped to the page card, an audio strip for a
-  tab playing sound, and a video that follows you into the sidebar are not built
-  (Mp1–Mp4, `S-95`).
+  (`features/player.md` Mp5). With a setting, off by default, a video playing with
+  sound pops out when its tab is left and goes back when the tab shows (Mp2, Mp4).
+- **What's playing** **[1.0]** — a tab playing sound in the background shows a card
+  above Archived, with its favicon and title, play or pause, and stop; its body goes
+  back to the tab, in its Space. In the rail it is the favicon above History. `⌥⇧⌘M`
+  (Ctrl+Alt+Shift+M) goes to the tab. On by default (`features/player.md` Mp3,
+  Mp7–Mp10). A player clipped to the page card is not built (Mp1, `S-95`).
 - **Downloads** **[1.0]** — Chromium's downloads, with the progress ring on the
   sidebar's downloads button (`features/toolbar.md` T14). The button opens the
   Downloads panel in the sidebar's column (`features/sidebar-panels.md` Pn2).

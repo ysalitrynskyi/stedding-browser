@@ -2,6 +2,32 @@
 
 What was built, newest first. Nothing here is needed to do a task: `AGENTS.md` carries what is true now, `BACKLOG.md` the order of work, `PLAN.md` the owner's decisions. This file was the "State of the project" section of `AGENTS.md` until 2026-09-30. This log starts at 2026-10-15. Closed work from before that is the table in [docs/history/archive.md](history/archive.md).
 
+## 2026-11-13 -- What's playing, at the sidebar's foot (S-95, Mp3)
+
+Arc kept the tab playing sound in the background at the foot of its sidebar. Four forms were
+rendered from a real Windows build, light and dark; the owner chose the card: "B, Card".
+
+- A tab of the window that plays sound while it is not on screen shows a card above Archived:
+  its favicon and title, play or pause, and stop. The card's body shows the tab in its Space.
+  A paused card stays until its tab is shown or stopped; the newest player takes the card. In
+  the rail the card is the favicon above History, with a pause or play badge, and a click
+  pauses or plays (player Mp3, Mp7, Mp8; patch 0183).
+- ⌥⇧⌘M (Ctrl+Alt+Shift+M) goes to the tab; the command bar lists Go to, Pause or Play, and
+  Stop while a card shows; Settings › Pages and menus has the switch, on by default (Mp9,
+  Mp10, settings T62, commandbar K45).
+- Each tab's media session is watched through its observer; the rules that pick the card's tab
+  are a pure function with unit tests (`AudioStripRulesTest.*`). The pause and play glyphs are
+  Chromium's filled ones, as its picture-in-picture window draws them: the outlined pause read
+  as "00".
+- On win-release `AudioStripTest.*` (9) passed three times of three; the unit tests around it
+  (104) and the DCHECK build's 32 passed. The whole browser suite ran 959: all passed but the
+  nine WebDAV sync restart tests, which could not bind their fixed port (48089) beside the
+  suite's other jobs; alone, all 98 sync tests passed twice of two.
+- Captures of the real card, light and dark, playing, paused, focused, with a long title and in
+  the rail, were checked before release.
+
+Not done here: the Mac (not free).
+
 ## 2026-11-13 -- An extension's button in a peek shows the peek's page (S-476, GitHub issue 102)
 
 The reporter of issue 102 confirmed beta 19 and sent a capture: Bitwarden's button counted the

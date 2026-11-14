@@ -1,0 +1,172 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Fri, 13 Nov 2026 21:51:38 -0500
+Subject: feat: a separator travels with its row in the sidebar file (S-286)
+
+docs/features/sidebar.md Y45, sidebar-file Sf2, import I18. A separator
+above a row of the Space's list was left out of Export Space and Export
+all Spaces, so Import sidebar... brought the row back without it. The
+file now carries it in the item's "stedding" block, which Arc ignores,
+and the import gives the row it makes its separator. A row in a folder
+or a split has none, as before.
+
+Why: GitHub issue 19 asked for separators; a backup should bring back
+the sidebar as it was.
+Removable when: never; Stedding's own file format.
+---
+ .../browser/ui/spaces/arc_sidebar_importer.cc | 15 +++++++++-
+ .../browser/ui/spaces/arc_sidebar_importer.h  |  4 +++
+ chrome/browser/ui/spaces/sidebar_backup.cc    |  7 +++++
+ .../ui/spaces/sidebar_backup_unittest.cc      | 30 +++++++++++++++++++
+ 4 files changed, 55 insertions(+), 1 deletion(-)
+
+diff --git a/chrome/browser/ui/spaces/arc_sidebar_importer.cc b/chrome/browser/ui/spaces/arc_sidebar_importer.cc
+index fec592d17b14d..7f5cfe0029db3 100644
+--- a/chrome/browser/ui/spaces/arc_sidebar_importer.cc
++++ b/chrome/browser/ui/spaces/arc_sidebar_importer.cc
+@@ -53,6 +53,7 @@
+ #include "chrome/browser/ui/stedding/stedding_prefs.h"
+ #include "chrome/browser/ui/stedding/tab_names.h"
+ #include "chrome/browser/ui/stedding/tab_parents.h"
++#include "chrome/browser/ui/stedding/tab_separators.h"
+ #include "chrome/browser/ui/tab_ui_helper.h"
+ #include "chrome/browser/ui/tabs/split_tab_metrics.h"
+ #include "chrome/browser/ui/tabs/tab_model.h"
+@@ -175,6 +176,8 @@ struct ArcItem {
+   // folders F42: a list's icon, in the "stedding" dict a file Stedding wrote
+   // gives it (sidebar-file Sf2); Arc's own lists have none.
+   std::string icon;
++  // sidebar Y45 (BACKLOG S-286): a tab's separator, in the same dict.
++  bool separator_above = false;
+ };
+ 
+ // Arc's lists alternate an id string with its dict.
+@@ -308,8 +311,12 @@ std::optional<ArcItem> ParseItem(const base::DictValue& dict) {
+     item.url = GURL(StringAt(*tab, "savedURL"));
+     // I3 (BACKLOG S-431, GitHub issue 80): `title` is the name the person gave
+     // the tab, null for one they did not rename; `savedTitle` is the page's. A
+-    // file Stedding wrote leaves `title` empty.
++    // file Stedding wrote gives the name there too (GitHub issue 114).
+     item.name = item.title;
++    if (const base::DictValue* const stedding = dict.FindDict("stedding")) {
++      item.separator_above =
++          stedding->FindBool("separatorAbove").value_or(false);
++    }
+     const std::string saved_title = StringAt(*tab, "savedTitle");
+     if (!saved_title.empty()) {
+       item.title = base::UTF8ToUTF16(saved_title);
+@@ -414,6 +421,8 @@ std::vector<Node> BuildChildren(const ArcItem& parent,
+       node.kind = Node::Kind::kTab;
+       node.url = child.url;
+       node.name = child.name;
++      // sidebar Y45: a row in a folder has no separator.
++      node.separator_above = depth == 0 && child.separator_above;
+       out.push_back(std::move(node));
+     } else if (child.kind == ArcItem::Kind::kList && depth < kMaxListDepth) {
+       node.kind = Node::Kind::kFolder;
+@@ -633,6 +642,10 @@ tabs::TabInterface* InsertUnloaded(ApplyContext& ctx, const Node& node) {
+       helper->TabNameChanged();
+     }
+   }
++  // sidebar Y45 (BACKLOG S-286): the separator the file gives its row.
++  if (tab && node.separator_above && node.split.empty()) {
++    stedding::SetSeparatorAbove(ctx.browser, tab, true);
++  }
+   return tab;
+ }
+ 
+diff --git a/chrome/browser/ui/spaces/arc_sidebar_importer.h b/chrome/browser/ui/spaces/arc_sidebar_importer.h
+index d8d0100aaf762..f14c2908201c9 100644
+--- a/chrome/browser/ui/spaces/arc_sidebar_importer.h
++++ b/chrome/browser/ui/spaces/arc_sidebar_importer.h
+@@ -49,6 +49,10 @@ struct ArcImportPlan {
+     // of its own: its panes are tabs in its place, so whatever takes tabs
+     // takes them, and the import makes the split once they are in.
+     std::string split;
++    // sidebar Y45 (BACKLOG S-286): a separator above the tab's row, from a
++    // file Stedding wrote; only a row of the Space's list, not one in a
++    // folder or a split, has one.
++    bool separator_above = false;
+     // import I7: how that split is laid out: stacked, or side by side, and
+     // what share of its first two panes the first takes.
+     bool split_stacked = false;
+diff --git a/chrome/browser/ui/spaces/sidebar_backup.cc b/chrome/browser/ui/spaces/sidebar_backup.cc
+index 6826713c05924..9f543436d53e9 100644
+--- a/chrome/browser/ui/spaces/sidebar_backup.cc
++++ b/chrome/browser/ui/spaces/sidebar_backup.cc
+@@ -29,6 +29,7 @@
+ #include "chrome/browser/ui/stedding/pin_home.h"
+ #include "chrome/browser/ui/stedding/tab_names.h"
+ #include "chrome/browser/ui/stedding/tab_parents.h"
++#include "chrome/browser/ui/stedding/tab_separators.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "components/tabs/public/folder_tab_collection.h"
+ #include "components/tabs/public/tab_collection.h"
+@@ -85,6 +86,8 @@ Node TabNode(Snapshot& snapshot, tabs::TabInterface* tab) {
+   // its name, and the page's title is its title. The name was written as the
+   // page's title, so an import showed it only until the page loaded.
+   node.name = stedding::TabName(contents);
++  // sidebar Y45 (BACKLOG S-286): the separator above its row.
++  node.separator_above = stedding::HasSeparatorAbove(contents);
+   node.title = contents->GetTitle();
+   if (node.title.empty()) {
+     node.title = node.name.empty() ? tab->GetTitle() : node.name;
+@@ -270,6 +273,10 @@ std::string AppendItem(const Node& node,
+     tab.Set("savedURL", node.url.spec());
+     tab.Set("savedTitle", node.title);
+     data.Set("tab", std::move(tab));
++    // sidebar Y45 (BACKLOG S-286): Stedding's own key, which Arc ignores.
++    if (node.separator_above) {
++      item.Set("stedding", base::DictValue().Set("separatorAbove", true));
++    }
+   } else {
+     item.Set("title", node.title);
+     data.Set("list", base::DictValue());
+diff --git a/chrome/browser/ui/spaces/sidebar_backup_unittest.cc b/chrome/browser/ui/spaces/sidebar_backup_unittest.cc
+index 403ebf29c6ec2..2f63206cccdfe 100644
+--- a/chrome/browser/ui/spaces/sidebar_backup_unittest.cc
++++ b/chrome/browser/ui/spaces/sidebar_backup_unittest.cc
+@@ -34,6 +34,7 @@
+ #include "chrome/browser/ui/stedding/stedding_prefs.h"
+ #include "chrome/browser/ui/stedding/tab_names.h"
+ #include "chrome/browser/ui/stedding/tab_parents.h"
++#include "chrome/browser/ui/stedding/tab_separators.h"
+ #include "chrome/browser/ui/tabs/tab_model.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "chrome/test/base/browser_with_test_window_test.h"
+@@ -394,6 +395,35 @@ TEST_F(SidebarBackupTest, ARenamedPinKeepsItsNameThroughTheFile) {
+       << "the name is the tab's, not the title of a page not yet loaded";
+ }
+ 
++// sidebar Y45 (BACKLOG S-286): a separator above a row goes into the file
++// and comes back with the row; a row without one comes back without.
++TEST_F(SidebarBackupTest, ASeparatorTravelsThroughTheFile) {
++  Open("https://kept.example/");
++  tabs::TabInterface* const plain = Open("https://plain.example/");
++  tabs::TabInterface* const pin = Open("https://pin.example/");
++  model().SetSpacePinned(pin, true);
++  stedding::SetSeparatorAbove(browser(), pin, true);
++  ASSERT_TRUE(stedding::HasSeparatorAbove(pin->GetContents()));
++  const std::string json =
++      PlanToJson(SnapshotSpace(browser(), model().active_id()));
++  EXPECT_NE(std::string::npos, json.find("separatorAbove"));
++  tabs().CloseWebContentsAt(tabs().GetIndexOfTab(pin),
++                            TabCloseTypes::CLOSE_NONE);
++  tabs().CloseWebContentsAt(tabs().GetIndexOfTab(plain),
++                            TabCloseTypes::CLOSE_NONE);
++
++  const std::optional<ArcImportPlan> plan = ParseArcSidebar(json);
++  ASSERT_TRUE(plan.has_value());
++  ApplyArcImport(browser(), *plan, ArcImportOptions());
++  tabs::TabInterface* const back = TabShowing(tabs(), "https://pin.example/");
++  ASSERT_TRUE(back);
++  EXPECT_TRUE(stedding::HasSeparatorAbove(back->GetContents()));
++  tabs::TabInterface* const plain_back =
++      TabShowing(tabs(), "https://plain.example/");
++  ASSERT_TRUE(plain_back);
++  EXPECT_FALSE(stedding::HasSeparatorAbove(plain_back->GetContents()));
++}
++
+ // sessions S50: a session with a name goes by its id and its name, and two
+ // Spaces of it stay one session on another install, on one empty jar. A
+ // Space's lone session stays what it was.

@@ -1,0 +1,316 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Fri, 13 Nov 2026 21:29:37 -0500
+Subject: feat: the command bar's search folds case in any script and takes a
+ Space's whole name (S-158, S-164)
+
+docs/features/commandbar.md K2, K10, K19. The bar's title and keyword
+matching folded ASCII alone, so a Cyrillic or accented title typed in
+another case was not found. Both now fold case in any script.
+"@Work Stuff rust" filtered to Spaces whose name starts with "Work" and
+searched for "Stuff rust": a Space named in several words could not be
+chosen. The longest whole name the text starts with, followed by a space
+or the end, is now the filter, and it matches that Space alone;
+otherwise the first word stays a prefix, folded the same way.
+
+A patch of its own: the lines it changes belong to four earlier patches
+(the bar's first, its keywords, the Spaces' query and the essentials'
+filter), and both are extensions of those rows, not defects in them.
+
+Why: Spaces are often named in more than one word, and titles in many
+scripts; the command bar is how people leaving Arc find a tab.
+Removable when: never; Stedding's own command bar.
+---
+ chrome/browser/ui/spaces/space_query.cc       | 60 ++++++++++++++++---
+ chrome/browser/ui/spaces/space_query.h        | 14 ++++-
+ .../browser/ui/spaces/space_query_unittest.cc | 38 ++++++++++++
+ .../ui/views/commandbar/command_bar_view.cc   | 27 ++++++---
+ .../commandbar/command_bar_view_unittest.cc   | 18 ++++++
+ 5 files changed, 140 insertions(+), 17 deletions(-)
+
+diff --git a/chrome/browser/ui/spaces/space_query.cc b/chrome/browser/ui/spaces/space_query.cc
+index d82632d2b0a60..6bc40f37af04b 100644
+--- a/chrome/browser/ui/spaces/space_query.cc
++++ b/chrome/browser/ui/spaces/space_query.cc
+@@ -4,32 +4,78 @@
+ 
+ #include "chrome/browser/ui/spaces/space_query.h"
+ 
+-#include "base/strings/string_util.h"
++#include "base/i18n/case_conversion.h"
+ 
+ namespace spaces {
+ 
+-SpaceQuery ParseSpaceQuery(std::u16string_view query) {
++namespace {
++
++bool SameFolded(std::u16string_view a, std::u16string_view b) {
++  return base::i18n::FoldCase(a) == base::i18n::FoldCase(b);
++}
++
++}  // namespace
++
++SpaceQuery ParseSpaceQuery(std::u16string_view query,
++                           base::span<const std::u16string> names) {
+   SpaceQuery parsed;
+   if (query.empty() || query[0] != u'@') {
+     parsed.rest = std::u16string(query);
+     return parsed;
+   }
+-  const size_t space = query.find(u' ');
++  const std::u16string_view after = query.substr(1);
++  // K19 (BACKLOG S-164): the longest whole name first, so "@Work Stuff rust"
++  // is the Space "Work Stuff" with the text "rust", not "Work" with
++  // "Stuff rust".
++  const std::u16string* best = nullptr;
++  for (const std::u16string& name : names) {
++    if (name.empty() || name.size() > after.size() ||
++        (best && name.size() <= best->size())) {
++      continue;
++    }
++    if (after.size() > name.size() && after[name.size()] != u' ') {
++      continue;
++    }
++    if (SameFolded(after.substr(0, name.size()), name)) {
++      best = &name;
++    }
++  }
++  if (best) {
++    parsed.space_prefix = *best;
++    parsed.whole_name = true;
++    if (after.size() > best->size()) {
++      parsed.rest = std::u16string(after.substr(best->size() + 1));
++    }
++    return parsed;
++  }
++  const size_t space = after.find(u' ');
+   if (space == std::u16string_view::npos) {
+-    parsed.space_prefix = std::u16string(query.substr(1));
++    parsed.space_prefix = std::u16string(after);
+     return parsed;
+   }
+-  parsed.space_prefix = std::u16string(query.substr(1, space - 1));
+-  parsed.rest = std::u16string(query.substr(space + 1));
++  parsed.space_prefix = std::u16string(after.substr(0, space));
++  parsed.rest = std::u16string(after.substr(space + 1));
+   return parsed;
+ }
+ 
++bool SpaceNameMatches(const SpaceQuery& query, std::u16string_view name) {
++  if (!query.space_prefix) {
++    return true;
++  }
++  return query.whole_name ? SameFolded(name, *query.space_prefix)
++                          : SpaceNameMatchesPrefix(name, *query.space_prefix);
++}
++
+ bool SpaceNameMatchesPrefix(std::u16string_view name,
+                             std::u16string_view prefix) {
+   if (prefix.empty()) {
+     return true;
+   }
+-  return base::StartsWith(name, prefix, base::CompareCase::INSENSITIVE_ASCII);
++  // K19 (BACKLOG S-164): folded in any script, so a lowercase u with an
++  // umlaut finds a Space whose name starts with the capital one.
++  const std::u16string folded_name = base::i18n::FoldCase(name);
++  return std::u16string_view(folded_name)
++      .starts_with(base::i18n::FoldCase(prefix));
+ }
+ 
+ }  // namespace spaces
+diff --git a/chrome/browser/ui/spaces/space_query.h b/chrome/browser/ui/spaces/space_query.h
+index 58aa2d8a75d05..480db0b052b22 100644
+--- a/chrome/browser/ui/spaces/space_query.h
++++ b/chrome/browser/ui/spaces/space_query.h
+@@ -9,15 +9,27 @@
+ #include <string>
+ #include <string_view>
+ 
++#include "base/containers/span.h"
++
+ namespace spaces {
+ 
+ // docs/features/commandbar.md K19: `@Work rust` filters to that Space.
+ struct SpaceQuery {
+   std::optional<std::u16string> space_prefix;
++  // K19 (BACKLOG S-164): the prefix is a Space's whole name, and only that
++  // name matches: "@Work Stuff" is not also "Work Stuff Archive".
++  bool whole_name = false;
+   std::u16string rest;
+ };
+ 
+-SpaceQuery ParseSpaceQuery(std::u16string_view query);
++// `names`: the window's Spaces' names. After "@", the longest of them the
++// text starts with, followed by a space or the end, is the filter, matched
++// whole, so a name of several words is one filter; otherwise the first word
++// is a prefix. Case is folded in any script.
++SpaceQuery ParseSpaceQuery(std::u16string_view query,
++                           base::span<const std::u16string> names = {});
++// Whether the Space named `name` is in the filter of `query`.
++bool SpaceNameMatches(const SpaceQuery& query, std::u16string_view name);
+ bool SpaceNameMatchesPrefix(std::u16string_view name,
+                             std::u16string_view prefix);
+ 
+diff --git a/chrome/browser/ui/spaces/space_query_unittest.cc b/chrome/browser/ui/spaces/space_query_unittest.cc
+index ee92bc5482f16..8543c0e3a9c10 100644
+--- a/chrome/browser/ui/spaces/space_query_unittest.cc
++++ b/chrome/browser/ui/spaces/space_query_unittest.cc
+@@ -4,6 +4,9 @@
+ 
+ #include "chrome/browser/ui/spaces/space_query.h"
+ 
++#include <string>
++#include <vector>
++
+ #include "testing/gtest/include/gtest/gtest.h"
+ 
+ namespace spaces {
+@@ -28,5 +31,40 @@ TEST(SpaceQueryTest, AtSpacePrefixFiltersOpenAndArchived) {
+   EXPECT_FALSE(SpaceNameMatchesPrefix(u"Home", u"Work"));
+ }
+ 
++// K19 (BACKLOG S-164): a Space's name of several words is one filter, the
++// longest whole name wins and matches alone, and case folds in any script.
++TEST(SpaceQueryTest, AWholeNameOfSeveralWordsIsOneFilter) {
++  const std::vector<std::u16string> names = {
++      u"Work", u"Work Stuff", u"Work Stuff Archive", u"\u00dcber"};
++  const SpaceQuery stuff = ParseSpaceQuery(u"@work stuff rust", names);
++  ASSERT_TRUE(stuff.space_prefix);
++  EXPECT_EQ(u"Work Stuff", *stuff.space_prefix);
++  EXPECT_TRUE(stuff.whole_name);
++  EXPECT_EQ(u"rust", stuff.rest);
++  EXPECT_TRUE(SpaceNameMatches(stuff, u"Work Stuff"));
++  EXPECT_FALSE(SpaceNameMatches(stuff, u"Work Stuff Archive"))
++      << "a whole name matches that Space alone";
++  EXPECT_FALSE(SpaceNameMatches(stuff, u"Work"));
++
++  const SpaceQuery all = ParseSpaceQuery(u"@Work Stuff Archive", names);
++  ASSERT_TRUE(all.space_prefix);
++  EXPECT_EQ(u"Work Stuff Archive", *all.space_prefix);
++  EXPECT_TRUE(all.rest.empty());
++
++  const SpaceQuery partial = ParseSpaceQuery(u"@Wor rust", names);
++  ASSERT_TRUE(partial.space_prefix);
++  EXPECT_FALSE(partial.whole_name) << "no whole name: the first word";
++  EXPECT_EQ(u"Wor", *partial.space_prefix);
++  EXPECT_TRUE(SpaceNameMatches(partial, u"Work Stuff Archive"));
++
++  const SpaceQuery umlaut = ParseSpaceQuery(u"@\u00fc docs", names);
++  EXPECT_TRUE(SpaceNameMatches(umlaut, u"\u00dcber"))
++      << "a prefix folds case beyond ASCII";
++  EXPECT_TRUE(SpaceNameMatchesPrefix(u"\u00dcber", u"\u00fcb"));
++  const SpaceQuery whole = ParseSpaceQuery(u"@\u00fcber docs", names);
++  EXPECT_TRUE(whole.whole_name);
++  EXPECT_EQ(u"docs", whole.rest);
++}
++
+ }  // namespace
+ }  // namespace spaces
+diff --git a/chrome/browser/ui/views/commandbar/command_bar_view.cc b/chrome/browser/ui/views/commandbar/command_bar_view.cc
+index 7bc7ed58651a4..9a2153a72fc3d 100644
+--- a/chrome/browser/ui/views/commandbar/command_bar_view.cc
++++ b/chrome/browser/ui/views/commandbar/command_bar_view.cc
+@@ -15,6 +15,7 @@
+ #include "base/functional/bind.h"
+ #include "base/functional/callback.h"
+ #include "base/functional/callback_helpers.h"
++#include "base/i18n/case_conversion.h"
+ #include "base/memory/ptr_util.h"
+ #include "base/notreached.h"
+ #include "base/strings/string_split.h"
+@@ -254,11 +255,13 @@ bool IsExtensionsChordModifier(ui::KeyboardCode key) {
+                                                 ExtensionsChordModifiers());
+ }
+ 
++// K2 (BACKLOG S-158): case folds in any script, so a title in Cyrillic or
++// with accents is found whatever case it is typed in; ASCII alone was folded.
+ bool Matches(const std::u16string& haystack, const std::u16string& needle) {
+   if (needle.empty()) {
+     return true;
+   }
+-  return base::ToLowerASCII(haystack).find(base::ToLowerASCII(needle)) !=
++  return base::i18n::FoldCase(haystack).find(base::i18n::FoldCase(needle)) !=
+          std::u16string::npos;
+ }
+ 
+@@ -274,10 +277,10 @@ bool MatchesKeywords(const std::u16string& title,
+     return false;
+   }
+   const std::vector<std::u16string> typed_words =
+-      base::SplitString(base::ToLowerASCII(typed), base::kWhitespaceUTF16,
++      base::SplitString(base::i18n::FoldCase(typed), base::kWhitespaceUTF16,
+                         base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
+   const std::vector<std::u16string> row_words = base::SplitString(
+-      base::ToLowerASCII(base::StrCat({title, u" ", keywords})),
++      base::i18n::FoldCase(base::StrCat({title, u" ", keywords})),
+       base::kWhitespaceUTF16, base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
+   const auto begins_a_row_word = [&](const std::u16string& word) {
+     return std::ranges::any_of(row_words, [&](const std::u16string& row_word) {
+@@ -2023,7 +2026,14 @@ void CommandBarView::UpdateResults(const std::u16string& query,
+ 
+   TabStripModel* const tabs = browser_->GetTabStripModel();
+   spaces::SpaceModel* const spaces = spaces::SpaceModel::From(browser_);
+-  const spaces::SpaceQuery parsed = spaces::ParseSpaceQuery(query);
++  // K19 (BACKLOG S-164): a Space's whole name, of several words too.
++  std::vector<std::u16string> space_names;
++  if (spaces) {
++    for (const std::unique_ptr<spaces::Space>& space : spaces->spaces()) {
++      space_names.push_back(spaces->DisplayName(space->id()));
++    }
++  }
++  const spaces::SpaceQuery parsed = spaces::ParseSpaceQuery(query, space_names);
+   const std::u16string title_query =
+       parsed.space_prefix ? parsed.rest : std::u16string(query);
+   // Hide Other Spaces keeps the other Spaces' tabs and names off screen
+@@ -2099,9 +2109,8 @@ void CommandBarView::UpdateResults(const std::u16string& query,
+       // in that Space alone, and found under its name only.
+       if (spaces && parsed.space_prefix &&
+           (!tab->IsPinned() || spaces->IsOwnEssential(tab))) {
+-        if (!spaces::SpaceNameMatchesPrefix(
+-                spaces->DisplayName(spaces->SpaceForTab(tab)),
+-                *parsed.space_prefix)) {
++        if (!spaces::SpaceNameMatches(
++                parsed, spaces->DisplayName(spaces->SpaceForTab(tab)))) {
+           continue;
+         }
+       }
+@@ -2187,8 +2196,8 @@ void CommandBarView::UpdateResults(const std::u16string& query,
+         continue;
+       }
+       if (parsed.space_prefix &&
+-          !spaces::SpaceNameMatchesPrefix(
+-              base::UTF8ToUTF16(tab.space_name), *parsed.space_prefix)) {
++          !spaces::SpaceNameMatches(parsed,
++                                    base::UTF8ToUTF16(tab.space_name))) {
+         continue;
+       }
+       if (!title_query.empty() && !Matches(tab.title, title_query)) {
+diff --git a/chrome/browser/ui/views/commandbar/command_bar_view_unittest.cc b/chrome/browser/ui/views/commandbar/command_bar_view_unittest.cc
+index fbd93adfe1a7d..b1a0b19920758 100644
+--- a/chrome/browser/ui/views/commandbar/command_bar_view_unittest.cc
++++ b/chrome/browser/ui/views/commandbar/command_bar_view_unittest.cc
+@@ -1667,6 +1667,24 @@ TEST_F(CommandBarViewTest, MatchesCustomTitle) {
+   EXPECT_EQ(0u, bar->result_count_for_testing());
+ }
+ 
++// K2 (BACKLOG S-158): case folds in any script. A Cyrillic title typed in
++// lower case was not found: the bar folded ASCII alone.
++TEST_F(CommandBarViewTest, ATitleIsFoundInAnyCaseInAnyScript) {
++  AddTab(browser(), GURL("https://example.com/"));
++  // "Kyiv News" in Ukrainian, capitalised.
++  stedding::SetTabName(
++      browser(), tabs().GetActiveTab(),
++      u"\u041a\u0438\u0457\u0432 \u041d\u043e\u0432\u0438\u043d\u0438");
++  auto bar = std::make_unique<CommandBarView>(browser());
++  // "kyiv", in lower case.
++  bar->ContentsChanged(bar->field_for_testing(), u"\u043a\u0438\u0457\u0432");
++  EXPECT_EQ(1u, bar->result_count_for_testing());
++  // "NEWS", in upper case.
++  bar->ContentsChanged(bar->field_for_testing(),
++                       u"\u041d\u041e\u0412\u0418\u041d\u0418");
++  EXPECT_EQ(1u, bar->result_count_for_testing());
++}
++
+ // spaces B13: typing filters by title, and the field is the bar's own.
+ TEST_F(CommandBarViewTest, TypingFiltersByTitle) {
+   AddTab(browser(), GURL("https://example.com/"));

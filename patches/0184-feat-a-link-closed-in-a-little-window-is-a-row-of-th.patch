@@ -1,0 +1,363 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Fri, 13 Nov 2026 21:26:54 -0500
+Subject: feat: a link closed in a little window is a row of the archive
+ (S-159)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A little window closed by hand already went on the recently-closed list
+(docs/features/little.md E13), and the archive listed its link as "in a
+closed window of 1 tabs" with no Space. Its row now says "from a little
+window", the Space filter offers "Little windows" while such a row is
+listed, and the command bar's archived row says "Archived · Little
+window" (docs/features/archive.md A17). A closed window or group of one
+tab no longer says "of 1 tabs", and Forget on a little window's row is
+plain Forget.
+
+Why: Arc keeps links closed from Little Arc in its archive, with a
+filter for them (Arc's 2023 release notes).
+Removable when: never; Stedding's own archive.
+---
+ .../browser/resources/stedding_archive/app.ts | 43 ++++++++++---
+ chrome/browser/ui/archive/BUILD.gn            |  2 +
+ chrome/browser/ui/archive/archived_tabs.cc    | 17 ++++-
+ .../ui/archive/archived_tabs_unittest.cc      | 37 +++++++++++
+ .../ui/views/commandbar/command_bar_view.cc   |  4 +-
+ .../stedding/little_window_browsertest.cc     | 63 ++++++++++++++++++-
+ 6 files changed, 154 insertions(+), 12 deletions(-)
+
+diff --git a/chrome/browser/resources/stedding_archive/app.ts b/chrome/browser/resources/stedding_archive/app.ts
+index f94eb176a7d8d..5aeae958186c0 100644
+--- a/chrome/browser/resources/stedding_archive/app.ts
++++ b/chrome/browser/resources/stedding_archive/app.ts
+@@ -115,11 +115,20 @@ function hostOf(url: string): string {
+   }
+ }
+ 
++// A17: the filter's choice for links closed in little windows, which belong
++// to no Space. Not a Space id, which is a GUID.
++const LITTLE_WINDOWS = 'little-windows';
++
+ // The filter goes by the Space's id: names repeat and change, so two Spaces
+ // of one name were one choice, and a renamed Space lost its rows (BACKLOG
+ // S-187). A row from before ids were recorded goes by the name it showed.
+ function matches(tab: ArchivedTab): boolean {
+-  if (state.space) {
++  // A17: Arc's "Little Arc" filter.
++  if (state.space === LITTLE_WINDOWS) {
++    if (tab.closedWith !== 'little') {
++      return false;
++    }
++  } else if (state.space) {
+     if (tab.spaceId ? tab.spaceId !== state.space :
+                       tab.spaceName !== nameOfSpace(state.space)) {
+       return false;
+@@ -153,16 +162,29 @@ function nameOfSpace(id: string): string {
+ function closedWithText(tab: ArchivedTab): string {
+   switch (tab.closedWith) {
+     case 'window':
+-      return ` · in a closed window of ${tab.closedCount} tabs`;
++      return tab.closedCount > 1 ?
++          ` · in a closed window of ${tab.closedCount} tabs` :
++          ' · in a closed window';
++    case 'little':
++      return ' · from a little window';
+     case 'split':
+       return ' · in a closed split';
+     case 'group':
+-      return ` · in a closed group of ${tab.closedCount} tabs`;
++      return tab.closedCount > 1 ?
++          ` · in a closed group of ${tab.closedCount} tabs` :
++          ' · in a closed group';
+     default:
+       return '';
+   }
+ }
+ 
++// Forget drops the whole close (BACKLOG S-187), so its button names it; a
++// little window held its one link.
++function closeNoun(tab: ArchivedTab): string {
++  return ['window', 'split', 'group'].includes(tab.closedWith) ?
++      tab.closedWith : '';
++}
++
+ // The page's own parts, made once: an update redraws the Space menu's
+ // choices and the list, and leaves the search field, the focus and the
+ // scroll where the reader has them. Every update rebuilt the page and put
+@@ -209,6 +231,13 @@ function renderSpaceMenu(select: HTMLSelectElement) {
+   const all = el('option', undefined, 'All Spaces');
+   all.value = '';
+   const options = [all];
++  if (state.space === LITTLE_WINDOWS ||
++      state.tabs.some(tab => tab.closedWith === 'little')) {
++    const little = el('option', undefined, 'Little windows');
++    little.value = LITTLE_WINDOWS;
++    little.selected = state.space === LITTLE_WINDOWS;
++    options.push(little);
++  }
+   for (const space of spaceChoices()) {
+     const option = el('option', undefined, space.markedName || space.name);
+     option.value = space.id;
+@@ -263,10 +292,10 @@ function renderList(list: HTMLElement) {
+     restore.addEventListener('click', () => chrome.send('restoreArchivedTab', [tab.id]));
+     row.append(restore);
+     // Chromium's list forgets a close made whole as one: the button says so.
+-    const remove = el('button', undefined,
+-        tab.closedWith ? `Forget ${tab.closedWith}` : 'Forget');
+-    remove.setAttribute('aria-label', tab.closedWith ?
+-        `Forget the closed ${tab.closedWith} this tab was in` : 'Forget this tab');
++    const noun = closeNoun(tab);
++    const remove = el('button', undefined, noun ? `Forget ${noun}` : 'Forget');
++    remove.setAttribute('aria-label', noun ?
++        `Forget the closed ${noun} this tab was in` : 'Forget this tab');
+     remove.addEventListener('click', () => chrome.send('removeArchivedTab', [tab.id]));
+     row.append(remove);
+     list.append(row);
+diff --git a/chrome/browser/ui/archive/BUILD.gn b/chrome/browser/ui/archive/BUILD.gn
+index 132176cdc1ab4..790c96dd48598 100644
+--- a/chrome/browser/ui/archive/BUILD.gn
++++ b/chrome/browser/ui/archive/BUILD.gn
+@@ -65,6 +65,7 @@ source_set("archive") {
+     "//chrome/browser/ui:browser_init_state",
+     "//chrome/browser/ui/browser_window",
+     "//chrome/browser/ui/spaces",
++    "//chrome/browser/ui/stedding:little_mark",
+     "//chrome/browser/ui/stedding:prefs",
+     "//chrome/browser/ui/stedding:sleep_tabs",
+     "//chrome/browser/ui/stedding:tab_names",
+@@ -129,6 +130,7 @@ source_set("unit_tests") {
+     "//chrome/browser/profiles:profile",
+     "//chrome/browser/sessions",
+     "//chrome/browser/ui/spaces",
++    "//chrome/browser/ui/stedding:little_mark",
+     "//chrome/browser/ui/stedding:little_window",
+     "//chrome/browser/ui/stedding:prefs",
+     "//chrome/browser/ui/stedding:tab_names",
+diff --git a/chrome/browser/ui/archive/archived_tabs.cc b/chrome/browser/ui/archive/archived_tabs.cc
+index 76b35e862eb0d..cb379929a5fa6 100644
+--- a/chrome/browser/ui/archive/archived_tabs.cc
++++ b/chrome/browser/ui/archive/archived_tabs.cc
+@@ -35,6 +35,7 @@
+ #include "chrome/browser/ui/spaces/space_model.h"
+ #include "chrome/browser/ui/spaces/space_storage_partition.h"
+ #include "chrome/browser/ui/spaces/tab_space_restore_data.h"
++#include "chrome/browser/ui/stedding/little_mark.h"
+ #include "chrome/browser/ui/stedding/stedding_prefs.h"
+ #include "chrome/browser/ui/stedding/tab_names.h"
+ #include "chrome/browser/ui/tabs/stedding_folder_session.h"
+@@ -183,6 +184,16 @@ void RefileInFolder(TabStripModel& strip,
+   }
+ }
+ 
++// A17 (BACKLOG S-159): a little window closed by hand (little E13). Its
++// session keeps the mark it was made with.
++bool IsLittleWindowClose(const sessions::tab_restore::Window& window) {
++  if (window.window_type != sessions::SessionWindow::TYPE_POPUP) {
++    return false;
++  }
++  const auto it = window.extra_data.find(kSessionLittleWindowKey);
++  return it != window.extra_data.end() && it->second == "1";
++}
++
+ // A14 (web apps Wa12): an installed app's window, or a little window an app
+ // opened. Its tabs are the app's, in the app's jar: ⇧⌘T brings the window
+ // back as the app's, while the archive's Restore would put a page of it in
+@@ -794,9 +805,13 @@ std::vector<ArchivedTab> ListArchivedTabs(
+         const base::Time closed = window.timestamp.is_null()
+                                       ? newest_page(window)
+                                       : window.timestamp;
++        // A17: a link closed in a little window, as Arc keeps Little Arc's
++        // in its archive.
++        const char* const closed_with =
++            IsLittleWindowClose(window) ? "little" : "window";
+         for (const std::unique_ptr<sessions::tab_restore::Tab>& tab :
+              window.tabs) {
+-          add(*tab, time_of(*tab, closed), "window", window.tabs.size());
++          add(*tab, time_of(*tab, closed), closed_with, window.tabs.size());
+         }
+         break;
+       }
+diff --git a/chrome/browser/ui/archive/archived_tabs_unittest.cc b/chrome/browser/ui/archive/archived_tabs_unittest.cc
+index f63d8c867d85c..cbeb895c75b5f 100644
+--- a/chrome/browser/ui/archive/archived_tabs_unittest.cc
++++ b/chrome/browser/ui/archive/archived_tabs_unittest.cc
+@@ -27,6 +27,7 @@
+ #include "chrome/browser/ui/spaces/space_colors.h"
+ #include "chrome/browser/ui/spaces/space_model.h"
+ #include "chrome/browser/ui/spaces/tab_space_restore_data.h"
++#include "chrome/browser/ui/stedding/little_mark.h"
+ #include "chrome/browser/ui/stedding/tab_names.h"
+ #include "chrome/browser/ui/tabs/stedding_folder_session.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+@@ -225,6 +226,42 @@ TEST(ArchivePageTest, AClosedWindowsAndSplitsTabsAreRows) {
+       << "the retention reads the close's time";
+ }
+ 
++// A17 (BACKLOG S-159): a link closed in a little window is a row that says
++// so, as Arc keeps Little Arc's links in its archive; a plain popup's close
++// stays a closed window's.
++TEST(ArchivePageTest, ALittleWindowsLinkIsARowOfItsOwn) {
++  const base::Time now = base::Time::Now();
++  sessions::TabRestoreService::Entries entries;
++  auto little = std::make_unique<sessions::tab_restore::Window>();
++  little->id = SessionID::FromSerializedValue(30);
++  little->timestamp = now - base::Minutes(5);
++  little->window_type = sessions::SessionWindow::TYPE_POPUP;
++  little->extra_data[kSessionLittleWindowKey] = "1";
++  little->tabs.push_back(
++      ClosedTab(31, "https://link.example/", u"Link", base::Time(), nullptr));
++  entries.push_back(std::move(little));
++  auto popup = std::make_unique<sessions::tab_restore::Window>();
++  popup->id = SessionID::FromSerializedValue(40);
++  popup->timestamp = now - base::Minutes(10);
++  popup->window_type = sessions::SessionWindow::TYPE_POPUP;
++  popup->tabs.push_back(
++      ClosedTab(41, "https://popup.example/", u"Popup", base::Time(), nullptr));
++  entries.push_back(std::move(popup));
++
++  const std::vector<ArchivedTab> shown =
++      ListArchivedTabs(entries, now, base::Days(30));
++  ASSERT_EQ(2u, shown.size());
++  EXPECT_EQ(u"Link", shown[0].title);
++  EXPECT_EQ("little", shown[0].closed_with);
++  EXPECT_EQ(1, shown[0].closed_count);
++  const base::DictValue value = ArchivedTabToValue(shown[0]);
++  const std::string* const closed_with = value.FindString("closedWith");
++  ASSERT_TRUE(closed_with);
++  EXPECT_EQ("little", *closed_with);
++  EXPECT_EQ(u"Popup", shown[1].title);
++  EXPECT_EQ("window", shown[1].closed_with) << "a popup is not little";
++}
++
+ // A11 (BACKLOG S-348): a window read from a crashed session has no close
+ // time; it ages from the last page any of its tabs showed, and is no row
+ // once that is past the keep time. It stayed a row, whatever the keep time,
+diff --git a/chrome/browser/ui/views/commandbar/command_bar_view.cc b/chrome/browser/ui/views/commandbar/command_bar_view.cc
+index 00515385b044e..7bc7ed58651a4 100644
+--- a/chrome/browser/ui/views/commandbar/command_bar_view.cc
++++ b/chrome/browser/ui/views/commandbar/command_bar_view.cc
+@@ -2208,7 +2208,9 @@ void CommandBarView::UpdateResults(const std::u16string& query,
+       rows_.push_back(
+           {.kind = RowKind::kArchived,
+            .title = tab.title,
+-           .detail = tab.space_name.empty()
++           // archive A17: a link a little window closed says so.
++           .detail = tab.closed_with == "little" ? u"Archived · Little window"
++                     : tab.space_name.empty()
+                          ? u"Archived"
+                          : u"Archived · " + base::UTF8ToUTF16(tab.space_name),
+            .archived_id = tab.id,
+diff --git a/chrome/test/stedding/little_window_browsertest.cc b/chrome/test/stedding/little_window_browsertest.cc
+index 5bca5cd4042a6..72777ee6978e8 100644
+--- a/chrome/test/stedding/little_window_browsertest.cc
++++ b/chrome/test/stedding/little_window_browsertest.cc
+@@ -11,6 +11,7 @@
+ 
+ #include "chrome/browser/ui/stedding/little_window.h"
+ 
++#include <algorithm>
+ #include <cstdlib>
+ #include <memory>
+ #include <optional>
+@@ -33,6 +34,8 @@
+ #include "chrome/browser/prefs/session_startup_pref.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/renderer_context_menu/render_view_context_menu_test_util.h"
++#include "chrome/browser/sessions/tab_restore_service_factory.h"
++#include "chrome/browser/ui/archive/archived_tabs.h"
+ #include "chrome/browser/ui/browser_commands.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+@@ -40,8 +43,8 @@
+ #include "chrome/browser/ui/spaces/space_model.h"
+ #include "chrome/browser/ui/startup/startup_browser_creator_impl.h"
+ #include "chrome/browser/ui/startup/startup_types.h"
+-#include "chrome/browser/ui/stedding/stedding_command_ids.h"
+ #include "chrome/browser/ui/stedding/peek.h"
++#include "chrome/browser/ui/stedding/stedding_command_ids.h"
+ #include "chrome/browser/ui/stedding/stedding_prefs.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "chrome/browser/ui/views/frame/browser_view.h"
+@@ -54,6 +57,7 @@
+ #include "components/policy/core/common/policy_pref_names.h"
+ #include "components/prefs/pref_service.h"
+ #include "components/sessions/core/session_id.h"
++#include "components/sessions/core/tab_restore_service.h"
+ #include "components/tabs/public/tab_interface.h"
+ #include "content/public/browser/context_menu_params.h"
+ #include "content/public/browser/navigation_controller.h"
+@@ -67,10 +71,10 @@
+ #include "ui/base/accelerators/accelerator.h"
+ #include "ui/base/base_window.h"
+ #include "ui/base/l10n/l10n_util.h"
+-#include "ui/events/event.h"
+-#include "ui/events/event_constants.h"
+ #include "ui/display/display.h"
+ #include "ui/display/screen.h"
++#include "ui/events/event.h"
++#include "ui/events/event_constants.h"
+ #include "ui/events/keycodes/keyboard_codes.h"
+ #include "ui/gfx/geometry/point.h"
+ #include "ui/gfx/geometry/rect.h"
+@@ -809,6 +813,59 @@ IN_PROC_BROWSER_TEST_F(LittleWindowRestoreTest,
+       << "its page came back as a tab as well";
+ }
+ 
++// archive A17 (BACKLOG S-159): the link a little window closed by hand held
++// is a row of the archive that says where it came from, as Arc keeps Little
++// Arc's links in its archive.
++IN_PROC_BROWSER_TEST_F(LittleWindowRestoreTest,
++                       AClosedLittleWindowsLinkIsInTheArchive) {
++  const GURL url = embedded_test_server()->GetURL("/title1.html");
++  BrowserWindowInterface* const little = stedding::OpenLittleWindow(
++      browser()->GetProfile(), url, browser(), /*untrusted_launch=*/false);
++  ASSERT_TRUE(little);
++  ASSERT_TRUE(content::WaitForLoadStop(
++      little->GetTabStripModel()->GetActiveWebContents()));
++  ASSERT_TRUE(chrome::ExecuteCommand(little, IDC_STEDDING_LITTLE_CLOSE));
++  ASSERT_TRUE(base::test::RunUntil(
++      [&]() { return GetAllBrowserWindowInterfaces().size() == 1u; }));
++  sessions::TabRestoreService* const service =
++      TabRestoreServiceFactory::GetForProfile(browser()->GetProfile());
++  ASSERT_TRUE(service);
++  const std::vector<stedding::ArchivedTab> rows = stedding::ListArchivedTabs(
++      service->entries(), base::Time::Now(), base::Days(30));
++  const auto row = std::ranges::find_if(
++      rows, [&](const stedding::ArchivedTab& tab) { return tab.url == url; });
++  ASSERT_NE(rows.end(), row) << "the little window's link is not archived";
++  EXPECT_EQ("little", row->closed_with);
++
++  // The page says where the row came from, and its filter finds it.
++  ASSERT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
++      browser(), GURL("chrome://stedding-archive"),
++      WindowOpenDisposition::NEW_FOREGROUND_TAB,
++      ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
++  content::WebContents* const page =
++      browser()->GetTabStripModel()->GetActiveWebContents();
++  const std::string meta =
++      "[...document.querySelectorAll('.row .meta')].map(m => m.textContent)"
++      ".join('|')";
++  EXPECT_TRUE(base::test::RunUntil([&]() {
++    return content::EvalJs(page, meta)
++               .ExtractString()
++               .find("from a little window") != std::string::npos;
++  })) << content::EvalJs(page, meta).ExtractString();
++  EXPECT_EQ(std::string::npos,
++            content::EvalJs(page, meta).ExtractString().find("of 1 tabs"));
++  ASSERT_TRUE(
++      content::ExecJs(page,
++                      "const menu = document.querySelector('select');"
++                      "const little = [...menu.options].find("
++                      "    option => option.textContent === 'Little windows');"
++                      "menu.value = little.value;"
++                      "menu.dispatchEvent(new Event('change'));"));
++  EXPECT_EQ(1,
++            content::EvalJs(page, "document.querySelectorAll('.row').length"))
++      << "the filter shows the little window's row alone";
++}
++
+ // little E13: Cmd-W is the way most people close one. The strip was empty by
+ // the time the window closed, so nothing recorded it, and Shift-Cmd-T brought
+ // back whatever closed before.

@@ -95,6 +95,11 @@ still open is a BACKLOG row that names its id.
     looked at as a user meets it (the owner, 2026-11-10). An item that is not ready moves to
     the next release; it does not go out half-checked. A capture that makes the browser look
     wrong is a defect, even when the browser is right.
+22. The next release is 0.5.0, the end of the 0.4.0 betas (the owner, 2026-11-13: "the next
+    version will be 0.5.0 or 0.5.1 whatever is better, time to move from 0.4.*"). 0.5.0, since a
+    new minor version starts at its first patch. Its pin is M157's newest point release at more
+    than 1% of users when the release is cut (ADR 0007; the owner, the same day: "bump chromium
+    version to the last stable 157 if available").
 
 The operator's own request in chat comes before any of this and before BACKLOG's order.
 

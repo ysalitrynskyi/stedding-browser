@@ -2,6 +2,36 @@
 
 What was built, newest first. Nothing here is needed to do a task: `AGENTS.md` carries what is true now, `BACKLOG.md` the order of work, `PLAN.md` the owner's decisions. This file was the "State of the project" section of `AGENTS.md` until 2026-09-30. This log starts at 2026-10-15. Closed work from before that is the table in [docs/history/archive.md](history/archive.md).
 
+## 2026-11-13 -- Renamed pins keep their names through a file; the archive keeps little windows' links; the command bar finds any script (GitHub issue 114, S-159, S-158, S-164)
+
+The owner, the same evening: carry on with the plan, and the next release is 0.5.0 (`PLAN.md`
+decision 22). M157's newest point release, 157.0.8103.80, was at 0.5% of users, so the pin stays
+at .79 until it passes 1% (ADR 0007).
+
+- S-159, the archive's audit leftovers, was mostly done already: the idle clock survives a
+  restart (A1), the page keeps its place (A9), and its messages are checked (S-188). Arc's own
+  archive opens on every Space with filters, so Stedding's does too. What was left of Arc's is
+  built (patch 0184, archive A17): a link closed in a little window is a row that says "from a
+  little window", with a "Little windows" filter, as Arc keeps Little Arc's links. A closed
+  window or group of one tab no longer reads "of 1 tabs".
+- The command bar folded ASCII case alone, so a Cyrillic or accented title typed in another case
+  was not found; titles and words now fold in any script (K2, K10). "@Work Stuff rust" now picks
+  the Space named "Work Stuff" whole, and matches it alone (K19). Patch 0185: its lines belong to
+  four earlier patches.
+- GitHub issue 114, reported that afternoon on Windows: names given to pinned tabs came back from
+  an imported sidebar file and went when the tab was clicked. The export wrote the name as the
+  page's saved title, so the import showed it only until the page loaded. The name is now the
+  item's `title`, as Arc's file has it, apart from the page's title; the sync folder's file the
+  same (import I3, I18; S-482). Folded into the patches that own the export and the sync file.
+- The nine WebDAV sync restart tests that failed in each whole suite bound one fixed port; each
+  now takes its own from its name, the same across its restart (S-481).
+- On win-release: the unit tests around the archive and the bar (128), the new archive test three
+  times of three, 106 related browser tests; the whole suite ran 960, all passed but the nine
+  WebDAV tests, which passed alone (98); on win-checks, 56. With the issue 114 and port fixes: unit 151; the 98 sync tests four at a time, twice, all passed; the import and sidebar file tests (12); on win-checks 119 unit and 25 browser.
+- A separator above a row now travels in the sidebar file too (S-286, Y45, patch 0186).
+
+Not done here: the Mac (not free).
+
 ## 2026-11-13 -- What's playing, at the sidebar's foot (S-95, Mp3)
 
 Arc kept the tab playing sound in the background at the foot of its sidebar. Four forms were

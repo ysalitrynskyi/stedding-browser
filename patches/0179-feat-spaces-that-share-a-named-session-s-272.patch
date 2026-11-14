@@ -60,15 +60,15 @@ Removable when: never; this is the feature.
  chrome/browser/ui/spaces/isolation_mark.cc    |  26 +
  chrome/browser/ui/spaces/isolation_mark.h     |  19 +
  chrome/browser/ui/spaces/new_tab_space.cc     |   6 +
- chrome/browser/ui/spaces/sidebar_backup.cc    |  18 +
- .../ui/spaces/sidebar_backup_unittest.cc      | 173 +++++
+ chrome/browser/ui/spaces/sidebar_backup.cc    |  31 +-
+ .../ui/spaces/sidebar_backup_unittest.cc      | 205 +++++-
  .../browser/ui/spaces/sidebar_sync_apply.cc   |  25 +-
  chrome/browser/ui/spaces/sidebar_sync_file.cc |   3 +
  .../browser/ui/spaces/sidebar_sync_service.cc |  20 +-
  .../browser/ui/spaces/sidebar_sync_state.cc   |  23 +-
  chrome/browser/ui/spaces/sidebar_sync_state.h |  12 +
  .../browser/ui/spaces/sidebar_sync_tracker.cc |   8 +
- .../ui/spaces/sidebar_sync_unittest.cc        |  35 +
+ .../ui/spaces/sidebar_sync_unittest.cc        |  49 ++
  chrome/browser/ui/spaces/space_model.cc       |  51 +-
  chrome/browser/ui/spaces/space_model.h        |   9 +
  .../ui/spaces/space_model_window_unittest.cc  |   7 +
@@ -95,7 +95,7 @@ Removable when: never; this is the feature.
  .../stedding/settings_spaces_browsertest.cc   | 177 ++++-
  .../stedding/shared_session_browsertest.cc    | 667 ++++++++++++++++++
  .../test/stedding/sidebar_sync_browsertest.cc |  94 +++
- 48 files changed, 2220 insertions(+), 117 deletions(-)
+ 48 files changed, 2274 insertions(+), 122 deletions(-)
  create mode 100644 chrome/test/stedding/shared_session_browsertest.cc
 
 diff --git a/chrome/app/stedding_strings.grdp b/chrome/app/stedding_strings.grdp
@@ -669,10 +669,27 @@ index 5235da4284280..7d9b73347b3c4 100644
  }
  
 diff --git a/chrome/browser/ui/spaces/sidebar_backup.cc b/chrome/browser/ui/spaces/sidebar_backup.cc
-index 5506a78f29207..0f7e5e4696d4f 100644
+index 5506a78f29207..6826713c05924 100644
 --- a/chrome/browser/ui/spaces/sidebar_backup.cc
 +++ b/chrome/browser/ui/spaces/sidebar_backup.cc
-@@ -198,6 +198,18 @@ ArcImportPlan::Space SpaceEntry(const SpaceModel& model, const Space& space) {
+@@ -81,10 +81,13 @@ Node TabNode(Snapshot& snapshot, tabs::TabInterface* tab) {
+   Node node;
+   node.kind = Node::Kind::kTab;
+   node.arc_id = TabId(snapshot, tab);
+-  // The user's name for the tab first (tabs R15), then the page title.
+-  node.title = stedding::TabName(contents);
++  // tabs R15, import I3 (GitHub issue 114): the user's name for the tab is
++  // its name, and the page's title is its title. The name was written as the
++  // page's title, so an import showed it only until the page loaded.
++  node.name = stedding::TabName(contents);
++  node.title = contents->GetTitle();
+   if (node.title.empty()) {
+-    node.title = tab->GetTitle();
++    node.title = node.name.empty() ? tab->GetTitle() : node.name;
+   }
+   // A pin's home is what it comes back as (pins H1), when that is a web page
+   // (H13). A pin with any other home is written as the page it shows, so the
+@@ -198,6 +201,18 @@ ArcImportPlan::Space SpaceEntry(const SpaceModel& model, const Space& space) {
    entry.dark_color = space.dark_color();
    // Whether it has its own session, never the jar: sign-ins do not travel.
    entry.isolated = model.SpaceIsIsolated(space.id());
@@ -691,7 +708,18 @@ index 5506a78f29207..0f7e5e4696d4f 100644
    return entry;
  }
  
-@@ -385,6 +397,12 @@ std::string PlanToJson(const ArcImportPlan& plan, base::DictValue extra) {
+@@ -248,7 +263,9 @@ std::string AppendItem(const Node& node,
+   base::ListValue child_ids;
+   base::DictValue data;
+   if (node.kind == Node::Kind::kTab) {
+-    item.Set("title", "");
++    // import I3: Arc's shape, the name the person gave the tab in `title`
++    // and the page's in `savedTitle`; empty for a tab that follows its page.
++    item.Set("title", node.name);
+     base::DictValue tab;
+     tab.Set("savedURL", node.url.spec());
+     tab.Set("savedTitle", node.title);
+@@ -385,6 +402,12 @@ std::string PlanToJson(const ArcImportPlan& plan, base::DictValue extra) {
      if (space.isolated) {
        stedding.Set("isolated", true);
      }
@@ -705,7 +733,7 @@ index 5506a78f29207..0f7e5e4696d4f 100644
        stedding.Set("essentials", essentials_id);
      }
 diff --git a/chrome/browser/ui/spaces/sidebar_backup_unittest.cc b/chrome/browser/ui/spaces/sidebar_backup_unittest.cc
-index 019b440f1981f..d79601991b64c 100644
+index 019b440f1981f..403ebf29c6ec2 100644
 --- a/chrome/browser/ui/spaces/sidebar_backup_unittest.cc
 +++ b/chrome/browser/ui/spaces/sidebar_backup_unittest.cc
 @@ -17,7 +17,9 @@
@@ -718,10 +746,49 @@ index 019b440f1981f..d79601991b64c 100644
  #include "base/strings/utf_string_conversions.h"
  #include "base/test/task_environment.h"
  #include "base/test/test_future.h"
-@@ -362,6 +364,177 @@ TEST_F(SidebarBackupTest, AClosedPinComesBackFromTheFile) {
+@@ -205,7 +207,9 @@ TEST_F(SidebarBackupTest, SnapshotCarriesEveryField) {
+   EXPECT_EQ("📄", docs->icon);
+   EXPECT_EQ("", home.pinned[0].icon) << "a folder with no icon has none";
+   ASSERT_EQ(1u, docs->children.size());
+-  EXPECT_EQ(u"My name", docs->children[0].title) << "tabs R15";
++  EXPECT_EQ(u"My name", docs->children[0].name) << "tabs R15";
++  EXPECT_NE(u"My name", docs->children[0].title)
++      << "GitHub issue 114: the page's title is not the name";
+   EXPECT_TRUE(
+       FindNode(home.unpinned, Node::Kind::kTab, "https://plain.example/"));
+ }
+@@ -362,6 +366,205 @@ TEST_F(SidebarBackupTest, AClosedPinComesBackFromTheFile) {
                    .empty());
  }
  
++// import I3 (GitHub issue 114): a renamed pin comes back from the file under
++// its name, and the name is the tab's, so it outlives the page's title once
++// the page loads. The file had written the name as the page's title, which
++// the page's own then replaced.
++TEST_F(SidebarBackupTest, ARenamedPinKeepsItsNameThroughTheFile) {
++  Open("https://kept.example/");
++  tabs::TabInterface* const pin = Open("https://pin.example/");
++  model().SetSpacePinned(pin, true);
++  stedding::SetTabName(browser(), pin, u"My mail");
++  const std::string json =
++      PlanToJson(SnapshotSpace(browser(), model().active_id()));
++  tabs().CloseWebContentsAt(tabs().GetIndexOfTab(pin),
++                            TabCloseTypes::CLOSE_NONE);
++
++  const std::optional<ArcImportPlan> plan = ParseArcSidebar(json);
++  ASSERT_TRUE(plan.has_value());
++  ASSERT_EQ(1u, plan->spaces.size());
++  ASSERT_EQ(1u, plan->spaces[0].pinned.size());
++  EXPECT_EQ(u"My mail", plan->spaces[0].pinned[0].name);
++  EXPECT_NE(u"My mail", plan->spaces[0].pinned[0].title)
++      << "the page's title is not the name";
++  ApplyArcImport(browser(), *plan, ArcImportOptions());
++  tabs::TabInterface* const back = TabShowing(tabs(), "https://pin.example/");
++  ASSERT_TRUE(back);
++  EXPECT_EQ(u"My mail", stedding::TabName(back->GetContents()))
++      << "the name is the tab's, not the title of a page not yet loaded";
++}
++
 +// sessions S50: a session with a name goes by its id and its name, and two
 +// Spaces of it stay one session on another install, on one empty jar. A
 +// Space's lone session stays what it was.
@@ -964,10 +1031,10 @@ index 5914a3262766a..a162fdf719edf 100644
          }
        }
 diff --git a/chrome/browser/ui/spaces/sidebar_sync_file.cc b/chrome/browser/ui/spaces/sidebar_sync_file.cc
-index 869baf4d919df..50d48b141683a 100644
+index f8f230f389511..29049c0affc0e 100644
 --- a/chrome/browser/ui/spaces/sidebar_sync_file.cc
 +++ b/chrome/browser/ui/spaces/sidebar_sync_file.cc
-@@ -449,6 +449,9 @@ ArcImportPlan LedgerToPlan(const State& state) {
+@@ -452,6 +452,9 @@ ArcImportPlan LedgerToPlan(const State& state) {
      space.color = ColorFromHex(record.Get(kFieldColor));
      space.dark_color = ColorFromHex(record.Get(kFieldDarkColor));
      space.isolated = record.Get(kFieldIsolated) == "1";
@@ -1130,7 +1197,7 @@ index c663805ed02df..19f6fbf582a37 100644
        AppendOnce(order, id);
      }
 diff --git a/chrome/browser/ui/spaces/sidebar_sync_unittest.cc b/chrome/browser/ui/spaces/sidebar_sync_unittest.cc
-index 0e24c5607f100..7f3e12a4dbe18 100644
+index 0e24c5607f100..19f50a6faf2f1 100644
 --- a/chrome/browser/ui/spaces/sidebar_sync_unittest.cc
 +++ b/chrome/browser/ui/spaces/sidebar_sync_unittest.cc
 @@ -18,6 +18,7 @@
@@ -1182,6 +1249,27 @@ index 0e24c5607f100..7f3e12a4dbe18 100644
  // Sf15: a rename on one computer and a recolour on the other both survive.
  TEST(SidebarSyncMergeTest, DifferentFieldsBothSurvive) {
    const LocalView base = WorkView();
+@@ -592,6 +627,20 @@ FileMeta Meta(const char* install) {
+   return meta;
+ }
+ 
++// import I3 (GitHub issue 114): a pin's name in the ledger is the plan's
++// name, so Import sidebar... with the folder's file keeps it once the page
++// loads; it was written as the page's title.
++TEST(SidebarSyncFileTest, APinsNameIsItsNameInThePlan) {
++  LocalView view = WorkView();
++  view.items[kPinA].fields[kFieldName] = "My mail";
++  const State state = StateOf(view, 100, kOffice);
++  const ArcImportPlan plan = LedgerToPlan(state);
++  ASSERT_EQ(1u, plan.spaces.size());
++  ASSERT_EQ(2u, plan.spaces[0].pinned.size());
++  EXPECT_EQ(u"My mail", plan.spaces[0].pinned[0].name);
++  EXPECT_EQ(u"", plan.spaces[0].pinned[1].name) << "an unnamed pin has none";
++}
++
+ // Sf28: only an exact name is a peer; a sync tool's copies are named,
+ // never read; temporary files and stubs are ignored.
+ TEST(SidebarSyncFileTest, OnlyExactNamesArePeers) {
 diff --git a/chrome/browser/ui/spaces/space_model.cc b/chrome/browser/ui/spaces/space_model.cc
 index 4c7b7ce1979f0..dbdb32e6ce576 100644
 --- a/chrome/browser/ui/spaces/space_model.cc

@@ -58,8 +58,9 @@ In this order:
 5. **Pins in every window (S-94's second slice, GitHub issue 111):** proposed in ADR 0035
    (2026-11-13): one record per pin for the profile and a tab of it in each window, as Arc does;
    waiting for the owner's decision; the build after.
-6. **Live Folders for GitHub pull requests (S-478, discussion 106):** the spec and an ADR (how it
-   reads GitHub, what is fetched and when) for the owner; the build after.
+6. **Live Folders for GitHub pull requests (S-478, discussion 106):** proposed in ADR 0036
+   (2026-11-13): GitHub's API with a read-only token the person makes, not github.com's pages, which
+   broke Arc's folder when GitHub changed them; waiting for the owner's decision; the build after.
 7. **Settings and the extension list in sync (S-479, GitHub issue 109):** waits on the owner's
    decision.
 8. **S-458 waits for the PC's own 4K display at 150%:** over Remote Desktop the PC runs at 100%.

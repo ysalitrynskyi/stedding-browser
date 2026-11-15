@@ -1,7 +1,7 @@
 # 0035 — Pins and essentials in every window
 
 Status: Accepted, option B (the owner, 2026-11-15: "Yes, option B"). Proposed 2026-11-13 (BACKLOG S-94, GitHub issue 111).
-Date: 2026-11-13; accepted 2026-11-15
+Date: 2026-11-13
 
 ## Context
 

@@ -100,6 +100,10 @@ still open is a BACKLOG row that names its id.
     new minor version starts at its first patch. Its pin is M157's newest point release at more
     than 1% of users when the release is cut (ADR 0007; the owner, the same day: "bump chromium
     version to the last stable 157 if available").
+23. The release after 0.5.1 is 0.6.0 (the owner, 2026-11-15), since it carries features and moves
+    pins to a store for the profile: pins and essentials in every window (ADR 0035), settings and
+    the extension list in sync (ADR 0037), and Live Folders for GitHub if they pass the gate in
+    time (ADR 0036). A release that only fixes bugs is a patch release of the current minor.
 
 The operator's own request in chat comes before any of this and before BACKLOG's order.
 

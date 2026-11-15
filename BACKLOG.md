@@ -20,8 +20,9 @@ infrastructure, then features. A request in chat comes before this list. A spec 
 **0.5.1 was released on 2026-11-14**: the Mac's crash on a right-click (S-486), the address row
 stuck in a page's declared colour (S-487), and, from GitHub discussions 115 and 116, Shift-click
 for a peek (S-488) and the download toast's Move to Trash and Remove from List (S-489). 0.5.0 went
-out the same day (`PLAN.md` decision 22), with items 2 to 5 below. The next release takes items 6
-to 8 below, each on the owner's decision. S-490, the full-screen pair, waits for the owner's steps.
+out the same day (`PLAN.md` decision 22), with items 2 to 5 below. The next feature release is
+0.6.0 (`PLAN.md` decision 23) and takes items 6 to 8 below, each decided by the owner on
+2026-11-15. S-490, the full-screen pair, waits for the owner's steps.
 Before it is cut, `tooling/check-pin` again: 157.0.8103.80 and Chromium 158 were at 0.5% of users
 or less on 2026-11-14, and the pin follows a release past 1%.
 

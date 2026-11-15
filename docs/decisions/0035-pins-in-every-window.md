@@ -1,7 +1,7 @@
 # 0035 — Pins and essentials in every window
 
-Status: Proposed, for the owner's decision (BACKLOG S-94, GitHub issue 111). Nothing is built until the owner chooses.
-Date: 2026-11-13
+Status: Accepted, option B (the owner, 2026-11-15: "Yes, option B"). Proposed 2026-11-13 (BACKLOG S-94, GitHub issue 111).
+Date: 2026-11-13; accepted 2026-11-15
 
 ## Context
 
@@ -13,7 +13,7 @@ Today a pin's record (its home address, its own name, its folder, its place in t
 
 ## Decision
 
-Proposed: **B**, below, once the owner agrees. The three ways considered:
+**B**, below: the owner chose it on 2026-11-15. The three ways considered:
 
 **A. Ghost rows.** Every window lists every pin, but a pin stays one tab in one window. In the other windows its row is a ghost: choosing it asks, as G12 does, to show it here (the tab moves) or go to its window. One page per pin, so nothing is loaded twice, and the session format barely changes. A pin still lives in one window at a time, and moving it moves the page out of the window that had it, which is not what Arc does.
 

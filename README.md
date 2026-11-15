@@ -127,8 +127,9 @@ Safari's bookmarks.
 | In Arc | Here |
 |---|---|
 | Boosts and Easels | Deferred ([ADR 0012](docs/decisions/0012-defer-boosts-and-easels.md)) |
-| The mini player in the sidebar | Planned (`S-95`). Picture in picture by key until then |
-| The Library panel and Live Folders | Later (`S-61`) |
+| The mini player in the sidebar | Planned (`S-95`). Until then a playing video can pop out into picture in picture, and the sidebar shows what's playing |
+| Live Folders for GitHub pull requests | Planned ([ADR 0036](docs/decisions/0036-live-folders-for-github.md)) |
+| The Library panel | Later (`S-61`) |
 | Shared Spaces and share links | No account or server, by design. Send a Space as a file |
 | AI (Arc Max) | Never, by choice ([ADR 0020](docs/decisions/0020-no-bundled-model.md)) |
 | Phones (Arc Search) | Desktop only |

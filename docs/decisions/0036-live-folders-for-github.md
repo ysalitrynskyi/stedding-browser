@@ -1,6 +1,6 @@
 # 0036 — Live Folders: GitHub pull requests in the sidebar
 
-Status: Proposed, for the owner's decision (BACKLOG S-478, discussion 106). Nothing is built until the owner chooses.
+Status: Accepted, option B (the owner, 2026-11-15: "Yes, option B"). Proposed 2026-11-13 (BACKLOG S-478, discussion 106). Not built.
 Date: 2026-11-13
 
 ## Context
@@ -13,7 +13,7 @@ A live folder is the first thing in Stedding that would ask a site for data with
 
 ## Decision
 
-Proposed: **B**, below, once the owner agrees. The ways considered:
+**B**, below: the owner chose it on 2026-11-15. The ways considered:
 
 **A. Read github.com's pages with the Space's sign-in, as Arc did.** No setup: whoever is signed in to github.com in that Space gets their pull requests. It reads pages written for people, so any redesign of GitHub breaks it, as it broke Arc's, and nothing tells Stedding until people report it.
 

@@ -228,8 +228,9 @@ a `+` (`features/sidebar.md` Y44). The Library is not this foot (§9).
   time, from the command bar (`features/focus.md`, `features/share-coat.md`). Focus
   does not survive a restart (focus Fc3, `S-61`). The coat does not arm itself when a
   tab captures the screen (share-coat Sc2, `S-61`).
-- **Live Folders (GitHub)** **[post-1.0]** — a folder filled with your open pull
-  requests. A bespoke integration; deferred, not dropped. No spec row yet.
+- **Live Folders (GitHub)** **[planned]** — a folder filled with your open pull
+  requests, through GitHub's API with a read-only token you make (ADR 0036, `S-478`).
+  No spec row yet.
 - **Live Calendars** **[post-1.0]** — a pinned calendar counts down to the next event
   with a Join button. Same reasoning. No spec row yet.
 - **Share Space** **[needs decision]** — publishes a snapshot of a Space to a public

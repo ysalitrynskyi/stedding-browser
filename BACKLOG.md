@@ -17,85 +17,53 @@ infrastructure, then features. A request in chat comes before this list. A spec 
 
 ### The next release
 
-**0.5.1 was released on 2026-11-14**: the Mac's crash on a right-click (S-486), the address row
-stuck in a page's declared colour (S-487), and, from GitHub discussions 115 and 116, Shift-click
-for a peek (S-488) and the download toast's Move to Trash and Remove from List (S-489). 0.5.0 went
-out the same day (`PLAN.md` decision 22), with items 2 to 5 below. The next feature release is
-0.6.0 (`PLAN.md` decision 23) and takes items 6 to 8 below, each decided by the owner on
-2026-11-15. S-490, the full-screen pair, waits for the owner's steps.
-Before it is cut, `tooling/check-pin` again: 157.0.8103.80 and Chromium 158 were at 0.5% of users
-or less on 2026-11-14, and the pin follows a release past 1%.
+**0.6.0** (`PLAN.md` decision 23), planned with the owner on 2026-11-15. Released before it:
+0.5.1 on 2026-11-14, with S-486 to S-489 (GitHub discussions 115 and 116), and 0.5.0 the same
+day; what each carried is in `docs/PROJECT-LOG.md`. A release goes out only when everything in it
+has passed and nothing published with it is in doubt (`PLAN.md` decision 21). An item that is not
+ready by then moves to the release after; it does not go out half-checked.
 
-0.4.0 beta 17 went out on 2026-11-10 with the bookmarks bar under a coloured address row
-(S-462, GitHub issue 98), the first item of that day's plan; the rest of it, below, carries to
-the next release. The owner, 2026-11-10: a release goes out only when everything in it has passed and
-nothing published with it is in doubt (`PLAN.md` decision 21). An item that is not ready by then
-moves to the release after; it does not go out half-checked. The plan of 2026-11-06 went out in
-betas 13 to 16, and what each of its items left is in its row.
+The owner, 2026-11-13: more of what people leaving Arc expect, not only fixes. Each feature is
+built to the quality bar, and each visual choice is shown to the owner as rendered options first.
 
-Chromium is on 157.0.8103.79, M157's newest point release at full rollout, since 0.4.0 beta 19
-(GitHub issue 110; the owner, 2026-11-12). 157.0.8103.80 was at 0.5% of users on 2026-11-12.
-158.0.8127.18 is early stable at 0.5% of users, and the full rollout usually follows about a week
-after early stable. The move to 158, with Sparkle 2.10.1 (S-358), is a release of its own, when the
-owner says so.
-
-The owner, 2026-11-13: plan the next release and work on it, with more of what people leaving Arc
-expect, not only fixes. The features below come before the remaining checks, each built only to
-the quality bar and each visual choice shown to the owner as rendered options first.
+Chromium stays on M157 through 0.6.0 (the owner, 2026-11-15: "After 0.6.0"): its newest point
+release past 1% of users when 0.6.0 is cut (ADR 0007), 157.0.8103.79 today. M158 is stable for
+everyone on 2026-11-17, and M157 gets no more security fixes after that. The move to M158, or to
+M159 if it is stable by then (2026-12-08), is a release of its own after 0.6.0, with Sparkle
+2.10.1 (S-358). The port saved on the `chromium-158` branch (2026-11-05) holds 130 of the series'
+189 patches and has never built through.
 
 In this order:
 
-1. **Released in 0.4.0 beta 19 on 2026-11-13:** Chromium 157.0.8103.79 (GitHub issue 110); S-469's
-   rest, GitHub issue 102's second report: an open peek is the window's active tab to extensions,
-   so a password manager fills it and fills it after Open as Tab, and a reload takes the peek
-   (0176, peek P25, P26); S-470, Copy Link on a page with no address (copy-link L9); S-472, a
-   crash at quit on Windows from Chromium's passkey check (0180). Fixed since, for the next release: S-471 (found
-   from the owner's full screen on beta 19), S-473 and S-474; built since, from GitHub issue 112
-   with the owner's yes: S-475; and S-476, an extension's button in a peek (GitHub issue 102).
-2. **The mini player's first slice (S-95, discussion 104), built 2026-11-13 (patch 0181):** a video playing with sound pops out when
-   its tab is left and goes back when the tab is shown again, as a setting, off by default (the
-   owner in discussion 104). It uses Chromium's own picture-in-picture window, which ⌥⇧⌘P already
-   opens (Mp5); the owner, 2026-11-13: "you can start with window". Chromium's automatic picture in
-   picture waits for a Safe Browsing check of the page, which Stedding has none of (S-75), so it
-   never fires for ordinary video. The player inside the window (Mp1) comes after, from rendered
-   options.
-3. **The background audio card (S-95, Mp3, Mp7-Mp10), built 2026-11-13 (patch 0183):** a tab
-   playing sound in the background shows a card above Archived (favicon, title, play or pause,
-   stop; its body goes back to the tab), the rail's favicon above History, ⌥⇧⌘M, command bar
-   rows and a setting, on by default. The owner chose the card from rendered options ("B, Card").
-   Left: the Mac.
-4. **How a Space's session shows (S-477, GitHub issue 99), built 2026-11-13 (patch 0182):** the
-   line in the session's colour, and the words the owner approved that day, "Own session" and
-   "Session: Clients" in place of "Independent session". Left: the Mac.
-5. **More room in the rail and the hover width, built 2026-11-13/14:** past four Spaces the rail's
-   dots stand two to a line under the active chip (S-483, sidebar Y56, patch 0187; the owner chose
-   "C" from renders), and the sidebar on hover takes the width it has open (S-484, GitHub
-   discussion 117, Y57). Left: the Mac. And S-480, found in the gate: on Windows a window's
-   first showing was not always said, and its list then never scrolled to a row made active
-   (Y58).
-6. **Pins in every window (S-94's second slice, GitHub issue 111):** ADR 0035, option B, chosen
-   by the owner on 2026-11-15: one record per pin for the profile and a tab of it in each window,
-   as Arc does. The spec rows (windows G2, pins), then the build.
-7. **Live Folders for GitHub pull requests (S-478, discussion 106):** ADR 0036, option B, chosen
-   by the owner on 2026-11-15: GitHub's API with a read-only token the person makes, not
-   github.com's pages, which broke Arc's folder when GitHub changed them. The spec rows, then the
-   build; in this release only if it passes the gate in time, otherwise first in the next.
-8. **Settings and the extension list in sync (S-479, GitHub issue 109):** ADR 0037, chosen by the
+1. **Pins and essentials in every window (S-94's second slice, GitHub issue 111):** ADR 0035,
+   option B, chosen by the owner on 2026-11-15: one record per pin for the profile and a tab of it
+   in each window, as Arc does. The spec rows first (windows G2, pins, the profile's store and the
+   migration of every window's pins into it), then the build with the tests the ADR lists, a
+   restart among them.
+2. **Settings and the extension list in sync (S-479, GitHub issue 109):** ADR 0037, chosen by the
    owner on 2026-11-15: Stedding's own settings and routes, and the list of Web Store extensions
-   to offer, each a box of sync. Built after item 6, whose change to the sync file it shares.
-9. **S-458 waits for the PC's own 4K display at 150%:** over Remote Desktop the PC runs at 100%.
-10. **The Mac's real-input checks still owed:** done on 2026-11-10 for little windows (S-157) and a
-   pin's redirected link with the screenshot keys over a peek (S-93), both closed; the first found
-   ⌘D doing nothing in a private window on the Mac, fixed in patch 0170. Child tabs (S-92) were
-   seen on the Mac on 2026-11-07, and their clipped favicon under a pinned parent is fixed (closed).
-11. **The tests:** S-458, the Windows geometry a DIP off at 150%. S-463, a Space switch's slide
-   on the PC, and S-461, the dragged row's copy, were the tests' and are closed.
-   For each test, decide whether the product or the test is wrong, and fix that one.
+   to offer, each a box of sync. After item 1, whose change to the sync file it shares.
+3. **Live Folders for GitHub pull requests (S-478, discussion 106):** ADR 0036, option B, chosen
+   by the owner on 2026-11-15: GitHub's API with a read-only token the person makes, not
+   github.com's pages, which broke Arc's folder when GitHub changed them. Its spec file and the
+   `docs/PRIVACY.md` line first. In 0.6.0 only if it passes the gate in time, otherwise first in
+   the next release.
+4. **The player inside the window (S-95's Mp1, discussion 104):** rendered options for the owner
+   to choose from. The build comes in the release after.
+
+Alongside, with no decision needed:
+
+- A real-build pass on the review's faults that can lose data: S-338 first, then S-342 and S-353.
+- S-485, the peek permission test that timed out once on the Mac.
+- A Windows build for ARM (S-404, GitHub issue 69) on a day the PC is idle: a separate download
+  that never updates itself and is not GitHub's latest release. The owner promised a link on the
+  issue (2026-11-10).
 
 Then the gate. The release waits until every line of it has passed:
 
 - the suites on the shipping and DCHECK builds on both platforms, and ASan on Windows;
-- acceptance on both platforms, and an update from the installed beta 19 on both;
+- acceptance on both platforms, and an update from the installed 0.5.1 on both, with pins in two
+  windows before it, so the migration is seen on a real profile;
 - every changed state captured from the release build on both platforms, light and dark, and looked
   at against its spec;
 - the what's-new entry looked at as an updater sees it on the live page, each capture included, down
@@ -103,10 +71,17 @@ Then the gate. The release waits until every line of it has passed:
   page's hero band under the window buttons, and they read as a bug. Then the release notes, both
   feeds, Homebrew and the site, each checked live after publishing.
 
-Not in this release: what waits on the owner or on others: a real passkey with a finger, and Apple's answer (S-239); the
-new signing certificate, before 2027-02-01 (S-444); one import of a real Arc file (S-107, S-103,
-S-431); a commercial WebDAV or S3 service (S-426); S-428 when it next happens; S-318's decision; and
-the reporter's steps for S-450 (GitHub issue 90).
+Waiting on the owner, without holding 0.6.0 back: the steps for S-490, the full-screen pair; the
+new Developer ID certificate before 2027-02-01 (S-444), without which no Mac release can be signed;
+S-458 on the PC's own 4K display at 150%; and a trial Linux build in WSL2 on the PC (S-216), which
+needs the owner's yes to install WSL.
+
+Not in 0.6.0: Boosts (ADR 0012, discussion 105); Safe Browsing (S-75, discussion 107); a Space's
+own essentials without a session of its own (S-445, discussion 103); a colour chosen for each
+session (GitHub issue 99's last comment, which said it can wait); and what waits on others: a real
+passkey with a finger, and Apple's answer (S-239); one import of a real Arc file (S-107, S-103,
+S-431); a commercial WebDAV or S3 service (S-426); S-428 when it next happens; S-318's decision;
+and the reporter's steps for S-450 (GitHub issue 90).
 
 After these, step 6 of beta 11's list below, in its order.
 

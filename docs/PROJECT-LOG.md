@@ -2,6 +2,66 @@
 
 What was built, newest first. Nothing here is needed to do a task: `AGENTS.md` carries what is true now, `BACKLOG.md` the order of work, `PLAN.md` the owner's decisions. This file was the "State of the project" section of `AGENTS.md` until 2026-09-30. This log starts at 2026-10-15. Closed work from before that is the table in [docs/history/archive.md](history/archive.md).
 
+## 2026-11-14 -- 0.5.1: the Mac's right-click, a row in a colour the page never shows, Shift-click for a peek, a menu on the download toast
+
+The owner, on the signed 0.5.0: a right-click on a link closed the browser, and the first tab at
+launch, their start.me page, had a blue address row that never changed. The owner asked for the
+new issues and discussions to be reviewed for the next release, and chose to ship the crash fix
+fast with what else was ready, leaving the bigger items for a release after.
+
+- S-486 (sessions S32, menus M1, M14; patch 0182): on the Mac every context menu is the system's
+  own, and it refuses an image generator, which S-477 had given the session disc in Open Link in
+  Space, Move to Space and Always Open; the browser stopped at `SetMenuItemIcon` whenever a Space
+  had a session of its own. The disc is now an `NSImage` drawn in the menu's light or dark.
+  `SessionMenusMacTest.TheMacsOwnMenusDrawTheSessionsDisc` builds the native menus as a
+  right-click does and crashes where the report did without the fix. On the release build, a
+  right-click on a link and on a tab showed the disc, and the browser went on.
+- S-487 (toolbar T63; patch 0160): start.me declares `#0093d5` and the top of its start page is a
+  dark photograph, so the row fell back to the declared blue and the reload rule kept it. A
+  declared colour is now the row's only where a third of the page's top edge shows it.
+- S-488 (peek P27, settings T63; patch 0188; GitHub discussion 115): Shift-click on any link, from
+  any tab, opens a peek, as Arc's did; a setting, on by default, gives Shift-click its window
+  back.
+- S-489 (sidebar panels Pn19; patch 0189; GitHub discussion 116): the download toast's menu on a
+  finished download has Move to Trash (Move to Recycle Bin on Windows) and Remove from List. The
+  first real right-click on the Mac's release build ended the browser at Move to Trash: the
+  bubble's menu counted its commands in a table of Chromium's and read past it for Stedding's id.
+  Fixed in the same patch, with `DownloadUiContextMenuViewSteddingTest.ThePanelsVerbsRunFromTheBubble`.
+- S-490, the window left without its address row after a full-screen pair, was not reproduced
+  in any order of quitting, killing or closing the other app; it waits for the owner's steps.
+- The pin stays on 157.0.8103.79: 157.0.8103.80 and Chromium 158 were at 0.5% of users or less.
+- The gate, on one tree on both machines (the product's code; later commits changed tests only).
+  On the Mac the release build's 1,548 unit and 1,023 browser tests passed but two:
+  `SidebarSyncTest.TheSidebarKeepsItsIdsWhenTheSessionComesBack` timed out once under load and
+  passed three of three alone, and `PageColourRowTest.TheRowFollowsADarkenedPage` read no colour:
+  its header did not show the colour the page declared, which T63 now rightly leaves alone; its
+  header shows it now, and the 16 row-colour tests passed three times. The DCHECK build's suites
+  passed whole. On Windows the release build's 1,536 unit tests passed; of 966 browser tests,
+  `SiteControlsTest.TheRowsUnderTheStripDoWhatTheyName` failed once and passed three of three
+  alone, and the three below failed. No DCHECK, dangling pointer or AddressSanitizer report.
+- Three tests raced the page they acted on, on Windows, and are fixed in the tests: Chromium
+  holds input to a page just loaded until its first frame (paint holding) and routes a click by
+  the compositor's hit-test data, so on the ASan build the Shift-click test's clicks never
+  reached the page, and the welcome flow's first Enter was lost now and then; the welcome test
+  also read the focus before an arrow key had reached the page; and the screenshot of a peek was
+  taken before the page had a frame to copy, one run in four on the release build. With the fixes, on the tree
+  that went out: the Shift-click test passed five of five on the ASan and release builds and
+  three of three on the DCHECK build, the screenshot test 20 of 20 on the release build, the
+  welcome test every run on all three, and the peek and welcome suites (35 tests) whole on each.
+  On the Mac these tests had passed before the fixes, which only wait longer.
+- On Windows, 0.5.0 updated itself to 0.5.1 from a signed local feed and kept the sidebar's
+  width; upgrade, uninstall and reinstall passed. Acceptance on both (docs/features/acceptance.md).
+- With the real pointer and keys on the release builds: on the Mac, the right-click menus with
+  the disc, Shift-click's peek, and the toast's Move to Trash, Remove from List, and Move to
+  Trash greyed for a file already gone; on Windows, on the installed 0.5.1, in light and in
+  dark, Shift-click opened a peek and no window and Escape closed it, the toast's Move to Recycle
+  Bin put the file in the Recycle Bin and the row read "Removed", Remove from List took the row
+  away and left the file, and Settings showed the new row on. Each state was captured from the
+  release builds and looked at; the site's entry for the page after an update is pushed and stays
+  hidden until the release.
+
+Released as `v0.5.1` on 2026-11-14.
+
 ## 2026-11-14 -- 0.5.0: the rail's dots in a grid, the sidebar's width on hover, a list that scrolls in every window
 
 The owner chose the rail's dot grid from the renders ("C") and, going to sleep, asked for the

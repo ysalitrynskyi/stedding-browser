@@ -93,8 +93,8 @@ Chromium gives a previewed page another way to be a tab's.
  .../ui/stedding/address_row_rules_unittest.cc |  38 +-
  chrome/browser/ui/stedding/little_window.cc   | 118 ++-
  chrome/browser/ui/stedding/little_window.h    |  17 +
- chrome/browser/ui/stedding/peek.cc            | 166 +++-
- chrome/browser/ui/stedding/peek.h             |  51 +
+ chrome/browser/ui/stedding/peek.cc            | 177 +++-
+ chrome/browser/ui/stedding/peek.h             |  64 +-
  chrome/browser/ui/stedding/stedding_prefs.cc  |  15 +-
  chrome/browser/ui/stedding/stedding_prefs.h   |  38 +-
  .../ui/stedding/stedding_prefs_unittest.cc    |  18 +-
@@ -163,7 +163,7 @@ Chromium gives a previewed page another way to be a tab's.
  .../test/stedding/space_wheel_browsertest.cc  |  26 +-
  chrome/test/stedding/welcome_browsertest.cc   |  47 +
  .../stedding/window_buttons_browsertest.mm    |  74 +-
- 94 files changed, 6650 insertions(+), 649 deletions(-)
+ 94 files changed, 6670 insertions(+), 653 deletions(-)
  create mode 100644 chrome/browser/ui/views/frame/stedding_window_lights_mac.h
  create mode 100644 chrome/browser/ui/views/frame/stedding_window_lights_mac.mm
  create mode 100644 chrome/browser/ui/views/peek/peek_overlay.cc
@@ -2183,7 +2183,7 @@ index 61494cf563c1a..e49e7b3231f0c 100644
  // File menu's): any little window but a peek whose pinned tab cannot take a
  // pair -- an essential, or a tab already in a split (peek P9).
 diff --git a/chrome/browser/ui/stedding/peek.cc b/chrome/browser/ui/stedding/peek.cc
-index f0c19c8702349..d9d2dd98713b1 100644
+index f0c19c8702349..df10d8b131e02 100644
 --- a/chrome/browser/ui/stedding/peek.cc
 +++ b/chrome/browser/ui/stedding/peek.cc
 @@ -21,8 +21,10 @@
@@ -2260,7 +2260,16 @@ index f0c19c8702349..d9d2dd98713b1 100644
  }  // namespace
  
  PeekLink::PeekLink() = default;
-@@ -288,15 +339,18 @@ BrowserWindowInterface* OpenPeek(tabs::TabInterface* source,
+@@ -284,19 +335,31 @@ PeekLink& PeekLink::operator=(const PeekLink&) = default;
+ PeekLink::~PeekLink() = default;
+ 
+ BrowserWindowInterface* OpenPeek(tabs::TabInterface* source,
+-                                 const PeekLink& link) {
++                                 const PeekLink& link,
++                                 bool* link_waits) {
++  if (link_waits) {
++    *link_waits = false;
++  }
    if (!source || !source->GetContents()) {
      return nullptr;
    }
@@ -2283,12 +2292,17 @@ index f0c19c8702349..d9d2dd98713b1 100644
 +            }
 +          },
 +          source->GetWeakPtr(), link));
++      // Not a peek that could not show: a caller that opens the link some
++      // other way then would open it twice (little E11).
++      if (link_waits) {
++        *link_waits = true;
++      }
 +      return nullptr;
 +    }
    }
    // P11 (PLAN.md CMD-9): the page is made in the pinned tab's own jar, so a
    // pin in a Space with its own session peeks with that session's cookies.
-@@ -307,23 +361,21 @@ BrowserWindowInterface* OpenPeek(tabs::TabInterface* source,
+@@ -307,23 +370,21 @@ BrowserWindowInterface* OpenPeek(tabs::TabInterface* source,
    std::unique_ptr<content::WebContents> contents =
        content::WebContents::Create(create);
    content::WebContents* const page = contents.get();
@@ -2322,7 +2336,7 @@ index f0c19c8702349..d9d2dd98713b1 100644
    ShowPeek(window, page);
    MaybeShowPeekNotice(page);
    return window;
-@@ -365,6 +417,9 @@ BrowserWindowInterface* OpenPeekWithContents(
+@@ -365,6 +426,9 @@ BrowserWindowInterface* OpenPeekWithContents(
    if (!source || !contents) {
      return nullptr;
    }
@@ -2332,7 +2346,7 @@ index f0c19c8702349..d9d2dd98713b1 100644
    if (PeekPage* const asking = CloseThePeekOver(source)) {
      // The page made for the link waits with it, as AddNewContents holds a
      // popup back while a full screen changes; dropped when the user keeps
-@@ -399,8 +454,7 @@ tabs::TabInterface* PeekSourceOf(const BrowserWindowInterface* window) {
+@@ -399,8 +463,7 @@ tabs::TabInterface* PeekSourceOf(const BrowserWindowInterface* window) {
  }
  
  bool PeekCanSplit(const BrowserWindowInterface* window) {
@@ -2342,7 +2356,7 @@ index f0c19c8702349..d9d2dd98713b1 100644
  }
  
  BrowserWindowInterface* PeekOver(const BrowserWindowInterface* window) {
-@@ -439,6 +493,72 @@ void ForgetPeek(content::WebContents* contents) {
+@@ -439,6 +502,72 @@ void ForgetPeek(content::WebContents* contents) {
    }
  }
  
@@ -2416,10 +2430,38 @@ index f0c19c8702349..d9d2dd98713b1 100644
    return l10n_util::GetStringUTF16(IDS_STEDDING_PEEK_OPEN_AS_TAB);
  }
 diff --git a/chrome/browser/ui/stedding/peek.h b/chrome/browser/ui/stedding/peek.h
-index cfabb184053c2..57e854885cfba 100644
+index cfabb184053c2..759387b9df67a 100644
 --- a/chrome/browser/ui/stedding/peek.h
 +++ b/chrome/browser/ui/stedding/peek.h
-@@ -111,6 +111,57 @@ void SetPeekOpeningGraceForTesting(base::TimeDelta grace);
+@@ -57,9 +57,13 @@ struct PeekLink {
+ // P6: opens `link` in a peek over the window of `source`, the page made in
+ // `source`'s jar. A peek already over that window closes first (P13). The
+ // session never saves a peek (P17). Returns the peek, or null when the
+-// window could not be made.
++// window could not be made. Null too when the peek in a small window over
++// that window asks "Leave site?" first: the link waits for the answer and
++// opens in the next peek on Leave (P13). `link_waits`, when given, says
++// which: true when the link waits.
+ BrowserWindowInterface* OpenPeek(tabs::TabInterface* source,
+-                                 const PeekLink& link);
++                                 const PeekLink& link,
++                                 bool* link_waits = nullptr);
+ 
+ // P8, P11 (BACKLOG S-338): `contents`, made for a link from `source` that
+ // asked for a new tab, in the jar a peek from `source` loads `url` in: the
+@@ -76,7 +80,10 @@ std::unique_ptr<content::WebContents> PeekContentsInPinsJar(
+ // P8: the same for a page made for a link that asked for a new tab: one the
+ // source made itself (window.open, a link with an opener), which shares its
+ // jar, or one made again in the pinned tab's jar (PeekContentsInPinsJar). The
+-// caller loads the link into it when it has not.
++// caller loads the link into it when it has not. Null when the page could not
++// be shown, and it is gone; or when it waits with its link for the "Leave
++// site?" of the peek over the window (P13), and it is still there, held for
++// the next peek: the caller loads the link into it then as well.
+ BrowserWindowInterface* OpenPeekWithContents(
+     tabs::TabInterface* source,
+     std::unique_ptr<content::WebContents> contents,
+@@ -111,6 +118,57 @@ void SetPeekOpeningGraceForTesting(base::TimeDelta grace);
  std::u16string PeekOpenAsTabLabel();
  std::u16string PeekOpenInSplitLabel();
  

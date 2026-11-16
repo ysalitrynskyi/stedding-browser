@@ -33,15 +33,15 @@ Removable when: never as a feature.
  .../stedding_sync_section.html.ts             |   80 +-
  .../stedding_page/stedding_sync_section.ts    |  359 +++-
  chrome/browser/ui/spaces/BUILD.gn             |   53 +
- .../browser/ui/spaces/sidebar_sync_bridge.cc  |  437 +++++
- .../browser/ui/spaces/sidebar_sync_bridge.h   |  126 ++
+ .../browser/ui/spaces/sidebar_sync_bridge.cc  |  464 +++++
+ .../browser/ui/spaces/sidebar_sync_bridge.h   |  128 ++
  .../ui/spaces/sidebar_sync_fake_place.cc      |  421 +++++
  .../ui/spaces/sidebar_sync_fake_place.h       |  138 ++
  .../browser/ui/spaces/sidebar_sync_place.cc   |  805 ++++++++
  chrome/browser/ui/spaces/sidebar_sync_place.h |  234 +++
  .../ui/spaces/sidebar_sync_place_client.cc    |  676 +++++++
  .../ui/spaces/sidebar_sync_place_client.h     |  205 ++
- .../ui/spaces/sidebar_sync_place_unittest.cc  |  804 ++++++++
+ .../ui/spaces/sidebar_sync_place_unittest.cc  |  844 +++++++++
  .../browser/ui/spaces/sidebar_sync_service.cc |  609 +++++-
  .../browser/ui/spaces/sidebar_sync_service.h  |   80 +-
  chrome/browser/ui/stedding/stedding_prefs.cc  |    3 +
@@ -52,7 +52,7 @@ Removable when: never as a feature.
  .../webui/settings/stedding_spaces_handler.h  |   12 +
  chrome/test/stedding/BUILD.gn                 |    4 +
  .../sidebar_sync_place_browsertest.cc         | 1652 +++++++++++++++++
- 23 files changed, 7018 insertions(+), 37 deletions(-)
+ 23 files changed, 7087 insertions(+), 37 deletions(-)
  create mode 100644 chrome/browser/ui/spaces/sidebar_sync_bridge.cc
  create mode 100644 chrome/browser/ui/spaces/sidebar_sync_bridge.h
  create mode 100644 chrome/browser/ui/spaces/sidebar_sync_fake_place.cc
@@ -766,10 +766,10 @@ index 4854828487aad..3f51731eda9c2 100644
      "//chrome/common/stedding:web_apps",
 diff --git a/chrome/browser/ui/spaces/sidebar_sync_bridge.cc b/chrome/browser/ui/spaces/sidebar_sync_bridge.cc
 new file mode 100644
-index 0000000000000..a8b5e1c977deb
+index 0000000000000..b92ae2290a2ba
 --- /dev/null
 +++ b/chrome/browser/ui/spaces/sidebar_sync_bridge.cc
-@@ -0,0 +1,437 @@
+@@ -0,0 +1,464 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -893,6 +893,8 @@ index 0000000000000..a8b5e1c977deb
 +  std::vector<std::pair<std::string, std::string>> wanted;
 +  MirrorChanges changes;
 +  std::map<std::string, std::string> fetched;
++  // Other computers' files the server says are not there (Sf64).
++  std::vector<std::string> gone;
 +  size_t held_bytes = 0;
 +};
 +
@@ -1019,6 +1021,7 @@ index 0000000000000..a8b5e1c977deb
 +  }
 +  pull_->changes.own_install = pull_->own_install;
 +  bool own_seen = false;
++  std::set<std::string> listed;
 +  for (const PlaceEntry& entry : list.entries) {
 +    if (entry.folder) {
 +      continue;
@@ -1037,6 +1040,7 @@ index 0000000000000..a8b5e1c977deb
 +      case EntryKind::kPeer:
 +        break;
 +    }
++    listed.insert(entry.name);
 +    // Sf51: unchanged is not downloaded. Sf54: too large is never read: an
 +    // empty file under the name shows it unreadable, and deletes nothing.
 +    const auto known = versions_.find(entry.name);
@@ -1059,6 +1063,20 @@ index 0000000000000..a8b5e1c977deb
 +      !pull_->own_install.empty()) {
 +    pull_->changes.removals.push_back(own_name);
 +    versions_.erase(own_name);
++  }
++  // Sf64 (bug hunt 2026-11-16): another computer's file the mirror has and a
++  // whole list lacks is asked for. Only a server that says it is not there
++  // takes it from the mirror (OnFetched), as a file gone from a folder is
++  // gone; a list that leaves files out removes nothing (Sf52). It stayed in
++  // the mirror, and the folder's read found that computer present for as
++  // long as this one synced.
++  if (!list.cut_short) {
++    for (const auto& [name, version] : versions_) {
++      if (!listed.contains(name) &&
++          ClassifyFolderEntry(name, pull_->own_install) == EntryKind::kPeer) {
++        pull_->wanted.emplace_back(name, std::string());
++      }
++    }
 +  }
 +  FetchNext();
 +}
@@ -1096,7 +1114,13 @@ index 0000000000000..a8b5e1c977deb
 +      pull_->fetched[name] = std::move(version);
 +      break;
 +    case PlaceFailure::kNoSuchPlace:
-+      // Gone since the list: the next list says so.
++      // Gone, since the list or before it. Sf64: another computer's file
++      // goes from the mirror too, and its version is forgotten, so one put
++      // back is read again.
++      if (ClassifyFolderEntry(name, pull_->own_install) == EntryKind::kPeer) {
++        pull_->changes.removals.push_back(name);
++        pull_->gone.push_back(std::move(name));
++      }
 +      break;
 +    case PlaceFailure::kNoRead:
 +    case PlaceFailure::kWebPage:
@@ -1127,6 +1151,9 @@ index 0000000000000..a8b5e1c977deb
 +  if (ok) {
 +    for (auto& [name, version] : run->fetched) {
 +      versions_[name] = std::move(version);
++    }
++    for (const std::string& name : run->gone) {
++      versions_.erase(name);
 +    }
 +    SaveVersions();
 +  } else if (run->failure == PlaceFailure::kNone) {
@@ -1209,10 +1236,10 @@ index 0000000000000..a8b5e1c977deb
 +}  // namespace spaces::sidebar_sync
 diff --git a/chrome/browser/ui/spaces/sidebar_sync_bridge.h b/chrome/browser/ui/spaces/sidebar_sync_bridge.h
 new file mode 100644
-index 0000000000000..dc012fdaaf283
+index 0000000000000..7f09c37470704
 --- /dev/null
 +++ b/chrome/browser/ui/spaces/sidebar_sync_bridge.h
-@@ -0,0 +1,126 @@
+@@ -0,0 +1,128 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -1256,7 +1283,9 @@ index 0000000000000..dc012fdaaf283
 +// install's file. One request sequence at a time, in order, so a list never
 +// overtakes the write before it. The mirror changes only by whole files:
 +// a failed read leaves the file before it, and a list, short or failed,
-+// removes no other computer's file (Sf19, Sf52).
++// removes no other computer's file (Sf19, Sf52). One a whole list lacks is
++// asked for, and goes only when the server says it is not there, as a file
++// that left a folder is gone from it (Sf64).
 +class PlaceBridge {
 + public:
 +  using Done = base::OnceCallback<void(PlaceFailure)>;
@@ -3856,10 +3885,10 @@ index 0000000000000..1bc67f38270bc
 +#endif  // CHROME_BROWSER_UI_SPACES_SIDEBAR_SYNC_PLACE_CLIENT_H_
 diff --git a/chrome/browser/ui/spaces/sidebar_sync_place_unittest.cc b/chrome/browser/ui/spaces/sidebar_sync_place_unittest.cc
 new file mode 100644
-index 0000000000000..361a4872718a1
+index 0000000000000..a130878c3766b
 --- /dev/null
 +++ b/chrome/browser/ui/spaces/sidebar_sync_place_unittest.cc
-@@ -0,0 +1,804 @@
+@@ -0,0 +1,844 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -4563,6 +4592,46 @@ index 0000000000000..361a4872718a1
 +  server.place.RemoveFile(kOwnName);
 +  EXPECT_EQ(Pull(*bridge), PlaceFailure::kNone);
 +  EXPECT_EQ(Mirrored(kOwnName), std::nullopt);
++}
++
++// Sf64 (bug hunt 2026-11-16): another computer's file, gone from the place,
++// goes from the mirror, as it would from a folder. It stayed, so the folder's
++// read found that computer present and its extensions stayed offered. A list
++// that leaves a file out the server still has removes nothing (Sf52).
++TEST_F(SidebarSyncBridgeTest, AnotherComputersFileGoneFromThePlaceGoes) {
++  for (const PlaceKind kind : {PlaceKind::kWebDav, PlaceKind::kS3}) {
++    SCOPED_TRACE(kind == PlaceKind::kS3 ? "S3" : "WebDAV");
++    FakeServer server(kind);
++    const std::string other = "stedding-sidebar-fedcba9876543210.json";
++    server.place.PutFile(kPeerName, "{\"a\":1}");
++    server.place.PutFile(other, "{\"b\":2}");
++    std::unique_ptr<PlaceBridge> bridge = Bridge(server);
++    EXPECT_EQ(Pull(*bridge), PlaceFailure::kNone);
++    EXPECT_EQ(Mirrored(other), "{\"b\":2}");
++
++    FakePlace::Knobs knobs;
++    knobs.hide_files = true;
++    server.place.SetKnobs(knobs);
++    EXPECT_EQ(Pull(*bridge), PlaceFailure::kNone);
++    EXPECT_EQ(Mirrored(kPeerName), "{\"a\":1}");
++    EXPECT_EQ(Mirrored(other), "{\"b\":2}")
++        << "a list that left the file out removed it";
++
++    server.place.SetKnobs(FakePlace::Knobs());
++    server.place.RemoveFile(other);
++    EXPECT_EQ(Pull(*bridge), PlaceFailure::kNone);
++    EXPECT_EQ(Mirrored(other), std::nullopt)
++        << "a file gone from the place stayed in the mirror";
++    EXPECT_EQ(Mirrored(kPeerName), "{\"a\":1}");
++
++    // Put back, it is read again.
++    server.place.PutFile(other, "{\"b\":3}");
++    EXPECT_EQ(Pull(*bridge), PlaceFailure::kNone);
++    EXPECT_EQ(Mirrored(other), "{\"b\":3}");
++    bridge.reset();
++    task_environment_.RunUntilIdle();
++    PlaceBridge::ResetMirror(temp_.GetPath(), /*make=*/false);
++  }
 +}
 +
 +// Sf51: one write at a time, through the mirror's order, and a write's own

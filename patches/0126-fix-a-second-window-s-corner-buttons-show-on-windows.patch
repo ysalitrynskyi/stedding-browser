@@ -25,20 +25,21 @@ tab back) and issue 74 (the reporter asked; the owner agreed to an option,
 off by default), 2026-11-04.
 Removable when: never as behaviour.
 ---
- .../api/settings_private/prefs_util.cc        |  2 +
- .../stedding_page/stedding_page.html.ts       |  7 ++
- chrome/browser/ui/stedding/little_window.cc   | 24 +++++
- chrome/browser/ui/stedding/peek.cc            |  4 +-
- chrome/browser/ui/stedding/stedding_prefs.cc  |  1 +
- chrome/browser/ui/stedding/stedding_prefs.h   |  3 +
- .../ui/stedding/stedding_prefs_unittest.cc    |  2 +-
- .../ui/views/peek/peek_navigation_throttle.cc |  3 +
- .../ui/views/tabs/vertical/sidebar_address.cc | 12 ++-
- .../ui/views/tabs/vertical/sidebar_address.h  |  7 +-
- .../browser/ui/webui/settings/settings_ui.cc  |  8 ++
- .../stedding/little_window_browsertest.cc     | 99 +++++++++++++++++++
- .../stedding/sidebar_address_browsertest.cc   | 70 +++++++++++++
- 13 files changed, 234 insertions(+), 8 deletions(-)
+ .../api/settings_private/prefs_util.cc        |   2 +
+ .../stedding_page/stedding_page.html.ts       |   7 +
+ chrome/browser/ui/stedding/little_window.cc   |  46 +++++
+ chrome/browser/ui/stedding/little_window.h    |   4 +-
+ chrome/browser/ui/stedding/peek.cc            |   4 +-
+ chrome/browser/ui/stedding/stedding_prefs.cc  |   1 +
+ chrome/browser/ui/stedding/stedding_prefs.h   |   3 +
+ .../ui/stedding/stedding_prefs_unittest.cc    |   2 +-
+ .../ui/views/peek/peek_navigation_throttle.cc |   3 +
+ .../ui/views/tabs/vertical/sidebar_address.cc |  12 +-
+ .../ui/views/tabs/vertical/sidebar_address.h  |   7 +-
+ .../browser/ui/webui/settings/settings_ui.cc  |   8 +
+ .../stedding/little_window_browsertest.cc     | 186 ++++++++++++++++++
+ .../stedding/sidebar_address_browsertest.cc   |  70 +++++++
+ 14 files changed, 346 insertions(+), 9 deletions(-)
 
 diff --git a/chrome/browser/extensions/api/settings_private/prefs_util.cc b/chrome/browser/extensions/api/settings_private/prefs_util.cc
 index 1403b25828ca1..4323fa36f85d6 100644
@@ -72,10 +73,10 @@ index 685f3e3f5083f..48e3efb13e959 100644
        id="peek"
        class="hr"
 diff --git a/chrome/browser/ui/stedding/little_window.cc b/chrome/browser/ui/stedding/little_window.cc
-index 386f27c0e6342..f42ba28dca181 100644
+index 386f27c0e6342..31e9a0ad021ef 100644
 --- a/chrome/browser/ui/stedding/little_window.cc
 +++ b/chrome/browser/ui/stedding/little_window.cc
-@@ -202,6 +202,30 @@ BrowserWindowInterface* OpenLittleWindow(Profile* profile,
+@@ -202,6 +202,44 @@ BrowserWindowInterface* OpenLittleWindow(Profile* profile,
    if (!anchor && profile) {
      anchor = LastActiveNormalWindow(profile);
    }
@@ -97,17 +98,61 @@ index 386f27c0e6342..f42ba28dca181 100644
 +        // As below: nothing vouches for the address.
 +        link.initiator_origin = url::Origin();
 +      }
-+      if (BrowserWindowInterface* const peek = OpenPeek(tab, link)) {
++      bool link_waits = false;
++      if (BrowserWindowInterface* const peek =
++              OpenPeek(tab, link, &link_waits)) {
 +        anchor->GetWindow()->Activate();
 +        return peek;
++      }
++      // peek P13: the peek in a small window over it asks "Leave site?"
++      // first, and the link waits for the answer: Leave opens it in the next
++      // peek, Stay drops it. Nothing else opens: a little window opened as
++      // well, and on Leave the link opened a second time. The question comes
++      // to the front in the window's place; the window itself would cover it.
++      if (link_waits) {
++        if (BrowserWindowInterface* const asking = PeekOver(anchor);
++            asking && asking->GetWindow()) {
++          asking->GetWindow()->Activate();
++        }
++        return anchor;
 +      }
 +    }
 +  }
    const gfx::Rect over = WindowBoundsOf(anchor);
    gfx::Size remembered;
    if (profile) {
+@@ -424,6 +462,14 @@ bool PromoteLittleWindow(BrowserWindowInterface* little,
+       return false;
+     }
+   }
++  // peek P9: a peek's page pairs with its pinned tab alone. A peek that
++  // offers no split -- its pinned tab an essential, in a split already, or
++  // gone -- gets a tab of its own from the split's key too, as its row shows.
++  // With the pinned tab gone, the page had paired with whatever tab was
++  // active in the last-active window.
++  if (!LittleWindowOffersSplit(little)) {
++    split = false;
++  }
+   TabStripModel* const little_tabs = from;
+   if (!PlacePromotedPage(
+           target, peek_source, split,
+diff --git a/chrome/browser/ui/stedding/little_window.h b/chrome/browser/ui/stedding/little_window.h
+index 6958e1ca4d563..056a2661ca5a9 100644
+--- a/chrome/browser/ui/stedding/little_window.h
++++ b/chrome/browser/ui/stedding/little_window.h
+@@ -42,7 +42,9 @@ bool ShouldOpenLittle(const PrefService* prefs, const GURL& url);
+ // E1: opens `url` in a little window over `anchor` (the last-active normal
+ // window when null). Returns the window, or null when `profile` may not open
+ // a window now (the browser is shutting down, or a policy allows private
+-// windows only); the caller then opens the address the ordinary way.
++// windows only); the caller then opens the address the ordinary way. E11:
++// as a peek, the peek's window, or the window under it; the window too while
++// the link waits for its peek's "Leave site?" (peek P13).
+ // `untrusted_launch`: the address came from another app with nothing to
+ // vouch for it (a custom scheme), so the page opens with an opaque initiator,
+ // not as if the user had typed it -- as upstream's startup tabs do (PLAN.md
 diff --git a/chrome/browser/ui/stedding/peek.cc b/chrome/browser/ui/stedding/peek.cc
-index d9d2dd98713b1..8679d03c9a639 100644
+index df10d8b131e02..7d86df5d8ca60 100644
 --- a/chrome/browser/ui/stedding/peek.cc
 +++ b/chrome/browser/ui/stedding/peek.cc
 @@ -317,7 +317,9 @@ BrowserWindowInterface* ShowPeekOverPage(
@@ -245,10 +290,18 @@ index b14d58e84d06e..f46b63a45433b 100644
    html_source->AddString("steddingPeekLabel",
                           "Open links from pinned tabs in a peek");
 diff --git a/chrome/test/stedding/little_window_browsertest.cc b/chrome/test/stedding/little_window_browsertest.cc
-index 422f0252d746b..1a86c815dae05 100644
+index 422f0252d746b..32eb3b50ceac9 100644
 --- a/chrome/test/stedding/little_window_browsertest.cc
 +++ b/chrome/test/stedding/little_window_browsertest.cc
-@@ -41,6 +41,7 @@
+@@ -27,6 +27,7 @@
+ #include "base/test/bind.h"
+ #include "base/test/run_until.h"
+ #include "base/thread_annotations.h"
++#include "base/time/time.h"
+ #include "build/build_config.h"
+ #include "chrome/app/chrome_command_ids.h"
+ #include "chrome/browser/browser_process.h"
+@@ -41,6 +42,7 @@
  #include "chrome/browser/ui/startup/startup_browser_creator_impl.h"
  #include "chrome/browser/ui/startup/startup_types.h"
  #include "chrome/browser/ui/stedding/stedding_command_ids.h"
@@ -256,7 +309,16 @@ index 422f0252d746b..1a86c815dae05 100644
  #include "chrome/browser/ui/stedding/stedding_prefs.h"
  #include "chrome/browser/ui/tabs/tab_strip_model.h"
  #include "chrome/browser/ui/views/frame/browser_view.h"
-@@ -145,6 +146,104 @@ class LittleWindowTest : public InProcessBrowserTest {
+@@ -50,6 +52,8 @@
+ #include "chrome/grit/generated_resources.h"
+ #include "chrome/test/base/in_process_browser_test.h"
+ #include "chrome/test/base/ui_test_utils.h"
++#include "components/javascript_dialogs/app_modal_dialog_controller.h"
++#include "components/javascript_dialogs/app_modal_dialog_view.h"
+ #include "components/policy/core/common/policy_pref_names.h"
+ #include "components/prefs/pref_service.h"
+ #include "components/sessions/core/session_id.h"
+@@ -145,6 +149,188 @@ class LittleWindowTest : public InProcessBrowserTest {
    std::string cookie_ GUARDED_BY(lock_);
  };
  
@@ -356,6 +418,90 @@ index 422f0252d746b..1a86c815dae05 100644
 +    EXPECT_EQ("none", FetchSite());
 +    EXPECT_NE(std::string::npos, Cookie().find("strict=1")) << Cookie();
 +  }
++}
++
++// little E11, peek P13 (bug hunt 2026-11-16): with "Show a peek" in a small
++// window, a link from another app that comes while the peek over the window
++// asks "Leave site?" waits for the answer, as a pinned tab's link does, and
++// nothing else opens; Leave opens it in the next peek. A little window had
++// opened with the link at once, and on Leave the link opened a second time,
++// in the peek.
++IN_PROC_BROWSER_TEST_F(LittleWindowTest,
++                       ALinkFromAnotherAppWaitsForThePeeksLeaveSite) {
++  PrefService* const prefs = browser()->GetProfile()->GetPrefs();
++  prefs->SetBoolean(stedding::prefs::kLittleAsPeek, true);
++  prefs->SetInteger(stedding::prefs::kPeekStyle,
++                    stedding::prefs::kPeekStyleSmallWindow);
++  // The link brings the window to the front (E11); that activation keeps the
++  // peek however slow the build, not only in its first 750 ms (peek P14).
++  stedding::SetPeekOpeningGraceForTesting(base::Seconds(30));
++  const GURL first_url = embedded_test_server()->GetURL("/title2.html");
++  const GURL next_url = embedded_test_server()->GetURL("/title3.html");
++  const auto little_windows = [&]() {
++    int count = 0;
++    ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
++        [&](BrowserWindowInterface* window) {
++          count += stedding::IsLittleWindow(window) &&
++                   !stedding::IsPeekWindow(window);
++          return true;
++        });
++    return count;
++  };
++  // How many pages of every window show `url`.
++  const auto pages_at = [&](const GURL& url) {
++    int count = 0;
++    ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
++        [&](BrowserWindowInterface* window) {
++          TabStripModel* const tabs = window->GetTabStripModel();
++          for (int i = 0; tabs && i < tabs->count(); ++i) {
++            count += tabs->GetWebContentsAt(i)->GetVisibleURL() == url;
++          }
++          return true;
++        });
++    return count;
++  };
++  const int tabs_before = browser()->GetTabStripModel()->count();
++
++  // The peek, its page asking before it is left: the user's activation
++  // "Leave site?" needs, and no hang timer.
++  BrowserWindowInterface* const first = stedding::OpenLittleWindow(
++      browser()->GetProfile(), first_url, /*anchor=*/nullptr,
++      /*untrusted_launch=*/false);
++  ASSERT_TRUE(first);
++  ASSERT_TRUE(stedding::IsPeekWindow(first));
++  content::WebContents* const page =
++      first->GetTabStripModel()->GetActiveWebContents();
++  ASSERT_TRUE(content::WaitForLoadStop(page));
++  ASSERT_TRUE(content::ExecJs(page,
++                              "window.addEventListener('beforeunload', e => {"
++                              "  e.preventDefault(); e.returnValue = ''; });"));
++  content::PrepContentsForBeforeUnloadTest(page);
++
++  // A null window would have the caller open the link as a tab as well.
++  EXPECT_TRUE(stedding::OpenLittleWindow(browser()->GetProfile(), next_url,
++                                         /*anchor=*/nullptr,
++                                         /*untrusted_launch=*/false));
++  javascript_dialogs::AppModalDialogController* const dialog =
++      ui_test_utils::WaitForAppModalDialog();
++  ASSERT_TRUE(dialog);
++  ASSERT_TRUE(dialog->is_before_unload_dialog());
++  EXPECT_EQ(0, little_windows()) << "a little window opened while the link "
++                                    "waited for the peek's answer";
++  EXPECT_EQ(0, pages_at(next_url));
++  EXPECT_EQ(tabs_before, browser()->GetTabStripModel()->count());
++  EXPECT_EQ(first, stedding::PeekOver(browser()));
++
++  dialog->view()->AcceptAppModalDialog();  // Leave.
++  EXPECT_TRUE(base::test::RunUntil([&]() {
++    BrowserWindowInterface* const now = stedding::PeekOver(browser());
++    return now && now != first &&
++           now->GetTabStripModel()->GetActiveWebContents()->GetVisibleURL() ==
++               next_url;
++  })) << "the link did not open once the peek had gone";
++  EXPECT_EQ(1, pages_at(next_url)) << "the link opened twice";
++  EXPECT_EQ(0, little_windows());
++  EXPECT_EQ(tabs_before, browser()->GetTabStripModel()->count());
++  stedding::SetPeekOpeningGraceForTesting(base::Milliseconds(750));
 +}
 +
  // An untrusted address is cross-site, a trusted one sends the cookie, and a

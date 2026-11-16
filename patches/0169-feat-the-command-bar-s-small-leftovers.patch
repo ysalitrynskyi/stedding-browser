@@ -13,19 +13,64 @@ Why: BACKLOG S-158; docs/features/commandbar.md K16, K41, K42.
 
 Removable when: never as a feature.
 ---
- .../ui/stedding/bookmarks_to_pins_dialog.cc   | 17 +++++++---
- .../ui/stedding/bookmarks_to_pins_dialog.h    |  4 +++
- .../ui/views/commandbar/command_bar_view.cc   | 27 ++++++++++++---
- .../ui/views/commandbar/command_bar_view.h    |  2 ++
- .../commandbar/command_bar_view_unittest.cc   | 33 +++++++++++++++++++
- .../test/stedding/command_bar_browsertest.cc  | 15 +++++----
- 6 files changed, 81 insertions(+), 17 deletions(-)
+ .../ui/stedding/bookmarks_to_pins_dialog.cc   | 45 +++------
+ .../ui/stedding/bookmarks_to_pins_dialog.h    |  4 +
+ .../ui/views/commandbar/command_bar_view.cc   | 27 +++++-
+ .../ui/views/commandbar/command_bar_view.h    |  2 +
+ .../commandbar/command_bar_view_unittest.cc   | 33 +++++++
+ .../test/stedding/command_bar_browsertest.cc  | 93 +++++++++++++++++--
+ 6 files changed, 162 insertions(+), 42 deletions(-)
 
 diff --git a/chrome/browser/ui/stedding/bookmarks_to_pins_dialog.cc b/chrome/browser/ui/stedding/bookmarks_to_pins_dialog.cc
-index 1d9cd6ba2dc91..f88089c7c4b68 100644
+index 1d9cd6ba2dc91..a6ccfe8e0f3d2 100644
 --- a/chrome/browser/ui/stedding/bookmarks_to_pins_dialog.cc
 +++ b/chrome/browser/ui/stedding/bookmarks_to_pins_dialog.cc
-@@ -53,15 +53,15 @@ void Convert(base::WeakPtr<BrowserWindowInterface> browser) {
+@@ -8,21 +8,18 @@
+ #include <string>
+ #include <vector>
+ 
+-#include "base/containers/flat_set.h"
+ #include "base/functional/bind.h"
+ #include "base/functional/callback_helpers.h"
+ #include "base/memory/weak_ptr.h"
+ #include "base/strings/strcat.h"
+ #include "base/strings/string_number_conversions.h"
+-#include "base/values.h"
+ #include "chrome/browser/bookmarks/bookmark_model_factory.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/dialogs/browser_dialogs.h"
++#include "chrome/browser/ui/spaces/arc_sidebar_importer.h"
+ #include "chrome/browser/ui/spaces/bookmarks_to_pins.h"
+-#include "chrome/browser/ui/stedding/stedding_prefs.h"
+ #include "components/bookmarks/browser/bookmark_model.h"
+-#include "components/prefs/pref_service.h"
+ #include "ui/base/models/dialog_model.h"
+ #include "ui/base/models/dialog_model_field.h"
+ 
+@@ -30,21 +27,6 @@ namespace stedding {
+ 
+ namespace {
+ 
+-// The bookmarks a conversion would make into tabs: those no earlier run
+-// made a tab of (I13: a second run adds nothing).
+-size_t CountNewTabs(const std::vector<spaces::ArcImportPlan::Node>& nodes,
+-                    const base::flat_set<std::string>& done) {
+-  size_t tabs = 0;
+-  for (const spaces::ArcImportPlan::Node& node : nodes) {
+-    if (node.kind == spaces::ArcImportPlan::Node::Kind::kFolder) {
+-      tabs += CountNewTabs(node.children, done);
+-    } else if (!done.contains(node.arc_id)) {
+-      ++tabs;
+-    }
+-  }
+-  return tabs;
+-}
+-
+ void Convert(base::WeakPtr<BrowserWindowInterface> browser) {
+   if (browser) {
+     ConvertBookmarksToPins(browser.get());
+@@ -53,25 +35,28 @@ void Convert(base::WeakPtr<BrowserWindowInterface> browser) {
  
  }  // namespace
  
@@ -42,23 +87,26 @@ index 1d9cd6ba2dc91..f88089c7c4b68 100644
 -    return;
 +    return 0;
    }
-   std::vector<std::string> done;
-   for (const base::Value& id :
-@@ -70,8 +70,15 @@ void ConvertBookmarksToPinsAsking(BrowserWindowInterface* browser) {
-       done.push_back(id.GetString());
-     }
-   }
--  const size_t count = CountNewTabs(
--      NodesFromBookmarks(*model), base::flat_set<std::string>(std::move(done)));
-+  return CountNewTabs(NodesFromBookmarks(*model),
-+                      base::flat_set<std::string>(std::move(done)));
+-  std::vector<std::string> done;
+-  for (const base::Value& id :
+-       browser->GetProfile()->GetPrefs()->GetList(prefs::kArcImportedIds)) {
+-    if (id.is_string()) {
+-      done.push_back(id.GetString());
+-    }
++  // I16: the count is what the conversion adds. Counted apart, it took in a
++  // bookmark added to a folder an earlier run made and the person has
++  // removed since, which the conversion leaves out (I12), so the command
++  // bar's row stayed listed with nothing to convert.
++  return spaces::CountNodesToPin(browser, NodesFromBookmarks(*model));
 +}
 +
 +void ConvertBookmarksToPinsAsking(BrowserWindowInterface* browser) {
 +  const size_t count = BookmarksLeftToConvert(browser);
 +  if (count == 0) {
 +    return;
-+  }
+   }
+-  const size_t count = CountNewTabs(
+-      NodesFromBookmarks(*model), base::flat_set<std::string>(std::move(done)));
    if (count <= kBookmarksToPinsWithoutAsking) {
      ConvertBookmarksToPins(browser);
      return;
@@ -208,16 +256,108 @@ index ba3bc332b3c76..c0316a61bb8ee 100644
  // a preference is one cycling row.
  // Enter advances, the bar stays open, and the title re-reads. The archive
 diff --git a/chrome/test/stedding/command_bar_browsertest.cc b/chrome/test/stedding/command_bar_browsertest.cc
-index f6408e236f419..cac8142f8aafe 100644
+index f6408e236f419..908a4b3d23bfd 100644
 --- a/chrome/test/stedding/command_bar_browsertest.cc
 +++ b/chrome/test/stedding/command_bar_browsertest.cc
-@@ -992,14 +992,15 @@ IN_PROC_BROWSER_TEST_F(CommandBarActionsTest,
+@@ -12,6 +12,7 @@
+ #include <map>
+ #include <memory>
+ #include <string>
++#include <string_view>
+ #include <vector>
+ 
+ #include "base/files/scoped_temp_dir.h"
+@@ -78,6 +79,8 @@
+ #include "components/search_engines/template_url_data.h"
+ #include "components/search_engines/template_url_service.h"
+ #include "components/sessions/core/session_id.h"
++#include "components/tabs/public/folder_tab_collection.h"
++#include "components/tabs/public/tab_collection.h"
+ #include "components/tabs/public/tab_interface.h"
+ #include "content/public/browser/navigation_controller.h"
+ #include "content/public/browser/web_contents.h"
+@@ -992,14 +995,90 @@ IN_PROC_BROWSER_TEST_F(CommandBarActionsTest,
    EXPECT_TRUE(
        profile->GetPrefs()->GetBoolean(stedding::prefs::kBookmarksConverted));
  
 -  // A second run adds nothing, so it does not ask.
 -  Run(browser(), u"Turn Bookmarks into Pinned Tabs");
 +  // commandbar K16: nothing is left to convert, so there is no row.
++  stedding::CommandBarView* const bar = Palette(browser());
++  ASSERT_TRUE(bar);
++  Type(bar, u"Turn Bookmarks into Pinned Tabs");
++  EXPECT_FALSE(std::ranges::contains(Titles(bar),
++                                     u"Turn Bookmarks into Pinned Tabs"))
++      << "offered with nothing left to convert";
++  Press(bar, ui::VKEY_ESCAPE);
++  base::RunLoop().RunUntilIdle();
++}
++
++// import I16, commandbar K16 (bug hunt 2026-11-16): the count the row and the
++// dialog go by is what the conversion adds. A bookmark added to a folder an
++// earlier conversion made is counted while that folder is in the window, and
++// comes into it. Once the person has taken the folder apart it stays removed,
++// with what it holds (I12), and the conversion adds nothing; a bookmark added
++// to it since had still been counted, so the row stayed listed for good.
++IN_PROC_BROWSER_TEST_F(CommandBarActionsTest,
++                       ABookmarkInARemovedFolderIsNotLeftToConvert) {
++  Profile* const profile = browser()->GetProfile();
++  bookmarks::BookmarkModel* const bookmarks =
++      BookmarkModelFactory::GetForBrowserContext(profile);
++  ASSERT_TRUE(bookmarks);
++  bookmarks::test::WaitForBookmarkModelToLoad(bookmarks);
++  const bookmarks::BookmarkNode* const docs =
++      bookmarks->AddFolder(bookmarks->bookmark_bar_node(), 0, u"Docs");
++  bookmarks->AddURL(docs, 0, u"A", GURL("https://a.example/"));
++  TabStripModel* const strip = browser()->GetTabStripModel();
++  const auto tab_titled =
++      [&](std::u16string_view title) -> tabs::TabInterface* {
++    for (int i = 0; i < strip->count(); ++i) {
++      if (strip->GetTabAtIndex(i)->GetContents()->GetTitle() == title) {
++        return strip->GetTabAtIndex(i);
++      }
++    }
++    return nullptr;
++  };
++  const auto folder_of =
++      [&](std::u16string_view title) -> tabs::FolderTabCollection* {
++    tabs::TabInterface* const tab = tab_titled(title);
++    const tabs::TabCollection* const parent =
++        tab ? tab->GetParentCollection() : nullptr;
++    return parent && parent->type() == tabs::TabCollection::Type::FOLDER
++               ? const_cast<tabs::FolderTabCollection*>(
++                     static_cast<const tabs::FolderTabCollection*>(parent))
++               : nullptr;
++  };
++
++  EXPECT_EQ(1u, stedding::BookmarksLeftToConvert(browser()));
++  stedding::ConvertBookmarksToPinsAsking(browser());
++  EXPECT_EQ(0u, stedding::BookmarksLeftToConvert(browser()));
++  tabs::FolderTabCollection* const folder = folder_of(u"A");
++  ASSERT_TRUE(folder) << "Docs did not become a folder";
++
++  // While the folder is here, a bookmark added to Docs is left to convert,
++  // and joins it.
++  bookmarks->AddURL(docs, 1, u"B", GURL("https://b.example/"));
++  EXPECT_EQ(1u, stedding::BookmarksLeftToConvert(browser()));
++  stedding::ConvertBookmarksToPinsAsking(browser());
++  EXPECT_EQ(folder, folder_of(u"B"));
++  EXPECT_EQ(0u, stedding::BookmarksLeftToConvert(browser()));
++
++  // The person takes the folder apart (its menu's Move Tabs Out, menus M7),
++  // then adds a bookmark to Docs: nothing comes in, and nothing is left.
++  strip->MoveTabsOutOfFolder(folder);
++  ASSERT_TRUE(tab_titled(u"A"));
++  ASSERT_FALSE(folder_of(u"A")) << "the premise: the folder is gone";
++  bookmarks->AddURL(docs, 2, u"C", GURL("https://c.example/"));
++  EXPECT_EQ(0u, stedding::BookmarksLeftToConvert(browser()))
++      << "counted, though the conversion adds nothing";
++  const int tabs_before = strip->count();
++  stedding::ConvertBookmarksToPinsAsking(browser());
++  EXPECT_EQ(tabs_before, strip->count());
++  EXPECT_FALSE(tab_titled(u"C"));
++
++  // commandbar K16: so there is no row.
 +  stedding::CommandBarView* const bar = Palette(browser());
 +  ASSERT_TRUE(bar);
 +  Type(bar, u"Turn Bookmarks into Pinned Tabs");

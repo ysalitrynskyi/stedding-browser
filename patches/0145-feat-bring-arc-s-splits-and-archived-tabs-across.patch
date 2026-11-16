@@ -50,17 +50,18 @@ with them.
  chrome/browser/ui/archive/archived_tabs.h     |   9 +-
  .../ui/archive/archived_tabs_unittest.cc      |  21 +
  chrome/browser/ui/spaces/BUILD.gn             |   2 +
- .../browser/ui/spaces/arc_sidebar_importer.cc | 360 +++++++++++++++++-
- .../browser/ui/spaces/arc_sidebar_importer.h  |  38 ++
- .../spaces/arc_sidebar_importer_unittest.cc   | 253 ++++++++++++
+ .../browser/ui/spaces/arc_sidebar_importer.cc | 440 +++++++++++++++++-
+ .../browser/ui/spaces/arc_sidebar_importer.h  |  46 ++
+ .../spaces/arc_sidebar_importer_unittest.cc   | 387 +++++++++++++++
+ .../ui/spaces/bookmarks_to_pins_unittest.cc   |  25 +-
  .../stedding_welcome_handler.cc               |   1 +
  .../stedding_welcome_handler.h                |   6 +-
  chrome/test/stedding/from_arc_browsertest.cc  |   5 +-
- chrome/test/stedding/import_browsertest.cc    | 220 +++++++++++
+ chrome/test/stedding/import_browsertest.cc    | 220 +++++++++
  .../sessions/core/tab_restore_service.h       |   8 +
- .../sessions/core/tab_restore_service_impl.cc |  22 ++
+ .../sessions/core/tab_restore_service_impl.cc |  22 +
  .../sessions/core/tab_restore_service_impl.h  |   2 +
- 18 files changed, 962 insertions(+), 33 deletions(-)
+ 19 files changed, 1200 insertions(+), 42 deletions(-)
 
 diff --git a/chrome/browser/resources/stedding_archive/app.ts b/chrome/browser/resources/stedding_archive/app.ts
 index e43c277442f96..43182eccc9f3d 100644
@@ -282,7 +283,7 @@ index bca0fe61ddf1a..4854828487aad 100644
      "//chrome/browser/ui/browser_window",
      # sessions S20: extension pages keep the profile's jar
 diff --git a/chrome/browser/ui/spaces/arc_sidebar_importer.cc b/chrome/browser/ui/spaces/arc_sidebar_importer.cc
-index 94704ddcf11d7..97f94f4b7243b 100644
+index 94704ddcf11d7..3b42bb235a71c 100644
 --- a/chrome/browser/ui/spaces/arc_sidebar_importer.cc
 +++ b/chrome/browser/ui/spaces/arc_sidebar_importer.cc
 @@ -6,6 +6,7 @@
@@ -400,7 +401,26 @@ index 94704ddcf11d7..97f94f4b7243b 100644
      }
    }
    return out;
-@@ -441,6 +487,8 @@ struct ApplyContext {
+@@ -331,6 +377,18 @@ tabs::FolderTabCollection* TopFolder(tabs::FolderTabCollection* folder) {
+   return folder;
+ }
+ 
++// folders F39: how many folders hold `folder`'s rows, itself included.
++int FoldersFrom(const tabs::FolderTabCollection* folder) {
++  int folders = 0;
++  for (const tabs::TabCollection* up = folder; up;
++       up = up->GetParentCollection()) {
++    if (up->type() == tabs::TabCollection::Type::FOLDER) {
++      ++folders;
++    }
++  }
++  return folders;
++}
++
+ // Arc's item ids already brought over (I12).
+ class ImportedIds {
+  public:
+@@ -441,6 +499,8 @@ struct ApplyContext {
    // The folder this import made for each list or folder of the plan: Sf2
    // finds a file's folders by it, and the pinned run knows what it made (F38).
    std::map<std::string, tabs::FolderId> made_folders;
@@ -409,7 +429,7 @@ index 94704ddcf11d7..97f94f4b7243b 100644
  };
  
  // I3: a tab that shows its title and loads on its first activation, the way
-@@ -575,6 +623,35 @@ SpaceId SpaceOfFolder(ApplyContext& ctx,
+@@ -575,6 +635,35 @@ SpaceId SpaceOfFolder(ApplyContext& ctx,
    return fallback;
  }
  
@@ -445,7 +465,7 @@ index 94704ddcf11d7..97f94f4b7243b 100644
  // Inserts the tabs directly in Arc's list `node` into `space`, unloaded,
  // skipping what an earlier import brought and what cannot be opened.
  std::vector<tabs::TabInterface*> InsertDirectTabs(ApplyContext& ctx,
-@@ -600,6 +677,7 @@ std::vector<tabs::TabInterface*> InsertDirectTabs(ApplyContext& ctx,
+@@ -600,6 +689,7 @@ std::vector<tabs::TabInterface*> InsertDirectTabs(ApplyContext& ctx,
      ctx.model->SetSpaceForTab(tab, space);
      AdoptToken(ctx, tab, child.arc_id);
      Remember(ctx, child.arc_id);
@@ -453,7 +473,7 @@ index 94704ddcf11d7..97f94f4b7243b 100644
      ++ctx.result->tabs;
      inserted.push_back(tab);
    }
-@@ -778,6 +856,7 @@ std::vector<tabs::TabInterface*> InsertNodes(
+@@ -778,6 +868,7 @@ std::vector<tabs::TabInterface*> InsertNodes(
        ctx.model->SetSpaceForTab(tab, space);
        AdoptToken(ctx, tab, node.arc_id);
        Remember(ctx, node.arc_id);
@@ -461,7 +481,55 @@ index 94704ddcf11d7..97f94f4b7243b 100644
        ++ctx.result->tabs;
        if (parent_folder) {
          const int index = ctx.tabs->GetIndexOfTab(tab);
-@@ -922,6 +1001,16 @@ size_t ArcImportPlan::unpinned_tab_count() const {
+@@ -789,6 +880,18 @@ std::vector<tabs::TabInterface*> InsertNodes(
+       }
+       continue;
+     }
++    // I3, folders F39: a list deeper than the five-level folder limit folds
++    // into the fifth level. No folder can be made inside `parent_folder`, so
++    // what the list holds, its own lists' tabs included, goes into that
++    // folder, in Arc's order. The list is not remembered, so a tab Arc adds
++    // to it later comes into the same folder. Its tabs had been inserted and
++    // left loose at the end of the Space, in no folder and, in a pinned run,
++    // no pins, and a second import skipped them as brought over.
++    if (parent_folder &&
++        FoldersFrom(parent_folder) >= stedding::kMaxNestDepth) {
++      InsertNodes(ctx, node.children, space, parent_folder);
++      continue;
++    }
+     // A folder: its direct tabs first, then the folder around them, then the
+     // folders inside it.
+     std::vector<const Node*> subfolders;
+@@ -834,6 +937,28 @@ std::vector<tabs::TabInterface*> InsertNodes(
+   return loose;
+ }
+ 
++// I16: how many tabs InsertNodes would insert of `nodes`, following it: none
++// here already, none of a page that cannot be opened, and none under a list
++// an earlier import made a folder of that is not here now, which stays
++// removed with all it holds (I12).
++size_t CountTabsToInsert(ApplyContext& ctx, const std::vector<Node>& nodes) {
++  size_t tabs = 0;
++  for (const Node& node : nodes) {
++    if (Present(ctx, node.arc_id)) {
++      if (node.kind == Node::Kind::kFolder && KnownFolder(ctx, node.arc_id)) {
++        tabs += CountTabsToInsert(ctx, node.children);
++      }
++    } else if (node.kind == Node::Kind::kTab) {
++      if (IsImportablePage(node.url)) {
++        ++tabs;
++      }
++    } else {
++      tabs += CountTabsToInsert(ctx, node.children);
++    }
++  }
++  return tabs;
++}
++
+ // I11, spaces B6: `nodes` as essentials, unloaded, after those already
+ // here: the shared row's when `own` is none, else the ones Space `own` has
+ // as its own -- which it keeps only while it has its own session. Twelve at
+@@ -922,6 +1047,16 @@ size_t ArcImportPlan::unpinned_tab_count() const {
    return tabs;
  }
  
@@ -478,7 +546,7 @@ index 94704ddcf11d7..97f94f4b7243b 100644
  size_t ArcImportPlan::folder_count() const {
    size_t tabs = 0;
    size_t folders = 0;
-@@ -1129,6 +1218,71 @@ void ParseArcRoutes(std::string_view json, ArcImportPlan& plan) {
+@@ -1129,6 +1264,71 @@ void ParseArcRoutes(std::string_view json, ArcImportPlan& plan) {
    }
  }
  
@@ -550,7 +618,7 @@ index 94704ddcf11d7..97f94f4b7243b 100644
  std::u16string SummariseArcImport(const ArcImportPlan& plan) {
    const auto count = [](size_t n, std::u16string_view one,
                          std::u16string_view many) {
-@@ -1148,6 +1302,15 @@ std::u16string SummariseArcImport(const ArcImportPlan& plan) {
+@@ -1148,6 +1348,15 @@ std::u16string SummariseArcImport(const ArcImportPlan& plan) {
                          u" become essentials)"});
      }
    }
@@ -566,7 +634,7 @@ index 94704ddcf11d7..97f94f4b7243b 100644
    // I49: the routes that can come across.
    if (!plan.routes.empty()) {
      text += base::StrCat(
-@@ -1310,6 +1473,90 @@ void ApplyArcRoutes(const ArcImportPlan& plan,
+@@ -1310,6 +1519,90 @@ void ApplyArcRoutes(const ArcImportPlan& plan,
    }
  }
  
@@ -657,7 +725,7 @@ index 94704ddcf11d7..97f94f4b7243b 100644
  }  // namespace
  
  ArcImportResult ApplyArcImport(BrowserWindowInterface* browser,
-@@ -1431,9 +1678,13 @@ ArcImportResult ApplyArcImport(BrowserWindowInterface* browser,
+@@ -1431,9 +1724,13 @@ ArcImportResult ApplyArcImport(BrowserWindowInterface* browser,
        if (options.unpinned) {
          InsertNodes(ctx, arc_space.unpinned, id, nullptr);
        }
@@ -671,8 +739,49 @@ index 94704ddcf11d7..97f94f4b7243b 100644
    ids.Save();
    return result;
  }
-@@ -1462,19 +1713,70 @@ ArcImportResult ImportNodesAsPins(
+@@ -1453,28 +1750,109 @@ ArcImportResult ImportNodesAsPins(
+   ctx.open = OpenIds(browser);
+   SpaceModel::ScopedRoutingPause no_routing(model);
+   const SpaceId space = model->active_id();
+-  for (tabs::TabInterface* const tab : InsertNodes(ctx, nodes, space, nullptr)) {
+-    model->SetSpacePinned(tab, true);
++  // I13, folders F38: one row at a time, as Arc's pinned run (InsertSpaceRows):
++  // a pin joins the end of the run (pins H14), and so does a folder pinned,
++  // every tab under it a pin with its home. A bookmark in a folder had come
++  // in as a plain tab, in a plain folder under the Clear line.
++  for (const ArcImportPlan::Node& node : nodes) {
++    for (tabs::TabInterface* const tab :
++         InsertNodes(ctx, {node}, space, nullptr)) {
++      model->SetSpacePinned(tab, true);
++    }
++    if (node.kind == ArcImportPlan::Node::Kind::kFolder &&
++        ctx.made_folders.contains(node.arc_id)) {
++      tabs::FolderTabCollection* const folder = KnownFolder(ctx, node.arc_id);
++      if (folder && model->CanPinFolder(folder) &&
++          !model->IsFolderSpacePinned(folder)) {
++        model->SetFolderSpacePinned(folder, true);
++      }
++    }
+   }
+   ids.Save();
+   return result;
+ }
  
++size_t CountNodesToPin(BrowserWindowInterface* browser,
++                       const std::vector<ArcImportPlan::Node>& nodes) {
++  SpaceModel* const model = browser ? SpaceModel::From(browser) : nullptr;
++  TabStripModel* const tabs = browser ? browser->GetTabStripModel() : nullptr;
++  Profile* const profile = browser ? browser->GetProfile() : nullptr;
++  if (!model || !tabs || !profile) {
++    return 0;
++  }
++  ImportedIds ids(profile->GetPrefs());
++  ArcImportResult result;
++  ApplyContext ctx{browser, model, tabs, profile, &ids, &result};
++  ctx.open = OpenIds(browser);
++  return CountTabsToInsert(ctx, nodes);
++}
++
  namespace {
  
 -// I48: Arc's routes, read from a copy as the sidebar is, beside it.
@@ -747,7 +856,7 @@ index 94704ddcf11d7..97f94f4b7243b 100644
  ArcSidebarInfo LoadInfoOnPool() {
    ArcSidebarInfo info;
    const std::optional<std::string> json = ReadArcSidebar(ArcSidebarPath());
-@@ -1485,7 +1787,7 @@ ArcSidebarInfo LoadInfoOnPool() {
+@@ -1485,7 +1863,7 @@ ArcSidebarInfo LoadInfoOnPool() {
    if (!info.plan) {
      return info;
    }
@@ -756,7 +865,7 @@ index 94704ddcf11d7..97f94f4b7243b 100644
    info.found = true;
    info.arc_running = IsArcRunning();
    info.summary = SummariseArcImport(*info.plan);
-@@ -1503,20 +1805,20 @@ std::optional<ArcImportPlan> ReadAndParseOnPool() {
+@@ -1503,20 +1881,20 @@ std::optional<ArcImportPlan> ReadAndParseOnPool() {
    std::optional<ArcImportPlan> plan =
        json ? ParseArcSidebar(*json) : std::nullopt;
    if (plan) {
@@ -784,7 +893,7 @@ index 94704ddcf11d7..97f94f4b7243b 100644
    if (!options.history && !options.passwords) {
      std::move(done).Run(result);
      return;
-@@ -1537,6 +1839,20 @@ void ApplyRead(base::WeakPtr<BrowserWindowInterface> browser,
+@@ -1537,6 +1915,20 @@ void ApplyRead(base::WeakPtr<BrowserWindowInterface> browser,
                           result, std::move(done)));
  }
  
@@ -805,7 +914,7 @@ index 94704ddcf11d7..97f94f4b7243b 100644
  // import I47: every way into an import ends here, once, so each opens the
  // page once: what the page will say is written first.
  void FinishImport(base::WeakPtr<BrowserWindowInterface> browser,
-@@ -1546,6 +1862,7 @@ void FinishImport(base::WeakPtr<BrowserWindowInterface> browser,
+@@ -1546,6 +1938,7 @@ void FinishImport(base::WeakPtr<BrowserWindowInterface> browser,
      base::DictValue last;
      last.Set("routes", static_cast<int>(result->routes));
      last.Set("routes_left_out", static_cast<int>(result->routes_left_out));
@@ -813,7 +922,7 @@ index 94704ddcf11d7..97f94f4b7243b 100644
      browser->GetProfile()->GetPrefs()->SetDict(
          stedding::prefs::kArcLastImport, std::move(last));
      ShowFromArcPage(browser.get());
-@@ -1644,6 +1961,14 @@ std::u16string DescribeArcImportResult(const ArcImportResult& result) {
+@@ -1644,6 +2037,14 @@ std::u16string DescribeArcImportResult(const ArcImportResult& result) {
    if (result.routes) {
      text += base::StrCat({u", ", count(result.routes, u"route", u"routes")});
    }
@@ -828,7 +937,7 @@ index 94704ddcf11d7..97f94f4b7243b 100644
    if (result.skipped) {
      text += base::StrCat({u" \u00B7 ", base::NumberToString16(result.skipped),
                            u" already here"});
-@@ -1654,6 +1979,13 @@ std::u16string DescribeArcImportResult(const ArcImportResult& result) {
+@@ -1654,6 +2055,13 @@ std::u16string DescribeArcImportResult(const ArcImportResult& result) {
                            count(result.routes_left_out, u"route", u"routes"),
                            u" left out"});
    }
@@ -843,7 +952,7 @@ index 94704ddcf11d7..97f94f4b7243b 100644
    if (result.passwords_past_the_cap) {
      text += base::StrCat({u" \u00B7 ",
 diff --git a/chrome/browser/ui/spaces/arc_sidebar_importer.h b/chrome/browser/ui/spaces/arc_sidebar_importer.h
-index 5abdcc22e5fe8..d0238502d6195 100644
+index 5abdcc22e5fe8..e3b1bf8d71294 100644
 --- a/chrome/browser/ui/spaces/arc_sidebar_importer.h
 +++ b/chrome/browser/ui/spaces/arc_sidebar_importer.h
 @@ -12,6 +12,7 @@
@@ -933,8 +1042,23 @@ index 5abdcc22e5fe8..d0238502d6195 100644
  };
  
  // Applies `plan` to `browser`'s window (I3): Spaces, essentials (capped at
+@@ -203,6 +241,14 @@ ArcImportResult ImportNodesAsPins(
+     BrowserWindowInterface* browser,
+     const std::vector<ArcImportPlan::Node>& nodes);
+ 
++// import I16: how many tabs ImportNodesAsPins would add for `nodes` in
++// `browser`'s window, the count Turn Bookmarks into Pinned Tabs goes by: none
++// an earlier run brought, and none under a folder an earlier run made that
++// is no longer in the window, which the conversion leaves out with all it
++// holds (I12). None without a Space model.
++size_t CountNodesToPin(BrowserWindowInterface* browser,
++                       const std::vector<ArcImportPlan::Node>& nodes);
++
+ // What the entry points ask before offering an import (I2, I9).
+ struct ArcSidebarInfo {
+   ArcSidebarInfo();
 diff --git a/chrome/browser/ui/spaces/arc_sidebar_importer_unittest.cc b/chrome/browser/ui/spaces/arc_sidebar_importer_unittest.cc
-index fa35761053e15..ea54d359be681 100644
+index fa35761053e15..c2e5a129f8985 100644
 --- a/chrome/browser/ui/spaces/arc_sidebar_importer_unittest.cc
 +++ b/chrome/browser/ui/spaces/arc_sidebar_importer_unittest.cc
 @@ -20,6 +20,7 @@
@@ -1126,7 +1250,148 @@ index fa35761053e15..ea54d359be681 100644
  // I10: every theme lands on one of the swatches (spaces B40), the nearest
  // by hue, and a grey on Slate.
  TEST(ArcSidebarImporterTest, ThemeMapsToTheNearestSwatch) {
-@@ -720,6 +895,84 @@ TEST_F(ArcSidebarImportWindowTest, ListsOfThePinnedSectionArePinnedFolders) {
+@@ -543,6 +718,140 @@ TEST_F(ArcSidebarImportWindowTest, ADeepFolderOfFoldersKeepsEveryFolder) {
+   EXPECT_EQ(0u, again.folders);
+ }
+ 
++// I3, folders F39 (bug hunt 2026-11-16): lists deeper than the five-level
++// folder limit fold into the fifth level. A list of Arc's pinned section
++// holds a list in each list, seven deep, a tab in each. The sixth and seventh
++// lists' tabs had been inserted, the folders refused, and the tabs left loose
++// at the end of the Space: in no folder, no pins, and skipped by the next
++// import as brought over. $1 is what the sixth list holds.
++TEST_F(ArcSidebarImportWindowTest, AListPastTheFifthLevelFoldsIntoIt) {
++  constexpr char kSevenDeep[] = R"json({
++  "version": 1,
++  "sidebar": {"containers": [
++    {"global": {}},
++    {
++      "spaces": ["space-work", {"id": "space-work", "title": "Work",
++        "containerIDs": ["unpinned", "cont-unpinned", "pinned", "cont-pinned"]}],
++      "items": [
++        "cont-pinned", {"id": "cont-pinned", "parentID": null,
++          "childrenIds": ["list-1"], "title": "",
++          "data": {"itemContainer": {"containerType": {"spaceItems": {}}}}},
++        "cont-unpinned", {"id": "cont-unpinned", "parentID": null,
++          "childrenIds": [], "title": "",
++          "data": {"itemContainer": {"containerType": {"spaceItems": {}}}}},
++        "list-1", {"id": "list-1", "parentID": "cont-pinned",
++          "childrenIds": ["tab-1", "list-2"], "title": "L1", "data": {"list": {}}},
++        "list-2", {"id": "list-2", "parentID": "list-1",
++          "childrenIds": ["tab-2", "list-3"], "title": "L2", "data": {"list": {}}},
++        "list-3", {"id": "list-3", "parentID": "list-2",
++          "childrenIds": ["tab-3", "list-4"], "title": "L3", "data": {"list": {}}},
++        "list-4", {"id": "list-4", "parentID": "list-3",
++          "childrenIds": ["tab-4", "list-5"], "title": "L4", "data": {"list": {}}},
++        "list-5", {"id": "list-5", "parentID": "list-4",
++          "childrenIds": ["tab-5", "list-6"], "title": "L5", "data": {"list": {}}},
++        "list-6", {"id": "list-6", "parentID": "list-5",
++          "childrenIds": [$1], "title": "L6", "data": {"list": {}}},
++        "list-7", {"id": "list-7", "parentID": "list-6",
++          "childrenIds": ["tab-7"], "title": "L7", "data": {"list": {}}},
++        "tab-1", {"id": "tab-1", "parentID": "list-1", "childrenIds": [],
++          "title": "", "data": {"tab": {"savedURL": "https://t1.example/", "savedTitle": "T1"}}},
++        "tab-2", {"id": "tab-2", "parentID": "list-2", "childrenIds": [],
++          "title": "", "data": {"tab": {"savedURL": "https://t2.example/", "savedTitle": "T2"}}},
++        "tab-3", {"id": "tab-3", "parentID": "list-3", "childrenIds": [],
++          "title": "", "data": {"tab": {"savedURL": "https://t3.example/", "savedTitle": "T3"}}},
++        "tab-4", {"id": "tab-4", "parentID": "list-4", "childrenIds": [],
++          "title": "", "data": {"tab": {"savedURL": "https://t4.example/", "savedTitle": "T4"}}},
++        "tab-5", {"id": "tab-5", "parentID": "list-5", "childrenIds": [],
++          "title": "", "data": {"tab": {"savedURL": "https://t5.example/", "savedTitle": "T5"}}},
++        "tab-6", {"id": "tab-6", "parentID": "list-6", "childrenIds": [],
++          "title": "", "data": {"tab": {"savedURL": "https://t6.example/", "savedTitle": "T6"}}},
++        "tab-6b", {"id": "tab-6b", "parentID": "list-6", "childrenIds": [],
++          "title": "", "data": {"tab": {"savedURL": "https://t6b.example/", "savedTitle": "T6b"}}},
++        "tab-7", {"id": "tab-7", "parentID": "list-7", "childrenIds": [],
++          "title": "", "data": {"tab": {"savedURL": "https://t7.example/", "savedTitle": "T7"}}}
++      ],
++      "topAppsContainerIDs": []
++    }
++  ]}
++})json";
++  const auto sidebar = [&](std::string_view sixth) {
++    return ParseArcSidebar(base::ReplaceStringPlaceholders(
++        kSevenDeep, {std::string(sixth)}, nullptr));
++  };
++  const std::optional<ArcImportPlan> plan = sidebar(R"("tab-6", "list-7")");
++  ASSERT_TRUE(plan.has_value());
++  const ArcImportResult result =
++      ApplyArcImport(browser(), *plan, ArcImportOptions());
++  EXPECT_EQ(7u, result.tabs);
++  EXPECT_EQ(5u, result.folders);
++  EXPECT_EQ(0u, result.skipped);
++
++  const auto tab_titled = [&](std::u16string_view title) -> tabs::TabInterface* {
++    for (int i = 0; i < tabs().count(); ++i) {
++      if (tabs().GetTabAtIndex(i)->GetContents()->GetTitle() == title) {
++        return tabs().GetTabAtIndex(i);
++      }
++    }
++    return nullptr;
++  };
++  const auto folder_of =
++      [](const tabs::TabCollection* collection) -> tabs::FolderTabCollection* {
++    return collection && collection->type() == tabs::TabCollection::Type::FOLDER
++               ? const_cast<tabs::FolderTabCollection*>(
++                     static_cast<const tabs::FolderTabCollection*>(collection))
++               : nullptr;
++  };
++  // Every tab is a pin of the run, with its home.
++  for (const std::u16string_view title :
++       {u"T1", u"T2", u"T3", u"T4", u"T5", u"T6", u"T7"}) {
++    tabs::TabInterface* const tab = tab_titled(title);
++    ASSERT_TRUE(tab) << title;
++    EXPECT_TRUE(model().IsSpacePinned(tab)) << title << " is no pin";
++    EXPECT_TRUE(model().HomeUrl(tab).has_value()) << title;
++  }
++  // L1 to L5, each inside the one before; the sixth and seventh lists' tabs
++  // in the fifth, after its own, in Arc's order.
++  tabs::FolderTabCollection* const fifth =
++      folder_of(tab_titled(u"T5")->GetParentCollection());
++  ASSERT_TRUE(fifth);
++  EXPECT_EQ("L5", fifth->title());
++  EXPECT_EQ(fifth, folder_of(tab_titled(u"T6")->GetParentCollection()))
++      << "the sixth list's tab is not in the fifth folder";
++  EXPECT_EQ(fifth, folder_of(tab_titled(u"T7")->GetParentCollection()))
++      << "the seventh list's tab is not in the fifth folder";
++  const tabs::FolderTabCollection* up = fifth;
++  for (const std::string_view title : {"L4", "L3", "L2", "L1"}) {
++    up = folder_of(up->GetParentCollection());
++    ASSERT_TRUE(up) << title;
++    EXPECT_EQ(title, up->title());
++  }
++  EXPECT_FALSE(folder_of(up->GetParentCollection()));
++  EXPECT_TRUE(model().IsFolderSpacePinned(up)) << "L1 is not in the run";
++  const auto index_of = [&](std::u16string_view title) {
++    return tabs().GetIndexOfTab(tab_titled(title));
++  };
++  EXPECT_LT(index_of(u"T5"), index_of(u"T6"));
++  EXPECT_LT(index_of(u"T6"), index_of(u"T7"));
++
++  // I12: nothing twice, and a tab Arc added to the sixth list since comes
++  // into the fifth folder, a pin.
++  const ArcImportResult again =
++      ApplyArcImport(browser(), *plan, ArcImportOptions());
++  EXPECT_EQ(0u, again.tabs);
++  EXPECT_EQ(0u, again.folders);
++  const std::optional<ArcImportPlan> grown =
++      sidebar(R"("tab-6", "tab-6b", "list-7")");
++  ASSERT_TRUE(grown.has_value());
++  const ArcImportResult added =
++      ApplyArcImport(browser(), *grown, ArcImportOptions());
++  EXPECT_EQ(1u, added.tabs);
++  EXPECT_EQ(0u, added.folders);
++  tabs::TabInterface* const joined = tab_titled(u"T6b");
++  ASSERT_TRUE(joined);
++  EXPECT_EQ(fifth, folder_of(joined->GetParentCollection()));
++  EXPECT_TRUE(model().IsSpacePinned(joined));
++}
++
+ // A made-up Arc sidebar of pinned folders (import I3, folders F38): Work's
+ // pinned run is a pin, a folder with a folder inside it and a folder of folders
+ // only, then a pin after them; Play, which is not the Space on screen, pins one
+@@ -720,6 +1029,84 @@ TEST_F(ArcSidebarImportWindowTest, ListsOfThePinnedSectionArePinnedFolders) {
    EXPECT_TRUE(model().IsFolderSpacePinned(docs));
  }
  
@@ -1211,6 +1476,67 @@ index fa35761053e15..ea54d359be681 100644
  // tabs R14, import I3 (BACKLOG S-431, GitHub issue 80): `title` is the name the
  // person gave a tab in Arc, as a rename here gives one, whichever part of the
  // sidebar holds it. It came in as the title of a page not yet loaded, so the
+diff --git a/chrome/browser/ui/spaces/bookmarks_to_pins_unittest.cc b/chrome/browser/ui/spaces/bookmarks_to_pins_unittest.cc
+index 04aba099b9763..01f8f42dd8cb2 100644
+--- a/chrome/browser/ui/spaces/bookmarks_to_pins_unittest.cc
++++ b/chrome/browser/ui/spaces/bookmarks_to_pins_unittest.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "chrome/browser/ui/spaces/bookmarks_to_pins.h"
+ 
++#include <string>
+ #include <vector>
+ 
+ #include "chrome/browser/bookmarks/bookmark_model_factory.h"
+@@ -42,7 +43,10 @@ class BookmarksToPinsTest : public BrowserWithTestWindowTest {
+   TabStripModel& tabs() { return *browser()->tab_strip_model(); }
+ };
+ 
+-// I13: the bar's bookmarks first, folders nested, every bookmark a pin.
++// I13: the bar's bookmarks first, folders nested, every bookmark a pin. A
++// bookmark in a folder had come in as a plain tab, in a folder under the Clear
++// line (bug hunt 2026-11-16): the folder is a folder of the pinned run (folders
++// F38), in the bar's order among the pins.
+ TEST_F(BookmarksToPinsTest, FolderTreeBecomesPinnedFolders) {
+   bookmarks::BookmarkModel* const bookmarks = model();
+   const bookmarks::BookmarkNode* const bar = bookmarks->bookmark_bar_node();
+@@ -67,23 +71,30 @@ TEST_F(BookmarksToPinsTest, FolderTreeBecomesPinnedFolders) {
+   EXPECT_EQ(1u, result.folders);
+   spaces::SpaceModel& spaces = *spaces::SpaceModel::From(browser());
+   int pinned = 0;
+-  int in_folder = 0;
++  const tabs::FolderTabCollection* folder = nullptr;
++  std::vector<std::u16string> titles;
+   for (int i = 0; i < tabs().count(); ++i) {
+     tabs::TabInterface* const tab = tabs().GetTabAtIndex(i);
++    titles.push_back(tab->GetContents()->GetTitle());
+     if (spaces.IsSpacePinned(tab)) {
+       ++pinned;
+       EXPECT_TRUE(spaces.HomeUrl(tab).has_value()) << "pins H1";
+     }
+     const tabs::TabCollection* const parent = tab->GetParentCollection();
+     if (parent && parent->type() == tabs::TabCollection::Type::FOLDER) {
+-      ++in_folder;
+-      EXPECT_EQ("Docs",
+-                static_cast<const tabs::FolderTabCollection*>(parent)->title());
++      EXPECT_FALSE(folder) << "one tab in a folder";
++      folder = static_cast<const tabs::FolderTabCollection*>(parent);
++      EXPECT_EQ(u"A", tab->GetContents()->GetTitle());
+     }
+     EXPECT_TRUE(tab->GetContents()->WasDiscarded()) << "unloaded (I3)";
+   }
+-  EXPECT_EQ(2, pinned) << "B and C are Space-pinned";
+-  EXPECT_EQ(1, in_folder) << "A sits in the Docs folder";
++  EXPECT_EQ(3, pinned) << "A, in its folder, B and C are Space-pinned";
++  ASSERT_TRUE(folder) << "A sits in no folder";
++  EXPECT_EQ("Docs", folder->title());
++  EXPECT_TRUE(spaces.IsFolderSpacePinned(folder))
++      << "Docs is not a folder of the pinned run";
++  EXPECT_EQ((std::vector<std::u16string>{u"A", u"B", u"C"}), titles)
++      << "the bar's order";
+ 
+   const spaces::ArcImportResult again = ConvertBookmarksToPins(browser());
+   EXPECT_EQ(0u, again.tabs) << "idempotent on the bookmark ids";
 diff --git a/chrome/browser/ui/webui/stedding_welcome/stedding_welcome_handler.cc b/chrome/browser/ui/webui/stedding_welcome/stedding_welcome_handler.cc
 index 761768b95c6de..f9e058a60da38 100644
 --- a/chrome/browser/ui/webui/stedding_welcome/stedding_welcome_handler.cc

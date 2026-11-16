@@ -43,14 +43,14 @@ Removable when: never as behaviour.
  .../stedding_page/stedding_routes_card.ts     | 265 ++++++++++++
  chrome/browser/ui/spaces/space_router.cc      |  82 +++-
  chrome/browser/ui/spaces/space_router.h       |  21 +-
- .../ui/spaces/space_router_unittest.cc        | 108 +++++
+ .../ui/spaces/space_router_unittest.cc        | 136 ++++++
  .../browser/ui/webui/settings/settings_ui.cc  |  35 +-
  .../webui/settings/stedding_spaces_handler.cc | 231 +++++++---
  .../webui/settings/stedding_spaces_handler.h  |  20 +-
  chrome/test/stedding/BUILD.gn                 |   1 +
  .../test/stedding/routes_card_browsertest.cc  | 401 ++++++++++++++++++
  .../stedding/settings_spaces_browsertest.cc   |  92 +---
- 16 files changed, 1270 insertions(+), 288 deletions(-)
+ 16 files changed, 1298 insertions(+), 288 deletions(-)
  create mode 100644 chrome/browser/resources/settings/stedding_page/stedding_routes_card.css
  create mode 100644 chrome/browser/resources/settings/stedding_page/stedding_routes_card.html.ts
  create mode 100644 chrome/browser/resources/settings/stedding_page/stedding_routes_card.ts
@@ -765,10 +765,10 @@ index 0000000000000..ce56abb9e5a9a
 +customElements.define(
 +    SettingsSteddingRoutesCardElement.is, SettingsSteddingRoutesCardElement);
 diff --git a/chrome/browser/ui/spaces/space_router.cc b/chrome/browser/ui/spaces/space_router.cc
-index 5ec4e4251e888..72bc6f2da961a 100644
+index 18e291bbf3a0c..99d26b5f1f1c6 100644
 --- a/chrome/browser/ui/spaces/space_router.cc
 +++ b/chrome/browser/ui/spaces/space_router.cc
-@@ -138,7 +138,7 @@ bool RouteMatches(const Route& route, const GURL& url) {
+@@ -141,7 +141,7 @@ bool RouteMatches(const Route& route, const GURL& url) {
  std::optional<std::string> RouteFor(const std::vector<Route>& routes,
                                      const GURL& url) {
    for (const Route& route : routes) {
@@ -777,7 +777,7 @@ index 5ec4e4251e888..72bc6f2da961a 100644
        return route.space;
      }
    }
-@@ -198,7 +198,10 @@ std::vector<Route> RoutesFromValue(const base::ListValue& value) {
+@@ -201,7 +201,10 @@ std::vector<Route> RoutesFromValue(const base::ListValue& value) {
      const std::string* const match = dict->FindString("match");
      const std::string* const pattern = dict->FindString("pattern");
      const std::string* const space = dict->FindString("space");
@@ -789,7 +789,7 @@ index 5ec4e4251e888..72bc6f2da961a 100644
        continue;
      }
      const std::optional<Route::Match> kind = MatchFromName(*match);
-@@ -262,6 +265,81 @@ void RemoveRoute(PrefService* prefs, size_t index) {
+@@ -265,6 +268,81 @@ void RemoveRoute(PrefService* prefs, size_t index) {
    WriteRoutes(prefs, routes);
  }
  
@@ -911,7 +911,7 @@ index 09168418d725e..4f2d1fc95c2f8 100644
  // the first rule that matches an address decides, and one naming no Space
  // would hide a later rule naming a live one. So does its place as the Space
 diff --git a/chrome/browser/ui/spaces/space_router_unittest.cc b/chrome/browser/ui/spaces/space_router_unittest.cc
-index f1a93fe07bcc0..b6aac0a3472b3 100644
+index f1a93fe07bcc0..92b27291846ba 100644
 --- a/chrome/browser/ui/spaces/space_router_unittest.cc
 +++ b/chrome/browser/ui/spaces/space_router_unittest.cc
 @@ -4,9 +4,12 @@
@@ -927,7 +927,42 @@ index f1a93fe07bcc0..b6aac0a3472b3 100644
  #include "chrome/browser/ui/stedding/stedding_prefs.h"
  #include "components/prefs/pref_registry_simple.h"
  #include "components/prefs/testing_pref_service.h"
-@@ -132,6 +135,111 @@ TEST(SpaceRouterTest, PrefsRoundTrip) {
+@@ -87,6 +90,34 @@ TEST(SpaceRouterTest, AHostRuleTakesIPv6AndADefaultPort) {
+   EXPECT_FALSE(matches("example.com:x", "https://example.com/"));
+ }
+ 
++// D8: a host-suffix rule's text is read as a host rule's host is (D7). An IDN
++// typed in Unicode, as an edit (D13) writes it, matches the punycode host the
++// address has, and an IPv6 literal needs no brackets. Compared as typed,
++// "bücher.de" never matched "shop.xn--bcher-kva.de".
++TEST(SpaceRouterTest, AHostSuffixIsReadAsAHostRuleIs) {
++  const auto matches = [](const char* pattern, const char* url) {
++    return RouteMatches(Make(Route::Match::kHostSuffix, pattern, "x"),
++                        GURL(url));
++  };
++  // "bücher.de", split so that the escape ends before "cher".
++  const char kIdn[] =
++      "b\xC3\xBC"
++      "cher.de";
++  EXPECT_TRUE(matches(kIdn, "https://shop.xn--bcher-kva.de/"));
++  EXPECT_TRUE(matches(kIdn, "https://xn--bcher-kva.de/x"));
++  EXPECT_FALSE(matches(kIdn, "https://shop.bucher.de/"));
++  EXPECT_TRUE(matches("::1", "http://[::1]:8080/x"));
++  EXPECT_TRUE(matches("[::1]", "http://[::1]/"));
++  EXPECT_TRUE(matches("Staging.Example.com", "https://a.staging.example.com/"));
++  EXPECT_FALSE(matches("staging.example.com", "https://example.com/"));
++  // As an edit writes it: the text is kept, and the rule routes.
++  const std::optional<Route> edited =
++      RouteFromTyped(Route::Match::kHostSuffix, kIdn, "work");
++  ASSERT_TRUE(edited);
++  EXPECT_EQ("work",
++            RouteFor({*edited}, GURL("https://shop.xn--bcher-kva.de/")));
++}
++
+ // D5: the rule the tab menu writes is the address's site, nothing more.
+ TEST(SpaceRouterTest, RuleFromTabIsSiteScoped) {
+   const Route route =
+@@ -132,6 +163,111 @@ TEST(SpaceRouterTest, PrefsRoundTrip) {
    EXPECT_EQ(3u, RoutesFromValue(raw).size());
  }
  

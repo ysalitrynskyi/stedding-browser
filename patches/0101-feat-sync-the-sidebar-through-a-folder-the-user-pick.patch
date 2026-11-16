@@ -43,7 +43,7 @@ Removable when: not removable; it is product behaviour.
  .../stedding_page/stedding_sync_section.ts    |  480 +++++
  chrome/browser/ui/spaces/BUILD.gn             |   85 +
  .../browser/ui/spaces/arc_sidebar_importer.cc |   92 +-
- chrome/browser/ui/spaces/sidebar_backup.cc    |   18 +-
+ chrome/browser/ui/spaces/sidebar_backup.cc    |   38 +-
  chrome/browser/ui/spaces/sidebar_backup.h     |    5 +
  chrome/browser/ui/spaces/sidebar_ids.cc       |  118 ++
  chrome/browser/ui/spaces/sidebar_ids.h        |   57 +
@@ -78,7 +78,7 @@ Removable when: not removable; it is product behaviour.
  chrome/test/stedding/BUILD.gn                 |    3 +
  .../test/stedding/sidebar_sync_browsertest.cc |  387 ++++
  .../tools/build/mac/infoplist_strings_util.cc |   16 +
- 45 files changed, 8576 insertions(+), 91 deletions(-)
+ 45 files changed, 8592 insertions(+), 95 deletions(-)
  create mode 100644 chrome/browser/resources/settings/stedding_page/stedding_sync_section.css
  create mode 100644 chrome/browser/resources/settings/stedding_page/stedding_sync_section.html.ts
  create mode 100644 chrome/browser/resources/settings/stedding_page/stedding_sync_section.ts
@@ -1149,18 +1149,21 @@ index 6fd52f83b1f58..8d1a12e18eea9 100644
  
  struct ApplyContext {
 diff --git a/chrome/browser/ui/spaces/sidebar_backup.cc b/chrome/browser/ui/spaces/sidebar_backup.cc
-index 5f17d8e072d97..878538e569fed 100644
+index 5f17d8e072d97..6a85ce30102fa 100644
 --- a/chrome/browser/ui/spaces/sidebar_backup.cc
 +++ b/chrome/browser/ui/spaces/sidebar_backup.cc
-@@ -19,6 +19,7 @@
+@@ -17,8 +17,10 @@
+ #include "base/i18n/file_util_icu.h"
+ #include "base/json/json_writer.h"
  #include "base/memory/raw_ptr.h"
++#include "base/strings/string_util.h"
  #include "base/strings/stringprintf.h"
  #include "base/strings/utf_string_conversions.h"
 +#include "base/task/lazy_thread_pool_task_runner.h"
  #include "base/task/thread_pool.h"
  #include "base/values.h"
  #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
-@@ -325,6 +326,10 @@ ArcImportPlan SnapshotWindow(BrowserWindowInterface* browser) {
+@@ -325,6 +327,10 @@ ArcImportPlan SnapshotWindow(BrowserWindowInterface* browser) {
  }
  
  std::string PlanToJson(const ArcImportPlan& plan) {
@@ -1171,7 +1174,7 @@ index 5f17d8e072d97..878538e569fed 100644
    base::ListValue spaces;
    base::ListValue items;
    for (const ArcImportPlan::Space& space : plan.spaces) {
-@@ -432,6 +437,7 @@ std::string PlanToJson(const ArcImportPlan& plan) {
+@@ -432,6 +438,7 @@ std::string PlanToJson(const ArcImportPlan& plan) {
    root.Set("version", 1);
    root.Set("sidebar", std::move(sidebar));
    root.Set("writer", "Stedding");
@@ -1179,7 +1182,7 @@ index 5f17d8e072d97..878538e569fed 100644
    std::string json;
    base::JSONWriter::WriteWithOptions(
        root, base::JSONWriter::OPTIONS_PRETTY_PRINT, &json);
-@@ -444,6 +450,14 @@ namespace {
+@@ -444,6 +451,20 @@ namespace {
  // and is not read whole into memory.
  constexpr size_t kMaxSidebarFileBytes = 64 * 1024 * 1024;
  
@@ -1191,10 +1194,43 @@ index 5f17d8e072d97..878538e569fed 100644
 +    LAZY_THREAD_POOL_SEQUENCED_TASK_RUNNER_INITIALIZER(
 +        base::TaskTraits(base::MayBlock(), base::TaskPriority::USER_VISIBLE));
 +
++// import I20: the most of an export's stem, the prefix and the Space's name,
++// that goes into its file name, in UTF-8 bytes. With the date, the number a
++// second export in the same minute takes and the folder, the name stays well
++// inside the 255 a file name may have, and Windows' 260 for a whole path.
++constexpr size_t kMaxExportStemBytes = 100;
++
  // Read and parsed off the UI thread: the file is not trusted, and a large
  // one held the window up while it parsed (BACKLOG S-160).
  std::optional<ArcImportPlan> ReadSidebarOnPool(const base::FilePath& path) {
-@@ -518,8 +532,8 @@ void ExportPlanAsync(const ArcImportPlan& plan,
+@@ -469,6 +490,11 @@ base::FilePath WriteExportOnPool(const base::FilePath& directory,
+                                  const std::string& json) {
+   base::Time::Exploded exploded;
+   base::Time::Now().LocalExplode(&exploded);
++  // import I20: a Space's name may be of any length, and a long one made a
++  // file name past 255 bytes, or on Windows a path past MAX_PATH, so the
++  // export failed every time. The stem is cut on a character's boundary.
++  std::string short_stem;
++  base::TruncateUTF8ToByteSize(stem, kMaxExportStemBytes, &short_stem);
+   // The stem carries the Space's name, which is the user's text: UTF-8, not
+   // ASCII (AppendASCII DCHECKs on anything else, and mangles it on Windows).
+   // It is one file name in `directory`: a "/" in the name made it a path, so
+@@ -476,10 +502,10 @@ base::FilePath WriteExportOnPool(const base::FilePath& directory,
+   // (2026-10-15).
+   base::FilePath::StringType name =
+       base::FilePath::FromUTF8Unsafe(
+-          base::StringPrintf("%s %04d-%02d-%02d %02d.%02d.json", stem.c_str(),
+-                             exploded.year, exploded.month,
+-                             exploded.day_of_month, exploded.hour,
+-                             exploded.minute))
++          base::StringPrintf("%s %04d-%02d-%02d %02d.%02d.json",
++                             short_stem.c_str(), exploded.year,
++                             exploded.month, exploded.day_of_month,
++                             exploded.hour, exploded.minute))
+           .value();
+   base::i18n::ReplaceIllegalCharactersInPath(&name, '_');
+   const base::FilePath wanted = directory.Append(name);
+@@ -518,8 +544,8 @@ void ExportPlanAsync(const ArcImportPlan& plan,
                       const base::FilePath& directory,
                       const std::string& stem,
                       base::OnceCallback<void(base::FilePath)> done) {

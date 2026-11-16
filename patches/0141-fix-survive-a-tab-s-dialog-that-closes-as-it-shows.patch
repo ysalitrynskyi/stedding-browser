@@ -30,19 +30,20 @@ widget that goes during the show.
 ---
  chrome/browser/ui/stedding/peek.cc            |   6 +-
  chrome/browser/ui/tabs/tab_dialog_manager.cc  |   4 +-
- .../ui/views/peek/peek_navigation_throttle.cc |   8 +-
+ .../ui/views/peek/peek_navigation_throttle.cc |  14 +-
  chrome/browser/ui/views/peek/peek_overlay.cc  |   6 +
+ chrome/test/stedding/peek_browsertest.cc      | 102 +++++++++++++++
  .../stedding/peek_over_page_browsertest.cc    | 122 ++++++++++++++++++
  ui/views/widget/native_widget_mac.mm          |   7 +
  ui/views/widget/native_widget_mac_unittest.mm |  26 ++++
  ui/views/widget/widget.cc                     |  16 ++-
- 8 files changed, 188 insertions(+), 7 deletions(-)
+ 9 files changed, 295 insertions(+), 8 deletions(-)
 
 diff --git a/chrome/browser/ui/stedding/peek.cc b/chrome/browser/ui/stedding/peek.cc
-index 8679d03c9a639..c5c87aed85cca 100644
+index 7d86df5d8ca60..2595ce6c9e5dd 100644
 --- a/chrome/browser/ui/stedding/peek.cc
 +++ b/chrome/browser/ui/stedding/peek.cc
-@@ -364,10 +364,12 @@ BrowserWindowInterface* OpenPeek(tabs::TabInterface* source,
+@@ -373,10 +373,12 @@ BrowserWindowInterface* OpenPeek(tabs::TabInterface* source,
        content::WebContents::Create(create);
    content::WebContents* const page = contents.get();
    if (over_page) {
@@ -73,22 +74,27 @@ index 4e82fbd0e6d34..12ffd23283040 100644
    return false;
  }
 diff --git a/chrome/browser/ui/views/peek/peek_navigation_throttle.cc b/chrome/browser/ui/views/peek/peek_navigation_throttle.cc
-index d9dbec25d447c..f7083ab6beed9 100644
+index d9dbec25d447c..b6fa1cd56cc80 100644
 --- a/chrome/browser/ui/views/peek/peek_navigation_throttle.cc
 +++ b/chrome/browser/ui/views/peek/peek_navigation_throttle.cc
-@@ -232,8 +232,14 @@ bool MaybePeekInsteadOfNewTab(NavigateParams* params) {
+@@ -232,8 +232,18 @@ bool MaybePeekInsteadOfNewTab(NavigateParams* params) {
      params->contents_to_insert = PeekContentsInPinsJar(
          tab, std::move(params->contents_to_insert), params->url);
      content::WebContents* const page = params->contents_to_insert.get();
+-    if (OpenPeekWithContents(tab, std::move(params->contents_to_insert),
+-                             params->url)) {
 +    // tabs R67 (bug hunt 2026-11-16): a peek over the page closed as it first
 +    // showed takes its page with it, and the window still comes back. Content
 +    // then loaded the link into the page that had gone. Only a page that is
-+    // still there is handed back, as OpenPeek loads one.
-+    const base::WeakPtr<content::WebContents> shown = page->GetWeakPtr();
-     if (OpenPeekWithContents(tab, std::move(params->contents_to_insert),
--                             params->url)) {
-+                             params->url) &&
-+        shown) {
++    // still there is handed back, as OpenPeek loads one. P13: a page that
++    // waits with its link for the "Leave site?" of the peek over the window
++    // is still there, held for the next peek, and is handed back too, so
++    // content loads the link into it. A page made again for the pin's jar
++    // had loaded nothing, and the next peek showed it blank.
++    const base::WeakPtr<content::WebContents> kept = page->GetWeakPtr();
++    OpenPeekWithContents(tab, std::move(params->contents_to_insert),
++                         params->url);
++    if (kept) {
        params->navigated_or_inserted_contents = page;
      }
      return true;
@@ -110,6 +116,133 @@ index aeea29d989e83..feb728baae98a 100644
    view_->UpdateSplit(CanSplit());
    page_->Focus();
    return true;
+diff --git a/chrome/test/stedding/peek_browsertest.cc b/chrome/test/stedding/peek_browsertest.cc
+index 8c1c1485f4358..dabbcf89c49a6 100644
+--- a/chrome/test/stedding/peek_browsertest.cc
++++ b/chrome/test/stedding/peek_browsertest.cc
+@@ -33,6 +33,7 @@
+ #include "chrome/browser/ui/stedding/peek_notice.h"
+ #include "chrome/browser/ui/stedding/stedding_command_ids.h"
+ #include "chrome/browser/ui/stedding/stedding_prefs.h"
++#include "chrome/browser/ui/tabs/tab_enums.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "chrome/browser/ui/views/interaction/browser_elements_views.h"
+ #include "chrome/browser/ui/views/toolbar/stedding_little_promote_button.h"
+@@ -689,6 +690,49 @@ IN_PROC_BROWSER_TEST_F(PeekTest, OpenInSplitViewShowsThePinsSpace) {
+   }
+ }
+ 
++// P9 (bug hunt 2026-11-16): a peek whose pinned tab has gone -- an extension
++// closed it, which no click on the window does, so the peek stayed -- offers
++// no split, and Open in Split View gives the page a tab of its own. It had
++// paired the page with whatever tab was active in the window.
++IN_PROC_BROWSER_TEST_F(PeekTest, OpenInSplitViewWithItsPinGoneOpensATab) {
++  // A tab a split could take: a page of its own, not pinned, in the Space on
++  // screen.
++  ASSERT_TRUE(
++      ui_test_utils::NavigateToURL(browser(), Url("c.test", "/title2.html")));
++  tabs::TabInterface* const other = tab();
++  ASSERT_NO_FATAL_FAILURE(
++      OpenPin(Url("b.test", "/title3.html"), "", /*in_space=*/true));
++  tabs::TabInterface* const pin = tab();
++  ASSERT_NE(other, pin);
++  ClickLink();
++  BrowserWindowInterface* const peek = WaitForPeek();
++  ASSERT_TRUE(peek);
++  ASSERT_TRUE(stedding::LittleWindowOffersSplit(peek));
++  content::WebContents* const page =
++      peek->GetTabStripModel()->GetActiveWebContents();
++
++  const tabs::TabHandle gone = pin->GetHandle();
++  tabs().CloseWebContentsAt(tabs().GetIndexOfTab(pin),
++                            TabCloseTypes::CLOSE_NONE);
++  ASSERT_TRUE(base::test::RunUntil([&]() { return !gone.Get(); }))
++      << "the pinned tab did not close";
++  ASSERT_EQ(1, PeekCount()) << "the peek went with its pin";
++  EXPECT_EQ(nullptr, stedding::PeekSourceOf(peek));
++  EXPECT_FALSE(stedding::LittleWindowOffersSplit(peek));
++  tabs().ActivateTab(other);
++  ASSERT_EQ(other, tab());
++
++  chrome::ExecuteCommand(peek, IDC_STEDDING_LITTLE_PROMOTE_SPLIT);
++  ASSERT_TRUE(base::test::RunUntil([&]() {
++    tabs::TabInterface* const moved =
++        tabs::TabInterface::MaybeGetFromContents(page);
++    return moved && moved->GetBrowserWindowInterface() == browser();
++  })) << "the page did not move into the window";
++  EXPECT_FALSE(tabs::TabInterface::MaybeGetFromContents(page)->IsSplit());
++  EXPECT_FALSE(other->IsSplit()) << "the page paired with the active tab";
++  EXPECT_EQ(page, contents());
++}
++
+ // P14: a click on the window closes the peek; the same link opens it again
+ // at once, as any click on it does.
+ IN_PROC_BROWSER_TEST_F(PeekTest, AClickOnTheWindowClosesThePeek) {
+@@ -931,6 +975,64 @@ IN_PROC_BROWSER_TEST_F(PeekTest, ALinkForANewTabFromAPinWithItsOwnJarLoads) {
+   EXPECT_EQ(count, tabs().count());
+ }
+ 
++// P8, P13 (bug hunt 2026-11-16): such a link, while the peek's page asks
++// "Leave site?", waits with the page made for it, and on Leave the next peek
++// shows the link loaded in that page, in the Space's jar. The page, made
++// again in that jar, waited with nothing loaded, and the next peek was blank.
++IN_PROC_BROWSER_TEST_F(PeekTest,
++                       ALinkForANewTabThatWaitsForLeaveSiteLoadsInTheNextPeek) {
++  spaces::SpaceModel* const model = spaces::SpaceModel::From(browser());
++  ASSERT_TRUE(model);
++  const spaces::SpaceId work = model->AddSpace("Work", SK_ColorBLUE)->id();
++  model->SetSpaceIsolated(work, true);
++  ASSERT_TRUE(model->SetActiveSpace(work));
++  const GURL to = Url("b.test", "/title3.html");
++  ASSERT_NO_FATAL_FAILURE(OpenPin(to, "_blank", /*in_space=*/true));
++  const content::StoragePartitionConfig jar =
++      spaces::StoragePartitionConfigForWebContents(contents());
++  ASSERT_TRUE(spaces::IsSpaceStoragePartition(jar));
++
++  // The peek, its page asking before it is left: the user's activation
++  // "Leave site?" needs, and no hang timer.
++  ClickLink();
++  ASSERT_TRUE(base::test::RunUntil([&]() {
++    return stedding::PeekOver(browser()) != nullptr;
++  })) << "no peek";
++  BrowserWindowInterface* const first = stedding::PeekOver(browser());
++  content::WebContents* const page =
++      first->GetTabStripModel()->GetActiveWebContents();
++  ASSERT_TRUE(base::test::RunUntil([&]() {
++    return page->GetLastCommittedURL() == to;
++  })) << "the first peek stayed blank at "
++      << page->GetVisibleURL();
++  ASSERT_TRUE(content::WaitForLoadStop(page));
++  ASSERT_TRUE(content::ExecJs(page,
++                              "window.addEventListener('beforeunload', e => {"
++                              "  e.preventDefault(); e.returnValue = ''; });"));
++  content::PrepContentsForBeforeUnloadTest(page);
++
++  ClickLink();
++  javascript_dialogs::AppModalDialogController* const dialog =
++      ui_test_utils::WaitForAppModalDialog();
++  ASSERT_TRUE(dialog);
++  ASSERT_TRUE(dialog->is_before_unload_dialog());
++  EXPECT_EQ(1, PeekCount()) << "a second peek opened beside the one asking";
++  dialog->view()->AcceptAppModalDialog();  // Leave.
++  BrowserWindowInterface* next = nullptr;
++  ASSERT_TRUE(base::test::RunUntil([&]() {
++    next = stedding::PeekOver(browser());
++    return PeekCount() == 1 && next && next != first;
++  })) << "the link did not open once the peek had gone";
++  content::WebContents* const next_page =
++      next->GetTabStripModel()->GetActiveWebContents();
++  EXPECT_TRUE(base::test::RunUntil([&]() {
++    return next_page->GetLastCommittedURL() == to;
++  })) << "the next peek stayed blank at "
++      << next_page->GetVisibleURL();
++  EXPECT_EQ(jar, spaces::StoragePartitionConfigForWebContents(next_page))
++      << "the next peek is not in the Space's jar";
++}
++
+ // P8, P11 (BACKLOG S-338): a link for a new tab from an essential every Space
+ // shares peeks in the essential's jar, the shared one, though a route names
+ // a Space with a session of its own for the address: a peek is the pin's,
 diff --git a/chrome/test/stedding/peek_over_page_browsertest.cc b/chrome/test/stedding/peek_over_page_browsertest.cc
 index dd19ead421593..c68d7b52f3159 100644
 --- a/chrome/test/stedding/peek_over_page_browsertest.cc

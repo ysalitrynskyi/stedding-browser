@@ -50,9 +50,9 @@ embedder hook for page activation; the feature itself stays.
  .../ui/stedding/blocker/blocker_convert.cc    | 222 ++++++
  .../ui/stedding/blocker/blocker_convert.h     |  79 +++
  .../blocker/blocker_convert_unittest.cc       | 168 +++++
- .../ui/stedding/blocker/blocker_lists.cc      | 607 ++++++++++++++++
+ .../ui/stedding/blocker/blocker_lists.cc      | 618 +++++++++++++++++
  .../ui/stedding/blocker/blocker_lists.h       | 226 ++++++
- .../blocker/blocker_lists_unittest.cc         | 250 +++++++
+ .../blocker/blocker_lists_unittest.cc         | 291 ++++++++
  .../ui/stedding/blocker/blocker_rules.cc      | 284 ++++++++
  .../ui/stedding/blocker/blocker_rules.h       | 109 +++
  .../blocker/blocker_rules_unittest.cc         | 160 +++++
@@ -87,7 +87,7 @@ embedder hook for page activation; the feature itself stays.
  chrome/test/stedding/blocker_browsertest.cc   | 656 ++++++++++++++++++
  ...ent_subresource_filter_throttle_manager.cc |  46 +-
  ...tent_subresource_filter_throttle_manager.h |  15 +
- 52 files changed, 4115 insertions(+), 5 deletions(-)
+ 52 files changed, 4167 insertions(+), 5 deletions(-)
  create mode 100644 chrome/browser/ui/stedding/blocker/BUILD.gn
  create mode 100644 chrome/browser/ui/stedding/blocker/DEPS
  create mode 100644 chrome/browser/ui/stedding/blocker/blocker.cc
@@ -1324,10 +1324,10 @@ index 0000000000000..f4a9e28f03579
 +}  // namespace stedding
 diff --git a/chrome/browser/ui/stedding/blocker/blocker_lists.cc b/chrome/browser/ui/stedding/blocker/blocker_lists.cc
 new file mode 100644
-index 0000000000000..f588dd63d7404
+index 0000000000000..45de56e79097d
 --- /dev/null
 +++ b/chrome/browser/ui/stedding/blocker/blocker_lists.cc
-@@ -0,0 +1,607 @@
+@@ -0,0 +1,618 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -1691,10 +1691,21 @@ index 0000000000000..f588dd63d7404
 +  if (!BlockerOn(env_.local_state)) {
 +    return;
 +  }
++  const base::Time now = base::Time::Now();
 +  base::Time earliest = base::Time::Max();
 +  for (const ListSpec& spec : Specs()) {
 +    if (!ListOn(spec) || loaders_.contains(spec.id)) {
 +      continue;
++    }
++    // Bk2: a next fetch more than the list's expiry away was written while
++    // the clock ran ahead, and the clock has since been put right. It is
++    // brought back to the expiry from now, as the Windows updater's wait is
++    // for a clock set back; the list waited until that date, a year for a
++    // clock that ran a year ahead.
++    const base::Time latest = now + ExpiryFrom(ListState(spec));
++    if (NextFetch(spec) > latest) {
++      ScopedDictPrefUpdate update(env_.local_state, prefs::kBlockerLists);
++      update->EnsureDict(spec.id)->Set(kNextKey, base::TimeToValue(latest));
 +    }
 +    earliest = std::min(earliest, NextFetch(spec));
 +  }
@@ -2169,10 +2180,10 @@ index 0000000000000..b6e57c85ac8e2
 +#endif  // CHROME_BROWSER_UI_STEDDING_BLOCKER_BLOCKER_LISTS_H_
 diff --git a/chrome/browser/ui/stedding/blocker/blocker_lists_unittest.cc b/chrome/browser/ui/stedding/blocker/blocker_lists_unittest.cc
 new file mode 100644
-index 0000000000000..864b3da3d5216
+index 0000000000000..1691dfc8dff54
 --- /dev/null
 +++ b/chrome/browser/ui/stedding/blocker/blocker_lists_unittest.cc
-@@ -0,0 +1,250 @@
+@@ -0,0 +1,291 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -2188,9 +2199,11 @@ index 0000000000000..864b3da3d5216
 +#include "base/files/file_util.h"
 +#include "base/files/scoped_temp_dir.h"
 +#include "base/functional/bind.h"
++#include "base/json/values_util.h"
 +#include "base/test/task_environment.h"
 +#include "base/time/time.h"
 +#include "chrome/browser/ui/stedding/stedding_prefs.h"
++#include "components/prefs/scoped_user_pref_update.h"
 +#include "components/prefs/testing_pref_service.h"
 +#include "components/subresource_filter/core/browser/ruleset_version.h"
 +#include "content/public/test/browser_task_environment.h"
@@ -2386,6 +2399,45 @@ index 0000000000000..864b3da3d5216
 +  EXPECT_EQ(failed + base::Hours(2), lists_->NextFetchForTesting("easylist"));
 +  EXPECT_FALSE(base::PathExists(dir_.GetPath().AppendASCII("easylist.txt")));
 +  EXPECT_TRUE(published_.empty());
++}
++
++// Bk2: a list fetched while the clock ran a year ahead was given a next
++// fetch a year on; with the clock put right, the next launch waited that
++// year. A next fetch further away than the list's expiry is brought back to
++// the expiry from now, and a list whose next fetch is nearer keeps it.
++TEST_F(BlockerListsTest, AClockThatRanAheadDelaysNoFetchPastTheExpiry) {
++  TurnOn();
++  const base::Time fetched = base::Time::Now();
++  Answer(kEasyListUrl, "\"one\"");
++  Answer(kEasyPrivacyUrl, "\"two\"");
++  ASSERT_EQ(fetched + base::Days(2), lists_->NextFetchForTesting("easylist"));
++  {
++    // What a fetch made at a clock a year ahead wrote.
++    ScopedDictPrefUpdate update(&local_state_, prefs::kBlockerLists);
++    update->EnsureDict("easylist")
++        ->Set("next", base::TimeToValue(fetched + base::Days(367)));
++  }
++
++  // The next launch, with the clock right.
++  BlockerLists::Environment environment;
++  environment.local_state = &local_state_;
++  environment.dir = dir_.GetPath();
++  environment.url_loader_factory = factory_.GetSafeWeakWrapper();
++  environment.list_base = GURL("https://lists.test/");
++  environment.minimum_rules = 1;
++  environment.launch_delay = base::Seconds(10);
++  lists_ = std::make_unique<BlockerLists>(std::move(environment));
++  lists_->Start();
++  task_environment_.RunUntilIdle();
++  const base::Time launched = base::Time::Now();
++  EXPECT_EQ(launched + base::Days(2), lists_->NextFetchForTesting("easylist"))
++      << "the next fetch stayed where the clock that ran ahead put it";
++  EXPECT_EQ(fetched + base::Days(2),
++            lists_->NextFetchForTesting("easyprivacy"));
++
++  task_environment_.FastForwardBy(base::Days(2) + base::Minutes(1));
++  EXPECT_TRUE(Pending(kEasyListUrl)) << "the list was not asked for again";
++  EXPECT_TRUE(Pending(kEasyPrivacyUrl));
 +}
 +
 +// Bk11, Bk3: a ruleset made at an earlier run that the service never

@@ -33,12 +33,15 @@ Removable when: child tabs go.
  chrome/browser/ui/tabs/tab_strip_model.cc     |  15 +
  .../ui/views/commandbar/command_bar_view.cc   |  18 ++
  .../spaces/space_tab_visibility_controller.cc |   2 +
+ .../tabs/common/stedding_tab_row_rules.cc     |   4 -
+ .../tabs/common/stedding_tab_row_rules.h      |   4 -
+ .../common/stedding_tab_row_rules_unittest.cc |  16 --
  .../browser/ui/views/tabs/common/tab_view.cc  |  44 +++
  .../browser/ui/views/tabs/common/tab_view.h   |   9 +
- .../tabs/common/tab_view_vertical_layout.cc   |  11 +
+ .../tabs/common/tab_view_vertical_layout.cc   |  35 +--
  .../test/stedding/child_tabs_browsertest.cc   | 268 ++++++++++++++++++
  .../tabs/public/tab_context_menu_command.h    |   4 +
- 19 files changed, 708 insertions(+), 3 deletions(-)
+ 22 files changed, 715 insertions(+), 44 deletions(-)
 
 diff --git a/chrome/app/stedding_strings.grdp b/chrome/app/stedding_strings.grdp
 index 03e1a66b4fca9..381a75cc40172 100644
@@ -775,6 +778,63 @@ index 3557dd4628e30..fe33528f8ca88 100644
        }
        continue;
      }
+diff --git a/chrome/browser/ui/views/tabs/common/stedding_tab_row_rules.cc b/chrome/browser/ui/views/tabs/common/stedding_tab_row_rules.cc
+index 0c49e47fcbe9e..6cd5181b6615d 100644
+--- a/chrome/browser/ui/views/tabs/common/stedding_tab_row_rules.cc
++++ b/chrome/browser/ui/views/tabs/common/stedding_tab_row_rules.cc
+@@ -19,10 +19,6 @@ bool ShowsCloseGlyph(const TabRowState& row) {
+   return row.hovered_or_focused;
+ }
+ 
+-bool ReservesCloseSlot(const TabRowState& row) {
+-  return !row.pinned && !row.narrow;
+-}
+-
+ bool ShowsFavicon(const TabRowState& row) {
+   // Upstream hides a pinned card's icon while an alert shows; Arc keeps it.
+   return true;
+diff --git a/chrome/browser/ui/views/tabs/common/stedding_tab_row_rules.h b/chrome/browser/ui/views/tabs/common/stedding_tab_row_rules.h
+index 62b34bb240392..ce1180750bbfb 100644
+--- a/chrome/browser/ui/views/tabs/common/stedding_tab_row_rules.h
++++ b/chrome/browser/ui/views/tabs/common/stedding_tab_row_rules.h
+@@ -34,10 +34,6 @@ struct TabRowState {
+ // collapsed rail. The active row carries no permanent glyph.
+ bool ShowsCloseGlyph(const TabRowState& row);
+ 
+-// R2: on an expanded row the close slot stays reserved whether or not the
+-// glyph is drawn, so the title never re-elides on hover.
+-bool ReservesCloseSlot(const TabRowState& row);
+-
+ // R18: an essentials card keeps its favicon whatever the alert; the alert
+ // becomes a corner badge instead of replacing the icon.
+ bool ShowsFavicon(const TabRowState& row);
+diff --git a/chrome/browser/ui/views/tabs/common/stedding_tab_row_rules_unittest.cc b/chrome/browser/ui/views/tabs/common/stedding_tab_row_rules_unittest.cc
+index 4f4f8fc9a13bf..fad21ce4c8e05 100644
+--- a/chrome/browser/ui/views/tabs/common/stedding_tab_row_rules_unittest.cc
++++ b/chrome/browser/ui/views/tabs/common/stedding_tab_row_rules_unittest.cc
+@@ -80,22 +80,6 @@ TEST(TabRowRulesTest, TheCloseGlyphShowsOnlyOnHover) {
+   }
+ }
+ 
+-// tabs R2: the slot is reserved on an expanded row whether the glyph is drawn
+-// or not, so the title's width does not change on hover; it is never reserved
+-// where the glyph can never appear.
+-TEST(TabRowRulesTest, TitleWidthUnchangedByHover) {
+-  TabRowState row;
+-  row.active = true;
+-  EXPECT_TRUE(ReservesCloseSlot(row));
+-  row.hovered_or_focused = true;
+-  EXPECT_TRUE(ReservesCloseSlot(row));
+-  row.pinned = true;
+-  EXPECT_FALSE(ReservesCloseSlot(row));
+-  row.pinned = false;
+-  row.narrow = true;
+-  EXPECT_FALSE(ReservesCloseSlot(row));
+-}
+-
+ // tabs R18, the rule alone: a playing or muted essentials card shows its
+ // alert as a corner badge; an ordinary row's alert is not a badge, and a card
+ // with no alert has none.
 diff --git a/chrome/browser/ui/views/tabs/common/tab_view.cc b/chrome/browser/ui/views/tabs/common/tab_view.cc
 index 54981a6e949bc..1cdfaf75f4c5d 100644
 --- a/chrome/browser/ui/views/tabs/common/tab_view.cc
@@ -900,7 +960,7 @@ index 534739673c0fc..4238dce070759 100644
    // Stedding (local tabs Lt1): the sidebar marks this row as local.
    bool local_ = false;
 diff --git a/chrome/browser/ui/views/tabs/common/tab_view_vertical_layout.cc b/chrome/browser/ui/views/tabs/common/tab_view_vertical_layout.cc
-index 2b3e999808551..161ac6821ba5e 100644
+index 2b3e999808551..9e79b3563bdfc 100644
 --- a/chrome/browser/ui/views/tabs/common/tab_view_vertical_layout.cc
 +++ b/chrome/browser/ui/views/tabs/common/tab_view_vertical_layout.cc
 @@ -34,6 +34,8 @@ constexpr int kHorizontalInset = 8;
@@ -922,7 +982,45 @@ index 2b3e999808551..161ac6821ba5e 100644
        TabChildConfig(TabView().icon_, IconDesignWidth(), kHorizontalInset,
                       /*align_leading=*/true,
                       /*expand=*/false),
-@@ -349,6 +354,12 @@ bool TabViewVerticalLayout::IsChildVisible(const views::View* child_view,
+@@ -79,9 +84,9 @@ views::ProposedLayout TabViewVerticalLayout::CalculateProposedLayout(
+   bounds_remaining.Inset(
+       gfx::Insets().set_left(TabView().SteddingNestIndent()));
+ 
+-  // Stedding (docs/features/tabs.md): Arc's rows. The close slot is reserved
+-  // whether or not the glyph is drawn (R2), and an essentials card's alert is
+-  // a corner badge beside the favicon rather than its one child (R18).
++  // Stedding (docs/features/tabs.md): Arc's rows. The close slot is the
++  // glyph's only while it shows (R2), and an essentials card's alert is a
++  // corner badge beside the favicon rather than its one child (R18).
+   const bool stedding_rows =
+       base::FeatureList::IsEnabled(stedding::kArcStyleWindow);
+ 
+@@ -124,20 +129,10 @@ views::ProposedLayout TabViewVerticalLayout::CalculateProposedLayout(
+       // Not counted: the favicon is still the card's centred child.
+       continue;
+     }
+-    if (stedding_rows && !is_centered && !is_child_visible &&
+-        child.view == TabView().close_button_ && can_render_child &&
+-        stedding::ReservesCloseSlot(row_state)) {
+-      // The glyph is hidden but its slot stays, so the title keeps its width
+-      // when the pointer arrives (R2).
+-      layouts.child_layouts.emplace_back(
+-          child.view.get(), false,
+-          gfx::Rect(bounds_remaining.right() - child.min_width,
+-                    bounds_remaining.y(), 0, 0));
+-      bounds_remaining.Inset(
+-          gfx::Insets().set_right(child.padding + child.min_width));
+-      placed_children += 1;
+-      continue;
+-    }
++    // R2 (the owner, 2026-11-15, from three rendered ways): while the glyph
++    // is hidden its slot is the title's, so a title at rest runs to the row's
++    // end; a row under the pointer makes room for the button, as in Arc. The
++    // slot had been kept on every row, and a title stopped well short.
+     if (is_child_visible && can_render_child) {
+       gfx::Rect child_bounds =
+           GetChildBounds(bounds_remaining, child, is_centered);
+@@ -349,6 +344,12 @@ bool TabViewVerticalLayout::IsChildVisible(const views::View* child_view,
      return TabView().active_ || hovered_or_focused;
    }
  

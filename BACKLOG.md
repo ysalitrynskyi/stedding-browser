@@ -33,6 +33,10 @@ M159 if it is stable by then (2026-12-08), is a release of its own after 0.6.0, 
 2.10.1 (S-358). The port saved on the `chromium-158` branch (2026-11-05) holds 130 of the series'
 189 patches and has never built through.
 
+Where it stands (2026-11-16): items 1 to 3 are built, reviewed three times and checked on Windows; the
+Mac's suites have not run. Fix S-498 and S-499 first (both in today's work, on main, in no release),
+then the gate below. Item 4 waits for the owner's choice of player option.
+
 In this order:
 
 1. **Pins and essentials in every window (S-94's second slice, GitHub issue 111):** ADR 0035,

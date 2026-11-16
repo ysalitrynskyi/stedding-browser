@@ -1,6 +1,6 @@
 # 0037 — Settings and the extension list travel with sync
 
-Status: Accepted (the owner, 2026-11-15: "Settings and extensions"; BACKLOG S-479, GitHub issue 109). Amends ADR 0029 and ADR 0032, whose list of what never travels (`docs/features/sidebar-file.md` Sf36) loses settings, routes and the extension list once this is built. Not built.
+Status: Accepted (the owner, 2026-11-15: "Settings and extensions"; BACKLOG S-479, GitHub issue 109). Amends ADR 0029 and ADR 0032, whose list of what never travels (`docs/features/sidebar-file.md` Sf36) loses settings, routes and the extension list once this is built. Built 2026-11-16 (sidebar-file Sf58–Sf69), checked on Windows.
 Date: 2026-11-15
 
 ## Context
@@ -31,6 +31,7 @@ The second: Stedding's own settings and the extension list, each a part of sync 
 
 - What travels: the list of extensions installed from the Chrome Web Store, each by its id and name. Unpacked extensions, ones installed by policy or by another program, Chromium's own components and extensions from other stores stay.
 - What another computer does: it offers the extensions it lacks, in Settings and once in a notice. Each is installed only through Chromium's own Web Store confirmation (`WebstoreInstallWithPrompt`). An extension declined there is not offered again from that computer.
+- An extension the person uninstalls on a computer is not offered again on that computer, whether the Extensions box was on or off.
 - What never happens: an extension removed or turned off on one computer is never removed or turned off on another. Nothing about an extension's data, settings, logins or state travels.
 
 **The boxes.** Settings and Extensions are boxes in sync's settings and on the join sheet, each on for a new join. A computer that already syncs gets both parts only when it turns them on, so no setting changes under someone after an update.
@@ -39,7 +40,7 @@ The second: Stedding's own settings and the extension list, each a part of sync 
 
 - The per-computer file gains a settings part and an extension part. A computer on an older version ignores them, and its sidebar still syncs.
 - Sf36 is amended when this ships, and new spec rows in `docs/features/sidebar-file.md` cover each rule above.
-- `docs/PRIVACY.md` gains a line: the list of extension ids is written to the person's own sync place, and the only network requests it causes are the Web Store downloads the person confirms.
+- `docs/PRIVACY.md` gains a line: the list of extension ids is written to the person's own sync place, and the only network requests it causes are the Chrome Web Store's, after the person clicks Install…: the extension's details and icon for Chromium's confirmation, then the download the person confirms.
 - WebDAV and S3 storage carry the same file, so nothing changes in ADR 0032's rules.
 - Tests to come with it:
   - every Stedding setting is in the synced list or the staying list;

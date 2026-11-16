@@ -2,6 +2,49 @@
 
 What was built, newest first. Nothing here is needed to do a task: `AGENTS.md` carries what is true now, `BACKLOG.md` the order of work, `PLAN.md` the owner's decisions. This file was the "State of the project" section of `AGENTS.md` until 2026-09-30. This log starts at 2026-10-15. Closed work from before that is the table in [docs/history/archive.md](history/archive.md).
 
+## 2026-11-16 -- settings and extensions in sync, Live Folders, and three reviews
+
+The owner gave the day to finishing 0.6.0's items, with the Mac in use: every build and test ran
+on the Windows PC. Each item was reviewed by readers who had not written it, each claim checked by a
+second reader trying to refute it, and every fault that survived was fixed with a test; then the
+fixes were reviewed the same way, twice; what the last review found is S-495.
+
+- S-479 (ADR 0037; patch 0191; sidebar-file Sf58-Sf69, settings T73, T74; GitHub issue 109):
+  Stedding's own settings and the sites routed to Spaces travel with sync, each keeping its later
+  edit; settings that belong to one computer stay (the table in `sidebar_sync_parts.cc`, and a test
+  that fails for a preference in neither list). The list of Chrome Web Store extensions travels by
+  id and name; another computer offers the ones it lacks, in Settings and once in a bar, each through
+  Chromium's own confirmation; a decline or an uninstall here is not offered again, and nothing is
+  ever removed elsewhere. Each part is a box, on for a new join and off for a computer that already
+  syncs until it is ticked. An older version ignores both parts. The review found 14 faults, among
+  them a route stamped before a join's pair lost on both computers, a browser-wide edit made while
+  the profile was closed reverted, and two profiles' syncs trading a value; all are fixed.
+- S-478 (ADR 0036, option B; patch 0192; `docs/features/live-folders.md` Lf1-Lf13, settings
+  T70-T72; GitHub discussion 106): a pinned folder of the person's open pull requests, from GitHub's
+  search API with a read-only token sealed by the system's key store, refreshed when made, every 10
+  minutes, when a window comes to the front and on Refresh, never more than once a minute. Its rows
+  are pin records, so every window shows them, and sync never carries them. The review found 17
+  faults, among them a pin of the person's own taken for a live row, the last row's removal turning
+  the folder off, and no way to paste a new token; all are fixed.
+- S-94 (patch 0190): the review of pins in every window found 15 faults, among them a window a tab
+  drag tears off taking every pin, and a window with a publish pending writing its old copy back over
+  another window's removal or rename. Each is fixed with a test that failed on a build without its
+  fix; a window now sends only what changed in it since it last followed the store.
+- S-493 (patches 0101, 0106, 0179; Sf10, Sf35): found while building S-479. Since 0.3.0 beta 16,
+  combining two Spaces at a join made a second Space here whenever the other computer's id was the
+  smaller, and the other computer's pins, renames and deletions went to it; importing a backup taken
+  after such a pair did the same. Fixed; each test failed first for those reasons. A second Space
+  already made on an earlier version stays (S-494).
+- S-353: its three sync faults were found fixed since 0.4.0 beta 2; their four tests passed again on
+  the 0.6.0 series and failed with the fixes taken out. The check on a real build is still owed.
+- S-492: the command bar tests' waits look the bar up again; folded into patch 0115.
+- S-95's Mp1: three options for the player inside the window, rendered from the Windows release
+  build in light and dark (the card grows, a compact card, a video over the page's corner), wait for
+  the owner's choice.
+
+Checked on Windows (the release build's whole suites, the DCHECK build and ASan): the release build's whole suites (1,581 unit and 1,027 browser tests, 229 of them one at a time), and after the last fixes its changed suites again (146 unit, 250 browser and 40 one-at-a-time tests), with the same suites on the DCHECK build; ASan passed the changed suites (144 unit, 244 browser, 40 one at a time) on the series before the last review's fixes.
+Not checked: anything on the Mac, and a pass on a real build with the pointer and keyboard.
+
 ## 2026-11-16 -- pins and essentials in every window; a title runs to the row's end
 
 The owner planned 0.6.0 on 2026-11-15, one decision at a time (`BACKLOG.md`, "The next

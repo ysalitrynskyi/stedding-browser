@@ -1,0 +1,4885 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Mon, 16 Nov 2026 10:34:01 -0500
+Subject: feat: Live Folders for GitHub pull requests (ADR 0036)
+
+A pinned folder of the person's open GitHub pull requests: the ones they
+opened, are assigned, are asked to review or are mentioned in. It is off
+until made, from the sidebar's New Live Folder menu (which opens Settings)
+or from Settings, with a fine-grained read-only token the person makes on
+github.com. The token is sealed with the system's key store, sent to
+api.github.com alone through the browser's own network context with no
+cookies, and can be replaced in Settings while the folder is on.
+
+The folder's rows are records in the profile's pin store, so every window
+shows the folder, each row asleep until chosen and named for its
+repository and title. It refreshes when made, every 10 minutes while a
+window is open and when a window comes to the front, never more than once
+a minute. A merged or closed pull request leaves at the next refresh; one
+the person opened stays as a normal tab. A row the person removes becomes
+their own tab and stays out of the folder while its pull request is open;
+with no row left the folder shows one that says so. A failed refresh keeps
+the last list and marks the folder's header, with the reason in its
+tooltip. Deleting the folder, unpinning it or closing its tabs turns it
+off and forgets the token at once. Sync leaves the folder, everything in
+it and its two preferences on this computer.
+
+Why: GitHub discussion 106; the owner chose option B of ADR 0036 (2026-11-15) for 0.6.0 (PLAN decision 23). Spec: docs/features/live-folders.md Lf1-Lf13, docs/features/settings.md T70-T72.
+Removable when: never; Stedding's own feature.
+---
+ chrome/browser/profiles/BUILD.gn              |    1 +
+ ...hrome_browser_main_extra_parts_profiles.cc |    4 +
+ chrome/browser/resources/settings/BUILD.gn    |    3 +
+ .../stedding_live_folders_card.css            |   59 +
+ .../stedding_live_folders_card.html.ts        |   66 +
+ .../stedding_live_folders_card.ts             |  142 +++
+ .../stedding_page/stedding_page.html.ts       |    2 +
+ .../settings/stedding_page/stedding_page.ts   |    1 +
+ .../browser/ui/browser_command_controller.cc  |   11 +
+ chrome/browser/ui/live_folders/BUILD.gn       |   75 ++
+ .../browser/ui/live_folders/github_pulls.cc   |  238 ++++
+ chrome/browser/ui/live_folders/github_pulls.h |  119 ++
+ .../ui/live_folders/live_folder_note.cc       |   92 ++
+ .../ui/live_folders/live_folder_note.h        |   76 ++
+ .../ui/live_folders/live_folder_scheduler.cc  |   67 +
+ .../ui/live_folders/live_folder_scheduler.h   |   61 +
+ .../ui/live_folders/live_folder_service.cc    | 1094 +++++++++++++++++
+ .../ui/live_folders/live_folder_service.h     |  246 ++++
+ .../live_folder_service_factory.cc            |   54 +
+ .../live_folder_service_factory.h             |   38 +
+ .../ui/live_folders/live_folders_unittest.cc  |  345 ++++++
+ .../ui/live_folders/recorded_answers.h        |  204 +++
+ chrome/browser/ui/spaces/BUILD.gn             |    2 +
+ .../browser/ui/spaces/sidebar_sync_parts.cc   |    7 +
+ .../browser/ui/spaces/sidebar_sync_tracker.cc |   17 +
+ .../ui/stedding/stedding_command_ids.h        |    5 +
+ chrome/browser/ui/stedding/stedding_prefs.cc  |    3 +
+ chrome/browser/ui/stedding/stedding_prefs.h   |    8 +
+ .../views/frame/system_menu_model_builder.cc  |    8 +
+ .../views/frame/system_menu_model_builder.h   |    2 +
+ chrome/browser/ui/views/tabs/common/BUILD.gn  |    2 +
+ .../ui/views/tabs/common/folder_view.cc       |   65 +
+ .../ui/views/tabs/common/folder_view.h        |    5 +
+ chrome/browser/ui/webui/settings/BUILD.gn     |    3 +
+ .../browser/ui/webui/settings/settings_ui.cc  |    4 +
+ .../settings/stedding_live_folders_handler.cc |  119 ++
+ .../settings/stedding_live_folders_handler.h  |   63 +
+ chrome/test/BUILD.gn                          |    1 +
+ chrome/test/stedding/BUILD.gn                 |    8 +
+ .../test/stedding/live_folders_browsertest.cc | 1014 +++++++++++++++
+ 40 files changed, 4334 insertions(+)
+ create mode 100644 chrome/browser/resources/settings/stedding_page/stedding_live_folders_card.css
+ create mode 100644 chrome/browser/resources/settings/stedding_page/stedding_live_folders_card.html.ts
+ create mode 100644 chrome/browser/resources/settings/stedding_page/stedding_live_folders_card.ts
+ create mode 100644 chrome/browser/ui/live_folders/BUILD.gn
+ create mode 100644 chrome/browser/ui/live_folders/github_pulls.cc
+ create mode 100644 chrome/browser/ui/live_folders/github_pulls.h
+ create mode 100644 chrome/browser/ui/live_folders/live_folder_note.cc
+ create mode 100644 chrome/browser/ui/live_folders/live_folder_note.h
+ create mode 100644 chrome/browser/ui/live_folders/live_folder_scheduler.cc
+ create mode 100644 chrome/browser/ui/live_folders/live_folder_scheduler.h
+ create mode 100644 chrome/browser/ui/live_folders/live_folder_service.cc
+ create mode 100644 chrome/browser/ui/live_folders/live_folder_service.h
+ create mode 100644 chrome/browser/ui/live_folders/live_folder_service_factory.cc
+ create mode 100644 chrome/browser/ui/live_folders/live_folder_service_factory.h
+ create mode 100644 chrome/browser/ui/live_folders/live_folders_unittest.cc
+ create mode 100644 chrome/browser/ui/live_folders/recorded_answers.h
+ create mode 100644 chrome/browser/ui/webui/settings/stedding_live_folders_handler.cc
+ create mode 100644 chrome/browser/ui/webui/settings/stedding_live_folders_handler.h
+ create mode 100644 chrome/test/stedding/live_folders_browsertest.cc
+
+diff --git a/chrome/browser/profiles/BUILD.gn b/chrome/browser/profiles/BUILD.gn
+index 7528d08291200..ac82d94a4a832 100644
+--- a/chrome/browser/profiles/BUILD.gn
++++ b/chrome/browser/profiles/BUILD.gn
+@@ -723,6 +723,7 @@ source_set("profiles_extra_parts_impl") {
+   deps = [
+     # sidebar-file Sf14: the folder sync's service.
+     "//chrome/browser/ui/spaces:sidebar_sync",
++    "//chrome/browser/ui/live_folders",
+     ":misc",
+     ":profile_manager",
+     ":profile_util",
+diff --git a/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc b/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
+index bc7380519b2cd..6cd2ffbbc4db8 100644
+--- a/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
++++ b/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
+@@ -274,6 +274,7 @@
+ #include "chrome/browser/ui/safety_hub/revoked_permissions_os_notification_display_manager_factory.h"
+ #include "chrome/browser/ui/safety_hub/revoked_permissions_service_factory.h"
+ #include "chrome/browser/ui/signin/dice_migration_service_factory.h"
++#include "chrome/browser/ui/live_folders/live_folder_service_factory.h"
+ #include "chrome/browser/ui/spaces/pin_store_factory.h"
+ #include "chrome/browser/ui/spaces/sidebar_sync_service_factory.h"
+ #include "chrome/browser/ui/spaces/space_registry_factory.h"
+@@ -1529,6 +1530,9 @@ void ChromeBrowserMainExtraPartsProfiles::
+   // sidebar-file Sf14, Sf39: made with the profile; with sync off it only
+   // watches its preference.
+   spaces::SidebarSyncServiceFactory::GetInstance();
++  // live-folders Lf1 (ADR 0036): made with the profile; with no live
++  // folder it only reads its setup.
++  live_folders::LiveFolderServiceFactory::GetInstance();
+ #if BUILDFLAG(IS_ANDROID)
+   tabs::TabStateStorageServiceFactory::GetInstance();
+ #endif
+diff --git a/chrome/browser/resources/settings/BUILD.gn b/chrome/browser/resources/settings/BUILD.gn
+index 3d96028260fe6..718f3458878ef 100644
+--- a/chrome/browser/resources/settings/BUILD.gn
++++ b/chrome/browser/resources/settings/BUILD.gn
+@@ -282,6 +282,8 @@ build_webui("build") {
+     "downloads_page/downloads_browser_proxy.ts",
+     "downloads_page/downloads_page.html.ts",
+     "downloads_page/downloads_page.ts",
++    "stedding_page/stedding_live_folders_card.html.ts",
++    "stedding_page/stedding_live_folders_card.ts",
+     "stedding_page/stedding_page.html.ts",
+     "stedding_page/stedding_page.ts",
+     "stedding_page/stedding_routes_card.html.ts",
+@@ -637,6 +639,7 @@ build_webui("build") {
+     "glic_page/glic_login_permissions_page.css",
+     "glic_page/glic_page.css",
+     "glic_page/glic_subpage.css",
++    "stedding_page/stedding_live_folders_card.css",
+     "stedding_page/stedding_page.css",
+     "stedding_page/stedding_routes_card.css",
+     "stedding_page/stedding_sync_section.css",
+diff --git a/chrome/browser/resources/settings/stedding_page/stedding_live_folders_card.css b/chrome/browser/resources/settings/stedding_page/stedding_live_folders_card.css
+new file mode 100644
+index 0000000000000..e27ceae0daaa2
+--- /dev/null
++++ b/chrome/browser/resources/settings/stedding_page/stedding_live_folders_card.css
+@@ -0,0 +1,59 @@
++/* Copyright 2026 The Stedding Authors
++ * Use of this source code is governed by a BSD-style license that can be
++ * found in the LICENSE file. */
++
++/* #css_wrapper_metadata_start
++ * #type=style-lit
++ * #import=chrome://resources/cr_elements/cr_shared_style_lit.css.js
++ * #import=../settings_shared_lit.css.js
++ * #include=cr-shared-style-lit settings-shared-lit
++ * #css_wrapper_metadata_end */
++
++:host {
++  display: block;
++}
++
++.settings-box {
++  padding-bottom: 12px;
++  padding-top: 12px;
++}
++
++.settings-box > .flex {
++  padding-inline-end: 24px;
++}
++
++.settings-box .secondary {
++  padding-top: 2px;
++}
++
++/* live-folders Lf1: the token's field and the button that makes the folder,
++ * on one line, wrapping in a narrow window. */
++.settings-box.stacked {
++  align-items: stretch;
++  flex-direction: column;
++  gap: 8px;
++}
++
++#liveFolderMakeRow {
++  align-items: flex-start;
++  display: flex;
++  flex-wrap: wrap;
++  gap: 8px;
++}
++
++#liveFolderToken {
++  direction: ltr;
++  flex: 1 1 240px;
++  min-width: 160px;
++}
++
++#liveFolderError,
++#liveFolderFailure {
++  color: var(--cr-input-error-color, var(--google-red-600));
++}
++
++.button-row {
++  display: flex;
++  flex-wrap: wrap;
++  gap: 8px;
++}
+diff --git a/chrome/browser/resources/settings/stedding_page/stedding_live_folders_card.html.ts b/chrome/browser/resources/settings/stedding_page/stedding_live_folders_card.html.ts
+new file mode 100644
+index 0000000000000..2e5b223904dd9
+--- /dev/null
++++ b/chrome/browser/resources/settings/stedding_page/stedding_live_folders_card.html.ts
+@@ -0,0 +1,66 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++import {html} from 'chrome://resources/lit/v3_0/lit.rollup.js';
++
++import type {SettingsSteddingLiveFoldersCardElement} from './stedding_live_folders_card.js';
++
++export function getHtml(this: SettingsSteddingLiveFoldersCardElement) {
++  return html`<!--_html_template_start_-->
++<div class="settings-box hr stacked" id="liveFolder">
++  <div class="flex">
++    <div class="label">Live folder: GitHub pull requests</div>
++    <div class="secondary" id="liveFolderLine">
++      A pinned folder of your open pull requests on GitHub: the ones you
++      opened, are assigned, are asked to review or are mentioned in. Stedding
++      asks api.github.com for the list every 10 minutes, and when a window
++      comes to the front, with a read-only token you make. Merged and closed
++      ones leave the folder.
++    </div>
++  </div>
++  ${this.state_.on ? html`
++    <div class="secondary" id="liveFolderState">${this.stateLine_()}</div>
++    ${this.state_.error ? html`
++      <div class="secondary" id="liveFolderFailure">${this.state_.error}</div>` :
++      ''}
++    <div class="button-row">
++      <cr-button id="liveFolderRefresh" @click="${this.onRefreshClick_}">
++        Refresh Now
++      </cr-button>
++      <cr-button id="liveFolderDelete" @click="${this.onDeleteClick_}">
++        Delete Live Folder
++      </cr-button>
++    </div>
++    <div class="secondary">
++      When GitHub no longer takes the token, make a new one and paste it here.
++      The folder keeps its name, icon and rows.
++      <a id="liveFolderTokenPage" href="${this.state_.tokenPage}"
++          target="_blank">Make a token on GitHub</a>
++    </div>` : html`
++    <div class="secondary">
++      Make a fine-grained token on GitHub with read-only access to pull
++      requests, then paste it here.
++      <a id="liveFolderTokenPage" href="${this.state_.tokenPage}"
++          target="_blank">Make a token on GitHub</a>
++    </div>`}
++  <div id="liveFolderMakeRow">
++    <cr-input id="liveFolderToken" type="password" spellcheck="false"
++        aria-label="GitHub token" placeholder="github_pat_…"
++        .value="${this.token_}" ?disabled="${this.state_.making}"
++        @input="${this.onTokenInput_}"
++        @keydown="${this.onTokenKeydown_}">
++    </cr-input>
++    <cr-button id="${this.state_.on ? 'liveFolderReplace' : 'liveFolderMake'}"
++        class="action-button"
++        ?disabled="${this.state_.making || !this.token_.trim()}"
++        @click="${this.onMakeClick_}">
++      ${this.state_.on ? 'Replace Token' : 'Make Live Folder'}
++    </cr-button>
++  </div>
++  ${this.makeError_ ? html`
++    <div class="secondary" id="liveFolderError">${this.makeError_}</div>` :
++    ''}
++</div>
++<!--_html_template_end_-->`;
++}
+diff --git a/chrome/browser/resources/settings/stedding_page/stedding_live_folders_card.ts b/chrome/browser/resources/settings/stedding_page/stedding_live_folders_card.ts
+new file mode 100644
+index 0000000000000..1ee044d562fe8
+--- /dev/null
++++ b/chrome/browser/resources/settings/stedding_page/stedding_live_folders_card.ts
+@@ -0,0 +1,142 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++/**
++ * @fileoverview
++ * 'settings-stedding-live-folders-card' makes, refreshes and deletes the
++ * profile's live folder of GitHub pull requests, and replaces its token
++ * (docs/features/live-folders.md Lf1, Lf2, Lf11; settings T70-T72). A token
++ * is sent once, to make the folder or replace the old one, and the page is
++ * never given it back.
++ */
++import 'chrome://resources/cr_elements/cr_button/cr_button.js';
++import 'chrome://resources/cr_elements/cr_input/cr_input.js';
++
++import type {CrInputElement} from 'chrome://resources/cr_elements/cr_input/cr_input.js';
++import {WebUiListenerMixinLit} from 'chrome://resources/cr_elements/web_ui_listener_mixin_lit.js';
++import {sendWithPromise} from 'chrome://resources/js/cr.js';
++import {CrLitElement} from 'chrome://resources/lit/v3_0/lit.rollup.js';
++
++import {getCss} from './stedding_live_folders_card.css.js';
++import {getHtml} from './stedding_live_folders_card.html.js';
++
++/** What the handler sends: never the token. */
++export interface SteddingLiveFolderState {
++  available: boolean;
++  on: boolean;
++  making: boolean;
++  tokenPage: string;
++  space?: string;
++  rows?: number;
++  refreshed?: string;
++  error?: string;
++}
++
++interface MadeAnswer {
++  ok: boolean;
++  error: string;
++}
++
++const SettingsSteddingLiveFoldersCardElementBase =
++    WebUiListenerMixinLit(CrLitElement);
++
++export class SettingsSteddingLiveFoldersCardElement extends
++    SettingsSteddingLiveFoldersCardElementBase {
++  static get is() {
++    return 'settings-stedding-live-folders-card';
++  }
++
++  static override get styles() {
++    return getCss();
++  }
++
++  override render() {
++    return getHtml.bind(this)();
++  }
++
++  static override get properties() {
++    return {
++      state_: {type: Object},
++      token_: {type: String},
++      makeError_: {type: String},
++    };
++  }
++
++  protected accessor state_: SteddingLiveFolderState = {
++    available: false,
++    on: false,
++    making: false,
++    tokenPage: '',
++  };
++  protected accessor token_: string = '';
++  protected accessor makeError_: string = '';
++
++  override connectedCallback() {
++    super.connectedCallback();
++    this.addWebUiListener(
++        'stedding-live-folder-changed',
++        (state: SteddingLiveFolderState) => this.state_ = state);
++    sendWithPromise('steddingGetLiveFolder').then((state: unknown) => {
++      this.state_ = state as SteddingLiveFolderState;
++    });
++  }
++
++  // live-folders Lf11: "Pull Requests in Work: 3 open, refreshed at 14:05."
++  protected stateLine_(): string {
++    const count = this.state_.rows ?? 0;
++    const open = count === 1 ? '1 open pull request' :
++                               `${count} open pull requests`;
++    const where = this.state_.space ? ` in ${this.state_.space}` : '';
++    const when =
++        this.state_.refreshed ? `, refreshed at ${this.state_.refreshed}` : '';
++    return `On${where}: ${open}${when}.`;
++  }
++
++  protected onTokenInput_(e: Event) {
++    this.token_ = (e.target as CrInputElement).value;
++    this.makeError_ = '';
++  }
++
++  protected onTokenKeydown_(e: KeyboardEvent) {
++    if (e.key === 'Enter') {
++      this.onMakeClick_();
++    }
++  }
++
++  protected onMakeClick_() {
++    const token = this.token_.trim();
++    if (!token || this.state_.making) {
++      return;
++    }
++    this.makeError_ = '';
++    sendWithPromise('steddingMakeLiveFolder', token).then((answer: unknown) => {
++      const made = answer as MadeAnswer;
++      if (made.ok) {
++        // The field forgets it as the folder is made.
++        this.token_ = '';
++      } else {
++        this.makeError_ = made.error;
++      }
++    });
++  }
++
++  protected onRefreshClick_() {
++    chrome.send('steddingRefreshLiveFolder');
++  }
++
++  protected onDeleteClick_() {
++    chrome.send('steddingDeleteLiveFolder');
++  }
++}
++
++declare global {
++  interface HTMLElementTagNameMap {
++    'settings-stedding-live-folders-card':
++        SettingsSteddingLiveFoldersCardElement;
++  }
++}
++
++customElements.define(
++    SettingsSteddingLiveFoldersCardElement.is,
++    SettingsSteddingLiveFoldersCardElement);
+diff --git a/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts b/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
+index b0c0e7c7f9425..4f340e70ed1f2 100644
+--- a/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
++++ b/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
+@@ -658,6 +658,8 @@ export function getHtml(this: SettingsSteddingPageElement) {
+     </div>
+   </div>
+   <settings-stedding-sync-section></settings-stedding-sync-section>
++  <settings-stedding-live-folders-card id="livefoldersSection">
++  </settings-stedding-live-folders-card>
+   <div class="settings-box hr" id="otherBrowserImport">
+     <div class="flex">
+       <div class="label">$i18n{steddingImportOtherLabel}</div>
+diff --git a/chrome/browser/resources/settings/stedding_page/stedding_page.ts b/chrome/browser/resources/settings/stedding_page/stedding_page.ts
+index 477543ca53a5d..cb25df9d1ed76 100644
+--- a/chrome/browser/resources/settings/stedding_page/stedding_page.ts
++++ b/chrome/browser/resources/settings/stedding_page/stedding_page.ts
+@@ -19,6 +19,7 @@ import '../controls/settings_slider.js';
+ import '../controls/settings_toggle_button.js';
+ import '../settings_page/settings_section.js';
+ // routing D12-D14: the one list of routes.
++import './stedding_live_folders_card.js';
+ import './stedding_routes_card.js';
+ // sidebar-file Sf7-Sf41: the "Sync through a folder" box.
+ import './stedding_sync_section.js';
+diff --git a/chrome/browser/ui/browser_command_controller.cc b/chrome/browser/ui/browser_command_controller.cc
+index 70f610de3e52a..0b294d983867f 100644
+--- a/chrome/browser/ui/browser_command_controller.cc
++++ b/chrome/browser/ui/browser_command_controller.cc
+@@ -1108,6 +1108,12 @@ void BrowserCommandController::HandleCommandWithDisposition(
+     // Stedding sidebar Y34: the sidebar to the window's other edge, in every
+     // window of the profile. Written to the original profile, which private
+     // windows read the side from, so a choice made in one outlives it.
++    // live-folders Lf1: New Live Folder > GitHub Pull Requests opens
++    // Settings on the live folder's block.
++    case IDC_STEDDING_NEW_LIVE_FOLDER:
++    case IDC_STEDDING_NEW_LIVE_FOLDER_GITHUB:
++      ShowSettingsSubPage(browser_, "stedding?card=livefolders");
++      break;
+     case IDC_STEDDING_SIDEBAR_SIDE: {
+       PrefService* const prefs = profile()->GetOriginalProfile()->GetPrefs();
+       prefs->SetBoolean(stedding::prefs::kSidebarOnRight,
+@@ -2335,6 +2341,11 @@ void BrowserCommandController::InitCommandState() {
+   command_updater_->UpdateCommandEnabled(
+       IDC_STEDDING_SIDEBAR_SIDE,
+       normal_window && base::FeatureList::IsEnabled(stedding::kArcStyleWindow));
++  for (const int id :
++       {IDC_STEDDING_NEW_LIVE_FOLDER, IDC_STEDDING_NEW_LIVE_FOLDER_GITHUB}) {
++    command_updater_->UpdateCommandEnabled(
++        id, normal_window && !profile()->IsOffTheRecord());
++  }
+   command_updater_->UpdateCommandEnabled(
+       IDC_STEDDING_TOGGLE_DARK_PAGES_FOR_SITE,
+       base::FeatureList::IsEnabled(stedding::kArcStyleWindow) &&
+diff --git a/chrome/browser/ui/live_folders/BUILD.gn b/chrome/browser/ui/live_folders/BUILD.gn
+new file mode 100644
+index 0000000000000..fef88bc47a349
+--- /dev/null
++++ b/chrome/browser/ui/live_folders/BUILD.gn
+@@ -0,0 +1,75 @@
++# Copyright 2026 The Stedding Authors
++# Use of this source code is governed by a BSD-style license that can be
++# found in the LICENSE file.
++
++# docs/features/live-folders.md (ADR 0036): a sidebar folder of the person's
++# open GitHub pull requests.
++
++# What the sidebar's folder header and sync's reader ask of a live folder,
++# with nothing of the service: the views and Spaces depend on this alone.
++source_set("note") {
++  public = [ "live_folder_note.h" ]
++  sources = [ "live_folder_note.cc" ]
++  public_deps = [ "//base" ]
++}
++
++source_set("live_folders") {
++  public = [
++    "github_pulls.h",
++    "live_folder_scheduler.h",
++    "live_folder_service.h",
++    "live_folder_service_factory.h",
++  ]
++  sources = [
++    "github_pulls.cc",
++    "live_folder_scheduler.cc",
++    "live_folder_service.cc",
++    "live_folder_service_factory.cc",
++  ]
++  public_deps = [
++    ":note",
++    "//base",
++    "//chrome/browser/profiles:profile",
++    "//chrome/browser/ui/browser_window",
++    "//chrome/browser/ui/spaces",
++    "//chrome/browser/ui/stedding:prefs",
++    "//components/keyed_service/core",
++    "//url",
++  ]
++  deps = [
++    "//base:i18n",
++    "//chrome/browser/ui/stedding:tab_parents",
++    "//chrome/browser/ui/tabs:tab_strip",
++    "//components/tabs:public",
++    "//content/public/browser",
++    "//chrome/common",
++    "//components/os_crypt/async/browser",
++    "//components/os_crypt/async/common",
++    "//components/pref_registry",
++    "//components/prefs",
++    "//net",
++    "//services/network/public/cpp",
++    "//services/network/public/mojom",
++  ]
++}
++
++# Lf10: GitHub's answers, recorded, for the unit and browser tests.
++source_set("test_support") {
++  testonly = true
++  public = [ "recorded_answers.h" ]
++}
++
++source_set("unit_tests") {
++  testonly = true
++  sources = [ "live_folders_unittest.cc" ]
++  deps = [
++    ":live_folders",
++    ":test_support",
++    ":note",
++    "//base",
++    "//base/test:test_support",
++    "//net",
++    "//testing/gtest",
++    "//url",
++  ]
++}
+diff --git a/chrome/browser/ui/live_folders/github_pulls.cc b/chrome/browser/ui/live_folders/github_pulls.cc
+new file mode 100644
+index 0000000000000..dc063e28e3d5b
+--- /dev/null
++++ b/chrome/browser/ui/live_folders/github_pulls.cc
+@@ -0,0 +1,238 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/live_folders/github_pulls.h"
++
++#include <algorithm>
++#include <set>
++#include <utility>
++
++#include "base/json/json_reader.h"
++#include "base/strings/escape.h"
++#include "base/strings/strcat.h"
++#include "base/strings/string_number_conversions.h"
++#include "base/strings/string_split.h"
++#include "base/strings/string_util.h"
++#include "base/strings/utf_string_conversions.h"
++#include "base/values.h"
++#include "net/base/net_errors.h"
++#include "net/http/http_request_headers.h"
++#include "net/http/http_response_headers.h"
++#include "url/origin.h"
++#include "url/url_constants.h"
++
++namespace live_folders {
++
++namespace {
++
++// Lf3: each way a pull request is the person's.
++constexpr const char* kWho[] = {
++    "author:@me",
++    "assignee:@me",
++    "review-requested:@me",
++    "mentions:@me",
++};
++
++// "owner/repo" from https://github.com/<owner>/<repo>/pull/<n>, or empty when
++// the address is not that.
++std::string RepoOf(const GURL& url) {
++  if (!url.is_valid() || !url.SchemeIs(url::kHttpsScheme) ||
++      url.host() != "github.com" || url.has_port() || url.has_username() ||
++      url.has_password()) {
++    return std::string();
++  }
++  const std::vector<std::string> parts =
++      base::SplitString(url.path(), "/", base::TRIM_WHITESPACE,
++                        base::SPLIT_WANT_NONEMPTY);
++  unsigned number = 0;
++  if (parts.size() != 4 || parts[2] != "pull" ||
++      !base::StringToUint(parts[3], &number) || number == 0) {
++    return std::string();
++  }
++  return base::StrCat({parts[0], "/", parts[1]});
++}
++
++}  // namespace
++
++std::vector<GURL> SearchUrls() {
++  std::vector<GURL> urls;
++  for (const char* who : kWho) {
++    const std::string query =
++        base::StrCat({"is:pr is:open archived:false ", who});
++    urls.emplace_back(base::StrCat(
++        {kApiOrigin, "/search/issues?q=",
++         base::EscapeQueryParamValue(query, /*use_plus=*/true),
++         "&sort=created&order=desc&per_page=",
++         base::NumberToString(kMaxRows)}));
++  }
++  return urls;
++}
++
++void SetRequestHeaders(const std::string& token,
++                       net::HttpRequestHeaders* headers) {
++  headers->SetHeader(net::HttpRequestHeaders::kAccept,
++                     "application/vnd.github+json");
++  headers->SetHeader("X-GitHub-Api-Version", kApiVersion);
++  headers->SetHeader(net::HttpRequestHeaders::kAuthorization,
++                     base::StrCat({"Bearer ", token}));
++}
++
++bool LooksLikeAToken(std::string_view token) {
++  return !token.empty() && token.size() <= 255 &&
++         std::ranges::all_of(token, [](char c) {
++           return base::IsAsciiAlphaNumeric(c) || c == '_';
++         });
++}
++
++bool IsNodeId(std::string_view node_id) {
++  // GitHub's ids: "PR_kwDO..." now, and base64 for objects made before the
++  // change ("MDExOlB1bGxSZXF1ZXN0MQ=="), which can end in '='.
++  return !node_id.empty() && node_id.size() <= 128 &&
++         std::ranges::all_of(node_id, [](char c) {
++           return base::IsAsciiAlphaNumeric(c) || c == '_' || c == '-' ||
++                  c == '=' || c == '+' || c == '/';
++         });
++}
++
++bool DropsAuthorizationOnRedirectTo(const GURL& to) {
++  return !url::Origin::Create(to).IsSameOriginWith(GURL(kApiOrigin));
++}
++
++std::optional<std::vector<PullRequest>> ParseSearchAnswer(
++    std::string_view json,
++    bool* complete) {
++  if (complete) {
++    *complete = false;
++  }
++  std::optional<base::DictValue> answer =
++      base::JSONReader::ReadDict(json, base::JSON_PARSE_RFC);
++  if (!answer) {
++    return std::nullopt;
++  }
++  const base::ListValue* const items = answer->FindList("items");
++  if (!items) {
++    return std::nullopt;
++  }
++  // Lf5: the answer holds everything that matched only when GitHub says so
++  // and its count fits in the page.
++  if (complete) {
++    const std::optional<double> total = answer->FindDouble("total_count");
++    *complete = !answer->FindBool("incomplete_results").value_or(true) &&
++                total && *total <= static_cast<double>(items->size());
++  }
++  std::vector<PullRequest> pulls;
++  for (const base::Value& value : *items) {
++    const base::DictValue* const item = value.GetIfDict();
++    if (!item || !item->FindDict("pull_request")) {
++      continue;
++    }
++    const std::string* const node_id = item->FindString("node_id");
++    const std::string* const title = item->FindString("title");
++    const std::string* const html_url = item->FindString("html_url");
++    const std::string* const created_at = item->FindString("created_at");
++    const std::string* const state = item->FindString("state");
++    if (!node_id || node_id->empty() || !title || !html_url ||
++        (state && *state != "open")) {
++      continue;
++    }
++    // A node id becomes part of a tab token: GitHub's alphabet alone.
++    if (!IsNodeId(*node_id)) {
++      continue;
++    }
++    PullRequest pull;
++    pull.url = GURL(*html_url);
++    pull.repo = RepoOf(pull.url);
++    if (pull.repo.empty()) {
++      continue;
++    }
++    pull.node_id = *node_id;
++    pull.title = *title;
++    pull.created_at = created_at ? *created_at : std::string();
++    pulls.push_back(std::move(pull));
++  }
++  return pulls;
++}
++
++std::vector<PullRequest> MergeAnswers(
++    const std::vector<std::vector<PullRequest>>& answers,
++    bool* capped) {
++  std::vector<PullRequest> merged;
++  std::set<std::string> seen;
++  for (const std::vector<PullRequest>& answer : answers) {
++    for (const PullRequest& pull : answer) {
++      if (seen.insert(pull.node_id).second) {
++        merged.push_back(pull);
++      }
++    }
++  }
++  // Newest first; GitHub's ISO 8601 times sort as text. Ties keep the order
++  // of the searches.
++  std::ranges::stable_sort(merged, [](const PullRequest& a,
++                                      const PullRequest& b) {
++    return a.created_at > b.created_at;
++  });
++  if (capped) {
++    *capped = merged.size() > kMaxRows;
++  }
++  if (merged.size() > kMaxRows) {
++    merged.resize(kMaxRows);
++  }
++  return merged;
++}
++
++Failure FailureOf(int net_error,
++                  int status,
++                  const net::HttpResponseHeaders* headers) {
++  if (status == 0) {
++    return net_error == net::OK ? Failure::kServer : Failure::kNetwork;
++  }
++  if (status >= 200 && status < 300) {
++    return Failure::kNone;
++  }
++  if (status == 401) {
++    return Failure::kToken;
++  }
++  if (status == 429) {
++    return Failure::kRateLimit;
++  }
++  if (status == 403) {
++    // GitHub's primary limit says so in its counter; the secondary one asks
++    // to wait.
++    const bool spent =
++        headers &&
++        (headers->GetNormalizedHeader("x-ratelimit-remaining") ==
++             std::optional<std::string>("0") ||
++         headers->HasHeader("retry-after"));
++    return spent ? Failure::kRateLimit : Failure::kToken;
++  }
++  return Failure::kServer;
++}
++
++std::u16string FailureText(Failure failure) {
++  switch (failure) {
++    case Failure::kNone:
++      return std::u16string();
++    case Failure::kToken:
++      return u"GitHub did not accept the token. It may have expired or been "
++             u"revoked. Make a new one and paste it in Settings.";
++    case Failure::kRateLimit:
++      return u"GitHub's rate limit was reached. The folder tries again "
++             u"later.";
++    case Failure::kNetwork:
++      return u"GitHub could not be reached. Check the network; the folder "
++             u"tries again later.";
++    case Failure::kServer:
++      return u"GitHub answered with an error. The folder tries again later.";
++    case Failure::kKeyStore:
++      return u"This computer's key store cannot keep the token, so it was "
++             u"not saved.";
++  }
++  return std::u16string();
++}
++
++std::u16string RowName(const PullRequest& pull) {
++  return base::UTF8ToUTF16(base::StrCat({pull.repo, ": ", pull.title}));
++}
++
++}  // namespace live_folders
+diff --git a/chrome/browser/ui/live_folders/github_pulls.h b/chrome/browser/ui/live_folders/github_pulls.h
+new file mode 100644
+index 0000000000000..4d80f7867fe17
+--- /dev/null
++++ b/chrome/browser/ui/live_folders/github_pulls.h
+@@ -0,0 +1,119 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_LIVE_FOLDERS_GITHUB_PULLS_H_
++#define CHROME_BROWSER_UI_LIVE_FOLDERS_GITHUB_PULLS_H_
++
++#include <optional>
++#include <string>
++#include <string_view>
++#include <vector>
++
++#include "url/gurl.h"
++
++namespace net {
++class HttpRequestHeaders;
++class HttpResponseHeaders;
++}  // namespace net
++
++// docs/features/live-folders.md Lf3, Lf7 (ADR 0036): GitHub's side of the
++// pull-request folder: the four searches, their headers, reading an answer,
++// and why a request failed. No network here.
++namespace live_folders {
++
++// The only host a live folder sends anything to.
++inline constexpr char kApiOrigin[] = "https://api.github.com";
++// GitHub's page for making a fine-grained token, which Settings links to.
++inline constexpr char kTokenPage[] =
++    "https://github.com/settings/personal-access-tokens/new";
++// Where the folder's one row points when no pull request is open.
++inline constexpr char kPullsPage[] = "https://github.com/pulls";
++// The REST API version the answers are read as.
++inline constexpr char kApiVersion[] = "2022-11-28";
++// Lf3: the most rows the folder holds; each search asks for this many.
++inline constexpr size_t kMaxRows = 50;
++// The largest answer read; GitHub's for 50 items is far below it.
++inline constexpr size_t kMaxAnswerBytes = 2 * 1024 * 1024;
++
++struct PullRequest {
++  // GitHub's node id of the pull request: stable, and the row's identity.
++  std::string node_id;
++  // "owner/repo".
++  std::string repo;
++  std::string title;
++  // https://github.com/<owner>/<repo>/pull/<number>.
++  GURL url;
++  // ISO 8601, as GitHub writes it; orders the rows, newest first.
++  std::string created_at;
++
++  bool operator==(const PullRequest& other) const = default;
++};
++
++// Lf7: why a refresh failed.
++enum class Failure {
++  kNone,
++  // 401: the token expired, was revoked or was mistyped.
++  kToken,
++  // 403 or 429 with GitHub's rate limit spent.
++  kRateLimit,
++  // No answer: the network is down, or GitHub could not be reached.
++  kNetwork,
++  // Any other answer: an error from GitHub, or one that is no list.
++  kServer,
++  // The system's key store cannot keep the token (making the folder only).
++  kKeyStore,
++};
++
++// Lf3: the four searches, one per way a pull request is the person's:
++// opened, assigned, asked to review, mentioned. Each `is:pr is:open
++// archived:false`, newest first, at most kMaxRows.
++std::vector<GURL> SearchUrls();
++
++// Lf3: the headers each search carries. The token goes in Authorization and
++// nowhere else.
++void SetRequestHeaders(const std::string& token,
++                       net::HttpRequestHeaders* headers);
++
++// Lf1: whether a paste can be a token as GitHub makes them: letters, digits
++// and '_', at most 255. Anything else is refused before any request.
++bool LooksLikeAToken(std::string_view token);
++
++// Lf3: whether `node_id` is a GitHub node id: letters, digits and '_', '-',
++// and the base64 of ids made before 2021 ('+', '/', '='), at most 128.
++bool IsNodeId(std::string_view node_id);
++
++// Lf3: whether a request redirected to `to` must lose its Authorization
++// header: anywhere but https://api.github.com.
++bool DropsAuthorizationOnRedirectTo(const GURL& to);
++
++// Lf3: the pull requests of one search answer. An item that is no pull
++// request, or whose address is not https://github.com/<owner>/<repo>/pull/<n>,
++// is left out. Nothing when the answer is not GitHub's search result.
++// `complete`, when given, says whether the answer holds every match: GitHub
++// marked it complete and its count fits in the page (Lf5).
++std::optional<std::vector<PullRequest>> ParseSearchAnswer(
++    std::string_view json,
++    bool* complete = nullptr);
++
++// Lf3: the four answers as one list: each pull request once, newest first, at
++// most kMaxRows. `capped`, when given, says whether rows were cut.
++std::vector<PullRequest> MergeAnswers(
++    const std::vector<std::vector<PullRequest>>& answers,
++    bool* capped = nullptr);
++
++// Lf7: what a finished request means. `net_error` is the loader's,
++// `status` the HTTP status (0 for none).
++Failure FailureOf(int net_error,
++                  int status,
++                  const net::HttpResponseHeaders* headers);
++
++// Lf7: the reason, as the folder's tooltip and Settings say it.
++std::u16string FailureText(Failure failure);
++
++// Lf5: a row's name: "<owner>/<repo>: <title>".
++std::u16string RowName(const PullRequest& pull);
++
++}  // namespace live_folders
++
++#endif  // CHROME_BROWSER_UI_LIVE_FOLDERS_GITHUB_PULLS_H_
+diff --git a/chrome/browser/ui/live_folders/live_folder_note.cc b/chrome/browser/ui/live_folders/live_folder_note.cc
+new file mode 100644
+index 0000000000000..bb50ddcf35955
+--- /dev/null
++++ b/chrome/browser/ui/live_folders/live_folder_note.cc
+@@ -0,0 +1,92 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/live_folders/live_folder_note.h"
++
++#include <map>
++#include <utility>
++
++#include "base/functional/callback.h"
++#include "base/no_destructor.h"
++#include "base/strings/string_util.h"
++
++namespace live_folders {
++
++namespace {
++
++struct Entry {
++  std::string folder_id;
++  FolderNote note;
++};
++
++std::map<const Profile*, Entry>& Notes() {
++  static base::NoDestructor<std::map<const Profile*, Entry>> notes;
++  return *notes;
++}
++
++std::map<const Profile*, CommandHandler>& Handlers() {
++  static base::NoDestructor<std::map<const Profile*, CommandHandler>>
++      handlers;
++  return *handlers;
++}
++
++base::RepeatingClosureList& Observers() {
++  static base::NoDestructor<base::RepeatingClosureList> observers;
++  return *observers;
++}
++
++}  // namespace
++
++bool IsLiveRowToken(std::string_view token) {
++  return base::StartsWith(token, kRowTokenPrefix);
++}
++
++void SetNote(Profile* profile,
++             const std::string& folder_id,
++             std::optional<FolderNote> note) {
++  if (note) {
++    Notes()[profile] = Entry{folder_id, std::move(*note)};
++  } else if (!Notes().erase(profile)) {
++    return;
++  }
++  Observers().Notify();
++}
++
++std::optional<FolderNote> NoteFor(Profile* profile,
++                                  const std::string& folder_id) {
++  const auto it = Notes().find(profile);
++  if (it == Notes().end() || it->second.folder_id != folder_id) {
++    return std::nullopt;
++  }
++  return it->second.note;
++}
++
++bool IsLiveFolder(Profile* profile, const std::string& folder_id) {
++  return !folder_id.empty() && NoteFor(profile, folder_id).has_value();
++}
++
++base::CallbackListSubscription AddNoteObserver(base::RepeatingClosure changed) {
++  return Observers().Add(std::move(changed));
++}
++
++void SetCommandHandler(Profile* profile, CommandHandler handler) {
++  if (handler) {
++    Handlers()[profile] = std::move(handler);
++  } else {
++    Handlers().erase(profile);
++  }
++}
++
++bool RunCommand(Profile* profile, Command command) {
++  const auto it = Handlers().find(profile);
++  if (it == Handlers().end()) {
++    return false;
++  }
++  // A copy: the handler may reset itself (Delete).
++  CommandHandler handler = it->second;
++  handler.Run(command);
++  return true;
++}
++
++}  // namespace live_folders
+diff --git a/chrome/browser/ui/live_folders/live_folder_note.h b/chrome/browser/ui/live_folders/live_folder_note.h
+new file mode 100644
+index 0000000000000..0fc91ec009e2e
+--- /dev/null
++++ b/chrome/browser/ui/live_folders/live_folder_note.h
+@@ -0,0 +1,76 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_LIVE_FOLDERS_LIVE_FOLDER_NOTE_H_
++#define CHROME_BROWSER_UI_LIVE_FOLDERS_LIVE_FOLDER_NOTE_H_
++
++#include <optional>
++#include <string>
++#include <string_view>
++
++#include "base/callback_list.h"
++#include "base/functional/callback_forward.h"
++
++class Profile;
++
++// docs/features/live-folders.md Lf-rows (ADR 0036): what the sidebar and sync
++// need to know of a live folder, without depending on the service that fills
++// it. The service sets it; a folder's header and sync's reader ask it.
++namespace live_folders {
++
++// Lf9: every row of a live folder carries a tab token with this prefix, so
++// sync can leave it out by the token alone.
++inline constexpr char kRowTokenPrefix[] = "livegh-";
++
++// Whether `token` (a tab's `stedding.tab_token`) is a live folder's row.
++bool IsLiveRowToken(std::string_view token);
++
++// Lf6: what a live folder's header shows beside its name.
++struct FolderNote {
++  // The last refresh failed: the header wears the mark.
++  bool failed = false;
++  // The header's tooltip: when the list was last refreshed, or why it was
++  // not.
++  std::u16string tooltip;
++};
++
++// Lf6, Lf13: set by the profile's service; `note` empty when `profile` has no
++// live folder. Tells every header.
++void SetNote(Profile* profile,
++             const std::string& folder_id,
++             std::optional<FolderNote> note);
++
++// The note of the folder `folder_id` of `profile`, or none when it is no live
++// folder.
++std::optional<FolderNote> NoteFor(Profile* profile,
++                                  const std::string& folder_id);
++
++// Called when any note changes; a header asks again.
++base::CallbackListSubscription AddNoteObserver(base::RepeatingClosure changed);
++
++// Lf9: whether `folder_id` is the live folder of `profile`: sync leaves it
++// out, with everything in it.
++bool IsLiveFolder(Profile* profile, const std::string& folder_id);
++
++// Lf13: the header menu's rows for a live folder; Lf8: the header's note that
++// the person is taking the folder itself out of the pinned run.
++enum class Command {
++  kRefresh,
++  kDelete,
++  kFolderGoing,
++};
++
++using CommandHandler = base::RepeatingCallback<void(Command)>;
++
++// Set by the profile's service while it has a live folder; reset with a null
++// callback.
++void SetCommandHandler(Profile* profile, CommandHandler handler);
++
++// Runs `command` on the live folder of `profile`. Returns false when it has
++// none.
++bool RunCommand(Profile* profile, Command command);
++
++}  // namespace live_folders
++
++#endif  // CHROME_BROWSER_UI_LIVE_FOLDERS_LIVE_FOLDER_NOTE_H_
+diff --git a/chrome/browser/ui/live_folders/live_folder_scheduler.cc b/chrome/browser/ui/live_folders/live_folder_scheduler.cc
+new file mode 100644
+index 0000000000000..2fbd0e02e1141
+--- /dev/null
++++ b/chrome/browser/ui/live_folders/live_folder_scheduler.cc
+@@ -0,0 +1,67 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/live_folders/live_folder_scheduler.h"
++
++#include <utility>
++
++#include "base/functional/bind.h"
++#include "base/location.h"
++
++namespace live_folders {
++
++LiveFolderScheduler::LiveFolderScheduler(
++    base::RepeatingClosure refresh,
++    base::RepeatingCallback<bool()> has_window)
++    : refresh_(std::move(refresh)), has_window_(std::move(has_window)) {}
++
++LiveFolderScheduler::~LiveFolderScheduler() = default;
++
++void LiveFolderScheduler::Start(bool ran_now) {
++  running_ = true;
++  if (ran_now) {
++    last_run_ = base::TimeTicks::Now();
++  }
++  beat_.Start(FROM_HERE, kEvery,
++              base::BindRepeating(&LiveFolderScheduler::OnBeat,
++                                  base::Unretained(this)));
++}
++
++void LiveFolderScheduler::Stop() {
++  running_ = false;
++  beat_.Stop();
++  deferred_.Stop();
++}
++
++void LiveFolderScheduler::Ask() {
++  if (!running_ || deferred_.IsRunning()) {
++    return;
++  }
++  const base::TimeTicks now = base::TimeTicks::Now();
++  if (last_run_.is_null() || now - last_run_ >= kFloor) {
++    Run();
++    return;
++  }
++  deferred_.Start(FROM_HERE, last_run_ + kFloor - now,
++                  base::BindOnce(&LiveFolderScheduler::Run,
++                                 base::Unretained(this)));
++}
++
++void LiveFolderScheduler::OnBeat() {
++  if (!has_window_.Run()) {
++    return;
++  }
++  Ask();
++}
++
++void LiveFolderScheduler::Run() {
++  if (!running_) {
++    return;
++  }
++  deferred_.Stop();
++  last_run_ = base::TimeTicks::Now();
++  refresh_.Run();
++}
++
++}  // namespace live_folders
+diff --git a/chrome/browser/ui/live_folders/live_folder_scheduler.h b/chrome/browser/ui/live_folders/live_folder_scheduler.h
+new file mode 100644
+index 0000000000000..c5a09bc4fc347
+--- /dev/null
++++ b/chrome/browser/ui/live_folders/live_folder_scheduler.h
+@@ -0,0 +1,61 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_LIVE_FOLDERS_LIVE_FOLDER_SCHEDULER_H_
++#define CHROME_BROWSER_UI_LIVE_FOLDERS_LIVE_FOLDER_SCHEDULER_H_
++
++#include "base/functional/callback.h"
++#include "base/time/time.h"
++#include "base/timer/timer.h"
++
++namespace live_folders {
++
++// docs/features/live-folders.md Lf4, Lf5: when a live folder asks GitHub for
++// its list. Every 10 minutes while a window of the profile is open; on a
++// window coming to the front; on the person's Refresh. Never more than once a
++// minute: an ask within a minute of the last refresh waits until the minute is
++// up, and any number of asks in that wait make one refresh.
++class LiveFolderScheduler {
++ public:
++  static constexpr base::TimeDelta kEvery = base::Minutes(10);
++  static constexpr base::TimeDelta kFloor = base::Minutes(1);
++
++  // `refresh` runs each time a refresh is due. `has_window` says whether a
++  // window of the profile is open; the 10-minute beat skips while none is.
++  LiveFolderScheduler(base::RepeatingClosure refresh,
++                      base::RepeatingCallback<bool()> has_window);
++  LiveFolderScheduler(const LiveFolderScheduler&) = delete;
++  LiveFolderScheduler& operator=(const LiveFolderScheduler&) = delete;
++  ~LiveFolderScheduler();
++
++  // Starts the 10-minute beat. `ran_now` notes a refresh that just ran outside
++  // the scheduler (the one that made the folder).
++  void Start(bool ran_now);
++  // Stops everything: no refresh runs until Start.
++  void Stop();
++  bool running() const { return running_; }
++
++  // A refresh asked for now: runs at once when a minute has passed since the
++  // last, else once when it has.
++  void Ask();
++
++  // Whether an ask is waiting for the minute to pass.
++  bool waiting() const { return deferred_.IsRunning(); }
++  base::TimeTicks last_run() const { return last_run_; }
++
++ private:
++  void Run();
++  void OnBeat();
++
++  const base::RepeatingClosure refresh_;
++  const base::RepeatingCallback<bool()> has_window_;
++  bool running_ = false;
++  base::TimeTicks last_run_;
++  base::RepeatingTimer beat_;
++  base::OneShotTimer deferred_;
++};
++
++}  // namespace live_folders
++
++#endif  // CHROME_BROWSER_UI_LIVE_FOLDERS_LIVE_FOLDER_SCHEDULER_H_
+diff --git a/chrome/browser/ui/live_folders/live_folder_service.cc b/chrome/browser/ui/live_folders/live_folder_service.cc
+new file mode 100644
+index 0000000000000..2c09f751fda3a
+--- /dev/null
++++ b/chrome/browser/ui/live_folders/live_folder_service.cc
+@@ -0,0 +1,1094 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/live_folders/live_folder_service.h"
++
++#include <algorithm>
++#include <optional>
++#include <utility>
++
++#include "base/base64.h"
++#include "base/functional/bind.h"
++#include "base/i18n/time_formatting.h"
++#include "base/json/json_writer.h"
++#include "base/json/values_util.h"
++#include "base/no_destructor.h"
++#include "base/strings/strcat.h"
++#include "base/strings/string_util.h"
++#include "base/strings/utf_string_conversions.h"
++#include "base/task/single_thread_task_runner.h"
++#include "base/token.h"
++#include "chrome/browser/browser_process.h"
++#include "chrome/browser/net/system_network_context_manager.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
++#include "chrome/browser/ui/live_folders/live_folder_note.h"
++#include "chrome/browser/ui/spaces/space_model.h"
++#include "chrome/browser/ui/spaces/space_registry.h"
++#include "chrome/browser/ui/spaces/space_registry_factory.h"
++#include "chrome/browser/ui/stedding/tab_parents.h"
++#include "chrome/browser/ui/tabs/tab_enums.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "chrome/browser/ui/tabs/stedding_folder_session.h"
++#include "components/os_crypt/async/browser/os_crypt_async.h"
++#include "components/os_crypt/async/common/encryptor.h"
++#include "components/prefs/pref_service.h"
++#include "components/tabs/public/folder_tab_collection.h"
++#include "components/tabs/public/tab_collection.h"
++#include "components/tabs/public/tab_interface.h"
++#include "content/public/browser/navigation_controller.h"
++#include "content/public/browser/web_contents.h"
++#include "net/base/net_errors.h"
++#include "net/http/http_request_headers.h"
++#include "net/http/http_response_headers.h"
++#include "net/traffic_annotation/network_traffic_annotation.h"
++#include "net/url_request/redirect_info.h"
++#include "services/network/public/cpp/resource_request.h"
++#include "services/network/public/cpp/shared_url_loader_factory.h"
++#include "services/network/public/cpp/simple_url_loader.h"
++#include "services/network/public/mojom/url_response_head.mojom.h"
++#include "url/origin.h"
++
++namespace live_folders {
++
++namespace {
++
++// The setup's keys (kGitHubFolderPref).
++constexpr char kOn[] = "on";
++constexpr char kSpace[] = "space";
++constexpr char kFolder[] = "folder";
++constexpr char kDismissed[] = "dismissed";
++constexpr char kRefreshed[] = "refreshed";
++constexpr char kFailure[] = "failure";
++
++// Lf5: the folder's name until the person renames it, as Arc's was.
++constexpr char kFolderTitle[] = "Pull Requests";
++// Lf5: the one row of an empty list.
++constexpr char kNoneRow[] = "none";
++constexpr char16_t kNoneRowName[] = u"No open pull requests";
++
++constexpr base::TimeDelta kRequestTimeout = base::Seconds(30);
++
++constexpr net::NetworkTrafficAnnotationTag kTrafficAnnotation =
++    net::DefineNetworkTrafficAnnotation("stedding_live_folder_github", R"(
++        semantics {
++          sender: "Stedding live folder"
++          description:
++            "Asks GitHub's API for the open pull requests the user opened, "
++            "is assigned, is asked to review or is mentioned in, to list them "
++            "in a folder of the sidebar."
++          trigger:
++            "The user makes the live folder in Settings; then every 10 "
++            "minutes while a window is open, when a window comes to the "
++            "front, and on Refresh, never more than once a minute."
++          data:
++            "The read-only token the user made on github.com, in the "
++            "Authorization header. No cookies, no browsing data."
++          destination: OTHER
++          destination_other: "api.github.com"
++        }
++        policy {
++          cookies_allowed: NO
++          setting:
++            "Off until the user makes a live folder. Deleting the folder, "
++            "from its menu or from Settings > Stedding, stops it and forgets "
++            "the token."
++          policy_exception_justification: "No policy controls this."
++        })");
++
++scoped_refptr<network::SharedURLLoaderFactory>& FactoryForTesting() {
++  static base::NoDestructor<scoped_refptr<network::SharedURLLoaderFactory>>
++      factory;
++  return *factory;
++}
++
++std::string RowId(const std::string& node_id) {
++  return base::StrCat({kRowTokenPrefix, node_id});
++}
++
++// Lf8: how long after the person takes the folder out of the run its rows
++// leaving the store count as the folder going.
++constexpr base::TimeDelta kFolderGoingWindow = base::Seconds(10);
++// Lf5: the most removed rows remembered.
++constexpr size_t kMaxDismissed = 500;
++
++// The id of the outermost folder `tab` is in, or empty.
++std::string OutermostFolderId(const tabs::TabInterface* tab) {
++  std::string id;
++  for (const tabs::TabCollection* each = tab->GetParentCollection(); each;
++       each = each->GetParentCollection()) {
++    if (each->type() == tabs::TabCollection::Type::FOLDER) {
++      id = static_cast<const tabs::FolderTabCollection*>(each)->id().ToString();
++    }
++  }
++  return id;
++}
++
++// Whether `tab` has no page loaded: discarded, or never shown.
++bool Asleep(tabs::TabInterface* tab) {
++  content::WebContents* const contents = tab->GetContents();
++  return contents &&
++         (contents->WasDiscarded() || contents->GetController().NeedsReload());
++}
++
++std::optional<spaces::SpaceId> SpaceFromString(const std::string& text) {
++  const std::optional<base::Token> token = base::Token::FromString(text);
++  if (!token || token->is_zero()) {
++    return std::nullopt;
++  }
++  return spaces::SpaceId::FromRawToken(*token);
++}
++
++}  // namespace
++
++// Lf3: one refresh's four searches.
++struct LiveFolderService::Fetch {
++  std::vector<std::unique_ptr<network::SimpleURLLoader>> loaders;
++  std::vector<std::vector<PullRequest>> answers;
++  size_t pending = 0;
++  Failure failure = Failure::kNone;
++  bool complete = true;
++  FetchDone done;
++};
++
++LiveFolderService::LiveFolderService(Profile* profile,
++                                     spaces::PinStore* store)
++    : profile_(profile),
++      store_(store),
++      scheduler_(base::BindRepeating(&LiveFolderService::Refresh,
++                                     base::Unretained(this)),
++                 base::BindRepeating(&LiveFolderService::HasWindow,
++                                     base::Unretained(this))) {
++  Load();
++  if (!on_) {
++    return;
++  }
++  if (store_) {
++    store_observation_.Observe(store_.get());
++    const std::vector<std::string> ids = LiveIdsInStore();
++    live_ids_ = std::set<std::string>(ids.begin(), ids.end());
++  }
++  browsers_observation_.Observe(GlobalBrowserCollection::GetInstance());
++  InstallCommandHandler();
++  UpdateNote();
++  // Lf2: the token is opened once, with the system's key store.
++  g_browser_process->os_crypt_async()->GetInstance(
++      base::BindOnce(&LiveFolderService::OnEncryptorToRead,
++                     weak_factory_.GetWeakPtr(), generation_));
++}
++
++LiveFolderService::~LiveFolderService() = default;
++
++// static
++void LiveFolderService::SetURLLoaderFactoryForTesting(
++    scoped_refptr<network::SharedURLLoaderFactory> factory) {
++  FactoryForTesting() = std::move(factory);
++}
++
++void LiveFolderService::Shutdown() {
++  ++generation_;
++  fetch_.reset();
++  scheduler_.Stop();
++  browsers_observation_.Reset();
++  store_observation_.Reset();
++  SetCommandHandler(profile_, CommandHandler());
++  SetNote(profile_, std::string(), std::nullopt);
++}
++
++void LiveFolderService::Load() {
++  const base::DictValue& setup =
++      profile_->GetPrefs()->GetDict(kGitHubFolderPref);
++  const std::string* const folder = setup.FindString(kFolder);
++  const std::string* const space = setup.FindString(kSpace);
++  const std::optional<spaces::SpaceId> space_id =
++      space ? SpaceFromString(*space) : std::nullopt;
++  if (!setup.FindBool(kOn).value_or(false) || !folder || folder->empty() ||
++      !space_id) {
++    return;
++  }
++  on_ = true;
++  folder_id_ = *folder;
++  space_ = *space_id;
++  if (const base::ListValue* const dismissed = setup.FindList(kDismissed)) {
++    for (const base::Value& id : *dismissed) {
++      if (id.is_string()) {
++        Dismiss(id.GetString());
++      }
++    }
++  }
++  refreshed_ = base::ValueToTime(setup.Find(kRefreshed)).value_or(base::Time());
++  const int failure = setup.FindInt(kFailure).value_or(0);
++  failure_ = failure >= 0 && failure <= static_cast<int>(Failure::kKeyStore)
++                 ? static_cast<Failure>(failure)
++                 : Failure::kNone;
++}
++
++void LiveFolderService::Save() {
++  PrefService* const prefs = profile_->GetPrefs();
++  if (!on_) {
++    prefs->ClearPref(kGitHubFolderPref);
++    prefs->ClearPref(kGitHubTokenPref);
++    return;
++  }
++  base::ListValue dismissed;
++  for (const std::string& id : dismissed_) {
++    dismissed.Append(id);
++  }
++  prefs->SetDict(kGitHubFolderPref,
++                 base::DictValue()
++                     .Set(kOn, true)
++                     .Set(kSpace, space_.ToString())
++                     .Set(kFolder, folder_id_)
++                     .Set(kDismissed, std::move(dismissed))
++                     .Set(kRefreshed, base::TimeToValue(refreshed_))
++                     .Set(kFailure, static_cast<int>(failure_)));
++}
++
++void LiveFolderService::OnEncryptorToRead(
++    int generation,
++    scoped_refptr<os_crypt_async::Encryptor> encryptor) {
++  if (generation != generation_ || !on_ || !token_.empty()) {
++    return;
++  }
++  std::string sealed;
++  std::string token;
++  if (!base::Base64Decode(profile_->GetPrefs()->GetString(kGitHubTokenPref),
++                          &sealed) ||
++      !encryptor->DecryptString(sealed, &token) || !LooksLikeAToken(token)) {
++    // Lf2: a profile copied to another computer cannot open it; the folder
++    // keeps its last list and says so, until a token is pasted again
++    // (ReplaceToken).
++    token_lost_ = true;
++    failure_ = Failure::kToken;
++    UpdateNote();
++    Changed();
++    return;
++  }
++  token_ = std::move(token);
++  scheduler_.Start(/*ran_now=*/false);
++  // Lf4: a window already in front asks at once.
++  if (HasWindow()) {
++    scheduler_.Ask();
++  }
++}
++
++std::optional<spaces::SpaceId> LiveFolderService::ActiveSpace() const {
++  std::optional<spaces::SpaceId> space;
++  ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
++      [&](BrowserWindowInterface* window) {
++        if (window->GetProfile() != profile_ ||
++            window->GetType() != BrowserWindowInterface::TYPE_NORMAL) {
++          return true;
++        }
++        spaces::SpaceModel* const model = spaces::SpaceModel::From(window);
++        if (!model || !model->follows_registry()) {
++          return true;
++        }
++        space = model->active_id();
++        return false;
++      });
++  if (!space) {
++    if (const spaces::SpaceRegistry* const registry =
++            spaces::SpaceRegistryFactory::GetForProfile(profile_);
++        registry && !registry->entries().empty()) {
++      space = registry->entries().front().id;
++    }
++  }
++  return space;
++}
++
++bool LiveFolderService::SpaceExists(const spaces::SpaceId& space) const {
++  const spaces::SpaceRegistry* const registry =
++      spaces::SpaceRegistryFactory::GetForProfile(profile_);
++  return registry &&
++         std::ranges::any_of(registry->entries(),
++                             [&](const spaces::RegistryEntry& entry) {
++                               return entry.id == space;
++                             });
++}
++
++void LiveFolderService::MakeInActiveSpace(const std::string& token,
++                                          MadeCallback done) {
++  if (on_) {
++    ReplaceToken(token, std::move(done));
++    return;
++  }
++  const std::optional<spaces::SpaceId> space = ActiveSpace();
++  if (!space) {
++    std::move(done).Run(Failure::kServer);
++    return;
++  }
++  Make(token, *space, std::move(done));
++}
++
++void LiveFolderService::Make(const std::string& typed,
++                             const spaces::SpaceId& space,
++                             MadeCallback done) {
++  if (on_) {
++    ReplaceToken(typed, std::move(done));
++    return;
++  }
++  const std::string token(
++      base::TrimWhitespaceASCII(typed, base::TRIM_ALL));
++  if (making_) {
++    std::move(done).Run(Failure::kServer);
++    return;
++  }
++  // Lf1: nothing is asked of GitHub with what cannot be a token.
++  if (!LooksLikeAToken(token)) {
++    std::move(done).Run(Failure::kToken);
++    return;
++  }
++  making_ = true;
++  Changed();
++  StartFetch(token, base::BindOnce(&LiveFolderService::OnMadeFetch,
++                                   weak_factory_.GetWeakPtr(), generation_,
++                                   token, std::optional<spaces::SpaceId>(space),
++                                   std::move(done)));
++}
++
++void LiveFolderService::ReplaceToken(const std::string& typed,
++                                     MadeCallback done) {
++  const std::string token(
++      base::TrimWhitespaceASCII(typed, base::TRIM_ALL));
++  if (!on_ || making_) {
++    std::move(done).Run(Failure::kServer);
++    return;
++  }
++  if (!LooksLikeAToken(token)) {
++    std::move(done).Run(Failure::kToken);
++    return;
++  }
++  making_ = true;
++  Changed();
++  // The new token's first list stands in for any refresh under way.
++  StartFetch(token, base::BindOnce(&LiveFolderService::OnMadeFetch,
++                                   weak_factory_.GetWeakPtr(), generation_,
++                                   token, std::optional<spaces::SpaceId>(),
++                                   std::move(done)));
++}
++
++void LiveFolderService::OnMadeFetch(int generation,
++                                    std::string token,
++                                    std::optional<spaces::SpaceId> space,
++                                    MadeCallback done,
++                                    Failure failure,
++                                    std::vector<PullRequest> pulls,
++                                    bool complete) {
++  if (generation != generation_) {
++    std::move(done).Run(Failure::kServer);
++    return;
++  }
++  if (failure != Failure::kNone) {
++    making_ = false;
++    Changed();
++    std::move(done).Run(failure);
++    return;
++  }
++  g_browser_process->os_crypt_async()->GetInstance(base::BindOnce(
++      &LiveFolderService::OnEncryptorToMake, weak_factory_.GetWeakPtr(),
++      generation, std::move(token), space, std::move(pulls), complete,
++      std::move(done)));
++}
++
++void LiveFolderService::OnEncryptorToMake(
++    int generation,
++    std::string token,
++    std::optional<spaces::SpaceId> space,
++    std::vector<PullRequest> pulls,
++    bool complete,
++    MadeCallback done,
++    scoped_refptr<os_crypt_async::Encryptor> encryptor) {
++  if (generation != generation_) {
++    std::move(done).Run(Failure::kServer);
++    return;
++  }
++  making_ = false;
++  // Lf2: sealed with the system's key store, or not kept, and no folder.
++  std::string sealed;
++  if (!encryptor->IsEncryptionAvailable() ||
++      !encryptor->EncryptString(token, &sealed)) {
++    Changed();
++    std::move(done).Run(Failure::kKeyStore);
++    return;
++  }
++  const bool replacing = !space.has_value();
++  if (replacing && !on_) {
++    // Deleted while the new token was being checked.
++    Changed();
++    std::move(done).Run(Failure::kServer);
++    return;
++  }
++  if (!replacing) {
++    // Lf1: the Space chosen may have been deleted during the request; the
++    // folder then goes to the Space on screen now.
++    if (!SpaceExists(*space)) {
++      space = ActiveSpace();
++    }
++    if (!space) {
++      Changed();
++      std::move(done).Run(Failure::kServer);
++      return;
++    }
++    on_ = true;
++    space_ = *space;
++    folder_id_ = base::Token::CreateRandom().ToString();
++    dismissed_.clear();
++    live_ids_.clear();
++    last_folder_path_.clear();
++    if (store_ && !store_observation_.IsObserving()) {
++      store_observation_.Observe(store_.get());
++    }
++    if (!browsers_observation_.IsObserving()) {
++      browsers_observation_.Observe(GlobalBrowserCollection::GetInstance());
++    }
++    InstallCommandHandler();
++  }
++  token_ = std::move(token);
++  token_lost_ = false;
++  failure_ = Failure::kNone;
++  refreshed_ = base::Time::Now();
++  profile_->GetPrefs()->SetString(kGitHubTokenPref,
++                                  base::Base64Encode(sealed));
++  last_pulls_ = pulls;
++  Apply(pulls, complete);
++  Save();
++  // Lf4: the refresh that made it counts as the first.
++  scheduler_.Stop();
++  scheduler_.Start(/*ran_now=*/true);
++  UpdateNote();
++  Changed();
++  std::move(done).Run(Failure::kNone);
++}
++
++void LiveFolderService::InstallCommandHandler() {
++  // Lf13: the folder header's Refresh and Delete rows, and Lf8's note that
++  // the folder itself is going.
++  SetCommandHandler(profile_,
++                    base::BindRepeating(
++                        [](base::WeakPtr<LiveFolderService> service,
++                           Command command) {
++                          if (!service) {
++                            return;
++                          }
++                          switch (command) {
++                            case Command::kRefresh:
++                              service->RefreshNow();
++                              break;
++                            case Command::kDelete:
++                              service->Delete();
++                              break;
++                            case Command::kFolderGoing:
++                              service->NoteFolderGoing();
++                              break;
++                          }
++                        },
++                        weak_factory_.GetWeakPtr()));
++}
++
++void LiveFolderService::RefreshNow() {
++  scheduler_.Ask();
++}
++
++void LiveFolderService::Delete() {
++  TurnOff(/*remove_rows=*/true);
++}
++
++void LiveFolderService::NoteFolderGoing() {
++  if (on_) {
++    folder_going_until_ = base::TimeTicks::Now() + kFolderGoingWindow;
++  }
++}
++
++bool LiveFolderService::Dismiss(const std::string& id) {
++  if (IsDismissed(id)) {
++    return false;
++  }
++  dismissed_.push_back(id);
++  // The newest are kept: an id forgotten here is of a row removed long ago.
++  if (dismissed_.size() > kMaxDismissed) {
++    dismissed_.erase(dismissed_.begin(),
++                     dismissed_.begin() +
++                         static_cast<std::ptrdiff_t>(dismissed_.size() -
++                                                     kMaxDismissed));
++  }
++  return true;
++}
++
++bool LiveFolderService::IsDismissed(const std::string& id) const {
++  return std::ranges::find(dismissed_, id) != dismissed_.end();
++}
++
++bool LiveFolderService::FolderGoing() const {
++  return !folder_going_until_.is_null() &&
++         base::TimeTicks::Now() < folder_going_until_;
++}
++
++void LiveFolderService::TurnOff(bool remove_rows) {
++  ++generation_;
++  const bool was = on_ || making_;
++  fetch_.reset();
++  scheduler_.Stop();
++  if (remove_rows) {
++    RemoveRows();
++  }
++  on_ = false;
++  making_ = false;
++  token_.clear();
++  token_lost_ = false;
++  folder_id_.clear();
++  dismissed_.clear();
++  live_ids_.clear();
++  last_pulls_.clear();
++  last_folder_path_.clear();
++  waiting_list_.reset();
++  folder_going_until_ = base::TimeTicks();
++  failure_ = Failure::kNone;
++  refreshed_ = base::Time();
++  // Lf8: the token is forgotten with the setup, on disk at once: a crash
++  // right after must not bring it back.
++  Save();
++  profile_->GetPrefs()->CommitPendingWrite();
++  store_observation_.Reset();
++  browsers_observation_.Reset();
++  SetCommandHandler(profile_, CommandHandler());
++  SetNote(profile_, std::string(), std::nullopt);
++  // Lf8: what is left of the rows in any window, a turn later: asleep, it
++  // closes; open, it is the person's own tab.
++  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
++      FROM_HERE, base::BindOnce(&LiveFolderService::ReleaseLooseRows,
++                                weak_factory_.GetWeakPtr(),
++                                /*close_asleep=*/true));
++  if (was) {
++    Changed();
++  }
++}
++
++size_t LiveFolderService::rows() const {
++  if (!store_) {
++    return 0;
++  }
++  return static_cast<size_t>(std::ranges::count_if(
++      store_->records(), [](const spaces::PinRecord& record) {
++        return IsLiveRowToken(record.id) && record.id != RowId(kNoneRow);
++      }));
++}
++
++void LiveFolderService::OnBrowserActivated(BrowserWindowInterface* browser) {
++  // Lf4: a window of this profile coming to the front.
++  if (!on_ || token_.empty() || !browser ||
++      browser->GetProfile() != profile_ ||
++      browser->GetType() != BrowserWindowInterface::TYPE_NORMAL) {
++    return;
++  }
++  scheduler_.Ask();
++}
++
++bool LiveFolderService::HasWindow() const {
++  bool any = false;
++  ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
++      [&](BrowserWindowInterface* window) {
++        any = window->GetProfile() == profile_ &&
++              window->GetType() == BrowserWindowInterface::TYPE_NORMAL;
++        return !any;
++      });
++  return any;
++}
++
++scoped_refptr<network::SharedURLLoaderFactory> LiveFolderService::Factory() {
++  if (FactoryForTesting()) {
++    return FactoryForTesting();
++  }
++  // Lf3: the browser's own network context, as sync's places use: no
++  // cookies, no cache shared with pages, and no extension sees it.
++  return g_browser_process->system_network_context_manager()
++      ->GetSharedURLLoaderFactory();
++}
++
++void LiveFolderService::StartFetch(const std::string& token,
++                                   FetchDone done) {
++  // One fetch at a time: a new one (a token being replaced) stands in for
++  // the one under way.
++  fetch_.reset();
++  scoped_refptr<network::SharedURLLoaderFactory> factory = Factory();
++  if (!factory) {
++    std::move(done).Run(Failure::kNetwork, {}, false);
++    return;
++  }
++  fetch_ = std::make_unique<Fetch>();
++  fetch_->done = std::move(done);
++  const std::vector<GURL> urls = SearchUrls();
++  fetch_->answers.resize(urls.size());
++  fetch_->pending = urls.size();
++  for (size_t i = 0; i < urls.size(); ++i) {
++    auto request = std::make_unique<network::ResourceRequest>();
++    request->url = urls[i];
++    request->method = "GET";
++    request->credentials_mode = network::mojom::CredentialsMode::kOmit;
++    SetRequestHeaders(token, &request->headers);
++    std::unique_ptr<network::SimpleURLLoader> loader =
++        network::SimpleURLLoader::Create(std::move(request),
++                                         kTrafficAnnotation);
++    loader->SetAllowHttpErrorResults(true);
++    loader->SetTimeoutDuration(kRequestTimeout);
++    // Lf3: the token goes to api.github.com alone, even when GitHub sends
++    // the request elsewhere.
++    loader->SetOnRedirectCallback(base::BindRepeating(
++        [](const GURL& url_before_redirect,
++           const net::RedirectInfo& redirect_info,
++           const network::mojom::URLResponseHead& response_head,
++           std::vector<std::string>* removed_headers) {
++          if (DropsAuthorizationOnRedirectTo(redirect_info.new_url)) {
++            removed_headers->push_back(
++                net::HttpRequestHeaders::kAuthorization);
++          }
++        }));
++    network::SimpleURLLoader* const raw = loader.get();
++    fetch_->loaders.push_back(std::move(loader));
++    raw->DownloadToString(
++        factory.get(),
++        base::BindOnce(&LiveFolderService::OnAnswer,
++                       weak_factory_.GetWeakPtr(), i),
++        kMaxAnswerBytes);
++  }
++}
++
++void LiveFolderService::OnAnswer(size_t index,
++                                 std::optional<std::string> body) {
++  if (!fetch_ || index >= fetch_->loaders.size()) {
++    return;
++  }
++  const network::SimpleURLLoader* const loader = fetch_->loaders[index].get();
++  const network::mojom::URLResponseHead* const head = loader->ResponseInfo();
++  const net::HttpResponseHeaders* const headers =
++      head ? head->headers.get() : nullptr;
++  Failure failure = FailureOf(loader->NetError(),
++                              headers ? headers->response_code() : 0, headers);
++  if (failure == Failure::kNone) {
++    bool complete = false;
++    std::optional<std::vector<PullRequest>> pulls =
++        body ? ParseSearchAnswer(*body, &complete) : std::nullopt;
++    if (pulls) {
++      fetch_->answers[index] = std::move(*pulls);
++      fetch_->complete &= complete;
++    } else {
++      failure = Failure::kServer;
++    }
++  }
++  // The first reason found is the one given.
++  if (fetch_->failure == Failure::kNone) {
++    fetch_->failure = failure;
++  }
++  if (--fetch_->pending > 0) {
++    return;
++  }
++  std::unique_ptr<Fetch> fetch = std::move(fetch_);
++  std::vector<PullRequest> merged;
++  bool complete = false;
++  if (fetch->failure == Failure::kNone) {
++    bool capped = false;
++    merged = MergeAnswers(fetch->answers, &capped);
++    complete = fetch->complete && !capped;
++  }
++  std::move(fetch->done).Run(fetch->failure, std::move(merged), complete);
++}
++
++void LiveFolderService::Refresh() {
++  if (!on_ || token_.empty() || fetch_ || making_) {
++    return;
++  }
++  StartFetch(token_, base::BindOnce(&LiveFolderService::OnRefreshed,
++                                    weak_factory_.GetWeakPtr(), generation_));
++}
++
++void LiveFolderService::OnRefreshed(int generation,
++                                    Failure failure,
++                                    std::vector<PullRequest> pulls,
++                                    bool complete) {
++  if (generation != generation_ || !on_) {
++    return;
++  }
++  failure_ = failure;
++  if (failure == Failure::kNone) {
++    refreshed_ = base::Time::Now();
++    last_pulls_ = pulls;
++    Apply(pulls, complete);
++  }
++  // Lf7: a failure keeps the last list as it is.
++  Save();
++  UpdateNote();
++  Changed();
++}
++
++std::vector<std::string> LiveFolderService::LiveIdsInStore() const {
++  std::vector<std::string> ids;
++  if (!store_) {
++    return ids;
++  }
++  for (const spaces::PinRecord& record : store_->records()) {
++    if (IsLiveRowToken(record.id)) {
++      ids.push_back(record.id);
++    }
++  }
++  return ids;
++}
++
++std::string LiveFolderService::FolderPath() const {
++  // The folder's name, icon and open or closed state, as the person left
++  // them, from a row already in it.
++  if (store_) {
++    for (const spaces::PinRecord& record : store_->records()) {
++      if (!IsLiveRowToken(record.id) || record.folder_path.empty()) {
++        continue;
++      }
++      const std::vector<stedding::FolderPathEntry> path =
++          stedding::ParseFolderPath(record.folder_path);
++      if (path.size() == 1 && path.front().id == folder_id_) {
++        return record.folder_path;
++      }
++    }
++  }
++  // The folder's path as its last row had it, when no row is left.
++  if (!last_folder_path_.empty()) {
++    const std::vector<stedding::FolderPathEntry> path =
++        stedding::ParseFolderPath(last_folder_path_);
++    if (path.size() == 1 && path.front().id == folder_id_) {
++      return last_folder_path_;
++    }
++  }
++  // As the session writes a folder's path (stedding_folder_session.cc), so
++  // a window's tab and its record read the same.
++  base::ListValue list;
++  list.Append(base::DictValue()
++                  .Set("i", folder_id_)
++                  .Set("t", kFolderTitle)
++                  .Set("c", false));
++  std::string path;
++  base::JSONWriter::Write(list, &path);
++  return path;
++}
++
++void LiveFolderService::Apply(const std::vector<PullRequest>& pulls,
++                              bool complete) {
++  if (!store_ || !on_) {
++    return;
++  }
++  if (!store_->ready()) {
++    waiting_list_ = pulls;
++    waiting_complete_ = complete;
++    return;
++  }
++  waiting_list_.reset();
++  // Lf5: a removed pull request that left GitHub's list is forgotten, but
++  // only when the list holds every match: one past the 50 rows, or in an
++  // answer GitHub cut short, is still open.
++  if (complete) {
++    std::set<std::string> open;
++    for (const PullRequest& pull : pulls) {
++      open.insert(RowId(pull.node_id));
++    }
++    std::erase_if(dismissed_,
++                  [&](const std::string& id) { return !open.contains(id); });
++  }
++
++  const std::string folder_path = FolderPath();
++  last_folder_path_ = folder_path;
++  std::vector<spaces::PinRecord> rows;
++  for (const PullRequest& pull : pulls) {
++    const std::string id = RowId(pull.node_id);
++    if (IsDismissed(id)) {
++      continue;
++    }
++    spaces::PinRecord row;
++    row.id = id;
++    row.tier = spaces::PinTier::kSpacePin;
++    row.space = space_;
++    row.has_space = true;
++    row.home = pull.url;
++    row.name = RowName(pull);
++    row.title = row.name;
++    row.folder_path = folder_path;
++    rows.push_back(std::move(row));
++  }
++  // A folder holds a row at least: an empty list, or one whose every row
++  // was removed, is one row that says so.
++  if (rows.empty()) {
++    spaces::PinRecord row;
++    row.id = RowId(kNoneRow);
++    row.tier = spaces::PinTier::kSpacePin;
++    row.space = space_;
++    row.has_space = true;
++    row.home = GURL(kPullsPage);
++    row.name = kNoneRowName;
++    row.title = row.name;
++    row.folder_path = folder_path;
++    rows.push_back(std::move(row));
++  }
++
++  // The rows take the place of the folder's rows in the store's order, or
++  // the end of it the first time.
++  std::vector<std::string> order;
++  std::set<std::string> fresh;
++  for (const spaces::PinRecord& row : rows) {
++    fresh.insert(row.id);
++  }
++  bool placed = false;
++  std::set<std::string> removed;
++  for (const spaces::PinRecord& record : store_->records()) {
++    if (!IsLiveRowToken(record.id)) {
++      order.push_back(record.id);
++      continue;
++    }
++    if (!fresh.contains(record.id)) {
++      removed.insert(record.id);
++    }
++    if (!placed) {
++      for (const spaces::PinRecord& row : rows) {
++        order.push_back(row.id);
++      }
++      placed = true;
++    }
++  }
++  if (!placed) {
++    for (const spaces::PinRecord& row : rows) {
++      order.push_back(row.id);
++    }
++  }
++  {
++    publishing_ = true;
++    store_->Publish(order, rows, removed);
++    publishing_ = false;
++  }
++  live_ids_ = fresh;
++}
++
++void LiveFolderService::ApplyLast() {
++  if (!on_ || !store_ || !store_->ready() || !LiveIdsInStore().empty()) {
++    return;
++  }
++  Apply(last_pulls_, /*complete=*/false);
++  Save();
++}
++
++void LiveFolderService::RemoveRows() {
++  if (!store_ || !store_->ready()) {
++    return;
++  }
++  const std::vector<std::string> ids = LiveIdsInStore();
++  if (ids.empty()) {
++    return;
++  }
++  std::vector<std::string> order;
++  for (const spaces::PinRecord& record : store_->records()) {
++    if (!IsLiveRowToken(record.id)) {
++      order.push_back(record.id);
++    }
++  }
++  publishing_ = true;
++  store_->Publish(order, {}, std::set<std::string>(ids.begin(), ids.end()));
++  publishing_ = false;
++}
++
++void LiveFolderService::ReleaseLooseRows(bool close_asleep) {
++  ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
++      [&](BrowserWindowInterface* window) {
++        TabStripModel* const strip = window->GetTabStripModel();
++        if (window->GetProfile() != profile_ || !strip) {
++          return true;
++        }
++        const spaces::SpaceModel* const model =
++            spaces::SpaceModel::From(window);
++        for (int i = strip->count() - 1; i >= 0; --i) {
++          tabs::TabInterface* const tab = strip->GetTabAtIndex(i);
++          const std::string token = stedding::TabToken(tab->GetContents());
++          if (!IsLiveRowToken(token)) {
++            continue;
++          }
++          // A row of the folder that is on stays one.
++          const bool row = on_ && store_ && store_->Find(token) && model &&
++                           (model->IsSpacePinned(tab) || tab->IsPinned());
++          if (row) {
++            continue;
++          }
++          if (close_asleep && Asleep(tab) && strip->GetActiveTab() != tab) {
++            strip->CloseWebContentsAt(i, TabCloseTypes::CLOSE_NONE);
++            continue;
++          }
++          stedding::SetTabToken(tab, base::Token::CreateRandom().ToString());
++          // While the folder is on, a tab the person took out of it leaves
++          // it: the last row unpinned stays in its folder, which would then
++          // be no row of the run, and the folder's one row could not come
++          // back there.
++          if (on_ && OutermostFolderId(tab) == folder_id_) {
++            strip->MoveTabOutOfFolders(i);
++          }
++        }
++        return true;
++      });
++}
++
++void LiveFolderService::OnPinStoreChanged() {
++  if (publishing_ || !on_ || !store_) {
++    return;
++  }
++  if (waiting_list_ && store_->ready()) {
++    const std::vector<PullRequest> list = *waiting_list_;
++    Apply(list, waiting_complete_);
++    return;
++  }
++  const std::vector<std::string> ids = LiveIdsInStore();
++  const std::set<std::string> now(ids.begin(), ids.end());
++  std::set<std::string> gone;
++  for (const std::string& id : live_ids_) {
++    if (!now.contains(id)) {
++      gone.insert(id);
++    }
++  }
++  live_ids_ = now;
++  // The folder's name, icon and open or closed state as the person left
++  // them, for a row made when none is left.
++  if (const std::string path = FolderPath(); !now.empty()) {
++    last_folder_path_ = path;
++  }
++  if (!gone.empty() && FolderGoing()) {
++    // Lf8: the person took the folder itself out of the run (Unpin Folder,
++    // a drop below the Clear line or into a folder there, Close Folder's
++    // Tabs): it is deleted, a row that was outside it at the time included.
++    // A turn later, once every window has followed this change.
++    folder_going_until_ = base::TimeTicks();
++    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
++        FROM_HERE,
++        base::BindOnce(
++            [](base::WeakPtr<LiveFolderService> service) {
++              if (service && service->on_) {
++                service->TurnOff(/*remove_rows=*/true);
++              }
++            },
++            weak_factory_.GetWeakPtr()));
++    return;
++  }
++  bool save = false;
++  // Lf5: a row brought back is shown again; a row removed is not, while its
++  // pull request is open.
++  for (const std::string& id : now) {
++    save |= std::erase(dismissed_, id) > 0;
++  }
++  for (const std::string& id : gone) {
++    if (id != RowId(kNoneRow)) {
++      save |= Dismiss(id);
++    }
++  }
++  // Lf8: the folder moved to another Space, or its Space was deleted and its
++  // pins moved (windows G21): every row in the folder is in the other Space.
++  // One row moved alone goes back into the folder at the next refresh.
++  std::optional<spaces::SpaceId> moved_to;
++  bool all_moved = false;
++  for (const spaces::PinRecord& record : store_->records()) {
++    if (!IsLiveRowToken(record.id) || !record.has_space) {
++      continue;
++    }
++    const std::vector<stedding::FolderPathEntry> path =
++        stedding::ParseFolderPath(record.folder_path);
++    if (path.empty() || path.front().id != folder_id_) {
++      continue;
++    }
++    if (record.space == space_ ||
++        (moved_to && record.space != *moved_to)) {
++      all_moved = false;
++      break;
++    }
++    moved_to = record.space;
++    all_moved = true;
++  }
++  if (all_moved && moved_to) {
++    space_ = *moved_to;
++    save = true;
++  }
++  if (!gone.empty()) {
++    // Lf5: the tab of a row the person took out is theirs: a token of its
++    // own, so pinning it again makes no live row. A turn later, once every
++    // window has settled.
++    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
++        FROM_HERE, base::BindOnce(&LiveFolderService::ReleaseLooseRows,
++                                  weak_factory_.GetWeakPtr(),
++                                  /*close_asleep=*/false));
++  }
++  if (now.empty() && !gone.empty()) {
++    // Lf5: the last row went: the folder stays, with its one row.
++    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
++        FROM_HERE, base::BindOnce(&LiveFolderService::ApplyLast,
++                                  weak_factory_.GetWeakPtr()));
++  }
++  if (save) {
++    Save();
++    Changed();
++  }
++}
++
++std::u16string LiveFolderService::Tooltip() const {
++  std::u16string when;
++  if (!refreshed_.is_null()) {
++    when = base::StrCat(
++        {u"Refreshed at ", base::TimeFormatTimeOfDay(refreshed_), u"."});
++  }
++  if (failure_ == Failure::kNone) {
++    return base::StrCat({u"Your open pull requests on GitHub. ", when});
++  }
++  return base::StrCat({FailureText(failure_), u" ", when});
++}
++
++void LiveFolderService::UpdateNote() {
++  if (!on_) {
++    SetNote(profile_, std::string(), std::nullopt);
++    return;
++  }
++  FolderNote note;
++  note.failed = failure_ != Failure::kNone;
++  note.tooltip = std::u16string(
++      base::TrimWhitespace(Tooltip(), base::TRIM_TRAILING));
++  SetNote(profile_, folder_id_, std::move(note));
++}
++
++base::DictValue LiveFolderService::StateForSettings() const {
++  base::DictValue state;
++  state.Set("on", on_);
++  state.Set("making", making_);
++  state.Set("tokenPage", kTokenPage);
++  if (!on_) {
++    return state;
++  }
++  std::string space_name;
++  if (const spaces::SpaceRegistry* const registry =
++          spaces::SpaceRegistryFactory::GetForProfile(profile_)) {
++    for (const spaces::RegistryEntry& entry : registry->entries()) {
++      if (entry.id == space_) {
++        space_name = entry.name;
++      }
++    }
++  }
++  state.Set("space", space_name);
++  state.Set("rows", static_cast<int>(rows()));
++  state.Set("refreshed", refreshed_.is_null()
++                             ? std::u16string()
++                             : base::TimeFormatTimeOfDay(refreshed_));
++  state.Set("error", FailureText(failure_));
++  return state;
++}
++
++void LiveFolderService::AddObserver(Observer* observer) {
++  observers_.AddObserver(observer);
++}
++
++void LiveFolderService::RemoveObserver(Observer* observer) {
++  observers_.RemoveObserver(observer);
++}
++
++void LiveFolderService::Changed() {
++  for (Observer& observer : observers_) {
++    observer.OnLiveFolderChanged();
++  }
++}
++
++}  // namespace live_folders
+diff --git a/chrome/browser/ui/live_folders/live_folder_service.h b/chrome/browser/ui/live_folders/live_folder_service.h
+new file mode 100644
+index 0000000000000..6359cea1b3c30
+--- /dev/null
++++ b/chrome/browser/ui/live_folders/live_folder_service.h
+@@ -0,0 +1,246 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_LIVE_FOLDERS_LIVE_FOLDER_SERVICE_H_
++#define CHROME_BROWSER_UI_LIVE_FOLDERS_LIVE_FOLDER_SERVICE_H_
++
++#include <memory>
++#include <optional>
++#include <set>
++#include <string>
++#include <vector>
++
++#include "base/functional/callback.h"
++#include "base/memory/raw_ptr.h"
++#include "base/memory/scoped_refptr.h"
++#include "base/memory/weak_ptr.h"
++#include "base/observer_list.h"
++#include "base/observer_list_types.h"
++#include "base/scoped_observation.h"
++#include "base/time/time.h"
++#include "base/values.h"
++#include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
++#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
++#include "chrome/browser/ui/live_folders/github_pulls.h"
++#include "chrome/browser/ui/live_folders/live_folder_scheduler.h"
++#include "chrome/browser/ui/spaces/pin_store.h"
++#include "chrome/browser/ui/spaces/space_id.h"
++#include "chrome/browser/ui/stedding/stedding_prefs.h"
++#include "components/keyed_service/core/keyed_service.h"
++
++class Profile;
++
++namespace network {
++class SharedURLLoaderFactory;
++}  // namespace network
++
++namespace os_crypt_async {
++class Encryptor;
++}  // namespace os_crypt_async
++
++namespace live_folders {
++
++// Lf2: the live folder's setup, none of it secret: whether it is on, its
++// Space, its folder's id, the rows the person removed, and the last refresh.
++inline constexpr const char* kGitHubFolderPref =
++    stedding::prefs::kLiveFolderGitHub;
++// Lf2: the token, sealed by the system's key store (os_crypt) and base64.
++// No list of Settings' preferences names it, so no page can read it.
++inline constexpr const char* kGitHubTokenPref =
++    stedding::prefs::kLiveFolderGitHubToken;
++
++// docs/features/live-folders.md (ADR 0036, option B): a profile's live folder
++// of GitHub pull requests. Off until the person makes it with a token; then a
++// pinned folder in one Space, kept in the profile's pin store (ADR 0035) so
++// every window shows it, refreshed from api.github.com on a timer.
++class LiveFolderService : public KeyedService,
++                          public BrowserCollectionObserver,
++                          public spaces::PinStore::Observer {
++ public:
++  class Observer : public base::CheckedObserver {
++   public:
++    // On, off, a refresh, or a failure: Settings draws again.
++    virtual void OnLiveFolderChanged() {}
++  };
++
++  // The answer to Make and ReplaceToken: kNone when it was done.
++  using MadeCallback = base::OnceCallback<void(Failure)>;
++
++  LiveFolderService(Profile* profile, spaces::PinStore* store);
++  LiveFolderService(const LiveFolderService&) = delete;
++  LiveFolderService& operator=(const LiveFolderService&) = delete;
++  ~LiveFolderService() override;
++
++  // Lf10: tests answer every request from here instead of the network.
++  static void SetURLLoaderFactoryForTesting(
++      scoped_refptr<network::SharedURLLoaderFactory> factory);
++
++  // Lf1, Lf2: makes the folder in `space` with `token`. The first list is
++  // asked for at once; the folder appears, and the token is kept, only when
++  // GitHub answers it. With the folder on, it is ReplaceToken.
++  void Make(const std::string& token,
++            const spaces::SpaceId& space,
++            MadeCallback done);
++  // Lf1: Make in the active Space of the window last in front.
++  void MakeInActiveSpace(const std::string& token, MadeCallback done);
++  // Lf2: a new token for the folder that is on, kept only when GitHub answers
++  // it. The folder, its name, icon, open or closed state and the rows the
++  // person removed stay as they are.
++  void ReplaceToken(const std::string& token, MadeCallback done);
++  // Lf4: the person's Refresh, from the folder's menu or Settings.
++  void RefreshNow();
++  // Lf8: the folder goes, the timer stops and the token is forgotten.
++  void Delete();
++  // Lf8: the person is about to take the folder itself out of the pinned run
++  // (Unpin Folder, a drop below the Clear line, Close Folder's Tabs). When its
++  // rows leave the store soon after, the folder is deleted; otherwise rows
++  // leaving only hide those pull requests.
++  void NoteFolderGoing();
++
++  bool on() const { return on_; }
++  bool making() const { return making_; }
++  const std::string& folder_id() const { return folder_id_; }
++  const spaces::SpaceId& space() const { return space_; }
++  Failure failure() const { return failure_; }
++  base::Time refreshed() const { return refreshed_; }
++  std::set<std::string> dismissed() const {
++    return std::set<std::string>(dismissed_.begin(), dismissed_.end());
++  }
++  // Lf5: `id` removed by the person, as the person's removal of its row does.
++  void DismissForTesting(const std::string& id) { Dismiss(id); }
++  // The pull requests in the folder now; the one row of an empty list is
++  // none.
++  size_t rows() const;
++  // Lf11: what Settings shows: no token, ever.
++  base::DictValue StateForSettings() const;
++  // Lf6: the folder header's tooltip.
++  std::u16string Tooltip() const;
++  const LiveFolderScheduler& scheduler_for_testing() const {
++    return scheduler_;
++  }
++  // Lf4's refresh at once, past the minute's floor, which the scheduler's own
++  // tests cover.
++  void RefreshNowForTesting() { Refresh(); }
++  bool refreshing_for_testing() const { return fetch_ != nullptr; }
++  bool has_token_for_testing() const { return !token_.empty(); }
++
++  void AddObserver(Observer* observer);
++  void RemoveObserver(Observer* observer);
++
++  // KeyedService:
++  void Shutdown() override;
++
++ private:
++  struct Fetch;
++  // The merged list, and whether every search answered in full (Lf5).
++  using FetchDone = base::OnceCallback<
++      void(Failure, std::vector<PullRequest>, bool complete)>;
++
++  // BrowserCollectionObserver:
++  void OnBrowserActivated(BrowserWindowInterface* browser) override;
++
++  // spaces::PinStore::Observer:
++  void OnPinStoreChanged() override;
++
++  void Load();
++  void Save();
++  void OnEncryptorToRead(int generation,
++                         scoped_refptr<os_crypt_async::Encryptor> encryptor);
++  void OnMadeFetch(int generation,
++                   std::string token,
++                   std::optional<spaces::SpaceId> space,
++                   MadeCallback done,
++                   Failure failure,
++                   std::vector<PullRequest> pulls,
++                   bool complete);
++  void OnEncryptorToMake(int generation,
++                         std::string token,
++                         std::optional<spaces::SpaceId> space,
++                         std::vector<PullRequest> pulls,
++                         bool complete,
++                         MadeCallback done,
++                         scoped_refptr<os_crypt_async::Encryptor> encryptor);
++
++  // Lf3: the four searches with `token`; `done` gets the merged list or why
++  // there is none. A fetch already running is dropped first.
++  void StartFetch(const std::string& token, FetchDone done);
++  void OnAnswer(size_t index, std::optional<std::string> body);
++  scoped_refptr<network::SharedURLLoaderFactory> Factory();
++
++  // Lf4's beat.
++  void Refresh();
++  void OnRefreshed(int generation,
++                   Failure failure,
++                   std::vector<PullRequest> pulls,
++                   bool complete);
++
++  // Lf5: the list into the pin store, where every window takes it from.
++  void Apply(const std::vector<PullRequest>& pulls, bool complete);
++  // Lf5: the last list again, after rows were removed: an empty folder shows
++  // its one row.
++  void ApplyLast();
++  std::string FolderPath() const;
++  std::vector<std::string> LiveIdsInStore() const;
++  void RemoveRows();
++  // Lf5, Lf8: a tab that carries a live row's token and is no row any more
++  // takes a token of its own, so it is the person's from then on; asleep, with
++  // `close_asleep`, it closes instead.
++  void ReleaseLooseRows(bool close_asleep);
++  bool FolderGoing() const;
++  // Lf5: `id` into the removed rows, newest last; false when it was there.
++  bool Dismiss(const std::string& id);
++  bool IsDismissed(const std::string& id) const;
++  // Lf1: the active Space of the window last in front, or the first Space.
++  std::optional<spaces::SpaceId> ActiveSpace() const;
++  bool SpaceExists(const spaces::SpaceId& space) const;
++
++  void InstallCommandHandler();
++  void TurnOff(bool remove_rows);
++  void UpdateNote();
++  void Changed();
++  bool HasWindow() const;
++
++  const raw_ptr<Profile> profile_;
++  const raw_ptr<spaces::PinStore> store_;
++
++  bool on_ = false;
++  bool making_ = false;
++  // Bumped by Delete and Shutdown: an answer for an older one is dropped.
++  int generation_ = 0;
++  std::string folder_id_;
++  spaces::SpaceId space_ = spaces::SpaceId::CreateEmpty();
++  // In memory only, once opened; never written as it is.
++  std::string token_;
++  bool token_lost_ = false;
++  Failure failure_ = Failure::kNone;
++  base::Time refreshed_;
++  // Lf5: pull requests whose row the person removed, oldest first; not shown
++  // again while they are open. Past kMaxDismissed the oldest is forgotten.
++  std::vector<std::string> dismissed_;
++  // The live rows the store had at the last look.
++  std::set<std::string> live_ids_;
++  // The last list GitHub gave, in memory.
++  std::vector<PullRequest> last_pulls_;
++  // The folder's path as its rows last had it.
++  std::string last_folder_path_;
++  // A list waiting for the store to be filled, and whether it was complete.
++  std::optional<std::vector<PullRequest>> waiting_list_;
++  bool waiting_complete_ = false;
++  bool publishing_ = false;
++  // Lf8: until when rows leaving the store are the folder going.
++  base::TimeTicks folder_going_until_;
++
++  std::unique_ptr<Fetch> fetch_;
++  LiveFolderScheduler scheduler_;
++  base::ObserverList<Observer> observers_;
++  base::ScopedObservation<GlobalBrowserCollection, BrowserCollectionObserver>
++      browsers_observation_{this};
++  base::ScopedObservation<spaces::PinStore, spaces::PinStore::Observer>
++      store_observation_{this};
++  base::WeakPtrFactory<LiveFolderService> weak_factory_{this};
++};
++
++}  // namespace live_folders
++
++#endif  // CHROME_BROWSER_UI_LIVE_FOLDERS_LIVE_FOLDER_SERVICE_H_
+diff --git a/chrome/browser/ui/live_folders/live_folder_service_factory.cc b/chrome/browser/ui/live_folders/live_folder_service_factory.cc
+new file mode 100644
+index 0000000000000..abbc503eb9958
+--- /dev/null
++++ b/chrome/browser/ui/live_folders/live_folder_service_factory.cc
+@@ -0,0 +1,54 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/live_folders/live_folder_service_factory.h"
++
++#include <memory>
++
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/ui/live_folders/live_folder_service.h"
++#include "chrome/browser/ui/spaces/pin_store_factory.h"
++#include "chrome/browser/ui/spaces/space_registry_factory.h"
++
++namespace live_folders {
++
++// static
++LiveFolderService* LiveFolderServiceFactory::GetForProfile(Profile* profile) {
++  return static_cast<LiveFolderService*>(
++      GetInstance()->GetServiceForBrowserContext(profile, /*create=*/true));
++}
++
++// static
++LiveFolderServiceFactory* LiveFolderServiceFactory::GetInstance() {
++  static base::NoDestructor<LiveFolderServiceFactory> instance;
++  return instance.get();
++}
++
++LiveFolderServiceFactory::LiveFolderServiceFactory()
++    : ProfileKeyedServiceFactory(
++          "live_folders::LiveFolderService",
++          ProfileSelections::Builder()
++              .WithRegular(ProfileSelection::kOriginalOnly)
++              .WithGuest(ProfileSelection::kNone)
++              .WithSystem(ProfileSelection::kNone)
++              .Build()) {
++  DependsOn(spaces::PinStoreFactory::GetInstance());
++  DependsOn(spaces::SpaceRegistryFactory::GetInstance());
++}
++
++LiveFolderServiceFactory::~LiveFolderServiceFactory() = default;
++
++std::unique_ptr<KeyedService>
++LiveFolderServiceFactory::BuildServiceInstanceForBrowserContext(
++    content::BrowserContext* context) const {
++  Profile* const profile = Profile::FromBrowserContext(context);
++  return std::make_unique<LiveFolderService>(
++      profile, spaces::PinStoreFactory::GetForProfile(profile));
++}
++
++bool LiveFolderServiceFactory::ServiceIsCreatedWithBrowserContext() const {
++  return true;
++}
++
++}  // namespace live_folders
+diff --git a/chrome/browser/ui/live_folders/live_folder_service_factory.h b/chrome/browser/ui/live_folders/live_folder_service_factory.h
+new file mode 100644
+index 0000000000000..4d8faf4bdf2fc
+--- /dev/null
++++ b/chrome/browser/ui/live_folders/live_folder_service_factory.h
+@@ -0,0 +1,38 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_LIVE_FOLDERS_LIVE_FOLDER_SERVICE_FACTORY_H_
++#define CHROME_BROWSER_UI_LIVE_FOLDERS_LIVE_FOLDER_SERVICE_FACTORY_H_
++
++#include "base/no_destructor.h"
++#include "chrome/browser/profiles/profile_keyed_service_factory.h"
++
++class Profile;
++
++namespace live_folders {
++
++class LiveFolderService;
++
++// docs/features/live-folders.md: the profile's live folder. Made with the
++// profile, so a folder that is on refreshes when a window comes to the front;
++// a profile without one only reads its setup. A private profile has none.
++class LiveFolderServiceFactory : public ProfileKeyedServiceFactory {
++ public:
++  static LiveFolderService* GetForProfile(Profile* profile);
++  static LiveFolderServiceFactory* GetInstance();
++
++ private:
++  friend base::NoDestructor<LiveFolderServiceFactory>;
++  LiveFolderServiceFactory();
++  ~LiveFolderServiceFactory() override;
++
++  // ProfileKeyedServiceFactory:
++  std::unique_ptr<KeyedService> BuildServiceInstanceForBrowserContext(
++      content::BrowserContext* context) const override;
++  bool ServiceIsCreatedWithBrowserContext() const override;
++};
++
++}  // namespace live_folders
++
++#endif  // CHROME_BROWSER_UI_LIVE_FOLDERS_LIVE_FOLDER_SERVICE_FACTORY_H_
+diff --git a/chrome/browser/ui/live_folders/live_folders_unittest.cc b/chrome/browser/ui/live_folders/live_folders_unittest.cc
+new file mode 100644
+index 0000000000000..46075d3c6123a
+--- /dev/null
++++ b/chrome/browser/ui/live_folders/live_folders_unittest.cc
+@@ -0,0 +1,345 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++// docs/features/live-folders.md Lf3, Lf4, Lf7, Lf9: the searches, reading an
++// answer, why a request failed, and when a refresh runs.
++
++#include <string>
++#include <vector>
++
++#include "base/functional/bind.h"
++#include "base/memory/scoped_refptr.h"
++#include "base/test/task_environment.h"
++#include "base/time/time.h"
++#include "chrome/browser/ui/live_folders/github_pulls.h"
++#include "chrome/browser/ui/live_folders/live_folder_note.h"
++#include "chrome/browser/ui/live_folders/live_folder_scheduler.h"
++#include "chrome/browser/ui/live_folders/recorded_answers.h"
++#include "net/base/net_errors.h"
++#include "net/base/url_util.h"
++#include "net/http/http_request_headers.h"
++#include "net/http/http_response_headers.h"
++#include "net/http/http_util.h"
++#include "testing/gtest/include/gtest/gtest.h"
++#include "url/gurl.h"
++
++namespace live_folders {
++
++namespace {
++
++scoped_refptr<net::HttpResponseHeaders> Headers(const std::string& raw) {
++  return base::MakeRefCounted<net::HttpResponseHeaders>(
++      net::HttpUtil::AssembleRawHeaders(raw));
++}
++
++}  // namespace
++
++// Lf3: four searches, each to api.github.com, each open pull requests of
++// unarchived repositories, one per way a pull request is the person's.
++TEST(LiveFolderAnswerTest, TheFourSearchesAskGitHubAlone) {
++  const std::vector<GURL> urls = SearchUrls();
++  ASSERT_EQ(4u, urls.size());
++  std::vector<std::string> who;
++  for (const GURL& url : urls) {
++    EXPECT_EQ("https", url.scheme());
++    EXPECT_EQ("api.github.com", url.host());
++    EXPECT_EQ("/search/issues", url.path());
++    std::string q;
++    ASSERT_TRUE(net::GetValueForKeyInQuery(url, "q", &q));
++    EXPECT_TRUE(q.starts_with("is:pr is:open archived:false ")) << q;
++    who.push_back(q.substr(q.rfind(' ') + 1));
++    std::string per_page;
++    ASSERT_TRUE(net::GetValueForKeyInQuery(url, "per_page", &per_page));
++    EXPECT_EQ("50", per_page);
++  }
++  EXPECT_EQ((std::vector<std::string>{"author:@me", "assignee:@me",
++                                      "review-requested:@me", "mentions:@me"}),
++            who);
++}
++
++// Lf3: the token goes in Authorization, as a bearer token, with GitHub's
++// media type and API version.
++TEST(LiveFolderAnswerTest, EachSearchCarriesTheTokenAndTheVersion) {
++  net::HttpRequestHeaders headers;
++  SetRequestHeaders("github_pat_abc123", &headers);
++  EXPECT_EQ("Bearer github_pat_abc123",
++            headers.GetHeader("Authorization").value_or(""));
++  EXPECT_EQ("application/vnd.github+json",
++            headers.GetHeader("Accept").value_or(""));
++  EXPECT_EQ("2022-11-28",
++            headers.GetHeader("X-GitHub-Api-Version").value_or(""));
++  EXPECT_FALSE(headers.HasHeader("Cookie"));
++}
++
++// Lf3, Lf10: what a recorded answer holds is what is read.
++TEST(LiveFolderAnswerTest, TheRecordedAnswerIsReadAsItIs) {
++  const std::optional<std::vector<PullRequest>> pulls =
++      ParseSearchAnswer(recorded::kAuthored);
++  ASSERT_TRUE(pulls);
++  ASSERT_EQ(2u, pulls->size());
++  EXPECT_EQ(recorded::kRocket42, (*pulls)[0].node_id);
++  EXPECT_EQ("acme/rocket", (*pulls)[0].repo);
++  EXPECT_EQ("Make the launch window configurable", (*pulls)[0].title);
++  EXPECT_EQ(GURL("https://github.com/acme/rocket/pull/42"), (*pulls)[0].url);
++  EXPECT_EQ(u"acme/rocket: Make the launch window configurable",
++            RowName((*pulls)[0]));
++  EXPECT_EQ(recorded::kFuel7, (*pulls)[1].node_id);
++  EXPECT_EQ("acme/fuel", (*pulls)[1].repo);
++}
++
++// Lf3: an issue, an address that is not a pull request on github.com, and a
++// closed one are left out; what is no search answer is none.
++TEST(LiveFolderAnswerTest, WhatIsNoOpenPullRequestIsLeftOut) {
++  const std::optional<std::vector<PullRequest>> pulls =
++      ParseSearchAnswer(recorded::kReviewRequested);
++  ASSERT_TRUE(pulls);
++  ASSERT_EQ(1u, pulls->size());
++  EXPECT_EQ(recorded::kRocket45, (*pulls)[0].node_id);
++
++  const std::optional<std::vector<PullRequest>> odd = ParseSearchAnswer(R"({
++    "items": [
++      {"node_id": "PR_a", "title": "elsewhere", "state": "open",
++       "html_url": "https://evil.example/acme/rocket/pull/1",
++       "pull_request": {}},
++      {"node_id": "PR_b", "title": "plain http", "state": "open",
++       "html_url": "http://github.com/acme/rocket/pull/2",
++       "pull_request": {}},
++      {"node_id": "PR_c", "title": "closed", "state": "closed",
++       "html_url": "https://github.com/acme/rocket/pull/3",
++       "pull_request": {}},
++      {"node_id": "PR d", "title": "odd id", "state": "open",
++       "html_url": "https://github.com/acme/rocket/pull/4",
++       "pull_request": {}},
++      {"node_id": "PR_e", "title": "a commit page", "state": "open",
++       "html_url": "https://github.com/acme/rocket/commit/5",
++       "pull_request": {}}
++    ]})");
++  ASSERT_TRUE(odd);
++  EXPECT_TRUE(odd->empty());
++
++  EXPECT_FALSE(ParseSearchAnswer(recorded::kBadCredentials));
++  EXPECT_FALSE(ParseSearchAnswer("not json"));
++  EXPECT_TRUE(ParseSearchAnswer(recorded::kNothing).value().empty());
++}
++
++// Lf3: the four answers make one list, each pull request once, newest first.
++TEST(LiveFolderAnswerTest, TheFourAnswersMakeOneListNewestFirst) {
++  const std::vector<PullRequest> merged = MergeAnswers({
++      ParseSearchAnswer(recorded::kAuthored).value(),
++      ParseSearchAnswer(recorded::kNothing).value(),
++      ParseSearchAnswer(recorded::kReviewRequested).value(),
++      ParseSearchAnswer(recorded::kMentioned).value(),
++  });
++  ASSERT_EQ(3u, merged.size());
++  EXPECT_EQ(recorded::kRocket45, merged[0].node_id);
++  EXPECT_EQ(recorded::kRocket42, merged[1].node_id);
++  EXPECT_EQ(recorded::kFuel7, merged[2].node_id);
++}
++
++// Lf3: never more than kMaxRows rows.
++TEST(LiveFolderAnswerTest, TheListStopsAtFiftyRows) {
++  std::vector<PullRequest> many;
++  for (int i = 0; i < 80; ++i) {
++    PullRequest pull;
++    pull.node_id = "PR_" + std::to_string(i);
++    pull.created_at = "2026-11-" + std::to_string(10 + i % 10);
++    many.push_back(pull);
++  }
++  EXPECT_EQ(kMaxRows, MergeAnswers({many}).size());
++}
++
++// Lf7: each reason the tooltip gives.
++TEST(LiveFolderAnswerTest, AFailedRequestSaysWhy) {
++  EXPECT_EQ(Failure::kNone, FailureOf(net::OK, 200, nullptr));
++  EXPECT_EQ(Failure::kToken, FailureOf(net::OK, 401, nullptr));
++  EXPECT_EQ(Failure::kRateLimit,
++            FailureOf(net::OK, 403,
++                      Headers("HTTP/1.1 403 Forbidden\n"
++                              "x-ratelimit-remaining: 0\n\n")
++                          .get()));
++  EXPECT_EQ(Failure::kRateLimit,
++            FailureOf(net::OK, 403,
++                      Headers("HTTP/1.1 403 Forbidden\nretry-after: 60\n\n")
++                          .get()));
++  EXPECT_EQ(Failure::kRateLimit, FailureOf(net::OK, 429, nullptr));
++  EXPECT_EQ(Failure::kToken,
++            FailureOf(net::OK, 403,
++                      Headers("HTTP/1.1 403 Forbidden\n"
++                              "x-ratelimit-remaining: 12\n\n")
++                          .get()));
++  EXPECT_EQ(Failure::kNetwork,
++            FailureOf(net::ERR_INTERNET_DISCONNECTED, 0, nullptr));
++  EXPECT_EQ(Failure::kNetwork, FailureOf(net::ERR_NAME_NOT_RESOLVED, 0, nullptr));
++  EXPECT_EQ(Failure::kServer, FailureOf(net::OK, 502, nullptr));
++  for (Failure failure : {Failure::kToken, Failure::kRateLimit,
++                          Failure::kNetwork, Failure::kServer,
++                          Failure::kKeyStore}) {
++    EXPECT_FALSE(FailureText(failure).empty());
++  }
++  EXPECT_NE(std::u16string::npos,
++            FailureText(Failure::kToken).find(u"expired"));
++  EXPECT_NE(std::u16string::npos,
++            FailureText(Failure::kRateLimit).find(u"rate limit"));
++  EXPECT_NE(std::u16string::npos,
++            FailureText(Failure::kNetwork).find(u"network"));
++}
++
++// Lf9: sync knows a live row by its token alone.
++TEST(LiveFolderAnswerTest, ALiveRowIsKnownByItsToken) {
++  EXPECT_TRUE(IsLiveRowToken("livegh-PR_kwDOAAAAAA42"));
++  EXPECT_FALSE(IsLiveRowToken("3f2c0c1e-0000-4000-8000-000000000000"));
++  EXPECT_FALSE(IsLiveRowToken(""));
++}
++
++// Lf1: a paste that cannot be a token is refused before any request.
++TEST(LiveFolderAnswerTest, APasteThatIsNoTokenIsRefused) {
++  EXPECT_TRUE(LooksLikeAToken("github_pat_11ABC_def123"));
++  EXPECT_TRUE(LooksLikeAToken("ghp_0123456789abc"));
++  EXPECT_FALSE(LooksLikeAToken(""));
++  EXPECT_FALSE(LooksLikeAToken("ghp_abc def"));
++  EXPECT_FALSE(LooksLikeAToken("Bearer ghp_abc"));
++  EXPECT_FALSE(LooksLikeAToken("ghp_abc\n"));
++  EXPECT_FALSE(LooksLikeAToken("ghp-abc"));
++  EXPECT_FALSE(LooksLikeAToken("https://github.com/settings/tokens"));
++  EXPECT_FALSE(LooksLikeAToken(std::string(256, 'a')));
++  EXPECT_TRUE(LooksLikeAToken(std::string(255, 'a')));
++}
++
++// Lf3: an old pull request's node id, base64 with '=' at its end, is kept.
++TEST(LiveFolderAnswerTest, AnOldNodeIdIsKept) {
++  EXPECT_TRUE(IsNodeId(recorded::kLegacy1));
++  EXPECT_TRUE(IsNodeId("MDEwOlJlcG9zaXRvcnkxMjk2MjY5"));
++  EXPECT_TRUE(IsNodeId("a+b/c=="));
++  EXPECT_FALSE(IsNodeId("PR d"));
++  EXPECT_FALSE(IsNodeId("PR_\"x"));
++  EXPECT_FALSE(IsNodeId(""));
++  const std::optional<std::vector<PullRequest>> pulls =
++      ParseSearchAnswer(recorded::kAssignedLegacy);
++  ASSERT_TRUE(pulls);
++  ASSERT_EQ(1u, pulls->size());
++  EXPECT_EQ(recorded::kLegacy1, (*pulls)[0].node_id);
++  EXPECT_EQ("acme/legacy", (*pulls)[0].repo);
++}
++
++// Lf3: a redirect anywhere but api.github.com loses the Authorization header.
++TEST(LiveFolderAnswerTest, ARedirectOffGitHubDropsTheToken) {
++  EXPECT_FALSE(DropsAuthorizationOnRedirectTo(
++      GURL("https://api.github.com/search/issues?q=x")));
++  EXPECT_TRUE(DropsAuthorizationOnRedirectTo(
++      GURL("https://github.com/search/issues")));
++  EXPECT_TRUE(DropsAuthorizationOnRedirectTo(
++      GURL("http://api.github.com/search/issues")));
++  EXPECT_TRUE(DropsAuthorizationOnRedirectTo(
++      GURL("https://api.github.com.evil.example/")));
++  EXPECT_TRUE(DropsAuthorizationOnRedirectTo(
++      GURL("https://api.github.com:8443/")));
++  EXPECT_TRUE(DropsAuthorizationOnRedirectTo(
++      GURL("https://objects.githubusercontent.com/x")));
++}
++
++// Lf5: an answer says whether it holds every match, and the merged list
++// whether rows were cut: only then is a removed row forgotten.
++TEST(LiveFolderAnswerTest, AnAnswerSaysWhetherItHoldsEveryMatch) {
++  bool complete = false;
++  ASSERT_TRUE(ParseSearchAnswer(recorded::kAuthored, &complete));
++  EXPECT_TRUE(complete);
++  ASSERT_TRUE(ParseSearchAnswer(recorded::kMentionedPastThePage, &complete));
++  EXPECT_FALSE(complete) << "75 matches, one on the page";
++  ASSERT_TRUE(ParseSearchAnswer(
++      R"({"total_count": 1, "incomplete_results": true, "items": [{}]})",
++      &complete));
++  EXPECT_FALSE(complete) << "GitHub said it was cut short";
++  ASSERT_TRUE(ParseSearchAnswer(R"({"items": []})", &complete));
++  EXPECT_FALSE(complete) << "no count, no claim to be whole";
++
++  std::vector<PullRequest> many;
++  for (int i = 0; i < 51; ++i) {
++    PullRequest pull;
++    pull.node_id = "PR_" + std::to_string(i);
++    many.push_back(pull);
++  }
++  bool capped = false;
++  MergeAnswers({many}, &capped);
++  EXPECT_TRUE(capped);
++  many.pop_back();
++  MergeAnswers({many}, &capped);
++  EXPECT_FALSE(capped);
++}
++
++class LiveFolderSchedulerTest : public testing::Test {
++ protected:
++  LiveFolderSchedulerTest()
++      : scheduler_(base::BindRepeating(&LiveFolderSchedulerTest::OnRefresh,
++                                       base::Unretained(this)),
++                   base::BindRepeating(
++                       [](const bool* window) { return *window; },
++                       base::Unretained(&window_))) {}
++
++  void OnRefresh() { ++refreshes_; }
++
++  base::test::TaskEnvironment task_environment_{
++      base::test::TaskEnvironment::TimeSource::MOCK_TIME};
++  bool window_ = true;
++  int refreshes_ = 0;
++  LiveFolderScheduler scheduler_;
++};
++
++// Lf4: never more than once a minute. An ask within the minute waits for
++// it, and many asks in the wait make one refresh.
++TEST_F(LiveFolderSchedulerTest, NeverMoreThanOnceAMinute) {
++  scheduler_.Start(/*ran_now=*/true);
++  EXPECT_EQ(0, refreshes_);
++  task_environment_.FastForwardBy(base::Seconds(10));
++  scheduler_.Ask();
++  scheduler_.Ask();
++  EXPECT_EQ(0, refreshes_);
++  EXPECT_TRUE(scheduler_.waiting());
++  task_environment_.FastForwardBy(base::Seconds(49));
++  EXPECT_EQ(0, refreshes_);
++  task_environment_.FastForwardBy(base::Seconds(1));
++  EXPECT_EQ(1, refreshes_);
++  // A minute after that one, an ask runs at once.
++  task_environment_.FastForwardBy(base::Minutes(1));
++  scheduler_.Ask();
++  EXPECT_EQ(2, refreshes_);
++  // Asks every few seconds for five minutes: at most one a minute.
++  for (int i = 0; i < 100; ++i) {
++    scheduler_.Ask();
++    task_environment_.FastForwardBy(base::Seconds(3));
++  }
++  EXPECT_LE(refreshes_, 2 + 5);
++  EXPECT_GE(refreshes_, 2 + 4);
++}
++
++// Lf4: every 10 minutes while a window is open, and not while none is.
++TEST_F(LiveFolderSchedulerTest, TheBeatIsTenMinutesWhileAWindowIsOpen) {
++  scheduler_.Start(/*ran_now=*/true);
++  task_environment_.FastForwardBy(base::Minutes(10) - base::Seconds(1));
++  EXPECT_EQ(0, refreshes_);
++  task_environment_.FastForwardBy(base::Seconds(1));
++  EXPECT_EQ(1, refreshes_);
++  task_environment_.FastForwardBy(base::Minutes(30));
++  EXPECT_EQ(4, refreshes_);
++  window_ = false;
++  task_environment_.FastForwardBy(base::Minutes(60));
++  EXPECT_EQ(4, refreshes_);
++  window_ = true;
++  task_environment_.FastForwardBy(base::Minutes(10));
++  EXPECT_EQ(5, refreshes_);
++}
++
++// Lf8: stopped, nothing runs: not the beat, not an ask, not one that waited.
++TEST_F(LiveFolderSchedulerTest, StoppedItRunsNothing) {
++  scheduler_.Ask();
++  EXPECT_EQ(0, refreshes_) << "an ask before Start ran";
++  scheduler_.Start(/*ran_now=*/true);
++  scheduler_.Ask();
++  EXPECT_TRUE(scheduler_.waiting());
++  scheduler_.Stop();
++  task_environment_.FastForwardBy(base::Hours(2));
++  scheduler_.Ask();
++  EXPECT_EQ(0, refreshes_);
++}
++
++}  // namespace live_folders
+diff --git a/chrome/browser/ui/live_folders/recorded_answers.h b/chrome/browser/ui/live_folders/recorded_answers.h
+new file mode 100644
+index 0000000000000..5c9cc60e59b89
+--- /dev/null
++++ b/chrome/browser/ui/live_folders/recorded_answers.h
+@@ -0,0 +1,204 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_LIVE_FOLDERS_RECORDED_ANSWERS_H_
++#define CHROME_BROWSER_UI_LIVE_FOLDERS_RECORDED_ANSWERS_H_
++
++// docs/features/live-folders.md Lf10: answers of GitHub's search API in the
++// shape GitHub gives them (GET /search/issues, API version 2022-11-28),
++// trimmed to the fields that matter and a few that do not, with made-up
++// repositories, people and ids. The tests serve them in place of the network.
++namespace live_folders::recorded {
++
++// author:@me: two open pull requests of the person's.
++inline constexpr char kAuthored[] = R"json({
++  "total_count": 2,
++  "incomplete_results": false,
++  "items": [
++    {
++      "url": "https://api.github.com/repos/acme/rocket/issues/42",
++      "repository_url": "https://api.github.com/repos/acme/rocket",
++      "html_url": "https://github.com/acme/rocket/pull/42",
++      "id": 3100000042,
++      "node_id": "PR_kwDOAAAAAA42",
++      "number": 42,
++      "title": "Make the launch window configurable",
++      "user": {"login": "someone", "id": 1},
++      "labels": [],
++      "state": "open",
++      "locked": false,
++      "comments": 3,
++      "created_at": "2026-11-12T09:15:00Z",
++      "updated_at": "2026-11-15T17:02:11Z",
++      "closed_at": null,
++      "draft": false,
++      "pull_request": {
++        "url": "https://api.github.com/repos/acme/rocket/pulls/42",
++        "html_url": "https://github.com/acme/rocket/pull/42",
++        "merged_at": null
++      },
++      "score": 1.0
++    },
++    {
++      "url": "https://api.github.com/repos/acme/fuel/issues/7",
++      "repository_url": "https://api.github.com/repos/acme/fuel",
++      "html_url": "https://github.com/acme/fuel/pull/7",
++      "id": 3100000007,
++      "node_id": "PR_kwDOAAAAAAA7",
++      "number": 7,
++      "title": "Fix the gauge rounding",
++      "user": {"login": "someone", "id": 1},
++      "labels": [],
++      "state": "open",
++      "locked": false,
++      "comments": 0,
++      "created_at": "2026-11-10T12:00:00Z",
++      "updated_at": "2026-11-10T12:30:00Z",
++      "closed_at": null,
++      "draft": true,
++      "pull_request": {
++        "url": "https://api.github.com/repos/acme/fuel/pulls/7",
++        "html_url": "https://github.com/acme/fuel/pull/7",
++        "merged_at": null
++      },
++      "score": 1.0
++    }
++  ]
++})json";
++
++// review-requested:@me: one pull request of someone else's, and an issue
++// (no "pull_request" key), which a folder of pull requests leaves out.
++inline constexpr char kReviewRequested[] = R"json({
++  "total_count": 2,
++  "incomplete_results": false,
++  "items": [
++    {
++      "url": "https://api.github.com/repos/acme/rocket/issues/45",
++      "repository_url": "https://api.github.com/repos/acme/rocket",
++      "html_url": "https://github.com/acme/rocket/pull/45",
++      "id": 3100000045,
++      "node_id": "PR_kwDOAAAAAA45",
++      "number": 45,
++      "title": "Count down in seconds",
++      "user": {"login": "colleague", "id": 2},
++      "state": "open",
++      "created_at": "2026-11-14T08:00:00Z",
++      "updated_at": "2026-11-14T08:00:00Z",
++      "pull_request": {
++        "url": "https://api.github.com/repos/acme/rocket/pulls/45",
++        "html_url": "https://github.com/acme/rocket/pull/45",
++        "merged_at": null
++      }
++    },
++    {
++      "url": "https://api.github.com/repos/acme/rocket/issues/44",
++      "repository_url": "https://api.github.com/repos/acme/rocket",
++      "html_url": "https://github.com/acme/rocket/issues/44",
++      "id": 3100000044,
++      "node_id": "I_kwDOAAAAAA44",
++      "number": 44,
++      "title": "An issue, not a pull request",
++      "state": "open",
++      "created_at": "2026-11-13T08:00:00Z"
++    }
++  ]
++})json";
++
++// mentions:@me: the person's own #42 again, which the folder lists once.
++inline constexpr char kMentioned[] = R"json({
++  "total_count": 1,
++  "incomplete_results": false,
++  "items": [
++    {
++      "html_url": "https://github.com/acme/rocket/pull/42",
++      "node_id": "PR_kwDOAAAAAA42",
++      "number": 42,
++      "title": "Make the launch window configurable",
++      "state": "open",
++      "created_at": "2026-11-12T09:15:00Z",
++      "pull_request": {
++        "html_url": "https://github.com/acme/rocket/pull/42",
++        "merged_at": null
++      }
++    }
++  ]
++})json";
++
++// author:@me after #7 was merged: GitHub's open search no longer has it.
++inline constexpr char kAuthoredAfterMerge[] = R"json({
++  "total_count": 1,
++  "incomplete_results": false,
++  "items": [
++    {
++      "html_url": "https://github.com/acme/rocket/pull/42",
++      "node_id": "PR_kwDOAAAAAA42",
++      "number": 42,
++      "title": "Make the launch window configurable",
++      "state": "open",
++      "created_at": "2026-11-12T09:15:00Z",
++      "pull_request": {
++        "html_url": "https://github.com/acme/rocket/pull/42",
++        "merged_at": null
++      }
++    }
++  ]
++})json";
++
++// assignee:@me: an old pull request, whose node id GitHub still gives in the
++// base64 form of ids made before 2021, ending in '='.
++inline constexpr char kAssignedLegacy[] = R"json({
++  "total_count": 1,
++  "incomplete_results": false,
++  "items": [
++    {
++      "html_url": "https://github.com/acme/legacy/pull/1",
++      "node_id": "MDExOlB1bGxSZXF1ZXN0MQ==",
++      "number": 1,
++      "title": "The first pull request",
++      "state": "open",
++      "created_at": "2016-03-01T10:00:00Z",
++      "pull_request": {
++        "html_url": "https://github.com/acme/legacy/pull/1",
++        "merged_at": null
++      }
++    }
++  ]
++})json";
++
++// mentions:@me with more matches than the page holds: 75 open, one listed.
++inline constexpr char kMentionedPastThePage[] = R"json({
++  "total_count": 75,
++  "incomplete_results": false,
++  "items": [
++    {
++      "html_url": "https://github.com/acme/rocket/pull/42",
++      "node_id": "PR_kwDOAAAAAA42",
++      "title": "Make the launch window configurable",
++      "state": "open",
++      "created_at": "2026-11-12T09:15:00Z",
++      "pull_request": {"html_url": "https://github.com/acme/rocket/pull/42"}
++    }
++  ]
++})json";
++
++// Any search with nothing open.
++inline constexpr char kNothing[] =
++    R"json({"total_count": 0, "incomplete_results": false, "items": []})json";
++
++// GitHub's answer to a token it does not take (HTTP 401).
++inline constexpr char kBadCredentials[] = R"json({
++  "message": "Bad credentials",
++  "documentation_url": "https://docs.github.com/rest",
++  "status": "401"
++})json";
++
++// The node ids above, as the folder's rows carry them.
++inline constexpr char kRocket42[] = "PR_kwDOAAAAAA42";
++inline constexpr char kFuel7[] = "PR_kwDOAAAAAAA7";
++inline constexpr char kRocket45[] = "PR_kwDOAAAAAA45";
++inline constexpr char kLegacy1[] = "MDExOlB1bGxSZXF1ZXN0MQ==";
++
++}  // namespace live_folders::recorded
++
++#endif  // CHROME_BROWSER_UI_LIVE_FOLDERS_RECORDED_ANSWERS_H_
+diff --git a/chrome/browser/ui/spaces/BUILD.gn b/chrome/browser/ui/spaces/BUILD.gn
+index f611b02e59195..4e4c148f54a98 100644
+--- a/chrome/browser/ui/spaces/BUILD.gn
++++ b/chrome/browser/ui/spaces/BUILD.gn
+@@ -290,6 +290,8 @@ source_set("sidebar_sync") {
+   ]
+   deps = [
+     "//chrome/browser/lifetime",
++    # live-folders Lf9: a live folder's rows stay out of sync.
++    "//chrome/browser/ui/live_folders:note",
+     "//chrome/browser/ui/stedding:synced_extensions_bar",
+     "//extensions/browser",
+     "//extensions/common",
+diff --git a/chrome/browser/ui/spaces/sidebar_sync_parts.cc b/chrome/browser/ui/spaces/sidebar_sync_parts.cc
+index 92e199032270b..da873b71c243c 100644
+--- a/chrome/browser/ui/spaces/sidebar_sync_parts.cc
++++ b/chrome/browser/ui/spaces/sidebar_sync_parts.cc
+@@ -35,6 +35,11 @@ constexpr char kMeasured[] = "a size measured against this computer's screen";
+ constexpr char kMacOnly[] = "a Mac-only setting";
+ constexpr char kThisComputer[] =
+     "belongs to this computer: its own updates or keyboard";
++// live-folders Lf9 (ADR 0036): another computer, without the token, would
++// hold a list that never changes.
++constexpr char kLiveFolder[] =
++    "the live folder's setup and its token, sealed by this computer's "
++    "key store";
+ 
+ // sidebar-file Sf59 (ADR 0037): every Stedding preference, in the order of
+ // stedding_prefs.cc. SettingsTableTest fails when one is in neither list.
+@@ -124,6 +129,8 @@ constexpr SettingRule kRules[] = {
+     {p::kPendingJarWipes, kP, kPlain, kInternal},
+     {stedding::kAppJarsPref, kP, kPlain, kInternal},
+     {stedding::kAppDockTilesPref, kP, kPlain, kInternal},
++    {p::kLiveFolderGitHub, kP, kPlain, kLiveFolder},
++    {p::kLiveFolderGitHubToken, kP, kPlain, kLiveFolder},
+     // Browser-wide.
+     {p::kGlobalPrivacyControl, kB, kPlain, ""},
+     {p::kShortcutsUser, kB, kPlain, kThisComputer},
+diff --git a/chrome/browser/ui/spaces/sidebar_sync_tracker.cc b/chrome/browser/ui/spaces/sidebar_sync_tracker.cc
+index 2706df06a79b6..3c1ef1eb50b3b 100644
+--- a/chrome/browser/ui/spaces/sidebar_sync_tracker.cc
++++ b/chrome/browser/ui/spaces/sidebar_sync_tracker.cc
+@@ -12,6 +12,7 @@
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
++#include "chrome/browser/ui/live_folders/live_folder_note.h"
+ #include "chrome/browser/ui/spaces/sidebar_ids.h"
+ #include "chrome/browser/ui/spaces/sidebar_sync_file.h"
+ #include "chrome/browser/ui/spaces/space_model.h"
+@@ -135,6 +136,13 @@ LocalView BuildLocalView(Profile* profile,
+     for (int i = 0; i < strip->count(); ++i) {
+       tabs::TabInterface* const tab = strip->GetTabAtIndex(i);
+       std::string container;
++      // live-folders Lf9: a live folder's rows, and with them its
++      // folder, stay on this computer: another one, without the token,
++      // would hold a list that never changes.
++      if (live_folders::IsLiveRowToken(
++              stedding::TabToken(tab->GetContents()))) {
++        continue;
++      }
+       if (tab->IsPinned()) {
+         const std::optional<SpaceId> owner = model->FindSpaceForTab(tab);
+         container = model->IsOwnEssential(tab) && owner
+@@ -152,6 +160,15 @@ LocalView BuildLocalView(Profile* profile,
+         if (!chain.empty() && !model->IsFolderSpacePinned(chain.front())) {
+           continue;
+         }
++        // live-folders Lf9: nor is anything in a live folder, a tab of the
++        // person's own put there included: the folder stays here.
++        if (std::ranges::any_of(
++                chain, [&](const tabs::FolderTabCollection* folder) {
++                  return live_folders::IsLiveFolder(
++                      profile, folder->id().ToString());
++                })) {
++          continue;
++        }
+         container = PinsListOf(Canonical(resolved, space->ToString()));
+         for (const tabs::FolderTabCollection* const folder : chain) {
+           const std::string folder_id =
+diff --git a/chrome/browser/ui/stedding/stedding_command_ids.h b/chrome/browser/ui/stedding/stedding_command_ids.h
+index 5d70718578b38..de0f3936a3a92 100644
+--- a/chrome/browser/ui/stedding/stedding_command_ids.h
++++ b/chrome/browser/ui/stedding/stedding_command_ids.h
+@@ -28,6 +28,11 @@ inline constexpr int IDC_STEDDING_TOGGLE_PICTURE_IN_PICTURE = 55147;
+ // player Mp9 (BACKLOG S-95): opt-shift-cmd-M shows the tab playing sound in
+ // the background, the sidebar's audio card's.
+ inline constexpr int IDC_STEDDING_GO_TO_PLAYING_TAB = 55160;
++// live-folders Lf1 (ADR 0036): the sidebar menu's New Live Folder
++// submenu, and its GitHub Pull Requests row, which opens Settings on
++// the live folder.
++inline constexpr int IDC_STEDDING_NEW_LIVE_FOLDER = 55161;
++inline constexpr int IDC_STEDDING_NEW_LIVE_FOLDER_GITHUB = 55162;
+ // folders F30: collapse or expand every folder of the Space.
+ inline constexpr int IDC_STEDDING_TOGGLE_ALL_FOLDERS = 55148;
+ // commandbar K24, sessions S27: the site's cookies cleared and the page
+diff --git a/chrome/browser/ui/stedding/stedding_prefs.cc b/chrome/browser/ui/stedding/stedding_prefs.cc
+index d3a53d7706d68..2211f6a301ade 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs.cc
++++ b/chrome/browser/ui/stedding/stedding_prefs.cc
+@@ -150,6 +150,9 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
+   // jar each was made in and the Dock tile Stedding added for it.
+   registry->RegisterDictionaryPref(stedding::kAppJarsPref);
+   registry->RegisterDictionaryPref(stedding::kAppDockTilesPref);
++  // live-folders Lf1, Lf2: off until made.
++  registry->RegisterDictionaryPref(kLiveFolderGitHub);
++  registry->RegisterStringPref(kLiveFolderGitHubToken, std::string());
+ }
+ 
+ void RegisterLocalStatePrefs(PrefRegistrySimple* registry) {
+diff --git a/chrome/browser/ui/stedding/stedding_prefs.h b/chrome/browser/ui/stedding/stedding_prefs.h
+index 670b8b32a415c..faa77aecd9e0d 100644
+--- a/chrome/browser/ui/stedding/stedding_prefs.h
++++ b/chrome/browser/ui/stedding/stedding_prefs.h
+@@ -391,6 +391,14 @@ inline constexpr char kExternalDefaultSpace[] =
+ // next window of the profile finishes them (BACKLOG S-206).
+ inline constexpr char kPendingJarWipes[] = "stedding.spaces.pending_jar_wipes";
+ 
++// live-folders Lf2 (ADR 0036): the live folder's setup (on, its Space, its
++// folder, the rows the person removed, the last refresh), and its token,
++// sealed by the system's key store. No list of Settings' preferences names
++// either, and neither travels with settings sync (settings T72).
++inline constexpr char kLiveFolderGitHub[] = "stedding.live_folders.github";
++inline constexpr char kLiveFolderGitHubToken[] =
++    "stedding.live_folders.github_token";
++
+ // updates Up1, Up6 (docs/features/updates.md): the Mac's updater checks once
+ // a day and downloads a new version in the background; off, it makes no
+ // request at all. Browser-wide, like the updater. On by default (the owner,
+diff --git a/chrome/browser/ui/views/frame/system_menu_model_builder.cc b/chrome/browser/ui/views/frame/system_menu_model_builder.cc
+index f7360197d68d3..8b8b04f4a8323 100644
+--- a/chrome/browser/ui/views/frame/system_menu_model_builder.cc
++++ b/chrome/browser/ui/views/frame/system_menu_model_builder.cc
+@@ -272,6 +272,14 @@ void SystemMenuModelBuilder::BuildSystemMenuForBrowserWindow(
+         model->AddItemWithStringId(IDC_STEDDING_SIDEBAR_SIDE,
+                                    on_right ? IDS_STEDDING_MOVE_SIDEBAR_LEFT
+                                             : IDS_STEDDING_MOVE_SIDEBAR_RIGHT);
++        // live-folders Lf1 (ADR 0036): New Live Folder > GitHub Pull
++        // Requests opens Settings, where the token is pasted.
++        live_folder_menu_ =
++            std::make_unique<ui::SimpleMenuModel>(&menu_delegate_);
++        live_folder_menu_->AddItem(IDC_STEDDING_NEW_LIVE_FOLDER_GITHUB,
++                                   u"GitHub Pull Requests\u2026");
++        model->AddSubMenu(IDC_STEDDING_NEW_LIVE_FOLDER, u"New Live Folder",
++                          live_folder_menu_.get());
+       }
+     } else {
+       model->AddItemWithStringId(IDC_TOGGLE_VERTICAL_TABS,
+diff --git a/chrome/browser/ui/views/frame/system_menu_model_builder.h b/chrome/browser/ui/views/frame/system_menu_model_builder.h
+index ee3e4c2442562..fcfc2fe3014b8 100644
+--- a/chrome/browser/ui/views/frame/system_menu_model_builder.h
++++ b/chrome/browser/ui/views/frame/system_menu_model_builder.h
+@@ -64,6 +64,8 @@ class SystemMenuModelBuilder {
+   SystemMenuModelDelegate menu_delegate_;
+   std::unique_ptr<ui::MenuModel> menu_model_;
+   std::unique_ptr<ui::SimpleMenuModel> zoom_menu_contents_;
++  // Stedding (live-folders Lf1): New Live Folder's rows.
++  std::unique_ptr<ui::SimpleMenuModel> live_folder_menu_;
+ #if BUILDFLAG(IS_CHROMEOS)
+   std::unique_ptr<chromeos::MoveToDesksMenuModel> move_to_desks_model_;
+ #endif
+diff --git a/chrome/browser/ui/views/tabs/common/BUILD.gn b/chrome/browser/ui/views/tabs/common/BUILD.gn
+index 38226a1b901d5..d7177e111b632 100644
+--- a/chrome/browser/ui/views/tabs/common/BUILD.gn
++++ b/chrome/browser/ui/views/tabs/common/BUILD.gn
+@@ -108,6 +108,8 @@ source_set("impl") {
+ 
+   deps = [
+     # Stedding tabs R65: tidy titles.
++    # live-folders Lf6, Lf13: a live folder's note and menu rows.
++    "//chrome/browser/ui/live_folders:note",
+     "//chrome/browser/ui/stedding:tidy_names",
+     "//base:i18n",
+     "//cc/paint",
+diff --git a/chrome/browser/ui/views/tabs/common/folder_view.cc b/chrome/browser/ui/views/tabs/common/folder_view.cc
+index a16d918d5e31a..73e625bbdc022 100644
+--- a/chrome/browser/ui/views/tabs/common/folder_view.cc
++++ b/chrome/browser/ui/views/tabs/common/folder_view.cc
+@@ -21,10 +21,12 @@
+ #include "base/strings/utf_string_conversions.h"
+ #include "base/task/sequenced_task_runner.h"
+ #include "base/time/time.h"
++#include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/ui/browser_commands.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/color/chrome_color_id.h"
+ #include "chrome/browser/ui/layout_constants.h"
++#include "chrome/browser/ui/live_folders/live_folder_note.h"
+ #include "chrome/browser/ui/spaces/space_icon.h"
+ #include "chrome/browser/ui/spaces/space_model.h"
+ #include "chrome/browser/ui/spaces/space_storage_partition.h"
+@@ -450,6 +452,9 @@ FolderView::FolderView(TabCollectionNode* collection_node)
+   data_changed_subscription_ = collection_node_->RegisterDataChangedCallback(
+       base::BindRepeating(&FolderView::OnFolderDataChanged,
+                           base::Unretained(this)));
++  // live-folders Lf6: the mark and the tooltip follow the note.
++  live_note_subscription_ = live_folders::AddNoteObserver(
++      base::BindRepeating(&FolderView::UpdateHeader, base::Unretained(this)));
+   auto* const layout = SetLayoutManager(std::make_unique<views::BoxLayout>(
+       views::BoxLayout::Orientation::kVertical));
+   layout->SetDefaultFlex(0);
+@@ -1034,6 +1039,14 @@ void FolderView::PlaceAt(bool pinned, size_t slot) {
+   if (!controller || !f) {
+     return;
+   }
++  // live-folders Lf8: a live folder dropped below the Clear line goes.
++  if (BrowserWindowInterface* const live_window = GetBrowserWindow();
++      !pinned && live_window &&
++      live_folders::IsLiveFolder(live_window->GetProfile(),
++                                 f->id().ToString())) {
++    live_folders::RunCommand(live_window->GetProfile(),
++                             live_folders::Command::kFolderGoing);
++  }
+   // folders F39: a nested folder comes out to the block's own rows first,
+   // whole, and then takes its place and its pin there as a top-level folder
+   // does. A folder the move emptied leaves the block's rows, so the place is
+@@ -1120,6 +1133,13 @@ void FolderView::MoveInto(tabs::TabCollection::Handle into,
+   tabs::FolderTabCollection* const outermost = OutermostFolder(into_folder);
+   const bool pinned =
+       space_model && space_model->IsFolderSpacePinned(outermost);
++  // live-folders Lf8: a live folder dropped into a folder under the Clear
++  // line leaves the pinned run, as one dropped below the line does: it goes.
++  if (!pinned &&
++      live_folders::IsLiveFolder(window->GetProfile(), f->id().ToString())) {
++    live_folders::RunCommand(window->GetProfile(),
++                             live_folders::Command::kFolderGoing);
++  }
+   if (!model->MoveFolderInto(f, into_folder, child_index) || !space_model ||
+       !space_model->CanPinFolder(outermost)) {
+     return;
+@@ -1318,6 +1338,17 @@ void FolderView::UpdateHeader() {
+   }
+   const std::string& title = f->title();
+   name_->SetText(title.empty() ? u"New Folder" : base::UTF8ToUTF16(title));
++  // live-folders Lf6: a live folder whose last refresh failed wears a mark
++  // after its name, and its tooltip says why.
++  BrowserWindowInterface* const live_window = GetBrowserWindow();
++  const std::optional<live_folders::FolderNote> note =
++      live_window ? live_folders::NoteFor(live_window->GetProfile(),
++                                          f->id().ToString())
++                  : std::nullopt;
++  header_->SetTooltipText(note ? note->tooltip : std::u16string());
++  if (note && note->failed) {
++    name_->SetText(std::u16string(name_->GetText()) + u" \u26A0");
++  }
+   // The header is the folder's control: a screen reader reads it by the name
+   // it shows, collapsed or expanded (BACKLOG S-140).
+   views::ViewAccessibility& accessibility = header_->GetViewAccessibility();
+@@ -1479,6 +1510,14 @@ void FolderView::ShowContextMenuForViewImpl(
+ void FolderView::BuildMenuModel() {
+   const tabs::FolderTabCollection* const f = folder();
+   menu_model_ = std::make_unique<ui::SimpleMenuModel>(this);
++  // live-folders Lf13: a live folder's own rows come first.
++  if (BrowserWindowInterface* const live_window = GetBrowserWindow();
++      live_window && f &&
++      live_folders::NoteFor(live_window->GetProfile(), f->id().ToString())) {
++    menu_model_->AddItem(kLiveRefreshCommand, u"Refresh Pull Requests");
++    menu_model_->AddItem(kLiveDeleteCommand, u"Delete Live Folder");
++    menu_model_->AddSeparator(ui::NORMAL_SEPARATOR);
++  }
+   menu_model_->AddItem(kRenameCommand, u"Rename Folder\u2026");
+   menu_model_->AddItem(kIconCommand, u"Change Icon\u2026");
+   if (f && !f->icon().empty()) {
+@@ -1560,6 +1599,32 @@ bool FolderView::IsCommandIdEnabled(int command_id) const {
+ }
+ 
+ void FolderView::ExecuteCommand(int command_id, int event_flags) {
++  // live-folders Lf8: Unpin Folder and Close Folder's Tabs on a live
++  // folder take the folder itself away: its service is told first.
++  if ((command_id == kPinCommand || command_id == kCloseTabsCommand) &&
++      folder()) {
++    if (BrowserWindowInterface* const live_window = GetBrowserWindow();
++        live_window && live_folders::IsLiveFolder(
++                           live_window->GetProfile(),
++                           folder()->id().ToString())) {
++      live_folders::RunCommand(live_window->GetProfile(),
++                               live_folders::Command::kFolderGoing);
++    }
++  }
++  // live-folders Lf13: after the menu's own dispatch: Delete takes this
++  // folder, and this view, away.
++  if (command_id == kLiveRefreshCommand || command_id == kLiveDeleteCommand) {
++    if (BrowserWindowInterface* const live_window = GetBrowserWindow()) {
++      base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
++          FROM_HERE,
++          base::BindOnce(base::IgnoreResult(&live_folders::RunCommand),
++                         base::Unretained(live_window->GetProfile()),
++                         command_id == kLiveRefreshCommand
++                             ? live_folders::Command::kRefresh
++                             : live_folders::Command::kDelete));
++    }
++    return;
++  }
+   // folders F47: after the menu's own dispatch, as a drop is: the move lays
+   // the rows out again, and a nested folder's view can go with it.
+   if (command_id >= kMoveToSpaceFirst && command_id <= kMoveToSpaceLast) {
+diff --git a/chrome/browser/ui/views/tabs/common/folder_view.h b/chrome/browser/ui/views/tabs/common/folder_view.h
+index 438b619454760..e4f5898fff10e 100644
+--- a/chrome/browser/ui/views/tabs/common/folder_view.h
++++ b/chrome/browser/ui/views/tabs/common/folder_view.h
+@@ -86,6 +86,9 @@ class FolderView : public views::View,
+   static constexpr int kMoveToSpaceMenuCommand = 11;
+   static constexpr int kMoveToSpaceFirst = 100;
+   static constexpr int kMoveToSpaceLast = 199;
++  // live-folders Lf13: a live folder's Refresh and Delete rows.
++  static constexpr int kLiveRefreshCommand = 12;
++  static constexpr int kLiveDeleteCommand = 13;
+ 
+   // folders F42: the name's field, empty, takes one character for the
+   // folder's icon -- typed, pasted or from the system's emoji picker, which
+@@ -289,6 +292,8 @@ class FolderView : public views::View,
+   tabs::TabCollection::Handle folder_handle_;
+   base::CallbackListSubscription node_destroyed_subscription_;
+   base::CallbackListSubscription data_changed_subscription_;
++  // live-folders Lf6: a live folder's note changed somewhere.
++  base::CallbackListSubscription live_note_subscription_;
+   base::RepeatingClosure on_collapsed_changed_;
+   raw_ptr<HeaderView> header_ = nullptr;
+   raw_ptr<views::ImageView> glyph_ = nullptr;
+diff --git a/chrome/browser/ui/webui/settings/BUILD.gn b/chrome/browser/ui/webui/settings/BUILD.gn
+index b0558cb217807..e62b33d255a4c 100644
+--- a/chrome/browser/ui/webui/settings/BUILD.gn
++++ b/chrome/browser/ui/webui/settings/BUILD.gn
+@@ -156,6 +156,8 @@ source_set("impl") {
+     "stedding_clean_links_handler.h",
+     "stedding_dark_pages_handler.cc",
+     "stedding_dark_pages_handler.h",
++    "stedding_live_folders_handler.cc",
++    "stedding_live_folders_handler.h",
+     "stedding_extension_install.cc",
+     "stedding_extension_install.h",
+     "stedding_shortcuts_handler.cc",
+@@ -211,6 +213,7 @@ source_set("impl") {
+     "//chrome/browser/ui/stedding:shortcuts",
+     "//chrome/browser/ui/stedding:prefs",
+     "//chrome/browser/ui/stedding:dark_pages",
++    "//chrome/browser/ui/live_folders",
+     # blocker Bk9: the lists' state and the sites where blocking is off.
+     "//base:i18n",
+     "//chrome/browser/ui/stedding/blocker",
+diff --git a/chrome/browser/ui/webui/settings/settings_ui.cc b/chrome/browser/ui/webui/settings/settings_ui.cc
+index f91a7ea71cd37..c78322838edd7 100644
+--- a/chrome/browser/ui/webui/settings/settings_ui.cc
++++ b/chrome/browser/ui/webui/settings/settings_ui.cc
+@@ -71,6 +71,7 @@
+ #include "chrome/browser/ui/webui/settings/stedding_blocker_handler.h"
+ #include "chrome/browser/ui/webui/settings/stedding_clean_links_handler.h"
+ #include "chrome/browser/ui/webui/settings/stedding_dark_pages_handler.h"
++#include "chrome/browser/ui/webui/settings/stedding_live_folders_handler.h"
+ #include "chrome/browser/ui/webui/settings/stedding_shortcuts_handler.h"
+ #include "chrome/browser/ui/webui/settings/stedding_spaces_handler.h"
+ #include "chrome/browser/ui/webui/settings/downloads_handler.h"
+@@ -267,6 +268,9 @@ SettingsUI::SettingsUI(content::WebUI* web_ui)
+   // Stedding blocker (docs/features/blocker.md Bk9): the lists' state, Update
+   // lists now and the sites where blocking is off.
+   AddSettingsPageUIHandler(std::make_unique<SteddingBlockerHandler>(profile));
++// Stedding live folders (docs/features/live-folders.md Lf1, Lf11).
++AddSettingsPageUIHandler(
++std::make_unique<SteddingLiveFoldersHandler>(profile));
+ 
+ #if BUILDFLAG(IS_CHROMEOS)
+   AddSettingsPageUIHandler(std::make_unique<LanguagesHandler>(profile));
+diff --git a/chrome/browser/ui/webui/settings/stedding_live_folders_handler.cc b/chrome/browser/ui/webui/settings/stedding_live_folders_handler.cc
+new file mode 100644
+index 0000000000000..d3e4af08a796e
+--- /dev/null
++++ b/chrome/browser/ui/webui/settings/stedding_live_folders_handler.cc
+@@ -0,0 +1,119 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/webui/settings/stedding_live_folders_handler.h"
++
++#include <string>
++#include <utility>
++
++#include "base/functional/bind.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/ui/live_folders/live_folder_service_factory.h"
++#include "content/public/browser/web_ui.h"
++
++SteddingLiveFoldersHandler::SteddingLiveFoldersHandler(Profile* profile)
++    : profile_(profile->GetOriginalProfile()) {}
++
++SteddingLiveFoldersHandler::~SteddingLiveFoldersHandler() = default;
++
++void SteddingLiveFoldersHandler::RegisterMessages() {
++  web_ui()->RegisterMessageCallback(
++      "steddingGetLiveFolder",
++      base::BindRepeating(&SteddingLiveFoldersHandler::HandleGet,
++                          base::Unretained(this)));
++  web_ui()->RegisterMessageCallback(
++      "steddingMakeLiveFolder",
++      base::BindRepeating(&SteddingLiveFoldersHandler::HandleMake,
++                          base::Unretained(this)));
++  web_ui()->RegisterMessageCallback(
++      "steddingRefreshLiveFolder",
++      base::BindRepeating(&SteddingLiveFoldersHandler::HandleRefresh,
++                          base::Unretained(this)));
++  web_ui()->RegisterMessageCallback(
++      "steddingDeleteLiveFolder",
++      base::BindRepeating(&SteddingLiveFoldersHandler::HandleDelete,
++                          base::Unretained(this)));
++}
++
++void SteddingLiveFoldersHandler::OnJavascriptAllowed() {
++  if (live_folders::LiveFolderService* const service =
++          live_folders::LiveFolderServiceFactory::GetForProfile(profile_);
++      service && !observation_.IsObserving()) {
++    observation_.Observe(service);
++  }
++}
++
++void SteddingLiveFoldersHandler::OnJavascriptDisallowed() {
++  observation_.Reset();
++  weak_factory_.InvalidateWeakPtrs();
++}
++
++void SteddingLiveFoldersHandler::OnLiveFolderChanged() {
++  if (IsJavascriptAllowed()) {
++    FireWebUIListener("stedding-live-folder-changed", State());
++  }
++}
++
++base::DictValue SteddingLiveFoldersHandler::State() const {
++  live_folders::LiveFolderService* const service =
++      live_folders::LiveFolderServiceFactory::GetForProfile(profile_);
++  if (!service) {
++    return base::DictValue().Set("on", false).Set("available", false);
++  }
++  return service->StateForSettings().Set("available", true);
++}
++
++void SteddingLiveFoldersHandler::HandleGet(const base::ListValue& args) {
++  if (args.size() != 1U) {
++    return;
++  }
++  AllowJavascript();
++  ResolveJavascriptCallback(args[0], State());
++}
++
++void SteddingLiveFoldersHandler::HandleMake(const base::ListValue& args) {
++  if (args.size() != 2U || !args[1].is_string()) {
++    return;
++  }
++  AllowJavascript();
++  live_folders::LiveFolderService* const service =
++      live_folders::LiveFolderServiceFactory::GetForProfile(profile_);
++  if (!service) {
++    ResolveJavascriptCallback(
++        args[0], base::DictValue().Set("ok", false).Set("error", ""));
++    return;
++  }
++  // Lf1: the folder goes into the Space of the window last in front: the
++  // one this page is in, or the one the sidebar's menu was opened in.
++  service->MakeInActiveSpace(
++      args[1].GetString(),
++      base::BindOnce(&SteddingLiveFoldersHandler::OnMade,
++                     weak_factory_.GetWeakPtr(), args[0].Clone()));
++}
++
++void SteddingLiveFoldersHandler::OnMade(base::Value callback_id,
++                                        live_folders::Failure failure) {
++  if (!IsJavascriptAllowed()) {
++    return;
++  }
++  ResolveJavascriptCallback(
++      callback_id,
++      base::DictValue()
++          .Set("ok", failure == live_folders::Failure::kNone)
++          .Set("error", live_folders::FailureText(failure)));
++}
++
++void SteddingLiveFoldersHandler::HandleRefresh(const base::ListValue& args) {
++  if (live_folders::LiveFolderService* const service =
++          live_folders::LiveFolderServiceFactory::GetForProfile(profile_)) {
++    service->RefreshNow();
++  }
++}
++
++void SteddingLiveFoldersHandler::HandleDelete(const base::ListValue& args) {
++  if (live_folders::LiveFolderService* const service =
++          live_folders::LiveFolderServiceFactory::GetForProfile(profile_)) {
++    service->Delete();
++  }
++}
+diff --git a/chrome/browser/ui/webui/settings/stedding_live_folders_handler.h b/chrome/browser/ui/webui/settings/stedding_live_folders_handler.h
+new file mode 100644
+index 0000000000000..db791666a5675
+--- /dev/null
++++ b/chrome/browser/ui/webui/settings/stedding_live_folders_handler.h
+@@ -0,0 +1,63 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_WEBUI_SETTINGS_STEDDING_LIVE_FOLDERS_HANDLER_H_
++#define CHROME_BROWSER_UI_WEBUI_SETTINGS_STEDDING_LIVE_FOLDERS_HANDLER_H_
++
++#include "base/memory/raw_ptr.h"
++#include "base/memory/weak_ptr.h"
++#include "base/scoped_observation.h"
++#include "base/values.h"
++#include "chrome/browser/ui/live_folders/github_pulls.h"
++#include "chrome/browser/ui/live_folders/live_folder_service.h"
++#include "chrome/browser/ui/webui/settings/settings_page_ui_handler.h"
++
++class Profile;
++
++// The live folder's block in chrome://settings/stedding
++// (docs/features/live-folders.md Lf1, Lf2, Lf11; settings T70-T72): its state,
++// and making, refreshing, deleting it and replacing its token. The token comes in once, from the
++// field, and never goes back to the page.
++//
++// Messages:
++//   steddingGetLiveFolder(callback) -> state
++//   steddingMakeLiveFolder(callback, token) -> {ok, error}: makes the folder,
++//     or, while it is on, replaces its token (Lf2's Replace Token)
++//   steddingRefreshLiveFolder()
++//   steddingDeleteLiveFolder()
++// Event: "stedding-live-folder-changed" with the state.
++class SteddingLiveFoldersHandler
++    : public settings::SettingsPageUIHandler,
++      public live_folders::LiveFolderService::Observer {
++ public:
++  explicit SteddingLiveFoldersHandler(Profile* profile);
++  SteddingLiveFoldersHandler(const SteddingLiveFoldersHandler&) = delete;
++  SteddingLiveFoldersHandler& operator=(const SteddingLiveFoldersHandler&) =
++      delete;
++  ~SteddingLiveFoldersHandler() override;
++
++  // SettingsPageUIHandler:
++  void RegisterMessages() override;
++  void OnJavascriptAllowed() override;
++  void OnJavascriptDisallowed() override;
++
++ private:
++  // live_folders::LiveFolderService::Observer:
++  void OnLiveFolderChanged() override;
++
++  base::DictValue State() const;
++  void HandleGet(const base::ListValue& args);
++  void HandleMake(const base::ListValue& args);
++  void HandleRefresh(const base::ListValue& args);
++  void HandleDelete(const base::ListValue& args);
++  void OnMade(base::Value callback_id, live_folders::Failure failure);
++
++  const raw_ptr<Profile> profile_;
++  base::ScopedObservation<live_folders::LiveFolderService,
++                          live_folders::LiveFolderService::Observer>
++      observation_{this};
++  base::WeakPtrFactory<SteddingLiveFoldersHandler> weak_factory_{this};
++};
++
++#endif  // CHROME_BROWSER_UI_WEBUI_SETTINGS_STEDDING_LIVE_FOLDERS_HANDLER_H_
+diff --git a/chrome/test/BUILD.gn b/chrome/test/BUILD.gn
+index 271b296f021f7..35f9f389560b1 100644
+--- a/chrome/test/BUILD.gn
++++ b/chrome/test/BUILD.gn
+@@ -2902,6 +2902,7 @@ test("unit_tests") {
+     "//chrome/browser/ui/cookie_controls:unit_tests",
+     "//chrome/browser/ui/file_system_access:unit_tests",
+     "//chrome/browser/ui/spaces:unit_tests",
++    "//chrome/browser/ui/live_folders:unit_tests",
+     "//chrome/browser/ui/archive:unit_tests",
+     "//chrome/browser/ui:stedding_ui_metrics_unit_tests",
+     "//chrome/browser/ui/color:stedding_unit_tests",
+diff --git a/chrome/test/stedding/BUILD.gn b/chrome/test/stedding/BUILD.gn
+index d51e07fc63b03..1979dd9510375 100644
+--- a/chrome/test/stedding/BUILD.gn
++++ b/chrome/test/stedding/BUILD.gn
+@@ -53,6 +53,7 @@ test("stedding_browser_tests") {
+     "isolation_mark_browsertest.cc",
+     "link_drop_browsertest.cc",
+     "little_window_browsertest.cc",
++    "live_folders_browsertest.cc",
+     "local_tabs_browsertest.cc",
+     "make_app_browsertest.cc",
+     "make_app_quiet_browsertest.cc",
+@@ -215,6 +216,13 @@ test("stedding_browser_tests") {
+     # Sf43-Sf57: sync through WebDAV or S3 storage.
+     "//chrome/browser/ui/spaces:sidebar_sync_fake_place",
+     "//chrome/browser/ui/spaces:sidebar_sync_place",
++    # live-folders (ADR 0036).
++    "//chrome/browser/ui/live_folders",
++    "//chrome/browser/ui/live_folders:note",
++    "//chrome/browser/ui/live_folders:test_support",
++    "//services/network:test_support",
++    "//components/os_crypt/async/browser",
++    "//components/os_crypt/async/common",
+     "//chrome/browser/ui/stedding:address_row",
+     "//chrome/browser/ui/stedding:app_updater_test_support",
+     "//chrome/browser/ui/stedding:bookmarks_to_pins_dialog",
+diff --git a/chrome/test/stedding/live_folders_browsertest.cc b/chrome/test/stedding/live_folders_browsertest.cc
+new file mode 100644
+index 0000000000000..fc655f2988dcc
+--- /dev/null
++++ b/chrome/test/stedding/live_folders_browsertest.cc
+@@ -0,0 +1,1014 @@
++// Copyright 2026 The Stedding Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++// docs/features/live-folders.md (ADR 0036): a pinned folder of the person's
++// open GitHub pull requests, filled from GitHub's search API. Every request
++// is answered here, from recorded answers; nothing reaches the network.
++
++#include <map>
++#include <set>
++#include <memory>
++#include <string>
++#include <vector>
++
++#include "base/base64.h"
++#include "base/json/json_writer.h"
++#include "base/run_loop.h"
++#include "base/strings/string_number_conversions.h"
++#include "base/strings/utf_string_conversions.h"
++#include "base/test/bind.h"
++#include "base/test/run_until.h"
++#include "base/test/test_future.h"
++#include "chrome/app/chrome_command_ids.h"
++#include "chrome/browser/extensions/api/settings_private/prefs_util.h"
++#include "chrome/browser/browser_process.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/ui/browser_commands.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/live_folders/github_pulls.h"
++#include "chrome/browser/ui/live_folders/live_folder_note.h"
++#include "chrome/browser/ui/live_folders/live_folder_service.h"
++#include "chrome/browser/ui/live_folders/live_folder_service_factory.h"
++#include "chrome/browser/ui/live_folders/recorded_answers.h"
++#include "chrome/browser/ui/spaces/pin_store.h"
++#include "chrome/browser/ui/spaces/pin_store_factory.h"
++#include "chrome/browser/ui/spaces/sidebar_sync_state.h"
++#include "chrome/browser/ui/spaces/sidebar_sync_tracker.h"
++#include "chrome/browser/ui/spaces/space.h"
++#include "chrome/browser/ui/spaces/space_model.h"
++#include "chrome/browser/ui/stedding/stedding_command_ids.h"
++#include "chrome/browser/ui/stedding/tab_names.h"
++#include "chrome/browser/ui/stedding/tab_parents.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "chrome/browser/ui/views/frame/browser_view.h"
++#include "chrome/browser/ui/views/frame/browser_widget.h"
++#include "chrome/browser/ui/views/tabs/common/folder_view.h"
++#include "chrome/browser/ui/views/test/vertical_tabs_browser_test_mixin.h"
++#include "chrome/common/extensions/api/settings_private.h"
++#include "chrome/test/base/in_process_browser_test.h"
++#include "chrome/test/base/ui_test_utils.h"
++#include "chrome/test/stedding/sidebar_test_util.h"
++#include "components/os_crypt/async/browser/os_crypt_async.h"
++#include "components/os_crypt/async/common/encryptor.h"
++#include "components/prefs/pref_service.h"
++#include "components/tabs/public/folder_tab_collection.h"
++#include "components/tabs/public/tab_collection.h"
++#include "components/tabs/public/tab_interface.h"
++#include "content/public/browser/navigation_controller.h"
++#include "content/public/browser/web_contents.h"
++#include "content/public/test/browser_test.h"
++#include "content/public/test/browser_test_utils.h"
++#include "ui/menus/simple_menu_model.h"
++#include "ui/views/test/views_test_utils.h"
++#include "ui/views/widget/widget.h"
++#include "net/base/url_util.h"
++#include "net/http/http_status_code.h"
++#include "net/test/embedded_test_server/embedded_test_server.h"
++#include "services/network/public/cpp/resource_request.h"
++#include "services/network/public/cpp/shared_url_loader_factory.h"
++#include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
++#include "services/network/test/test_url_loader_factory.h"
++#include "third_party/skia/include/core/SkColor.h"
++#include "url/gurl.h"
++
++namespace {
++
++using live_folders::Failure;
++using live_folders::LiveFolderService;
++
++constexpr char kToken[] = "github_pat_11TESTONLY0000000000_abcdefghijklmnop";
++constexpr char kOtherToken[] = "github_pat_22TESTONLY1111111111_qrstuvwxyz";
++
++GURL Fuel7Url() {
++  return GURL("https://github.com/acme/fuel/pull/7");
++}
++GURL Rocket42Url() {
++  return GURL("https://github.com/acme/rocket/pull/42");
++}
++GURL Rocket45Url() {
++  return GURL("https://github.com/acme/rocket/pull/45");
++}
++
++class LiveFoldersTest
++    : public VerticalTabsBrowserTestMixin<InProcessBrowserTest> {
++ protected:
++  struct Answer {
++    int status = net::HTTP_OK;
++    std::string body = live_folders::recorded::kNothing;
++  };
++
++  // The test factory answers from before the browser starts: a folder made
++  // in a PRE_ step refreshes as the next start opens its token.
++  void SetUpInProcessBrowserTestFixture() override {
++    VerticalTabsBrowserTestMixin<
++        InProcessBrowserTest>::SetUpInProcessBrowserTestFixture();
++    const std::string name =
++        testing::UnitTest::GetInstance()->current_test_info()->name();
++    if (name.find("ComeBack") != std::string::npos) {
++      AnswerTheFirstList();
++    }
++    factory_.SetInterceptor(
++        base::BindLambdaForTesting([this](const network::ResourceRequest& r) {
++          Seen seen;
++          seen.url = r.url;
++          seen.authorization =
++              r.headers.GetHeader("Authorization").value_or("");
++          seen.cookie = r.headers.GetHeader("Cookie").value_or("");
++          seen.credentials_omitted =
++              r.credentials_mode == network::mojom::CredentialsMode::kOmit;
++          seen_.push_back(seen);
++          std::string q;
++          net::GetValueForKeyInQuery(r.url, "q", &q);
++          const std::string who = q.substr(q.rfind(' ') + 1);
++          const Answer answer =
++              answers_.contains(who) ? answers_[who] : Answer();
++          factory_.AddResponse(r.url.spec(), answer.body,
++                               static_cast<net::HttpStatusCode>(answer.status));
++        }));
++    LiveFolderService::SetURLLoaderFactoryForTesting(
++        factory_.GetSafeWeakWrapper());
++  }
++
++  void SetUpOnMainThread() override {
++    VerticalTabsBrowserTestMixin<InProcessBrowserTest>::SetUpOnMainThread();
++    // The store is filled from the first window a turn after it settles
++    // (windows G19); a folder is made only into a filled store.
++    ASSERT_TRUE(base::test::RunUntil([&] { return Store().ready(); }));
++  }
++
++  void TearDownOnMainThread() override {
++    LiveFolderService::SetURLLoaderFactoryForTesting(nullptr);
++    VerticalTabsBrowserTestMixin<InProcessBrowserTest>::TearDownOnMainThread();
++  }
++
++  Profile* profile() { return browser()->GetProfile(); }
++
++  LiveFolderService& Service() {
++    LiveFolderService* const service =
++        live_folders::LiveFolderServiceFactory::GetForProfile(profile());
++    CHECK(service);
++    return *service;
++  }
++
++  spaces::PinStore& Store() {
++    spaces::PinStore* const store =
++        spaces::PinStoreFactory::GetForProfile(profile());
++    CHECK(store);
++    return *store;
++  }
++
++  static spaces::SpaceModel& Model(BrowserWindowInterface* window) {
++    spaces::SpaceModel* const model = spaces::SpaceModel::From(window);
++    CHECK(model);
++    return *model;
++  }
++
++  // The answers of a refresh: the person opened #42 and #7, is asked to
++  // review #45, and is mentioned in #42.
++  void AnswerTheFirstList() {
++    answers_["author:@me"] = {net::HTTP_OK, live_folders::recorded::kAuthored};
++    answers_["review-requested:@me"] = {
++        net::HTTP_OK, live_folders::recorded::kReviewRequested};
++    answers_["mentions:@me"] = {net::HTTP_OK,
++                                live_folders::recorded::kMentioned};
++  }
++
++  Failure Make() {
++    base::test::TestFuture<Failure> made;
++    Service().Make(kToken, Model(browser()).active_id(), made.GetCallback());
++    return made.Get();
++  }
++
++  // Lf4's refresh without the minute's wait, which the scheduler's own tests
++  // cover; waits for its answer.
++  void RefreshAndWait() {
++    const size_t before = seen_.size();
++    Service().RefreshNowForTesting();
++    ASSERT_TRUE(base::test::RunUntil([&] {
++      return seen_.size() >= before + 4 && !Service().refreshing_for_testing();
++    }));
++    base::RunLoop().RunUntilIdle();
++  }
++
++  // The window's rows of the live folder, in the strip's order.
++  static std::vector<tabs::TabInterface*> LiveRows(
++      BrowserWindowInterface* window) {
++    std::vector<tabs::TabInterface*> rows;
++    TabStripModel* const strip = window->GetTabStripModel();
++    for (int i = 0; i < strip->count(); ++i) {
++      tabs::TabInterface* const tab = strip->GetTabAtIndex(i);
++      if (live_folders::IsLiveRowToken(
++              stedding::TabToken(tab->GetContents()))) {
++        rows.push_back(tab);
++      }
++    }
++    return rows;
++  }
++
++  // Lf5, Lf8: the tabs of `window` at `url`, whatever their token: a row
++  // that should have closed is found even after it was given a new one.
++  static size_t TabsAt(BrowserWindowInterface* window, const GURL& url) {
++    size_t count = 0;
++    TabStripModel* const strip = window->GetTabStripModel();
++    for (int i = 0; i < strip->count(); ++i) {
++      content::WebContents* const contents =
++          strip->GetTabAtIndex(i)->GetContents();
++      count += contents->GetVisibleURL() == url ||
++               contents->GetLastCommittedURL() == url;
++    }
++    return count;
++  }
++
++  static std::vector<std::u16string> Names(
++      const std::vector<tabs::TabInterface*>& rows) {
++    std::vector<std::u16string> names;
++    for (tabs::TabInterface* tab : rows) {
++      names.push_back(stedding::TabName(tab->GetContents()));
++    }
++    return names;
++  }
++
++  static const tabs::FolderTabCollection* FolderOf(tabs::TabInterface* tab) {
++    const tabs::TabCollection* const parent = tab->GetParentCollection();
++    return parent && parent->type() == tabs::TabCollection::Type::FOLDER
++               ? static_cast<const tabs::FolderTabCollection*>(parent)
++               : nullptr;
++  }
++
++  static bool Asleep(tabs::TabInterface* tab) {
++    content::WebContents* const contents = tab->GetContents();
++    return contents->WasDiscarded() ||
++           contents->GetController().NeedsReload();
++  }
++
++  // The drawn header of `folder` in the browser's window, once the rows are
++  // in place.
++  FolderView* DrawnFolder(const tabs::FolderTabCollection* folder) {
++    views::Widget* const widget =
++        BrowserView::GetBrowserViewForBrowser(browser())->GetWidget();
++    EXPECT_TRUE(stedding::test::WaitForRowsToSettle(widget));
++    views::test::RunScheduledLayout(widget);
++    return stedding::test::FindDrawnFolder(widget->GetRootView(), folder);
++  }
++
++  BrowserWindowInterface* OpenWindow() {
++    ui_test_utils::BrowserCreatedObserver opened;
++    chrome::ExecuteCommand(browser(), IDC_NEW_WINDOW);
++    BrowserWindowInterface* const window = opened.Wait();
++    EXPECT_TRUE(window);
++    base::RunLoop().RunUntilIdle();
++    return window;
++  }
++
++  struct Seen {
++    GURL url;
++    std::string authorization;
++    std::string cookie;
++    bool credentials_omitted = false;
++  };
++
++  network::TestURLLoaderFactory factory_;
++  std::map<std::string, Answer> answers_;
++  std::vector<Seen> seen_;
++};
++
++// The first list's rows, newest first.
++std::vector<std::u16string> FirstList() {
++  return {
++      u"acme/rocket: Count down in seconds",
++      u"acme/rocket: Make the launch window configurable",
++      u"acme/fuel: Fix the gauge rounding",
++  };
++}
++
++// Lf1, Lf3, Lf5, Lf10: made, the folder lists what GitHub's answer holds:
++// each pull request once, newest first, asleep, named for its repository and
++// title, at its address, in one pinned folder of the Space it was made in;
++// and a second window shows the same folder.
++IN_PROC_BROWSER_TEST_F(LiveFoldersTest, TheFolderListsWhatTheAnswerHolds) {
++  AnswerTheFirstList();
++  ASSERT_EQ(Failure::kNone, Make());
++  ASSERT_TRUE(Service().on());
++  EXPECT_EQ(4u, seen_.size()) << "the four searches, once each";
++
++  ASSERT_TRUE(base::test::RunUntil([&] {
++    return LiveRows(browser()).size() == FirstList().size();
++  }));
++  const std::vector<tabs::TabInterface*> rows = LiveRows(browser());
++  EXPECT_EQ(FirstList(), Names(rows));
++  const tabs::FolderTabCollection* const folder = FolderOf(rows.front());
++  ASSERT_TRUE(folder);
++  EXPECT_EQ("Pull Requests", folder->title());
++  EXPECT_EQ(Service().folder_id(), folder->id().ToString());
++  EXPECT_TRUE(Model(browser()).IsFolderSpacePinned(folder));
++  for (tabs::TabInterface* tab : rows) {
++    EXPECT_EQ(folder, FolderOf(tab));
++    EXPECT_TRUE(Model(browser()).IsSpacePinned(tab));
++    EXPECT_EQ(Model(browser()).active_id(),
++              Model(browser()).FindSpaceForTab(tab));
++    EXPECT_TRUE(Asleep(tab)) << "a row loads only when chosen";
++  }
++  EXPECT_EQ(GURL("https://github.com/acme/rocket/pull/45"),
++            Model(browser()).HomeUrl(rows[0]).value_or(GURL()));
++  EXPECT_EQ(3u, Service().rows());
++
++  BrowserWindowInterface* const second = OpenWindow();
++  ASSERT_TRUE(base::test::RunUntil([&] {
++    return LiveRows(second).size() == FirstList().size();
++  })) << "the second window lacks the live folder";
++  EXPECT_EQ(FirstList(), Names(LiveRows(second)));
++  EXPECT_EQ(Service().folder_id(),
++            FolderOf(LiveRows(second).front())->id().ToString());
++  EXPECT_EQ(4u, seen_.size()) << "a new window asks GitHub nothing more";
++}
++
++// Lf5: at the next refresh a merged pull request's row goes; one the person
++// opened stays, a normal tab of the Space, out of the folder.
++IN_PROC_BROWSER_TEST_F(LiveFoldersTest, AMergedPullRequestLeavesAtTheNextRefresh) {
++  AnswerTheFirstList();
++  ASSERT_EQ(Failure::kNone, Make());
++  ASSERT_TRUE(base::test::RunUntil(
++      [&] { return LiveRows(browser()).size() == FirstList().size(); }));
++  // The person opens #45 (asked to review).
++  TabStripModel* const strip = browser()->GetTabStripModel();
++  tabs::TabInterface* const opened = LiveRows(browser())[0];
++  strip->ActivateTabAt(strip->GetIndexOfTab(opened));
++  ASSERT_TRUE(base::test::RunUntil([&] { return !Asleep(opened); }));
++
++  // #7 is merged, and the review of #45 is done.
++  answers_["author:@me"] = {net::HTTP_OK,
++                            live_folders::recorded::kAuthoredAfterMerge};
++  answers_["review-requested:@me"] = {net::HTTP_OK,
++                                      live_folders::recorded::kNothing};
++  RefreshAndWait();
++
++  EXPECT_EQ(std::vector<std::u16string>{
++                u"acme/rocket: Make the launch window configurable"},
++            Names(LiveRows(browser())));
++  EXPECT_EQ(1u, Service().rows());
++  // #7 was asleep: its tab is gone, under any token.
++  EXPECT_EQ(0u, TabsAt(browser(), Fuel7Url()));
++  EXPECT_EQ(1u, TabsAt(browser(), Rocket45Url()));
++  // #45 was open: it stays, loose, with a token of its own.
++  ASSERT_NE(TabStripModel::kNoTab, strip->GetIndexOfTab(opened));
++  EXPECT_FALSE(Model(browser()).IsSpacePinned(opened));
++  EXPECT_FALSE(FolderOf(opened));
++  EXPECT_FALSE(live_folders::IsLiveRowToken(
++      stedding::TabToken(opened->GetContents())));
++  EXPECT_EQ(Failure::kNone, Service().failure());
++}
++
++// Lf7: a token GitHub no longer takes keeps the last list, marks the folder
++// and says why; a bad token at making makes nothing.
++IN_PROC_BROWSER_TEST_F(LiveFoldersTest, ABadTokenKeepsTheLastListAndSaysWhy) {
++  for (const char* who : {"author:@me", "assignee:@me",
++                          "review-requested:@me", "mentions:@me"}) {
++    answers_[who] = {net::HTTP_UNAUTHORIZED,
++                     live_folders::recorded::kBadCredentials};
++  }
++  EXPECT_EQ(Failure::kToken, Make());
++  EXPECT_FALSE(Service().on());
++  EXPECT_TRUE(LiveRows(browser()).empty());
++  EXPECT_TRUE(
++      profile()->GetPrefs()->GetString(live_folders::kGitHubTokenPref).empty());
++
++  answers_.clear();
++  AnswerTheFirstList();
++  ASSERT_EQ(Failure::kNone, Make());
++  ASSERT_TRUE(base::test::RunUntil(
++      [&] { return LiveRows(browser()).size() == FirstList().size(); }));
++  std::optional<live_folders::FolderNote> note =
++      live_folders::NoteFor(profile(), Service().folder_id());
++  ASSERT_TRUE(note);
++  EXPECT_FALSE(note->failed);
++
++  for (const char* who : {"author:@me", "assignee:@me",
++                          "review-requested:@me", "mentions:@me"}) {
++    answers_[who] = {net::HTTP_UNAUTHORIZED,
++                     live_folders::recorded::kBadCredentials};
++  }
++  RefreshAndWait();
++  EXPECT_EQ(Failure::kToken, Service().failure());
++  EXPECT_EQ(FirstList(), Names(LiveRows(browser())))
++      << "a failed refresh changed the list";
++  note = live_folders::NoteFor(profile(), Service().folder_id());
++  ASSERT_TRUE(note);
++  EXPECT_TRUE(note->failed);
++  EXPECT_NE(std::u16string::npos, note->tooltip.find(u"expired"))
++      << note->tooltip;
++
++  // GitHub's rate limit says so too.
++  for (const char* who : {"author:@me", "assignee:@me",
++                          "review-requested:@me", "mentions:@me"}) {
++    answers_[who] = {net::HTTP_TOO_MANY_REQUESTS, "{}"};
++  }
++  RefreshAndWait();
++  EXPECT_EQ(Failure::kRateLimit, Service().failure());
++  EXPECT_EQ(FirstList(), Names(LiveRows(browser())));
++
++  // And the next good answer clears the mark.
++  answers_.clear();
++  AnswerTheFirstList();
++  RefreshAndWait();
++  EXPECT_EQ(Failure::kNone, Service().failure());
++  EXPECT_FALSE(live_folders::NoteFor(profile(), Service().folder_id())
++                   .value_or(live_folders::FolderNote{true, u""})
++                   .failed);
++}
++
++// Lf8, Lf10: nothing is asked of GitHub before the folder is made, nor after
++// it is deleted; deleting it forgets the token.
++IN_PROC_BROWSER_TEST_F(LiveFoldersTest,
++                       NoRequestBeforeItIsMadeOrAfterItIsDeleted) {
++  // A window coming to the front, a second window, a Refresh: nothing.
++  BrowserWindowInterface* const second = OpenWindow();
++  Service().RefreshNow();
++  base::RunLoop().RunUntilIdle();
++  EXPECT_FALSE(Service().on());
++  EXPECT_TRUE(seen_.empty()) << "a request before the folder was made";
++
++  // Lf1: a paste that cannot be a token asks GitHub nothing.
++  for (const char* paste : {"", "   ", "ghp_abc def", "Bearer ghp_abc",
++                            "https://github.com/settings/tokens"}) {
++    base::test::TestFuture<Failure> made;
++    Service().Make(paste, Model(browser()).active_id(), made.GetCallback());
++    EXPECT_EQ(Failure::kToken, made.Get()) << paste;
++  }
++  base::RunLoop().RunUntilIdle();
++  EXPECT_FALSE(Service().on());
++  EXPECT_TRUE(seen_.empty()) << "a request for a paste that is no token";
++
++  AnswerTheFirstList();
++  ASSERT_EQ(Failure::kNone, Make());
++  ASSERT_TRUE(base::test::RunUntil(
++      [&] { return LiveRows(second).size() == FirstList().size(); }));
++  ASSERT_EQ(4u, seen_.size());
++  EXPECT_FALSE(
++      profile()->GetPrefs()->GetString(live_folders::kGitHubTokenPref).empty());
++
++  ASSERT_TRUE(live_folders::RunCommand(profile(),
++                                       live_folders::Command::kDelete));
++  EXPECT_FALSE(Service().on());
++  EXPECT_TRUE(
++      profile()->GetPrefs()->GetString(live_folders::kGitHubTokenPref).empty());
++  EXPECT_TRUE(profile()
++                  ->GetPrefs()
++                  ->GetDict(live_folders::kGitHubFolderPref)
++                  .empty());
++  ASSERT_TRUE(base::test::RunUntil([&] {
++    return LiveRows(browser()).empty() && LiveRows(second).empty();
++  })) << "a row outlived the folder";
++  // Every row was asleep: none is left under any token, in either window.
++  for (BrowserWindowInterface* window : {browser(), second}) {
++    EXPECT_EQ(0u, TabsAt(window, Fuel7Url()));
++    EXPECT_EQ(0u, TabsAt(window, Rocket42Url()));
++    EXPECT_EQ(0u, TabsAt(window, Rocket45Url()));
++  }
++  EXPECT_FALSE(live_folders::NoteFor(profile(), std::string()));
++
++  Service().RefreshNow();
++  Service().RefreshNowForTesting();
++  OpenWindow();
++  base::RunLoop().RunUntilIdle();
++  EXPECT_EQ(4u, seen_.size()) << "a request after the folder was deleted";
++  EXPECT_FALSE(
++      live_folders::RunCommand(profile(), live_folders::Command::kRefresh));
++}
++
++// Lf8: Unpin Folder on the folder's header deletes it too: off, the token
++// forgotten, its asleep rows closed, and an open one the person's own tab.
++IN_PROC_BROWSER_TEST_F(LiveFoldersTest, UnpinningTheFolderTurnsItOff) {
++  AnswerTheFirstList();
++  ASSERT_EQ(Failure::kNone, Make());
++  ASSERT_TRUE(base::test::RunUntil(
++      [&] { return LiveRows(browser()).size() == FirstList().size(); }));
++  TabStripModel* const strip = browser()->GetTabStripModel();
++  tabs::TabInterface* const opened = LiveRows(browser())[0];
++  strip->ActivateTabAt(strip->GetIndexOfTab(opened));
++  ASSERT_TRUE(base::test::RunUntil([&] { return !Asleep(opened); }));
++  FolderView* const view = DrawnFolder(FolderOf(LiveRows(browser()).front()));
++  ASSERT_TRUE(view);
++  view->ExecuteCommand(FolderView::kPinCommand, 0);
++  ASSERT_TRUE(base::test::RunUntil([&] { return !Service().on(); }));
++  EXPECT_TRUE(
++      profile()->GetPrefs()->GetString(live_folders::kGitHubTokenPref).empty());
++  ASSERT_TRUE(base::test::RunUntil([&] {
++    return TabsAt(browser(), Fuel7Url()) == 0 &&
++           TabsAt(browser(), Rocket42Url()) == 0;
++  })) << "an asleep row outlived the folder";
++  EXPECT_EQ(1u, TabsAt(browser(), Rocket45Url()));
++  EXPECT_TRUE(LiveRows(browser()).empty())
++      << "a tab kept a live row's token";
++  EXPECT_FALSE(Model(browser()).IsSpacePinned(opened));
++}
++
++// Lf2, Lf11: the token is kept sealed, is no preference Settings' page can
++// read, is in nothing Settings is sent, and goes to api.github.com alone,
++// with no cookie.
++IN_PROC_BROWSER_TEST_F(LiveFoldersTest, TheTokenReachesNoPageNorSettings) {
++  AnswerTheFirstList();
++  ASSERT_EQ(Failure::kNone, Make());
++  const std::string stored =
++      profile()->GetPrefs()->GetString(live_folders::kGitHubTokenPref);
++  ASSERT_FALSE(stored.empty());
++  // The preference is base64 of what the key store sealed: the token is in
++  // neither, and only the key store gives it back.
++  std::string sealed;
++  ASSERT_TRUE(base::Base64Decode(stored, &sealed));
++  EXPECT_EQ(std::string::npos, sealed.find(kToken));
++  EXPECT_EQ(std::string::npos, sealed.find("TESTONLY"));
++  EXPECT_EQ(std::string::npos, sealed.find("github_pat"));
++  EXPECT_NE(std::string(kToken), sealed);
++  base::test::TestFuture<scoped_refptr<os_crypt_async::Encryptor>> encryptor;
++  g_browser_process->os_crypt_async()->GetInstance(encryptor.GetCallback());
++  std::string opened;
++  ASSERT_TRUE(encryptor.Get()->DecryptString(sealed, &opened));
++  EXPECT_EQ(kToken, opened);
++
++  extensions::PrefsUtil prefs_util(profile());
++  for (const char* name :
++       {live_folders::kGitHubTokenPref, live_folders::kGitHubFolderPref}) {
++    EXPECT_EQ(extensions::api::settings_private::PrefType::kNone,
++              prefs_util.GetAllowlistedPrefType(name))
++        << name;
++    EXPECT_FALSE(prefs_util.GetPref(name)) << name;
++  }
++  std::string state;
++  ASSERT_TRUE(
++      base::JSONWriter::Write(Service().StateForSettings(), &state));
++  EXPECT_EQ(std::string::npos, state.find("TESTONLY")) << state;
++  EXPECT_NE(std::string::npos, state.find("personal-access-tokens")) << state;
++
++  ASSERT_EQ(4u, seen_.size());
++  for (const Seen& seen : seen_) {
++    EXPECT_EQ("api.github.com", seen.url.host()) << seen.url;
++    EXPECT_EQ("https", seen.url.scheme());
++    EXPECT_EQ(std::string("Bearer ") + kToken, seen.authorization);
++    EXPECT_TRUE(seen.cookie.empty());
++    EXPECT_TRUE(seen.credentials_omitted);
++  }
++}
++
++// Lf9: sync and the sidebar file carry neither the folder nor its rows; the
++// other pins of the Space travel as before.
++IN_PROC_BROWSER_TEST_F(LiveFoldersTest, TheFolderIsNotInTheSyncFile) {
++  ASSERT_TRUE(embedded_test_server()->Start());
++  ASSERT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
++      browser(), embedded_test_server()->GetURL("/title1.html"),
++      WindowOpenDisposition::NEW_FOREGROUND_TAB,
++      ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
++  tabs::TabInterface* const pin = browser()->GetTabStripModel()->GetActiveTab();
++  Model(browser()).SetSpacePinned(pin, true);
++  base::RunLoop().RunUntilIdle();
++
++  AnswerTheFirstList();
++  ASSERT_EQ(Failure::kNone, Make());
++  ASSERT_TRUE(base::test::RunUntil(
++      [&] { return LiveRows(browser()).size() == FirstList().size(); }));
++
++  // Lf9: a pin of the person's own put in the live folder stays here too.
++  ASSERT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
++      browser(), embedded_test_server()->GetURL("/title2.html"),
++      WindowOpenDisposition::NEW_FOREGROUND_TAB,
++      ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
++  TabStripModel* const strip = browser()->GetTabStripModel();
++  tabs::TabInterface* const inside = strip->GetActiveTab();
++  Model(browser()).SetSpacePinned(inside, true);
++  tabs::FolderTabCollection* const folder =
++      const_cast<tabs::FolderTabCollection*>(
++          FolderOf(LiveRows(browser()).front()));
++  ASSERT_TRUE(strip->MoveTabsToFolder({strip->GetIndexOfTab(inside)}, folder));
++  ASSERT_EQ(folder, FolderOf(inside));
++  base::RunLoop().RunUntilIdle();
++  const std::string inside_token = stedding::TabToken(inside->GetContents());
++
++  const spaces::sidebar_sync::LocalView view =
++      spaces::sidebar_sync::BuildLocalView(profile(), {});
++  bool pin_seen = false;
++  for (const auto& [id, item] : view.items) {
++    EXPECT_EQ(std::string::npos, id.find(live_folders::kRowTokenPrefix)) << id;
++    EXPECT_EQ(std::string::npos, id.find(Service().folder_id())) << id;
++    for (const auto& [key, value] : item.fields) {
++      EXPECT_EQ(std::string::npos, value.find("github.com")) << id;
++      EXPECT_NE("Pull Requests", value) << id;
++    }
++    pin_seen |=
++        id.find(stedding::TabToken(pin->GetContents())) != std::string::npos;
++    if (!inside_token.empty()) {
++      EXPECT_EQ(std::string::npos, id.find(inside_token))
++          << "a tab inside the live folder syncs";
++    }
++  }
++  EXPECT_TRUE(pin_seen) << "the Space's own pin no longer syncs";
++}
++
++
++// Lf5: a row the person takes out is theirs, and its pull request stays out
++// of the folder while it is open; pinned again, it is the person's own pin,
++// which a refresh leaves alone. The last row taken out leaves the folder with
++// its one row, on, with its token.
++IN_PROC_BROWSER_TEST_F(LiveFoldersTest, ARemovedRowStaysOutAndTheLastLeavesOne) {
++  AnswerTheFirstList();
++  ASSERT_EQ(Failure::kNone, Make());
++  ASSERT_TRUE(base::test::RunUntil(
++      [&] { return LiveRows(browser()).size() == FirstList().size(); }));
++  const spaces::SpaceId space = Service().space();
++  tabs::TabInterface* const fuel = LiveRows(browser())[2];
++  ASSERT_EQ(Fuel7Url(), Model(browser()).HomeUrl(fuel).value_or(GURL()));
++
++  Model(browser()).SetSpacePinned(fuel, false);
++  ASSERT_TRUE(base::test::RunUntil([&] {
++    return LiveRows(browser()).size() == 2u &&
++           !live_folders::IsLiveRowToken(
++               stedding::TabToken(fuel->GetContents()));
++  })) << "the row taken out kept a live row's token";
++  EXPECT_TRUE(Service().dismissed().contains(
++      std::string(live_folders::kRowTokenPrefix) +
++      live_folders::recorded::kFuel7));
++  EXPECT_FALSE(FolderOf(fuel));
++
++  RefreshAndWait();
++  EXPECT_EQ(2u, LiveRows(browser()).size()) << "the removed row came back";
++  EXPECT_EQ(1u, TabsAt(browser(), Fuel7Url())) << "the person's tab went";
++
++  // Pinned again, it is the person's own pin.
++  Model(browser()).SetSpacePinned(fuel, true);
++  base::RunLoop().RunUntilIdle();
++  const std::string own = stedding::TabToken(fuel->GetContents());
++  EXPECT_FALSE(live_folders::IsLiveRowToken(own));
++  RefreshAndWait();
++  EXPECT_TRUE(Model(browser()).IsSpacePinned(fuel)) << "a refresh unpinned it";
++  EXPECT_TRUE(Store().Find(own));
++  EXPECT_EQ(space, Service().space());
++  EXPECT_EQ(2u, LiveRows(browser()).size());
++
++  // The last rows go: the folder stays, with its one row.
++  const std::string folder_id = Service().folder_id();
++  for (tabs::TabInterface* row : LiveRows(browser())) {
++    Model(browser()).SetSpacePinned(row, false);
++  }
++  ASSERT_TRUE(base::test::RunUntil([&] {
++    return Names(LiveRows(browser())) ==
++           std::vector<std::u16string>{u"No open pull requests"};
++  })) << "the emptied folder has no row";
++  EXPECT_TRUE(Service().on());
++  EXPECT_EQ(folder_id, Service().folder_id());
++  EXPECT_EQ(folder_id,
++            FolderOf(LiveRows(browser()).front())->id().ToString());
++  EXPECT_FALSE(
++      profile()->GetPrefs()->GetString(live_folders::kGitHubTokenPref).empty());
++}
++
++// Lf8: one row moved to another Space does not take the folder there; the
++// folder moved whole does.
++IN_PROC_BROWSER_TEST_F(LiveFoldersTest, OnlyTheWholeFolderMovesItsSpace) {
++  AnswerTheFirstList();
++  ASSERT_EQ(Failure::kNone, Make());
++  ASSERT_TRUE(base::test::RunUntil(
++      [&] { return LiveRows(browser()).size() == FirstList().size(); }));
++  const spaces::SpaceId home = Service().space();
++  spaces::Space* const other = Model(browser()).AddSpace("Other", SK_ColorBLUE);
++  ASSERT_TRUE(other);
++  const spaces::SpaceId other_id = other->id();
++  ASSERT_NE(home, other_id);
++  base::RunLoop().RunUntilIdle();
++
++  Model(browser()).MoveTabsToSpace({LiveRows(browser())[1]}, other_id);
++  base::RunLoop().RunUntilIdle();
++  EXPECT_EQ(home, Service().space()) << "one row took the folder away";
++  RefreshAndWait();
++  EXPECT_EQ(home, Service().space());
++  for (tabs::TabInterface* row : LiveRows(browser())) {
++    EXPECT_EQ(home, Model(browser()).FindSpaceForTab(row));
++  }
++
++  tabs::FolderTabCollection* const folder =
++      const_cast<tabs::FolderTabCollection*>(
++          FolderOf(LiveRows(browser()).front()));
++  ASSERT_TRUE(folder);
++  Model(browser()).MoveFolderToSpace(folder, other_id);
++  ASSERT_TRUE(base::test::RunUntil(
++      [&] { return Service().space() == other_id; }))
++      << "the folder moved whole but the service did not follow";
++}
++
++// Lf2: while the folder is on, a new token replaces the old one: the folder
++// keeps its id, its name and the rows the person removed, and the new token
++// is the one sent.
++IN_PROC_BROWSER_TEST_F(LiveFoldersTest, ANewTokenReplacesTheOld) {
++  AnswerTheFirstList();
++  ASSERT_EQ(Failure::kNone, Make());
++  ASSERT_TRUE(base::test::RunUntil(
++      [&] { return LiveRows(browser()).size() == FirstList().size(); }));
++  const std::string folder_id = Service().folder_id();
++  // The person renames the folder, and then takes a row out: two changes,
++  // each published from the window in its own turn (windows G13).
++  const_cast<tabs::FolderTabCollection*>(FolderOf(LiveRows(browser())[0]))
++      ->SetTitle("Reviews");
++  ASSERT_TRUE(base::test::RunUntil([&] {
++    const spaces::PinRecord* const record =
++        Store().Find(stedding::TabToken(LiveRows(browser())[0]->GetContents()));
++    return record && record->folder_path.find("Reviews") != std::string::npos;
++  })) << "the folder's new name did not reach the store";
++  Model(browser()).SetSpacePinned(LiveRows(browser())[2], false);
++  ASSERT_TRUE(base::test::RunUntil(
++      [&] { return LiveRows(browser()).size() == 2u; }))
++      << "the row taken out is still a row";
++  const std::string old_sealed =
++      profile()->GetPrefs()->GetString(live_folders::kGitHubTokenPref);
++
++  for (const char* who : {"author:@me", "assignee:@me",
++                          "review-requested:@me", "mentions:@me"}) {
++    answers_[who] = {net::HTTP_UNAUTHORIZED,
++                     live_folders::recorded::kBadCredentials};
++  }
++  RefreshAndWait();
++  ASSERT_EQ(Failure::kToken, Service().failure());
++
++  answers_.clear();
++  AnswerTheFirstList();
++  const size_t before = seen_.size();
++  base::test::TestFuture<Failure> replaced;
++  Service().MakeInActiveSpace(kOtherToken, replaced.GetCallback());
++  ASSERT_EQ(Failure::kNone, replaced.Get());
++  ASSERT_EQ(before + 4, seen_.size());
++  EXPECT_EQ(std::string("Bearer ") + kOtherToken,
++            seen_.back().authorization);
++  EXPECT_TRUE(Service().on());
++  EXPECT_EQ(Failure::kNone, Service().failure());
++  EXPECT_EQ(folder_id, Service().folder_id());
++  EXPECT_NE(old_sealed,
++            profile()->GetPrefs()->GetString(live_folders::kGitHubTokenPref));
++  EXPECT_EQ(2u, LiveRows(browser()).size()) << "the removed row came back";
++  EXPECT_EQ("Reviews", FolderOf(LiveRows(browser())[0])->title());
++
++  // A paste that is no token is refused and changes nothing.
++  base::test::TestFuture<Failure> refused;
++  Service().MakeInActiveSpace("not a token", refused.GetCallback());
++  EXPECT_EQ(Failure::kToken, refused.Get());
++  EXPECT_EQ(before + 4, seen_.size());
++}
++
++// Lf2: the folder and its token come back at the next start: the token is
++// opened from the key store and sent with the first refresh.
++IN_PROC_BROWSER_TEST_F(LiveFoldersTest, PRE_TheFolderAndItsTokenComeBack) {
++  ASSERT_EQ(Failure::kNone, Make());
++  ASSERT_TRUE(base::test::RunUntil(
++      [&] { return LiveRows(browser()).size() == FirstList().size(); }));
++}
++
++IN_PROC_BROWSER_TEST_F(LiveFoldersTest, TheFolderAndItsTokenComeBack) {
++  ASSERT_TRUE(Service().on());
++  ASSERT_TRUE(base::test::RunUntil(
++      [&] { return Service().has_token_for_testing(); }))
++      << "the saved token did not open";
++  Service().RefreshNow();
++  ASSERT_TRUE(base::test::RunUntil([&] { return seen_.size() >= 4u; }));
++  for (const Seen& seen : seen_) {
++    EXPECT_EQ(std::string("Bearer ") + kToken, seen.authorization);
++  }
++  ASSERT_TRUE(base::test::RunUntil(
++      [&] { return LiveRows(browser()).size() == FirstList().size(); }));
++  EXPECT_EQ(FirstList(), Names(LiveRows(browser())));
++}
++
++// Lf8: Close Folder's Tabs on the folder's header deletes it, as Unpin Folder
++// does: off, the token forgotten, its rows gone.
++IN_PROC_BROWSER_TEST_F(LiveFoldersTest, ClosingTheFoldersTabsTurnsItOff) {
++  AnswerTheFirstList();
++  ASSERT_EQ(Failure::kNone, Make());
++  ASSERT_TRUE(base::test::RunUntil(
++      [&] { return LiveRows(browser()).size() == FirstList().size(); }));
++  FolderView* const view = DrawnFolder(FolderOf(LiveRows(browser()).front()));
++  ASSERT_TRUE(view);
++  view->ExecuteCommand(FolderView::kCloseTabsCommand, 0);
++  ASSERT_TRUE(base::test::RunUntil([&] { return !Service().on(); }))
++      << "closing the folder's tabs left it on";
++  EXPECT_TRUE(
++      profile()->GetPrefs()->GetString(live_folders::kGitHubTokenPref).empty());
++  EXPECT_TRUE(profile()
++                  ->GetPrefs()
++                  ->GetDict(live_folders::kGitHubFolderPref)
++                  .empty());
++  ASSERT_TRUE(base::test::RunUntil([&] {
++    return TabsAt(browser(), Fuel7Url()) == 0 &&
++           TabsAt(browser(), Rocket42Url()) == 0 &&
++           TabsAt(browser(), Rocket45Url()) == 0;
++  })) << "a row outlived the folder";
++  EXPECT_TRUE(LiveRows(browser()).empty());
++  const size_t seen = seen_.size();
++  Service().RefreshNowForTesting();
++  base::RunLoop().RunUntilIdle();
++  EXPECT_EQ(seen, seen_.size()) << "a request after the folder was deleted";
++}
++
++// Lf12: a private window, a Blank Window and a guest window have no live
++// folder: no row, and a guest profile has no service at all.
++IN_PROC_BROWSER_TEST_F(LiveFoldersTest, NoLiveFolderInPrivateBlankOrGuest) {
++  AnswerTheFirstList();
++  ASSERT_EQ(Failure::kNone, Make());
++  ASSERT_TRUE(base::test::RunUntil(
++      [&] { return LiveRows(browser()).size() == FirstList().size(); }));
++
++  BrowserWindowInterface* const private_window = CreateIncognitoBrowser();
++  ASSERT_TRUE(private_window);
++  ui_test_utils::BrowserCreatedObserver blank_opened;
++  chrome::ExecuteCommand(browser(), IDC_STEDDING_NEW_BLANK_WINDOW);
++  BrowserWindowInterface* const blank = blank_opened.Wait();
++  ASSERT_TRUE(blank);
++  BrowserWindowInterface* const guest = CreateGuestBrowser();
++  ASSERT_TRUE(guest);
++  // Each window settles a turn after it is made (windows G16); a window that
++  // takes the profile's pins has them by then.
++  for (int i = 0; i < 5; ++i) {
++    base::RunLoop().RunUntilIdle();
++  }
++  for (BrowserWindowInterface* window : {private_window, blank, guest}) {
++    EXPECT_TRUE(LiveRows(window).empty())
++        << "a live row in a window that has no pins of the profile";
++    EXPECT_EQ(0u, TabsAt(window, Rocket42Url()));
++  }
++  EXPECT_FALSE(live_folders::LiveFolderServiceFactory::GetForProfile(
++      guest->GetProfile()))
++      << "a guest profile has a live folder service";
++  EXPECT_FALSE(live_folders::LiveFolderServiceFactory::GetForProfile(
++      private_window->GetProfile()))
++      << "a private profile has a live folder service of its own";
++  // The profile's own window still has its folder.
++  EXPECT_EQ(FirstList(), Names(LiveRows(browser())));
++}
++
++// Lf8: Unpin Folder deletes the folder even when one of its rows sits
++// outside it at the time (dragged elsewhere in the run): that row goes too.
++IN_PROC_BROWSER_TEST_F(LiveFoldersTest, UnpinFolderWithARowOutsideTurnsItOff) {
++  AnswerTheFirstList();
++  ASSERT_EQ(Failure::kNone, Make());
++  ASSERT_TRUE(base::test::RunUntil(
++      [&] { return LiveRows(browser()).size() == FirstList().size(); }));
++  TabStripModel* const strip = browser()->GetTabStripModel();
++  tabs::TabInterface* const outside = LiveRows(browser())[0];
++  strip->MoveTabOutOfFolders(strip->GetIndexOfTab(outside));
++  ASSERT_TRUE(base::test::RunUntil([&] {
++    const spaces::PinRecord* const record =
++        Store().Find(stedding::TabToken(outside->GetContents()));
++    return record && record->folder_path.empty() && !FolderOf(outside);
++  })) << "the row did not leave the folder";
++  ASSERT_TRUE(Model(browser()).IsSpacePinned(outside));
++  const tabs::FolderTabCollection* folder = nullptr;
++  for (tabs::TabInterface* row : LiveRows(browser())) {
++    folder = folder ? folder : FolderOf(row);
++  }
++  ASSERT_TRUE(folder);
++  FolderView* const view = DrawnFolder(folder);
++  ASSERT_TRUE(view);
++  view->ExecuteCommand(FolderView::kPinCommand, 0);
++  ASSERT_TRUE(base::test::RunUntil([&] { return !Service().on(); }))
++      << "Unpin Folder left the folder on while a row was outside it";
++  EXPECT_TRUE(
++      profile()->GetPrefs()->GetString(live_folders::kGitHubTokenPref).empty());
++  ASSERT_TRUE(base::test::RunUntil([&] {
++    return TabsAt(browser(), Fuel7Url()) == 0 &&
++           TabsAt(browser(), Rocket42Url()) == 0 &&
++           TabsAt(browser(), Rocket45Url()) == 0;
++  })) << "an asleep row outlived the folder";
++  EXPECT_TRUE(LiveRows(browser()).empty());
++}
++
++// Lf5: past 500 removed rows the oldest is forgotten and a new removal
++// still sticks.
++IN_PROC_BROWSER_TEST_F(LiveFoldersTest, TheNewestRemovedRowsAreKept) {
++  AnswerTheFirstList();
++  ASSERT_EQ(Failure::kNone, Make());
++  ASSERT_TRUE(base::test::RunUntil(
++      [&] { return LiveRows(browser()).size() == FirstList().size(); }));
++  const std::string oldest =
++      std::string(live_folders::kRowTokenPrefix) + "PR_old0";
++  for (int i = 0; i < 500; ++i) {
++    Service().DismissForTesting(std::string(live_folders::kRowTokenPrefix) +
++                                "PR_old" + base::NumberToString(i));
++  }
++  ASSERT_EQ(500u, Service().dismissed().size());
++
++  tabs::TabInterface* const fuel = LiveRows(browser())[2];
++  ASSERT_EQ(Fuel7Url(), Model(browser()).HomeUrl(fuel).value_or(GURL()));
++  Model(browser()).SetSpacePinned(fuel, false);
++  ASSERT_TRUE(base::test::RunUntil(
++      [&] { return LiveRows(browser()).size() == 2u; }));
++  const std::set<std::string> dismissed = Service().dismissed();
++  EXPECT_TRUE(dismissed.contains(std::string(live_folders::kRowTokenPrefix) +
++                                 live_folders::recorded::kFuel7))
++      << "a removal past 500 did not stick";
++  EXPECT_FALSE(dismissed.contains(oldest)) << "the oldest was kept";
++  EXPECT_EQ(500u, dismissed.size());
++
++  RefreshAndWait();
++  EXPECT_EQ(2u, LiveRows(browser()).size()) << "the removed row came back";
++}
++
++// Lf6, Lf13: the folder's header says when the list was refreshed; after a
++// failure it wears the mark and says why; its menu starts with Refresh Pull
++// Requests and Delete Live Folder.
++IN_PROC_BROWSER_TEST_F(LiveFoldersTest, TheHeaderSaysWhenAndWhy) {
++  AnswerTheFirstList();
++  ASSERT_EQ(Failure::kNone, Make());
++  ASSERT_TRUE(base::test::RunUntil(
++      [&] { return LiveRows(browser()).size() == FirstList().size(); }));
++  views::Widget* const widget =
++      BrowserView::GetBrowserViewForBrowser(browser())->GetWidget();
++  const auto header = [&]() -> FolderView* {
++    EXPECT_TRUE(stedding::test::WaitForRowsToSettle(widget));
++    views::test::RunScheduledLayout(widget);
++    return stedding::test::FindDrawnFolder(
++        widget->GetRootView(), FolderOf(LiveRows(browser()).front()));
++  };
++  FolderView* view = header();
++  ASSERT_TRUE(view) << "the live folder's header is not drawn";
++  EXPECT_EQ(u"Pull Requests", view->name_for_testing()->GetText());
++  EXPECT_NE(std::u16string::npos,
++            view->header_for_testing()->GetTooltipText().find(u"Refreshed at"))
++      << view->header_for_testing()->GetTooltipText();
++  ui::SimpleMenuModel* const menu = view->menu_model_for_testing();
++  ASSERT_GE(menu->GetItemCount(), 2u);
++  EXPECT_EQ(FolderView::kLiveRefreshCommand, menu->GetCommandIdAt(0));
++  EXPECT_EQ(u"Refresh Pull Requests", menu->GetLabelAt(0));
++  EXPECT_EQ(FolderView::kLiveDeleteCommand, menu->GetCommandIdAt(1));
++  EXPECT_EQ(u"Delete Live Folder", menu->GetLabelAt(1));
++
++  for (const char* who : {"author:@me", "assignee:@me",
++                          "review-requested:@me", "mentions:@me"}) {
++    answers_[who] = {net::HTTP_UNAUTHORIZED,
++                     live_folders::recorded::kBadCredentials};
++  }
++  RefreshAndWait();
++  view = header();
++  ASSERT_TRUE(view);
++  EXPECT_EQ(u"Pull Requests ⚠", view->name_for_testing()->GetText());
++  EXPECT_NE(std::u16string::npos,
++            view->header_for_testing()->GetTooltipText().find(u"expired"))
++      << view->header_for_testing()->GetTooltipText();
++
++  // An ordinary folder has none of it.
++  EXPECT_FALSE(live_folders::NoteFor(profile(), "not-a-live-folder"));
++}
++
++// Lf1: the sidebar's own menu has New Live Folder > GitHub Pull Requests…,
++// which opens Settings on the live folder's block, off, asking for the token.
++IN_PROC_BROWSER_TEST_F(LiveFoldersTest, TheSidebarsMenuOpensTheBlock) {
++  ui::MenuModel* const menu = BrowserView::GetBrowserViewForBrowser(browser())
++                                  ->browser_widget()
++                                  ->GetSystemMenuModel();
++  std::optional<size_t> row;
++  for (size_t i = 0; i < menu->GetItemCount(); ++i) {
++    if (menu->GetCommandIdAt(i) == IDC_STEDDING_NEW_LIVE_FOLDER) {
++      row = i;
++    }
++  }
++  ASSERT_TRUE(row) << "the sidebar's menu has no New Live Folder";
++  EXPECT_EQ(u"New Live Folder", menu->GetLabelAt(*row));
++  EXPECT_TRUE(menu->IsEnabledAt(*row));
++  ui::MenuModel* const sub = menu->GetSubmenuModelAt(*row);
++  ASSERT_TRUE(sub);
++  ASSERT_EQ(1u, sub->GetItemCount());
++  EXPECT_EQ(IDC_STEDDING_NEW_LIVE_FOLDER_GITHUB, sub->GetCommandIdAt(0));
++  EXPECT_EQ(u"GitHub Pull Requests…", sub->GetLabelAt(0));
++  ASSERT_TRUE(sub->IsEnabledAt(0));
++  sub->ActivatedAt(0);
++
++  ASSERT_TRUE(base::test::RunUntil([&] {
++    content::WebContents* const page =
++        browser()->GetTabStripModel()->GetActiveWebContents();
++    return page && page->GetLastCommittedURL().host() == "settings" &&
++           page->GetLastCommittedURL().path() == "/stedding";
++  }));
++  content::WebContents* const page =
++      browser()->GetTabStripModel()->GetActiveWebContents();
++  // The block, found through every shadow root, offers the token's field.
++  constexpr char kFind[] = R"(
++    (() => {
++      const find = root => {
++        const hit = root.querySelector('#liveFolderMake');
++        if (hit) {
++          return hit;
++        }
++        for (const element of root.querySelectorAll('*')) {
++          if (element.shadowRoot) {
++            const found = find(element.shadowRoot);
++            if (found) {
++              return found;
++            }
++          }
++        }
++        return null;
++      };
++      const make = find(document);
++      return make ? make.textContent.trim() : '';
++    })()
++  )";
++  ASSERT_TRUE(base::test::RunUntil([&] {
++    return content::EvalJs(page, kFind).ExtractString() == "Make Live Folder";
++  })) << "the live folder's block is not on the page";
++  EXPECT_TRUE(seen_.empty()) << "opening the block asked GitHub";
++}
++
++}  // namespace

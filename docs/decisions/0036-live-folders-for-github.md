@@ -1,6 +1,6 @@
 # 0036 — Live Folders: GitHub pull requests in the sidebar
 
-Status: Accepted, option B (the owner, 2026-11-15: "Yes, option B"). Proposed 2026-11-13 (BACKLOG S-478, discussion 106). Not built.
+Status: Accepted, option B (the owner, 2026-11-15: "Yes, option B"). Proposed 2026-11-13 (BACKLOG S-478, discussion 106). Built 2026-11-16 (`docs/features/live-folders.md` Lf1–Lf13), checked on Windows; not yet in a release.
 Date: 2026-11-13
 
 ## Context
@@ -17,7 +17,7 @@ A live folder is the first thing in Stedding that would ask a site for data with
 
 **A. Read github.com's pages with the Space's sign-in, as Arc did.** No setup: whoever is signed in to github.com in that Space gets their pull requests. It reads pages written for people, so any redesign of GitHub breaks it, as it broke Arc's, and nothing tells Stedding until people report it.
 
-**B. GitHub's API, with a token the person makes.** The folder asks `api.github.com` for the pull requests the person opened, is assigned, is asked to review or is mentioned in (GitHub's search API, `is:pr is:open`), with a fine-grained, read-only token the person creates on github.com and pastes once. The API is documented and versioned, so a page redesign does not break it. The token is kept in the profile, encrypted by the system's keychain (as passwords are), and sent to `api.github.com` alone. Setup is one minute, and the folder's empty state links to the page where the token is made.
+**B. GitHub's API, with a token the person makes.** The folder asks `api.github.com` for the pull requests the person opened, is assigned, is asked to review or is mentioned in (GitHub's search API, `is:pr is:open`), with a fine-grained, read-only token the person creates on github.com and pastes once. The API is documented and versioned, so a page redesign does not break it. The token is kept in the profile, encrypted by the system's keychain (as passwords are), and sent to `api.github.com` alone. Setup is one minute, and the Settings block where the folder is made links to the page where the token is made.
 
 **C. B, without a token, through the signed-in session.** GitHub's API does not take the web session's cookies, so this is A again under another name. Not possible as B.
 
@@ -28,7 +28,7 @@ Why B: it keeps working when GitHub changes its pages, it reaches nothing but `a
 If B is chosen:
 
 - A live folder is made from the sidebar's menu (New Live Folder › GitHub Pull Requests) and from Settings; it is off until made. No folder appears by itself.
-- It refreshes when made, every 10 minutes while a window of the profile is open, and when the window comes to the front, never more than once a minute. A failed refresh keeps the last list and marks the folder's row; the reason (token expired, no network, GitHub's rate limit) is in its tooltip.
+- It refreshes when made, every 10 minutes while a window of the profile is open, and when the window comes to the front, never more than once a minute. A failed refresh keeps the last list and marks the folder's name (a ⚠ after it); the reason (token expired, no network, GitHub's rate limit) is in its tooltip.
 - Each pull request is a row asleep until chosen, titled with the repository and the title. A merged or closed one leaves the folder at the next refresh; one opened by hand and still open stays a normal tab when it leaves.
 - Deleting the folder turns it off and forgets the token.
 - `docs/PRIVACY.md` gains a line: a live folder, once made, asks `api.github.com` for its list on a timer, with the person's token, and nothing else.

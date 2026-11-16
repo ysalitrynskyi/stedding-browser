@@ -1,6 +1,6 @@
 # 0035 — Pins and essentials in every window
 
-Status: Accepted, option B (the owner, 2026-11-15: "Yes, option B"). Proposed 2026-11-13 (BACKLOG S-94, GitHub issue 111).
+Status: Accepted, option B (the owner, 2026-11-15: "Yes, option B"). Proposed 2026-11-13 (BACKLOG S-94, GitHub issue 111). Built 2026-11-16 (`docs/features/windows.md` G2, G13-G22), checked on Windows; not yet in a release.
 Date: 2026-11-13
 
 ## Context

@@ -24,8 +24,8 @@ Removable when: never as a feature; the rows are Stedding's own views.
  .../ui/views/commandbar/command_bar_view.h    |  27 +-
  .../commandbar/command_bar_view_unittest.cc   | 122 ++++++++
  chrome/test/stedding/BUILD.gn                 |   3 +
- .../test/stedding/command_bar_browsertest.cc  | 151 ++++++++++
- 6 files changed, 543 insertions(+), 29 deletions(-)
+ .../test/stedding/command_bar_browsertest.cc  | 190 ++++++++++++-
+ 6 files changed, 576 insertions(+), 35 deletions(-)
 
 diff --git a/chrome/browser/ui/views/commandbar/BUILD.gn b/chrome/browser/ui/views/commandbar/BUILD.gn
 index 02ab76dfcf0fe..6bf98b5bd92d6 100644
@@ -710,10 +710,18 @@ index 4929783a7e8a8..22b050cf2a321 100644
      "//chrome/browser/devtools",
      "//chrome/browser/devtools:test_support",
 diff --git a/chrome/test/stedding/command_bar_browsertest.cc b/chrome/test/stedding/command_bar_browsertest.cc
-index 7982521eeecdd..893e3019cdadf 100644
+index 7982521eeecdd..ff554a14c2833 100644
 --- a/chrome/test/stedding/command_bar_browsertest.cc
 +++ b/chrome/test/stedding/command_bar_browsertest.cc
-@@ -25,6 +25,7 @@
+@@ -15,6 +15,7 @@
+ #include <vector>
+ 
+ #include "base/files/scoped_temp_dir.h"
++#include "base/functional/function_ref.h"
+ #include "base/run_loop.h"
+ #include "base/strings/strcat.h"
+ #include "base/strings/string_number_conversions.h"
+@@ -25,6 +26,7 @@
  #include "chrome/app/chrome_command_ids.h"
  #include "chrome/browser/bookmarks/bookmark_model_factory.h"
  #include "chrome/browser/extensions/chrome_test_extension_loader.h"
@@ -721,7 +729,7 @@ index 7982521eeecdd..893e3019cdadf 100644
  #include "chrome/browser/history/history_service_factory.h"
  #include "chrome/browser/profiles/profile.h"
  #include "chrome/browser/search_engines/template_url_service_factory.h"
-@@ -43,6 +44,7 @@
+@@ -43,6 +45,7 @@
  #include "chrome/browser/ui/stedding/screenshot/screenshot_capture.h"
  #include "chrome/browser/ui/stedding/stedding_command_ids.h"
  #include "chrome/browser/ui/stedding/stedding_prefs.h"
@@ -729,7 +737,7 @@ index 7982521eeecdd..893e3019cdadf 100644
  #include "chrome/browser/ui/tabs/tab_enums.h"
  #include "chrome/browser/ui/tabs/tab_strip_model.h"
  #include "chrome/browser/ui/tabs/vertical_tab_strip_state_controller.h"
-@@ -60,6 +62,9 @@
+@@ -60,6 +63,9 @@
  #include "chrome/test/base/ui_test_utils.h"
  #include "components/bookmarks/browser/bookmark_model.h"
  #include "components/bookmarks/test/bookmark_test_helpers.h"
@@ -739,7 +747,7 @@ index 7982521eeecdd..893e3019cdadf 100644
  #include "components/history/core/browser/history_service.h"
  #include "components/history/core/browser/history_types.h"
  #include "components/history/core/test/history_service_test_util.h"
-@@ -83,10 +88,12 @@
+@@ -83,10 +89,12 @@
  #include "extensions/test/test_extension_dir.h"
  #include "net/dns/mock_host_resolver.h"
  #include "net/test/embedded_test_server/embedded_test_server.h"
@@ -752,7 +760,7 @@ index 7982521eeecdd..893e3019cdadf 100644
  #include "ui/base/window_open_disposition.h"
  #include "ui/events/event.h"
  #include "ui/events/event_constants.h"
-@@ -94,7 +101,10 @@
+@@ -94,7 +102,10 @@
  #include "ui/gfx/geometry/rect.h"
  #include "ui/gfx/geometry/rect_conversions.h"
  #include "ui/gfx/geometry/rect_f.h"
@@ -763,7 +771,66 @@ index 7982521eeecdd..893e3019cdadf 100644
  #include "ui/views/controls/scroll_view.h"
  #include "ui/views/controls/textfield/textfield.h"
  #include "ui/views/test/views_test_utils.h"
-@@ -1678,6 +1688,147 @@ IN_PROC_BROWSER_TEST_F(CommandBarKeysTest, EveryRowItDrawsIsTheRowEnterRuns) {
+@@ -978,6 +989,26 @@ class CommandBarKeysTest : public CommandBarActionsTest {
+         BrowserView::GetBrowserViewForBrowser(browser()));
+   }
+ 
++  // A wait on the open bar, looked up again on each turn (S-492): the bar
++  // closes when the window loses the focus, as another test's window can
++  // take it in a parallel run. The wait then stops and says so, and nothing
++  // reads the bar that is gone.
++  [[nodiscard]] bool UntilBar(
++      base::FunctionRef<bool(stedding::CommandBarView*)> done) {
++    bool gone = false;
++    const bool met = base::test::RunUntil([&]() {
++      stedding::CommandBarView* const open = OpenBarNow();
++      if (!open) {
++        gone = true;
++        return true;
++      }
++      return done(open);
++    });
++    EXPECT_FALSE(gone) << "the bar closed in the wait: the window lost the "
++                          "focus";
++    return met && !gone;
++  }
++
+   // The tab titled `title`, or null.
+   tabs::TabInterface* TabTitled(const std::u16string& title) {
+     TabStripModel* const tabs = browser()->GetTabStripModel();
+@@ -1189,9 +1220,10 @@ IN_PROC_BROWSER_TEST_F(CommandBarKeysTest, ASiteFromHistoryAndASearchChip) {
+     ASSERT_TRUE(bar);
+     views::Textfield* const field = bar->field_for_testing();
+     Type(bar, u"inlines");
+-    ASSERT_TRUE(base::test::RunUntil([&]() {
+-      return field->GetText().starts_with(u"inlinesite.test");
+-    })) << "it reads " << base::UTF16ToUTF8(field->GetText());
++    ASSERT_TRUE(UntilBar([](stedding::CommandBarView* open) {
++      return open->field_for_testing()->GetText().starts_with(
++          u"inlinesite.test");
++    }));
+     EXPECT_EQ(u"inlinesite.test", field->GetText());
+     EXPECT_EQ(u"ite.test", field->GetSelectedText());
+     EXPECT_EQ(7u, field->GetCursorPosition());
+@@ -1202,13 +1234,14 @@ IN_PROC_BROWSER_TEST_F(CommandBarKeysTest, ASiteFromHistoryAndASearchChip) {
+     EXPECT_FALSE(field->HasSelection());
+     // The omnibox's later answers for the text.
+     base::RunLoop().RunUntilIdle();
++    ASSERT_EQ(bar, OpenBarNow()) << "the bar closed: the window lost the focus";
+     EXPECT_EQ(u"inlines", field->GetText()) << "nothing completes after it";
+     EXPECT_TRUE(bar->inline_completion_for_testing().empty());
+ 
+     Type(bar, u"inlinesi");
+-    ASSERT_TRUE(base::test::RunUntil(
+-        [&]() { return field->GetText() == u"inlinesite.test"; }))
+-        << "it reads " << base::UTF16ToUTF8(field->GetText());
++    ASSERT_TRUE(UntilBar([](stedding::CommandBarView* open) {
++      return open->field_for_testing()->GetText() == u"inlinesite.test";
++    }));
+     Press(bar, ui::VKEY_RETURN);
+     // The host only: whether a tab opens is K21's to say.
+     EXPECT_TRUE(base::test::RunUntil([&]() {
+@@ -1678,6 +1711,151 @@ IN_PROC_BROWSER_TEST_F(CommandBarKeysTest, EveryRowItDrawsIsTheRowEnterRuns) {
  // the active Space's two, then the first two of the other Space. The first
  // four matches of the strip were listed: the other Space's four, and none
  // of the Space on screen.
@@ -823,31 +890,35 @@ index 7982521eeecdd..893e3019cdadf 100644
 +    Type(bar, u"iconsite");
 +    // The first row whose title holds `title` (a suggestion's is set apart
 +    // in isolates, K4); the count when none.
-+    const auto row = [&](std::u16string_view title) {
-+      for (size_t i = 0; i < bar->row_count_for_testing(); ++i) {
-+        if (bar->row_title_for_testing(i).find(title) !=
++    const auto row = [](stedding::CommandBarView* open,
++                        std::u16string_view title) {
++      for (size_t i = 0; i < open->row_count_for_testing(); ++i) {
++        if (open->row_title_for_testing(i).find(title) !=
 +            std::u16string::npos) {
 +          return i;
 +        }
 +      }
-+      return bar->row_count_for_testing();
++      return open->row_count_for_testing();
 +    };
-+    EXPECT_TRUE(base::test::RunUntil([&]() {
-+      const size_t closed = row(u"Iconsite closed");
-+      return closed < bar->row_count_for_testing() &&
-+             is_red(bar->row_icon_for_testing(closed));
++    // Each wait looks the bar up again (S-492).
++    EXPECT_TRUE(UntilBar([&](stedding::CommandBarView* open) {
++      const size_t closed = row(open, u"Iconsite closed");
++      return closed < open->row_count_for_testing() &&
++             is_red(open->row_icon_for_testing(closed));
 +    })) << "the closed tab's row never drew the page's icon";
-+    EXPECT_TRUE(base::test::RunUntil([&]() {
-+      const size_t from_history = row(u"Iconsite home");
-+      return from_history < bar->row_count_for_testing() &&
-+             bar->row_detail_for_testing(from_history) == u"History" &&
-+             is_red(bar->row_icon_for_testing(from_history));
++    EXPECT_TRUE(UntilBar([&](stedding::CommandBarView* open) {
++      const size_t from_history = row(open, u"Iconsite home");
++      return from_history < open->row_count_for_testing() &&
++             open->row_detail_for_testing(from_history) == u"History" &&
++             is_red(open->row_icon_for_testing(from_history));
 +    })) << "the History row never drew the page's icon";
-+    EXPECT_TRUE(base::test::RunUntil([&]() {
-+      return bar->row_detail_for_testing(0) == u"Open" &&
-+             is_red(bar->row_icon_for_testing(0));
++    EXPECT_TRUE(UntilBar([&](stedding::CommandBarView* open) {
++      return open->row_detail_for_testing(0) == u"Open" &&
++             is_red(open->row_icon_for_testing(0));
 +    })) << "the typed row, completed to the site, never drew its icon";
-+    bar->Close();
++    if (stedding::CommandBarView* const open = OpenBarNow()) {
++      open->Close();
++    }
 +    base::RunLoop().RunUntilIdle();
 +  }
 +

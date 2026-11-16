@@ -64,7 +64,7 @@ Removable when: never; this is the feature.
  .../ui/spaces/sidebar_backup_unittest.cc      | 205 +++++-
  .../browser/ui/spaces/sidebar_sync_apply.cc   |  25 +-
  chrome/browser/ui/spaces/sidebar_sync_file.cc |   3 +
- .../browser/ui/spaces/sidebar_sync_service.cc |  20 +-
+ .../browser/ui/spaces/sidebar_sync_service.cc |  35 +-
  .../browser/ui/spaces/sidebar_sync_state.cc   |  23 +-
  chrome/browser/ui/spaces/sidebar_sync_state.h |  12 +
  .../browser/ui/spaces/sidebar_sync_tracker.cc |   8 +
@@ -94,8 +94,8 @@ Removable when: never; this is the feature.
  .../stedding/isolation_mark_browsertest.cc    |  45 +-
  .../stedding/settings_spaces_browsertest.cc   | 177 ++++-
  .../stedding/shared_session_browsertest.cc    | 667 ++++++++++++++++++
- .../test/stedding/sidebar_sync_browsertest.cc |  94 +++
- 48 files changed, 2274 insertions(+), 122 deletions(-)
+ .../test/stedding/sidebar_sync_browsertest.cc | 276 ++++++++
+ 48 files changed, 2466 insertions(+), 127 deletions(-)
  create mode 100644 chrome/test/stedding/shared_session_browsertest.cc
 
 diff --git a/chrome/app/stedding_strings.grdp b/chrome/app/stedding_strings.grdp
@@ -964,7 +964,7 @@ index 019b440f1981f..403ebf29c6ec2 100644
  // its own session has as its own is written with that Space, which is
  // written as having its own session. One Space's export carries its own
 diff --git a/chrome/browser/ui/spaces/sidebar_sync_apply.cc b/chrome/browser/ui/spaces/sidebar_sync_apply.cc
-index 5914a3262766a..a162fdf719edf 100644
+index 545982133dc48..414d863c57554 100644
 --- a/chrome/browser/ui/spaces/sidebar_sync_apply.cc
 +++ b/chrome/browser/ui/spaces/sidebar_sync_apply.cc
 @@ -13,6 +13,7 @@
@@ -988,7 +988,7 @@ index 5914a3262766a..a162fdf719edf 100644
  // The jar a Space's tabs use: its own while it has one, else the profile's.
  std::string JarOf(const SpaceRegistry& registry, const SpaceId& id) {
    const RegistryEntry* const entry = registry.Find(id);
-@@ -216,6 +223,8 @@ class Applier {
+@@ -221,6 +228,8 @@ class Applier {
            ColorFromHex(record.Get(kFieldDarkColor));
        const bool chosen = record.Get(kFieldColorChosen) == "1";
        const bool isolated = record.Get(kFieldIsolated) == "1";
@@ -997,7 +997,7 @@ index 5914a3262766a..a162fdf719edf 100644
        if (!found) {
          RegistryEntry made(
              *space, name,
-@@ -225,9 +234,12 @@ class Applier {
+@@ -230,9 +239,12 @@ class Applier {
          made.dark_color = dark;
          registry_->AddExisting(made);
          // Sf24: a Space made here with its own session takes a jar of its
@@ -1012,7 +1012,7 @@ index 5914a3262766a..a162fdf719edf 100644
          }
          ledger_->pending_adds.erase(id);
          ++out_->applied;
-@@ -254,11 +266,14 @@ class Applier {
+@@ -259,11 +271,14 @@ class Applier {
        if (changed) {
          ++out_->applied;
        }
@@ -1045,7 +1045,7 @@ index f8f230f389511..29049c0affc0e 100644
      for (ArcImportPlan::Node& node : NodesOf(state, OwnEssentialsListOf(id))) {
        if (node.kind == ArcImportPlan::Node::Kind::kTab) {
 diff --git a/chrome/browser/ui/spaces/sidebar_sync_service.cc b/chrome/browser/ui/spaces/sidebar_sync_service.cc
-index 5d9fd52c8756a..dec562802ba84 100644
+index 0c796cf6898e7..c9dfbc7b10115 100644
 --- a/chrome/browser/ui/spaces/sidebar_sync_service.cc
 +++ b/chrome/browser/ui/spaces/sidebar_sync_service.cc
 @@ -25,6 +25,7 @@
@@ -1056,7 +1056,16 @@ index 5d9fd52c8756a..dec562802ba84 100644
  #include "base/token.h"
  #include "build/build_config.h"
  #include "chrome/browser/browser_process.h"
-@@ -2241,6 +2242,9 @@ bool SidebarSyncService::ResolveDecision(const std::string& id,
+@@ -2239,12 +2240,16 @@ bool SidebarSyncService::ResolveDecision(const std::string& id,
+   } else if (id.starts_with(kIsolation)) {
+     const std::string space_id = id.substr(kIsolation.size());
+     const Record* const record = ledger_->state.FindAlive(space_id);
+-    const std::optional<SpaceId> space =
+-        SpaceId::FromOptionalToken(base::Token::FromString(space_id));
++    // Sf10: the Space here, which a join's pair may know by another id.
++    const std::optional<SpaceId> space = sidebar_sync::LocalSpaceOf(
++        SpaceRegistryFactory::GetForProfile(profile_), Resolved(), space_id);
+     if (!record || !space) {
        return false;
      }
      const std::string& wanted = record->Get(sidebar_sync::kFieldIsolated);
@@ -1066,7 +1075,7 @@ index 5d9fd52c8756a..dec562802ba84 100644
      if (choice == "turn") {
        // Sf24: through the model, which keeps the jar to wipe and the
        // essentials that are the Space's own right.
-@@ -2250,11 +2254,17 @@ bool SidebarSyncService::ResolveDecision(const std::string& id,
+@@ -2254,11 +2259,17 @@ bool SidebarSyncService::ResolveDecision(const std::string& id,
          return false;
        }
        base::AutoReset<bool> applying(&applying_, true);
@@ -1087,7 +1096,33 @@ index 5d9fd52c8756a..dec562802ba84 100644
      } else {
        return false;
      }
-@@ -2547,6 +2557,10 @@ base::DictValue SidebarSyncService::GetStatus() {
+@@ -2495,10 +2506,14 @@ base::DictValue SidebarSyncService::GetStatus() {
+   const std::vector<BrowserWindowInterface*> windows =
+       sidebar_sync::RegistryWindows(profile_);
+   // A Space as the sidebar names it: its name, or "Space 2" for one never
+-  // named, whose stored name is empty.
++  // named, whose stored name is empty. Sf10: the Space here, which a join's
++  // pair may know by another id.
++  const SpaceRegistry* const registry =
++      SpaceRegistryFactory::GetForProfile(profile_);
++  const std::map<std::string, std::string> resolved = Resolved();
+   const auto space_name = [&](const std::string& space_id) {
+     const std::optional<SpaceId> space =
+-        SpaceId::FromOptionalToken(base::Token::FromString(space_id));
++        sidebar_sync::LocalSpaceOf(registry, resolved, space_id);
+     if (space && !windows.empty()) {
+       const std::u16string shown =
+           SpaceModel::From(windows.front())->DisplayName(*space);
+@@ -2542,7 +2557,7 @@ base::DictValue SidebarSyncService::GetStatus() {
+   for (const std::string& space_id : isolation_questions_) {
+     const Record* const record = ledger_->state.FindAlive(space_id);
+     const std::optional<SpaceId> space =
+-        SpaceId::FromOptionalToken(base::Token::FromString(space_id));
++        sidebar_sync::LocalSpaceOf(registry, resolved, space_id);
+     if (!record || !space) {
+       continue;
+     }
+@@ -2551,6 +2566,10 @@ base::DictValue SidebarSyncService::GetStatus() {
      row.Set("kind", "isolation");
      row.Set("spaceName", space_name(space_id));
      row.Set("turnOn", record->Get(sidebar_sync::kFieldIsolated) == "1");
@@ -3508,10 +3543,26 @@ index 0000000000000..b48e5a9da684d
 +
 +}  // namespace
 diff --git a/chrome/test/stedding/sidebar_sync_browsertest.cc b/chrome/test/stedding/sidebar_sync_browsertest.cc
-index 5fa7aa49c2cd7..92c46191e57f9 100644
+index 5fa7aa49c2cd7..d011d79f34e74 100644
 --- a/chrome/test/stedding/sidebar_sync_browsertest.cc
 +++ b/chrome/test/stedding/sidebar_sync_browsertest.cc
-@@ -559,6 +559,100 @@ IN_PROC_BROWSER_TEST_F(SidebarSyncTest, OnlyTheUsersOwnRemovalTravels) {
+@@ -6,6 +6,7 @@
+ // as a person uses it: a folder in a temporary directory stands for the
+ // shared one, and another computer's file is written into it by the test.
+ 
++#include <algorithm>
+ #include <optional>
+ #include <string>
+ #include <tuple>
+@@ -37,6 +38,7 @@
+ #include "chrome/browser/ui/browser_commands.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/spaces/arc_sidebar_importer.h"
++#include "chrome/browser/ui/spaces/sidebar_backup.h"
+ #include "chrome/browser/ui/spaces/sidebar_ids.h"
+ #include "chrome/browser/ui/spaces/sidebar_sync_file.h"
+ #include "chrome/browser/ui/spaces/sidebar_sync_ledger.h"
+@@ -559,6 +561,280 @@ IN_PROC_BROWSER_TEST_F(SidebarSyncTest, OnlyTheUsersOwnRemovalTravels) {
  // Sf25: a loaded pin another computer moves out of a Space with its own
  // session onto the shared essentials row, which is in the profile's
  // session, waits for Move now like a move into another Space's session.
@@ -3607,6 +3658,186 @@ index 5fa7aa49c2cd7..92c46191e57f9 100644
 +  EXPECT_NE(here, model().SessionOf(SpaceOf(mail)));
 +  EXPECT_EQ("Work", model().registry()->FindSession(here)->name);
 +  EXPECT_EQ("Work 2", model().registry()->FindSession(there)->name);
++}
++
++// Sf10: a Space paired at the join whose shared id is the other computer's,
++// the smaller one, stays the one Space here, under its own id: no second
++// Space is made, the other computer's pin arrives in it, a rename there
++// renames it, and the question about its session turns it.
++IN_PROC_BROWSER_TEST_F(SidebarSyncTest,
++                       ASpacePairedUnderTheOtherComputersIdIsNotMadeTwice) {
++  const spaces::SpaceId here_id = model().active_id();
++  const std::string here = here_id.ToString();
++  model().SetSpaceName(here_id, "Work");
++  std::string there = base::Token::CreateRandom().ToString();
++  while (there >= here) {
++    there = base::Token::CreateRandom().ToString();
++  }
++  const std::string pin = NewTabId();
++  const int64_t start = NowMs();
++  sb::State peer = PeerState(there, {pin}, start, "Work");
++  WritePeer(peer, 1);
++  const size_t spaces_before = registry().entries().size();
++  {
++    const base::DictValue preview = Preview(shared_.GetPath());
++    ASSERT_FALSE(preview.FindString("refusal"));
++    const base::ListValue* const pairs = preview.FindList("pairs");
++    ASSERT_TRUE(pairs);
++    ASSERT_EQ(1u, pairs->size()) << preview.DebugString();
++  }
++  ASSERT_TRUE(service()->ConfirmJoin(/*combine=*/true, "Test computer", {0}));
++  ASSERT_TRUE(base::test::RunUntil([&] { return service()->enabled(); }));
++  ASSERT_TRUE(
++      base::test::RunUntil([&] { return TabWithToken(pin) != nullptr; }))
++      << "the other computer's pin did not arrive";
++
++  EXPECT_EQ(spaces_before, registry().entries().size())
++      << "the paired Space was made a second time";
++  EXPECT_FALSE(registry().Find(SpaceOf(there)));
++  EXPECT_EQ(here_id, model().FindSpaceForTab(TabWithToken(pin)));
++  EXPECT_TRUE(model().IsSpacePinned(TabWithToken(pin)));
++
++  // A rename on the other computer renames the Space here.
++  peer.records[there].f[sb::kFieldName] =
++      sb::Field{"Office", sb::Stamp{start + 60'000, kPeer}};
++  WritePeer(peer, 2);
++  Scan();
++  ASSERT_TRUE(registry().Find(here_id));
++  EXPECT_EQ("Office", registry().Find(here_id)->name);
++  EXPECT_EQ(spaces_before, registry().entries().size());
++
++  // Its own session, turned on there, is asked about here (Sf24), and the
++  // answer turns this Space.
++  peer.records[there].f[sb::kFieldIsolated] =
++      sb::Field{"1", sb::Stamp{start + 120'000, kPeer}};
++  WritePeer(peer, 3);
++  Scan();
++  const std::string row = "isolation:" + there;
++  ASSERT_TRUE(Decision(row)) << service()->GetStatus().DebugString();
++  EXPECT_EQ("Office", *Decision(row)->FindString("spaceName"));
++  ASSERT_TRUE(service()->ResolveDecision(row, "turn"));
++  EXPECT_TRUE(model().SpaceIsIsolated(here_id));
++  EXPECT_EQ(spaces_before, registry().entries().size());
++}
++
++// Sf10, Sf35: a backup taken after a join names the Space and the pin paired
++// under the other computer's ids by their ids here, so importing it makes no
++// second Space and no second pin.
++IN_PROC_BROWSER_TEST_F(SidebarSyncTest,
++                       ABackupImportedAfterAPairMakesNoSecondSpaceOrPin) {
++  const spaces::SpaceId here_id = model().active_id();
++  const std::string here = here_id.ToString();
++  model().SetSpaceName(here_id, "Work");
++  tabs::TabInterface* const mine = OpenPin();
++  ASSERT_TRUE(mine);
++  const std::string mine_id =
++      spaces::TabSyncId(stedding::EnsureTabToken(mine));
++  ASSERT_NE("tab:", mine_id);
++  const GURL home = mine->GetContents()->GetLastCommittedURL();
++  // The other computer's ids are the smaller: they become the shared ones.
++  std::string there = base::Token::CreateRandom().ToString();
++  while (there >= here) {
++    there = base::Token::CreateRandom().ToString();
++  }
++  std::string paired = NewTabId();
++  while (paired >= mine_id) {
++    paired = NewTabId();
++  }
++  // Its Work holds the same pin and five of its own.
++  std::vector<std::string> others;
++  for (int i = 0; i < 5; ++i) {
++    others.push_back(NewTabId());
++  }
++  const int64_t start = NowMs();
++  sb::State peer = PeerState(there, others, start, "Work");
++  {
++    const sb::Stamp stamp{start, kPeer};
++    sb::Record pin(sb::Kind::kTab);
++    pin.f[sb::kFieldHome] = sb::Field{home.spec(), stamp};
++    pin.f[sb::kFieldName] = sb::Field{"", stamp};
++    pin.f[sb::kFieldParent] = sb::Field{sb::PinsListOf(there), stamp};
++    peer.records[paired] = pin;
++    std::vector<std::string>& run = peer.lists[sb::PinsListOf(there)].order;
++    run.insert(run.begin(), paired);
++  }
++  WritePeer(peer, 1);
++  const size_t spaces_before = registry().entries().size();
++  {
++    const base::DictValue preview = Preview(shared_.GetPath());
++    ASSERT_FALSE(preview.FindString("refusal"));
++    const base::ListValue* const pairs = preview.FindList("pairs");
++    ASSERT_TRUE(pairs);
++    ASSERT_EQ(2u, pairs->size()) << preview.DebugString();
++  }
++  ASSERT_TRUE(
++      service()->ConfirmJoin(/*combine=*/true, "Test computer", {0, 1}));
++  ASSERT_TRUE(base::test::RunUntil([&] { return service()->enabled(); }));
++  ASSERT_TRUE(base::test::RunUntil(
++      [&] { return TabWithToken(others[0]) != nullptr; }));
++  ASSERT_EQ(spaces_before, registry().entries().size());
++
++  // The other computer removes its five: the batch waits, and applying it
++  // takes a backup first (Sf22).
++  for (const std::string& id : others) {
++    peer.records[id].del = sb::Stamp{start + 60'000, kPeer};
++  }
++  WritePeer(peer, 2);
++  Scan();
++  ASSERT_TRUE(Decision(std::string("batch:") + kPeer))
++      << service()->GetStatus().DebugString();
++  const auto listed = [&] {
++    std::vector<std::string> names;
++    const base::DictValue status = service()->GetStatus();
++    if (const base::ListValue* const list = status.FindList("backups")) {
++      for (const base::Value& name : *list) {
++        names.push_back(name.GetString());
++      }
++    }
++    return names;
++  };
++  const std::vector<std::string> before = listed();
++  ASSERT_TRUE(
++      service()->ResolveDecision(std::string("batch:") + kPeer, "apply"));
++  std::vector<std::string> backups;
++  std::string taken;
++  ASSERT_TRUE(base::test::RunUntil([&] {
++    backups = listed();
++    for (const std::string& name : backups) {
++      if (std::ranges::find(before, name) == before.end()) {
++        taken = name;
++      }
++    }
++    return !taken.empty();
++  })) << "the batch's backup";
++
++  // The batch's backup names the Space and the pin by their ids here.
++  {
++    base::ScopedAllowBlockingForTesting allow;
++    std::string json;
++    ASSERT_TRUE(
++        base::ReadFileToString(service()->BackupPath(taken), &json));
++    const std::optional<spaces::ArcImportPlan> plan =
++        spaces::ParseArcSidebar(json);
++    ASSERT_TRUE(plan);
++    ASSERT_EQ(1u, plan->spaces.size());
++    EXPECT_EQ(here, plan->spaces[0].arc_id);
++    EXPECT_EQ(std::string::npos, json.find(paired.substr(4)))
++        << "the backup names the pin by the other computer's id";
++    EXPECT_NE(std::string::npos, json.find(mine_id.substr(4)));
++  }
++
++  // Settings' Import, for each backup.
++  for (const std::string& name : backups) {
++    base::test::TestFuture<std::optional<spaces::ArcImportResult>> done;
++    spaces::ImportSidebarFileAsync(browser(), service()->BackupPath(name),
++                                   done.GetCallback());
++    ASSERT_TRUE(done.Get().has_value()) << name;
++    EXPECT_EQ(0u, done.Get()->spaces) << name;
++  }
++  EXPECT_EQ(spaces_before, registry().entries().size())
++      << "the paired Space was made a second time";
++  EXPECT_TRUE(TabWithToken(mine_id));
++  EXPECT_FALSE(TabWithToken(paired)) << "the paired pin came in twice";
 +}
 +
  // It was put on the shared row at once: its page reloaded in the other

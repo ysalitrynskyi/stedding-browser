@@ -57,6 +57,7 @@ your choice.
 | Connection | To | Contains | Why |
 |---|---|---|---|
 | Ad and tracker lists | `easylist.to` (`/easylist/easylist.txt` and `/easylist/easyprivacy.txt`), only while Settings › Stedding › Privacy › **Block ads and trackers** is on. It is off by default. Each list is fetched again when its own expiry says so (clamped to between one and fourteen days), and at once on **Update lists now**. | A conditional GET (If-None-Match, If-Modified-Since). No cookies, no cache, no query string, Chromium's own user agent. Nothing about the machine or the pages visited. | The filter lists. Nothing from them is built into the browser ([ADR 0030](decisions/0030-ad-and-tracker-blocking.md)). |
+| Live folder of GitHub pull requests | `api.github.com` (`/search/issues`), only once the user makes a live folder with a token they made on github.com (Settings › Stedding › Sync and import). A live folder, once made, asks `api.github.com` for its list on a timer, with the person's token, and nothing else: when it is made, every 10 minutes while a normal window of the profile is open, when such a window comes to the front and on Refresh, never more than once a minute. Deleting the folder stops it and forgets the token. | Four HTTPS GETs, one per search (pull requests the user opened, is assigned, is asked to review or is mentioned in), with the token in the Authorization header. Through the browser's own network context: no cookies, no cache shared with pages, nothing extensions see. Nothing about the pages visited. The token is kept sealed by the system's key store and never synced. | The folder's list ([ADR 0036](decisions/0036-live-folders-for-github.md), `features/live-folders.md`). |
 
 ### Never
 
@@ -285,11 +286,28 @@ session's name and random id), pins (home
 address and the user's own name), pinned folders, essentials, a random install
 id (16 hex characters) and the computer's name ("Mac" or "Windows PC" plus
 four characters of that id, or a name the user typed). It never holds open
-tabs, history, cookies, passwords, jars or the host name (Sf36). In its own
+tabs, history, cookies, passwords, jars or the host name (Sf36). With their
+boxes on, it also holds the settings and the extension list described below. In its own
 profile, each computer also keeps a record of the merged sidebar, the last ten
 batches for Undo, and five backups (Sf7–Sf41, [ADR 0029](decisions/0029-sidebar-sync-through-a-folder.md)).
 **Stop syncing** leaves the sidebar as it is. This computer's file in the
 folder is removed only if that box is ticked.
+
+Two more parts of sync each have a box, **Settings** and **Extensions**, ticked
+on the join sheet for a new join and off for a computer that synced before
+them (Sf58–Sf69, [ADR 0037](decisions/0037-settings-and-extensions-in-sync.md)).
+Settings adds Stedding's own settings, those chosen in Settings › Stedding, and
+the sites routed to Spaces; sync's own name, place and sign-in, shortcuts, sizes
+measured against the screen and what only a Mac or only Windows has stay on
+each computer, and Chromium's own settings never travel. Extensions adds the
+list of extensions installed from the Chrome Web Store, each by its id and
+name, written to the person's own sync place like the rest of the file. It
+makes no network request of its own. Only when the person clicks **Install…** on
+an offer does Chromium's own Web Store installer ask the Chrome Web Store
+(Google) for that extension's details and icon, to show its confirmation; the
+extension is downloaded only after the person confirms it there. No extension's data, settings, logins, cookies,
+passwords or tokens travel, and nothing is removed because of another
+computer.
 
 A profile can sync through a WebDAV folder or an S3 bucket the user sets up in
 place of a folder, also off by default (Sf43–Sf57, [ADR 0032](decisions/0032-sidebar-sync-through-webdav-or-s3.md)).

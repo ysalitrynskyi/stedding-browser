@@ -41,13 +41,13 @@ Removable when: never; Stedding's own model of pins.
  .../public/browser_window_features.h          |    4 +
  .../browser/ui/navigator/browser_navigator.cc |   19 +-
  chrome/browser/ui/spaces/BUILD.gn             |   32 +
- chrome/browser/ui/spaces/pin_mirror.cc        | 1021 +++++++++++++++++
- chrome/browser/ui/spaces/pin_mirror.h         |  162 +++
- chrome/browser/ui/spaces/pin_store.cc         |  413 +++++++
- chrome/browser/ui/spaces/pin_store.h          |  147 +++
- chrome/browser/ui/spaces/pin_store_factory.cc |   75 ++
+ chrome/browser/ui/spaces/pin_mirror.cc        | 1214 +++++++++++++++++
+ chrome/browser/ui/spaces/pin_mirror.h         |  194 +++
+ chrome/browser/ui/spaces/pin_store.cc         |  552 ++++++++
+ chrome/browser/ui/spaces/pin_store.h          |  178 +++
+ chrome/browser/ui/spaces/pin_store_factory.cc |   75 +
  chrome/browser/ui/spaces/pin_store_factory.h  |   47 +
- .../browser/ui/spaces/pin_store_unittest.cc   |  353 ++++++
+ .../browser/ui/spaces/pin_store_unittest.cc   |  531 +++++++
  .../browser/ui/spaces/sidebar_sync_tracker.cc |    9 +-
  chrome/browser/ui/spaces/space_model.cc       |   12 +
  chrome/browser/ui/stedding/stedding_prefs.cc  |    2 +
@@ -60,8 +60,8 @@ Removable when: never; Stedding's own model of pins.
  chrome/test/stedding/BUILD.gn                 |    2 +
  .../test/stedding/command_bar_browsertest.cc  |   38 +-
  chrome/test/stedding/import_browsertest.cc    |   36 +-
- .../stedding/pins_every_window_browsertest.cc |  609 ++++++++++
- 26 files changed, 3031 insertions(+), 17 deletions(-)
+ .../stedding/pins_every_window_browsertest.cc | 1029 ++++++++++++++
+ 26 files changed, 4024 insertions(+), 17 deletions(-)
  create mode 100644 chrome/browser/ui/spaces/pin_mirror.cc
  create mode 100644 chrome/browser/ui/spaces/pin_mirror.h
  create mode 100644 chrome/browser/ui/spaces/pin_store.cc
@@ -252,10 +252,10 @@ index be2198237e7c2..a1f766ec9dc29 100644
      "sidebar_sync_place_unittest.cc",
 diff --git a/chrome/browser/ui/spaces/pin_mirror.cc b/chrome/browser/ui/spaces/pin_mirror.cc
 new file mode 100644
-index 0000000000000..1bad6402c9e4b
+index 0000000000000..5b84e045a71f6
 --- /dev/null
 +++ b/chrome/browser/ui/spaces/pin_mirror.cc
-@@ -0,0 +1,1021 @@
+@@ -0,0 +1,1214 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -279,8 +279,8 @@ index 0000000000000..1bad6402c9e4b
 +#include "chrome/browser/sessions/session_restore.h"
 +#include "chrome/browser/tab_list/tab_removed_reason.h"
 +#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
-+#include "chrome/browser/ui/spaces/pin_store_factory.h"
 +#include "chrome/browser/ui/spaces/arc_sidebar_importer.h"
++#include "chrome/browser/ui/spaces/pin_store_factory.h"
 +#include "chrome/browser/ui/spaces/sidebar_backup.h"
 +#include "chrome/browser/ui/spaces/sidebar_sync_ledger.h"
 +#include "chrome/browser/ui/spaces/sidebar_sync_tracker.h"
@@ -290,6 +290,7 @@ index 0000000000000..1bad6402c9e4b
 +#include "chrome/browser/ui/stedding/tab_separators.h"
 +#include "chrome/browser/ui/tabs/stedding_folder_session.h"
 +#include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "chrome/browser/ui/tabs/tab_strip_model_delegate.h"
 +#include "components/tabs/public/folder_tab_collection.h"
 +#include "components/tabs/public/split_tab_data.h"
 +#include "components/tabs/public/tab_collection.h"
@@ -431,6 +432,11 @@ index 0000000000000..1bad6402c9e4b
 +
 +bool g_disabled_for_testing = false;
 +
++bool g_tab_drag_for_testing = false;
++
++// windows G16: how soon what waited for a tab drag is tried again.
++constexpr base::TimeDelta kDragRetry = base::Milliseconds(200);
++
 +}  // namespace
 +
 +DEFINE_USER_DATA(PinMirror);
@@ -455,7 +461,8 @@ index 0000000000000..1bad6402c9e4b
 +                            base::Unretained(this)));
 +  } else {
 +    // A turn later: the window says by then whether it is a little window or
-+    // a peek's, and a tab moved into it is in.
++    // a peek's, and a tab moved into it is in. A window a tab drag tears off
++    // settles once the drag is over (Settle).
 +    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
 +        FROM_HERE,
 +        base::BindOnce(&PinMirror::Settle, weak_factory_.GetWeakPtr()));
@@ -477,6 +484,11 @@ index 0000000000000..1bad6402c9e4b
 +}
 +
 +// static
++void PinMirror::SetTabDragForTesting(bool under_way) {
++  g_tab_drag_for_testing = under_way;
++}
++
++// static
 +PinMirror* PinMirror::From(BrowserWindowInterface* window) {
 +  return window ? Get(window->GetUnownedUserDataHost()) : nullptr;
 +}
@@ -486,6 +498,90 @@ index 0000000000000..1bad6402c9e4b
 +  // closing removes nothing, G16).
 +  return takes_part_ && model_ && store_ && !window_->IsDeleteScheduled() &&
 +         !window_->GetTabStripModel()->closing_all();
++}
++
++bool PinMirror::DragUnderWay() const {
++  if (g_tab_drag_for_testing) {
++    return true;
++  }
++  // A strip is not editable while a tab drag is attached to it, the strip of
++  // the window a drag tears off included.
++  for (BrowserWindowInterface* const window :
++       sidebar_sync::RegistryWindows(window_->GetProfile())) {
++    TabStripModelDelegate* const delegate =
++        window->GetTabStripModel()->delegate();
++    if (delegate && !delegate->IsTabStripEditable()) {
++      return true;
++    }
++  }
++  return false;
++}
++
++void PinMirror::WaitForTheDrag() {
++  if (drag_retry_posted_) {
++    return;
++  }
++  drag_retry_posted_ = true;
++  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
++      FROM_HERE,
++      base::BindOnce(&PinMirror::AfterTheDrag, weak_factory_.GetWeakPtr()),
++      kDragRetry);
++}
++
++void PinMirror::AfterTheDrag() {
++  drag_retry_posted_ = false;
++  if (DragUnderWay()) {
++    WaitForTheDrag();
++    return;
++  }
++  // A change made here during the drag goes first, then this window is
++  // brought in line with what changed elsewhere.
++  if (publish_scheduled_) {
++    Publish();
++  }
++  if (reconcile_after_drag_) {
++    reconcile_after_drag_ = false;
++    Reconcile();
++  }
++}
++
++void PinMirror::Hold(std::vector<PinRecord> records,
++                     const std::set<std::string>& removed) {
++  std::set<std::string> ids;
++  std::erase_if(records, [&](const PinRecord& record) {
++    return !ids.insert(record.id).second;
++  });
++  // windows G13: a record whose tab is still here but no row of the run for
++  // now (its pinned folder holds a row that is no pin yet) stays held, in its
++  // place, so an edit made to it meanwhile goes out once it is a row again
++  // rather than being taken for a tab from another window.
++  std::set<std::string> here;
++  TabStripModel* const strip = window_->GetTabStripModel();
++  for (int i = 0; i < strip->count(); ++i) {
++    here.insert(stedding::TabToken(strip->GetTabAtIndex(i)->GetContents()));
++  }
++  for (size_t i = 0; i < held_.size(); ++i) {
++    const PinRecord& before = held_[i];
++    if (ids.contains(before.id) || removed.contains(before.id) ||
++        !here.contains(before.id) || !store_->Find(before.id)) {
++      continue;
++    }
++    // After the record it followed, or first.
++    auto at = records.begin();
++    for (size_t j = i; j > 0; --j) {
++      const std::string& previous = held_[j - 1].id;
++      const auto it = std::ranges::find_if(
++          records,
++          [&](const PinRecord& record) { return record.id == previous; });
++      if (it != records.end()) {
++        at = it + 1;
++        break;
++      }
++    }
++    records.insert(at, before);
++    ids.insert(before.id);
++  }
++  held_ = std::move(records);
 +}
 +
 +bool PinMirror::IsMirrored(const tabs::TabInterface* tab) const {
@@ -571,17 +667,22 @@ index 0000000000000..1bad6402c9e4b
 +}
 +
 +void PinMirror::Publish() {
-+  publish_scheduled_ = false;
 +  if (!Active() || !store_->ready() || reconciling_ || waiting_for_restore_ ||
 +      g_filling) {
++    publish_scheduled_ = false;
 +    removed_.clear();
 +    return;
 +  }
++  // windows G16: what a drag changes is published once, as the drag ends.
++  if (DragUnderWay()) {
++    publish_scheduled_ = true;
++    WaitForTheDrag();
++    return;
++  }
++  publish_scheduled_ = false;
 +  const std::vector<PinRecord> records = BuildRecords();
-+  std::vector<std::string> order;
 +  std::set<std::string> here;
 +  for (const PinRecord& record : records) {
-+    order.push_back(record.id);
 +    here.insert(record.id);
 +  }
 +  // windows G15: what stopped being a pin here by the person's hand and is not
@@ -593,9 +694,15 @@ index 0000000000000..1bad6402c9e4b
 +    }
 +  }
 +  removed_.clear();
-+  // Every record this window has is sent as it has it: the store keeps what
-+  // did not change, and a record only this window just made is added.
-+  store_->Publish(order, records, removed);
++  // windows G13: only what changed here since this window last held its
++  // records is sent. A record this window did not touch is never written
++  // back from it, so a change or a removal made elsewhere since, which this
++  // window has not followed yet, is not undone (G15).
++  const PinChanges changes = store_->ChangesSince(held_, records);
++  // Held before the store tells anyone: a reconcile it sets off here holds
++  // what it leaves.
++  Hold(records, removed);
++  store_->Publish(changes.order, changes.changed, removed);
 +}
 +
 +void PinMirror::NoteRemoved(const std::string& id) {
@@ -781,6 +888,16 @@ index 0000000000000..1bad6402c9e4b
 +  }
 +  waiting_for_restore_ = false;
 +  restored_subscription_ = {};
++  // windows G16: the window a tab drag tears off settles once the drag is
++  // over. Emptied by the drag, it closes and never does; kept, it gets every
++  // pin then. A window with no tab yet waits for one.
++  if (DragUnderWay() || window_->GetTabStripModel()->empty()) {
++    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
++        FROM_HERE,
++        base::BindOnce(&PinMirror::Settle, weak_factory_.GetWeakPtr()),
++        kDragRetry);
++    return;
++  }
 +  settled_ = true;
 +  takes_part_ = model_ && store_ &&
 +                sidebar_sync::IsRegistryWindow(&window_.get(), profile);
@@ -863,8 +980,15 @@ index 0000000000000..1bad6402c9e4b
 +}
 +
 +void PinMirror::Reconcile() {
++  // A window with no tab left is closing: it takes none.
 +  if (!Active() || !store_->ready() || waiting_for_restore_ || g_filling ||
-+      reconciling_) {
++      reconciling_ || window_->GetTabStripModel()->empty()) {
++    return;
++  }
++  // windows G16: no window is brought in line while a tab drag runs.
++  if (DragUnderWay()) {
++    reconcile_after_drag_ = true;
++    WaitForTheDrag();
 +    return;
 +  }
 +  // A change made here and not yet published goes first, so the store has it
@@ -877,6 +1001,12 @@ index 0000000000000..1bad6402c9e4b
 +      return;
 +    }
 +  }
++  if (ReconcileNow()) {
++    SchedulePublish();
++  }
++}
++
++bool PinMirror::ReconcileNow() {
 +  base::AutoReset<bool> reconciling(&reconciling_, true);
 +  SpaceModel::ScopedRoutingPause pause(model_.get());
 +  TabStripModel* const strip = window_->GetTabStripModel();
@@ -968,14 +1098,36 @@ index 0000000000000..1bad6402c9e4b
 +  Fold(wanted);
 +  Order(wanted);
 +  seen_ = std::move(wanted_ids);
++  // What this window now holds. A tab given its id just now (a pin with
++  // none yet) is no record the store knows: it is published as one made
++  // here.
++  std::vector<PinRecord> records = BuildRecords();
++  const size_t all = records.size();
++  std::erase_if(records, [&](const PinRecord& record) {
++    return !store_->Find(record.id);
++  });
++  const bool made_here = records.size() != all;
++  Hold(std::move(records), {});
++  return made_here;
 +}
 +
 +void PinMirror::LetGo(tabs::TabInterface* tab, bool removed_here) {
 +  TabStripModel* const strip = window_->GetTabStripModel();
-+  const int index = strip->GetIndexOfTab(tab);
-+  if (index == TabStripModel::kNoTab) {
++  if (strip->GetIndexOfTab(tab) == TabStripModel::kNoTab) {
 +    return;
 +  }
++  // splits J4: the record let go is this pane's alone. A pane whose split's
++  // other pane is still a record leaves the split, which stays a pin.
++  if (const std::optional<split_tabs::SplitTabId> split = tab->GetSplit()) {
++    for (tabs::TabInterface* const peer : model_->SplitPeers(tab)) {
++      if (peer != tab &&
++          store_->Find(stedding::TabToken(peer->GetContents()))) {
++        strip->RemoveSplit(*split);
++        break;
++      }
++    }
++  }
++  const int index = strip->GetIndexOfTab(tab);
 +  // windows G15: asleep, it closes without a trace; awake, it stays, a loose
 +  // tab of its Space, with an id of its own. G18: one that came back with an
 +  // id the store no longer has always stays, a loose tab.
@@ -1005,9 +1157,44 @@ index 0000000000000..1bad6402c9e4b
 +                                                     : record.title);
 +}
 +
++void PinMirror::LeaveSplitUnlessPeersFollow(tabs::TabInterface* tab,
++                                            const PinRecord& record) {
++  const std::optional<split_tabs::SplitTabId> split = tab->GetSplit();
++  if (!split) {
++    return;
++  }
++  for (tabs::TabInterface* const peer : model_->SplitPeers(tab)) {
++    if (peer == tab) {
++      continue;
++    }
++    // The other pane's record calls for the same tier, Space and folders:
++    // the split moves whole.
++    const PinRecord* const theirs =
++        store_->Find(stedding::TabToken(peer->GetContents()));
++    if (!theirs || theirs->tier != record.tier ||
++        theirs->has_space != record.has_space ||
++        (record.has_space && theirs->space != record.space) ||
++        theirs->folder_path != record.folder_path) {
++      window_->GetTabStripModel()->RemoveSplit(*split);
++      return;
++    }
++  }
++}
++
 +void PinMirror::Align(tabs::TabInterface* tab, const PinRecord& record) {
 +  TabStripModel* const strip = window_->GetTabStripModel();
 +  const auto index = [&] { return strip->GetIndexOfTab(tab); };
++  // splits J4: SpaceModel's verbs below take both panes of a split.
++  const bool moves =
++      record.tier == PinTier::kEssential
++          ? (model_->IsSpacePinned(tab) || !tab->IsPinned() ||
++             model_->IsOwnEssential(tab) != record.has_space ||
++             (record.has_space && model_->FindSpaceForTab(tab) != record.space))
++          : (tab->IsPinned() || !model_->IsSpacePinned(tab) ||
++             model_->FindSpaceForTab(tab) != record.space);
++  if (moves) {
++    LeaveSplitUnlessPeersFollow(tab, record);
++  }
 +  if (record.tier == PinTier::kEssential) {
 +    const bool own = record.has_space;
 +    if (model_->IsSpacePinned(tab)) {
@@ -1029,6 +1216,10 @@ index 0000000000000..1bad6402c9e4b
 +      if (!own) {
 +        model_->ShareEssential(tab);
 +      }
++    } else if (own && model_->FindSpaceForTab(tab) != record.space) {
++      // windows G13, G21: an own essential moved to another Space elsewhere
++      // is refiled there, and stays that Space's own (ADR 0028).
++      model_->SetSpaceForTab(tab, record.space);
 +    }
 +  } else {
 +    if (tab->IsPinned()) {
@@ -1086,6 +1277,8 @@ index 0000000000000..1bad6402c9e4b
 +    for (const stedding::FolderPathEntry& entry : path) {
 +      wanted_ids.push_back(entry.id);
 +    }
++    // splits J4: a split moves into or out of a folder whole.
++    LeaveSplitUnlessPeersFollow(tab, *record);
 +    // In the wrong folders: out of every one first, to the top level just
 +    // after the outermost (folders F37), then into the record's.
 +    if (FolderIdsOf(tab) != wanted_ids && InFolder(tab)) {
@@ -1279,10 +1472,10 @@ index 0000000000000..1bad6402c9e4b
 +}  // namespace spaces
 diff --git a/chrome/browser/ui/spaces/pin_mirror.h b/chrome/browser/ui/spaces/pin_mirror.h
 new file mode 100644
-index 0000000000000..0278ca871cdeb
+index 0000000000000..ac94d2eb2959e
 --- /dev/null
 +++ b/chrome/browser/ui/spaces/pin_mirror.h
-@@ -0,0 +1,162 @@
+@@ -0,0 +1,194 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -1290,6 +1483,7 @@ index 0000000000000..0278ca871cdeb
 +#ifndef CHROME_BROWSER_UI_SPACES_PIN_MIRROR_H_
 +#define CHROME_BROWSER_UI_SPACES_PIN_MIRROR_H_
 +
++#include <map>
 +#include <set>
 +#include <string>
 +#include <vector>
@@ -1357,6 +1551,9 @@ index 0000000000000..0278ca871cdeb
 +  // windows G19's test: windows made while this is on keep their own pins, as
 +  // they did before ADR 0035, and the store stays unfilled.
 +  static void SetDisabledForTesting(bool disabled);
++  // windows G16's test: a tab drag runs in some window while this is on, as
++  // while a window's tab strip is not editable.
++  static void SetTabDragForTesting(bool under_way);
 +
 + private:
 +  // PinStore::Observer:
@@ -1407,6 +1604,9 @@ index 0000000000000..0278ca871cdeb
 +  // not yet, then this window in line.
 +  void Settle();
 +
++  // Reconcile, once nothing holds it back. Returns whether a tab was given
++  // an id the store does not know, to be published.
++  bool ReconcileNow();
 +  // Reconcile's parts.
 +  void LetGo(tabs::TabInterface* tab, bool removed_here);
 +  tabs::TabInterface* Make(const PinRecord& record);
@@ -1421,6 +1621,27 @@ index 0000000000000..0278ca871cdeb
 +  // the window says whether it is a little window or a peek's.
 +  bool Active() const;
 +
++  // windows G16: whether a tab drag runs in any window of the profile. The
++  // window a drag tears off is not yet one that stays, and a tab dragged out
++  // of a window may come back to it: nothing settles, publishes or is
++  // brought in line until the drag ends.
++  bool DragUnderWay() const;
++  // What waited for the drag is done a little after it ends.
++  void WaitForTheDrag();
++  void AfterTheDrag();
++
++  // What this window holds, as its last reconcile left it or its last
++  // publish sent it: a publish sends only what changed since (windows G13).
++  // `removed` are the records this window is removing.
++  void Hold(std::vector<PinRecord> records,
++            const std::set<std::string>& removed);
++
++  // splits J4: SpaceModel's verbs take both panes of a split. A record's
++  // change is one pane's, so a pane whose change its split's other pane's
++  // record does not share leaves the split first.
++  void LeaveSplitUnlessPeersFollow(tabs::TabInterface* tab,
++                                   const PinRecord& record);
++
 +  const raw_ref<BrowserWindowInterface> window_;
 +  // Null once the model is going away.
 +  raw_ptr<SpaceModel> model_;
@@ -1432,7 +1653,11 @@ index 0000000000000..0278ca871cdeb
 +  bool reconciling_ = false;
 +  bool publish_scheduled_ = false;
 +  bool waiting_for_restore_ = false;
++  bool reconcile_after_drag_ = false;
++  bool drag_retry_posted_ = false;
 +  std::set<std::string> removed_;
++  // Hold's records, in the strip's order, one per id.
++  std::vector<PinRecord> held_;
 +  // The records this window had at its last reconcile.
 +  std::set<std::string> seen_;
 +  base::CallbackListSubscription restored_subscription_;
@@ -1447,10 +1672,10 @@ index 0000000000000..0278ca871cdeb
 +#endif  // CHROME_BROWSER_UI_SPACES_PIN_MIRROR_H_
 diff --git a/chrome/browser/ui/spaces/pin_store.cc b/chrome/browser/ui/spaces/pin_store.cc
 new file mode 100644
-index 0000000000000..d417808ed5481
+index 0000000000000..f282ae59102ff
 --- /dev/null
 +++ b/chrome/browser/ui/spaces/pin_store.cc
-@@ -0,0 +1,413 @@
+@@ -0,0 +1,552 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -1510,7 +1735,20 @@ index 0000000000000..d417808ed5481
 +                  record.home.spec()};
 +}
 +
++// The run a record is a row of: the essentials, or its Space's pins.
++std::string RunOf(const PinRecord& record) {
++  return record.tier == PinTier::kEssential ? std::string()
++                                            : record.space.ToString();
++}
++
 +}  // namespace
++
++PinChanges::PinChanges() = default;
++PinChanges::PinChanges(const PinChanges& other) = default;
++PinChanges& PinChanges::operator=(const PinChanges& other) = default;
++PinChanges::PinChanges(PinChanges&& other) = default;
++PinChanges& PinChanges::operator=(PinChanges&& other) = default;
++PinChanges::~PinChanges() = default;
 +
 +PinRecord::PinRecord() = default;
 +PinRecord::PinRecord(const PinRecord& other) = default;
@@ -1577,6 +1815,7 @@ index 0000000000000..d417808ed5481
 +      titles = true;
 +    }
 +  }
++  const std::vector<std::string> current = IdsOf(records_);
 +  std::vector<std::string> published;
 +  std::set<std::string> seen;
 +  for (const std::string& id : order) {
@@ -1584,13 +1823,15 @@ index 0000000000000..d417808ed5481
 +      published.push_back(id);
 +    }
 +  }
-+  // A record `changed` brings that `order` lacks still has a place: the end.
++  // A record `changed` brings that `order` lacks keeps its place; a new one
++  // goes at the end.
 +  for (const PinRecord& record : changed) {
-+    if (by_id.contains(record.id) && seen.insert(record.id).second) {
++    if (by_id.contains(record.id) &&
++        !std::ranges::contains(current, record.id) &&
++        seen.insert(record.id).second) {
 +      published.push_back(record.id);
 +    }
 +  }
-+  const std::vector<std::string> current = IdsOf(records_);
 +  const std::vector<std::string> merged =
 +      MergeOrder(current, published, removed);
 +  any |= merged != current;
@@ -1612,6 +1853,129 @@ index 0000000000000..d417808ed5481
 +  if (any) {
 +    Changed();
 +  }
++}
++
++PinChanges PinStore::ChangesSince(const std::vector<PinRecord>& held,
++                                  const std::vector<PinRecord>& now) const {
++  std::map<std::string, const PinRecord*> before;
++  for (const PinRecord& record : held) {
++    before.emplace(record.id, &record);
++  }
++  std::map<std::string, int> tabs;
++  for (const PinRecord& record : now) {
++    ++tabs[record.id];
++  }
++  // A record the window speaks for: one it held that the store still has, or
++  // one it made that the store does not know yet, with one tab there.
++  const auto ours = [&](const std::string& id) {
++    const auto count = tabs.find(id);
++    return !id.empty() && count != tabs.end() && count->second == 1 &&
++           before.contains(id) == (Find(id) != nullptr);
++  };
++  PinChanges changes;
++  std::map<std::string, std::vector<std::string>> runs;
++  for (const PinRecord& record : now) {
++    if (!ours(record.id)) {
++      continue;
++    }
++    runs[RunOf(record)].push_back(record.id);
++    const auto it = before.find(record.id);
++    if (it == before.end()) {
++      changes.changed.push_back(record);
++      continue;
++    }
++    // Three ways: the store's record, with only the fields this window
++    // changed since it held it. A field another window changed meanwhile,
++    // which this window has not followed yet, stays as the store has it, and
++    // a title alone stays a title.
++    const PinRecord& was = *it->second;
++    PinRecord merged = *Find(record.id);
++    if (record.tier != was.tier) {
++      merged.tier = record.tier;
++    }
++    if (record.has_space != was.has_space ||
++        (record.has_space && record.space != was.space)) {
++      merged.has_space = record.has_space;
++      merged.space = record.space;
++    }
++    if (record.home != was.home) {
++      merged.home = record.home;
++    }
++    if (record.page != was.page) {
++      merged.page = record.page;
++    }
++    if (record.name != was.name) {
++      merged.name = record.name;
++    }
++    if (record.title != was.title) {
++      merged.title = record.title;
++    }
++    if (record.folder_path != was.folder_path) {
++      merged.folder_path = record.folder_path;
++    }
++    if (record.separator != was.separator) {
++      merged.separator = record.separator;
++    }
++    if (!(merged == *Find(record.id))) {
++      changes.changed.push_back(std::move(merged));
++    }
++  }
++  std::map<std::string, std::vector<std::string>> runs_before;
++  for (const PinRecord& record : held) {
++    runs_before[RunOf(record)].push_back(record.id);
++  }
++  std::map<std::string, size_t> place;
++  for (size_t i = 0; i < records_.size(); ++i) {
++    place.emplace(records_[i].id, i);
++  }
++  for (const auto& [run, ids] : runs) {
++    const std::vector<std::string>& had = runs_before[run];
++    // The rows the run had and still has, as the window has them now and as
++    // it had them.
++    std::vector<std::string> kept;
++    for (const std::string& id : ids) {
++      if (std::ranges::contains(had, id)) {
++        kept.push_back(id);
++      }
++    }
++    std::vector<std::string> was;
++    for (const std::string& id : had) {
++      if (std::ranges::contains(ids, id)) {
++        was.push_back(id);
++      }
++    }
++    if (kept != was) {
++      // The window reordered the run: its order goes out whole.
++      changes.order.insert(changes.order.end(), ids.begin(), ids.end());
++      continue;
++    }
++    if (kept.size() == ids.size()) {
++      continue;
++    }
++    // Only rows new to the run: the rows it had keep the store's order, which
++    // the window may not have followed (a run with a split, windows G13), and
++    // each new row goes after the row before it in the window.
++    std::vector<std::string> placed = kept;
++    std::ranges::sort(placed, [&](const std::string& a, const std::string& b) {
++      return place[a] < place[b];
++    });
++    for (size_t i = 0; i < ids.size(); ++i) {
++      if (std::ranges::contains(kept, ids[i])) {
++        continue;
++      }
++      auto at = placed.begin();
++      for (size_t j = i; j > 0; --j) {
++        const auto previous = std::ranges::find(placed, ids[j - 1]);
++        if (previous != placed.end()) {
++          at = previous + 1;
++          break;
++        }
++      }
++      placed.insert(at, ids[i]);
++    }
++    changes.order.insert(changes.order.end(), placed.begin(), placed.end());
++  }
++  return changes;
 +}
 +
 +std::vector<std::map<std::string, std::string>> PinStore::Fill(
@@ -1866,10 +2230,10 @@ index 0000000000000..d417808ed5481
 +}  // namespace spaces
 diff --git a/chrome/browser/ui/spaces/pin_store.h b/chrome/browser/ui/spaces/pin_store.h
 new file mode 100644
-index 0000000000000..55a446147ff0a
+index 0000000000000..0e3f97bacfa57
 --- /dev/null
 +++ b/chrome/browser/ui/spaces/pin_store.h
-@@ -0,0 +1,147 @@
+@@ -0,0 +1,178 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -1938,6 +2302,21 @@ index 0000000000000..55a446147ff0a
 +  bool separator = false;
 +};
 +
++// windows G13, G15: what a window publishes after a change made there
++// (PinStore::ChangesSince).
++struct PinChanges {
++  PinChanges();
++  PinChanges(const PinChanges& other);
++  PinChanges& operator=(const PinChanges& other);
++  PinChanges(PinChanges&& other);
++  PinChanges& operator=(PinChanges&& other);
++  ~PinChanges();
++
++  // The ids of each run whose order changed there, in the window's order.
++  std::vector<std::string> order;
++  std::vector<PinRecord> changed;
++};
++
 +// windows G2, G13 (ADR 0035): the profile's pinned run and essentials, kept
 +// beside the Space registry in the preference stedding.pins.store, written on
 +// every change. Each window's SpaceModel publishes what changed there and
@@ -1963,17 +2342,33 @@ index 0000000000000..55a446147ff0a
 +  // session brought back. Until then a window publishes nothing.
 +  bool ready() const { return ready_; }
 +
-+  // windows G13, G15: what a window has after a change made there. `order`
-+  // is every record id the window has, in its order; a record the window lacks
-+  // (a tab moved away) keeps its place after the record it followed, and an id
-+  // the store does not know and `changed` does not bring is ignored. Each of
-+  // `changed`, the records whose tab changed there, is added or updated: a
-+  // record the window did not touch is never written back from it. Only
-+  // `removed` removes: a tab missing from a window is never a removal. Tells
-+  // the observers if anything but a title changed.
++  // windows G13, G15: what changed in a window. `order` is the ids of the
++  // runs whose order changed there, in the window's order; a record it lacks
++  // (a tab moved away, another run) keeps its place after the record it
++  // followed, and an id the store does not know and `changed` does not bring
++  // is ignored. Each of `changed`, the records whose tab changed there, is
++  // added or updated; one `order` lacks keeps its place, and a new one goes
++  // at the end. A record the window did not touch is never written back from
++  // it (ChangesSince). Only `removed` removes: a tab missing from a window is
++  // never a removal. Tells the observers if anything but a title changed.
 +  void Publish(const std::vector<std::string>& order,
 +               const std::vector<PinRecord>& changed,
 +               const std::set<std::string>& removed);
++
++  // windows G13, G15, G16: what a window that held `held` at its last
++  // reconcile or publish and has `now` sends, each in its strip's order. Sent
++  // are a record it held, and the store still has, whose fields changed
++  // there, as the store has it with only those fields changed; a record made
++  // there, which neither `held` nor the store has; and the ids of each run
++  // (the essentials, or a Space's pins) whose rows it reordered there. A run
++  // that only gained rows keeps the store's order, each new row after the
++  // row it follows in the window. Not sent: a record removed from the store
++  // since (the removal elsewhere wins, and the window lets its tab go), a tab
++  // of a record that came from another window (the window puts it in the
++  // record's place), and a record the window has two tabs of (the window keeps
++  // one).
++  PinChanges ChangesSince(const std::vector<PinRecord>& held,
++                          const std::vector<PinRecord>& now) const;
 +
 +  // windows G19: the first fill, from every window the session brought back,
 +  // in session order, each in its own order. A later window's Space pin with
@@ -2153,10 +2548,10 @@ index 0000000000000..01a52609a7866
 +#endif  // CHROME_BROWSER_UI_SPACES_PIN_STORE_FACTORY_H_
 diff --git a/chrome/browser/ui/spaces/pin_store_unittest.cc b/chrome/browser/ui/spaces/pin_store_unittest.cc
 new file mode 100644
-index 0000000000000..0328e70f536b8
+index 0000000000000..df2bb7d6311fe
 --- /dev/null
 +++ b/chrome/browser/ui/spaces/pin_store_unittest.cc
-@@ -0,0 +1,353 @@
+@@ -0,0 +1,531 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -2508,6 +2903,184 @@ index 0000000000000..0328e70f536b8
 +  EXPECT_EQ(taker, store.Find("e")->space);
 +}
 +
++// windows G13: a record changed without a new order keeps its place; a new
++// one goes at the end.
++TEST_F(PinStoreTest, AChangeWithNoOrderKeepsItsPlace) {
++  const SpaceId work = NewSpace();
++  PinStore store(&prefs_);
++  Ready(store, {Pin("a", work, "https://a.example/"),
++                Pin("b", work, "https://b.example/"),
++                Pin("c", work, "https://c.example/")});
++  PinRecord a = Pin("a", work, "https://a.example/");
++  a.name = u"Alpha";
++  PinRecord c = Pin("c", work, "https://c.example/");
++  c.name = u"Gamma";
++  store.Publish({}, {c, a}, {});
++  EXPECT_THAT(Ids(store), ElementsAre("a", "b", "c"));
++  EXPECT_EQ(u"Alpha", store.Find("a")->name);
++  EXPECT_EQ(u"Gamma", store.Find("c")->name);
++  store.Publish({}, {Pin("n", work, "https://n.example/")}, {});
++  EXPECT_THAT(Ids(store), ElementsAre("a", "b", "c", "n"));
++}
++
++// windows G13, G15: a window that has not yet followed a change made in
++// another window sends nothing of it back. A record removed there stays
++// removed, and a rename there stays.
++TEST_F(PinStoreTest, AWindowBehindSendsNothingBack) {
++  const SpaceId work = NewSpace();
++  PinStore store(&prefs_);
++  const std::vector<PinRecord> held = {Pin("a", work, "https://a.example/"),
++                                       Pin("b", work, "https://b.example/")};
++  Ready(store, held);
++  // Another window renames a and removes b.
++  PinRecord renamed = Pin("a", work, "https://a.example/");
++  renamed.name = u"Alpha";
++  PublishAll(store, {renamed}, {"b"});
++  ASSERT_THAT(Ids(store), ElementsAre("a"));
++
++  // This window still has both as they were.
++  const PinChanges changes = store.ChangesSince(held, held);
++  EXPECT_TRUE(changes.changed.empty());
++  EXPECT_TRUE(changes.order.empty());
++  store.Publish(changes.order, changes.changed, {});
++  EXPECT_THAT(Ids(store), ElementsAre("a"));
++  EXPECT_EQ(u"Alpha", store.Find("a")->name);
++}
++
++// windows G13: what changed in a window is sent: a record changed there, a
++// record made there, and the order of a run whose order changed there. A
++// run whose order did not change sends none.
++TEST_F(PinStoreTest, OnlyWhatChangedInTheWindowIsSent) {
++  const SpaceId work = NewSpace();
++  const SpaceId play = NewSpace();
++  PinStore store(&prefs_);
++  const std::vector<PinRecord> held = {Essential("e", "https://e.example/"),
++                                       Pin("a", work, "https://a.example/"),
++                                       Pin("b", work, "https://b.example/"),
++                                       Pin("c", work, "https://c.example/"),
++                                       Pin("p", play, "https://p.example/"),
++                                       Pin("q", play, "https://q.example/")};
++  Ready(store, held);
++  PinRecord a = Pin("a", work, "https://a.example/");
++  a.name = u"Alpha";
++  PinRecord q = Pin("q", play, "https://q.example/");
++  q.title = u"Q (2)";
++  const PinChanges changes =
++      store.ChangesSince(held, {Essential("e", "https://e.example/"), a,
++                                Pin("c", work, "https://c.example/"),
++                                Pin("b", work, "https://b.example/"),
++                                Pin("n", work, "https://n.example/"),
++                                Pin("p", play, "https://p.example/"), q});
++  ASSERT_EQ(3u, changes.changed.size());
++  EXPECT_EQ("a", changes.changed[0].id);
++  EXPECT_EQ("n", changes.changed[1].id);
++  EXPECT_EQ("q", changes.changed[2].id);
++  EXPECT_THAT(changes.order, ElementsAre("a", "c", "b", "n"));
++
++  // A row gone from a run, moved to another window, is no change of order.
++  const PinChanges gone =
++      store.ChangesSince(held, {Essential("e", "https://e.example/"),
++                                Pin("a", work, "https://a.example/"),
++                                Pin("c", work, "https://c.example/"),
++                                Pin("p", play, "https://p.example/"),
++                                Pin("q", play, "https://q.example/")});
++  EXPECT_TRUE(gone.changed.empty());
++  EXPECT_TRUE(gone.order.empty());
++}
++
++// windows G16: a tab of a record that came from another window, and a record
++// a window has two tabs of, are not sent: the window puts the tab in the
++// record's place.
++TEST_F(PinStoreTest, ATabFromAnotherWindowIsNotSent) {
++  const SpaceId work = NewSpace();
++  const SpaceId play = NewSpace();
++  PinStore store(&prefs_);
++  Ready(store, {Pin("a", work, "https://a.example/"),
++                Pin("b", work, "https://b.example/")});
++  const std::vector<PinRecord> held = {Pin("a", work, "https://a.example/")};
++  PinRecord landed = Pin("a", play, "https://a.example/");
++  PinRecord arrived = Pin("b", play, "https://b.example/");
++  const PinChanges changes = store.ChangesSince(
++      held, {Pin("a", work, "https://a.example/"), landed, arrived});
++  EXPECT_TRUE(changes.changed.empty());
++  EXPECT_TRUE(changes.order.empty());
++}
++
++// windows G13: a window behind another window's change sends only the fields
++// it changed itself. A pin's new title there does not carry back the folder,
++// name or Space it had before the other window's change, and a rename there
++// keeps the other window's folder.
++TEST_F(PinStoreTest, AWindowBehindSendsOnlyTheFieldsItChanged) {
++  const SpaceId work = NewSpace();
++  const SpaceId play = NewSpace();
++  PinStore store(&prefs_);
++  const std::vector<PinRecord> held = {Pin("x", work, "https://x.example/"),
++                                       Pin("y", work, "https://y.example/")};
++  Ready(store, held);
++  // Another window moves x into a folder and to another Space, and renames y.
++  PinRecord moved = Pin("x", play, "https://x.example/");
++  moved.folder_path = R"([{"id":"f","title":"Mail"}])";
++  PinRecord named = Pin("y", work, "https://y.example/");
++  named.name = u"Why";
++  PublishAll(store, {moved, named}, {});
++  Counter counter;
++  base::ScopedObservation<PinStore, PinStore::Observer> watch(&counter);
++  watch.Observe(&store);
++
++  // This window still has both as they were; x retitled, y got a new home.
++  PinRecord titled = Pin("x", work, "https://x.example/");
++  titled.title = u"Inbox (2)";
++  PinRecord homed = Pin("y", work, "https://y2.example/");
++  const PinChanges changes = store.ChangesSince(held, {titled, homed});
++  store.Publish(changes.order, changes.changed, {});
++
++  const PinRecord* const x = store.Find("x");
++  ASSERT_TRUE(x);
++  EXPECT_EQ(play, x->space) << "the old Space was written back";
++  EXPECT_EQ(R"([{"id":"f","title":"Mail"}])", x->folder_path)
++      << "the old folder was written back";
++  EXPECT_EQ(u"Inbox (2)", x->title);
++  const PinRecord* const y = store.Find("y");
++  ASSERT_TRUE(y);
++  EXPECT_EQ(u"Why", y->name) << "the other window's rename was undone";
++  EXPECT_EQ(GURL("https://y2.example/"), y->home);
++  // The home is a real change; the title alone would have told no one.
++  EXPECT_EQ(1, counter.changes);
++}
++
++// windows G13: a pin new to a run, in a window that has not followed another
++// window's order of that run, keeps the store's order and goes after the row
++// it follows in the window.
++TEST_F(PinStoreTest, ANewPinKeepsTheOrderTheWindowIsBehindOn) {
++  const SpaceId work = NewSpace();
++  PinStore store(&prefs_);
++  const std::vector<PinRecord> held = {Pin("p", work, "https://p.example/"),
++                                       Pin("q", work, "https://q.example/"),
++                                       Pin("r", work, "https://r.example/")};
++  Ready(store, held);
++  // Another window puts q first.
++  store.Publish({"q", "p", "r"}, {}, {});
++  ASSERT_THAT(Ids(store), ElementsAre("q", "p", "r"));
++
++  // This window still has p, q, r, and a new pin after p.
++  const PinChanges changes =
++      store.ChangesSince(held, {Pin("p", work, "https://p.example/"),
++                                Pin("n", work, "https://n.example/"),
++                                Pin("q", work, "https://q.example/"),
++                                Pin("r", work, "https://r.example/")});
++  store.Publish(changes.order, changes.changed, {});
++  EXPECT_THAT(Ids(store), ElementsAre("q", "p", "n", "r"));
++
++  // A pin new at the end of the run goes there.
++  const std::vector<PinRecord> now = {Pin("p", work, "https://p.example/"),
++                                      Pin("q", work, "https://q.example/"),
++                                      Pin("r", work, "https://r.example/"),
++                                      Pin("m", work, "https://m.example/")};
++  const PinChanges more = store.ChangesSince(held, now);
++  store.Publish(more.order, more.changed, {});
++  EXPECT_THAT(Ids(store), ElementsAre("q", "p", "n", "r", "m"));
++}
++
 +}  // namespace
 +}  // namespace spaces
 diff --git a/chrome/browser/ui/spaces/sidebar_sync_tracker.cc b/chrome/browser/ui/spaces/sidebar_sync_tracker.cc
@@ -2761,10 +3334,10 @@ index 459376aa6b644..490ad9f779c62 100644
      # Sf43-Sf57: sync through WebDAV or S3 storage.
      "//chrome/browser/ui/spaces:sidebar_sync_fake_place",
 diff --git a/chrome/test/stedding/command_bar_browsertest.cc b/chrome/test/stedding/command_bar_browsertest.cc
-index 929b716bd3f8b..a3fa440882f39 100644
+index 96e02850e3982..bc0213f3f5a6e 100644
 --- a/chrome/test/stedding/command_bar_browsertest.cc
 +++ b/chrome/test/stedding/command_bar_browsertest.cc
-@@ -38,6 +38,7 @@
+@@ -39,6 +39,7 @@
  #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
  #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
  #include "chrome/browser/ui/navigator/browser_navigator.h"
@@ -2772,7 +3345,7 @@ index 929b716bd3f8b..a3fa440882f39 100644
  #include "chrome/browser/ui/spaces/space.h"
  #include "chrome/browser/ui/spaces/space_model.h"
  #include "chrome/browser/ui/stedding/bookmarks_to_pins_dialog.h"
-@@ -976,9 +977,15 @@ IN_PROC_BROWSER_TEST_F(CommandBarActionsTest,
+@@ -977,9 +978,15 @@ IN_PROC_BROWSER_TEST_F(CommandBarActionsTest,
  }
  
  // windows G12, pins H14: Show Here on a Space pin keeps it above the Clear
@@ -2790,7 +3363,7 @@ index 929b716bd3f8b..a3fa440882f39 100644
    ASSERT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
        other, embedded_test_server()->GetURL("/title2.html"),
        WindowOpenDisposition::NEW_FOREGROUND_TAB,
-@@ -1004,6 +1011,33 @@ IN_PROC_BROWSER_TEST_F(CommandBarActionsTest, ShowHereKeepsAPinInTheRun) {
+@@ -1005,6 +1012,33 @@ IN_PROC_BROWSER_TEST_F(CommandBarActionsTest, ShowHereKeepsAPinInTheRun) {
    EXPECT_EQ(0, here->GetIndexOfTab(pin)) << "a pin under the loose tabs";
  }
  
@@ -2899,10 +3472,10 @@ index 69bc76649719d..6eb323677a2b6 100644
  // on to its own site's page, the first load settles the home there, so the
 diff --git a/chrome/test/stedding/pins_every_window_browsertest.cc b/chrome/test/stedding/pins_every_window_browsertest.cc
 new file mode 100644
-index 0000000000000..8770e0e5f6087
+index 0000000000000..a3386ea2b543f
 --- /dev/null
 +++ b/chrome/test/stedding/pins_every_window_browsertest.cc
-@@ -0,0 +1,609 @@
+@@ -0,0 +1,1029 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -2916,13 +3489,18 @@ index 0000000000000..8770e0e5f6087
 +
 +#include "base/run_loop.h"
 +#include "base/strings/string_util.h"
++#include "base/task/single_thread_task_runner.h"
 +#include "base/test/run_until.h"
++#include "base/time/time.h"
++#include "base/token.h"
 +#include "chrome/app/chrome_command_ids.h"
 +#include "chrome/browser/prefs/session_startup_pref.h"
 +#include "chrome/browser/profiles/profile.h"
 +#include "chrome/browser/ui/browser_commands.h"
++#include "chrome/browser/ui/browser_tabstrip.h"
 +#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 +#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
++#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
 +#include "chrome/browser/ui/navigator/browser_navigator.h"
 +#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 +#include "chrome/browser/ui/spaces/pin_mirror.h"
@@ -2934,11 +3512,13 @@ index 0000000000000..8770e0e5f6087
 +#include "chrome/browser/ui/spaces/space_model.h"
 +#include "chrome/browser/ui/stedding/tab_names.h"
 +#include "chrome/browser/ui/stedding/tab_parents.h"
++#include "chrome/browser/ui/tabs/split_tab_metrics.h"
 +#include "chrome/browser/ui/tabs/tab_enums.h"
 +#include "chrome/browser/ui/tabs/tab_strip_model.h"
 +#include "chrome/browser/ui/views/test/vertical_tabs_browser_test_mixin.h"
 +#include "chrome/test/base/in_process_browser_test.h"
 +#include "chrome/test/base/ui_test_utils.h"
++#include "components/split_tabs/split_tab_visual_data.h"
 +#include "components/tabs/public/folder_tab_collection.h"
 +#include "components/tabs/public/tab_collection.h"
 +#include "components/tabs/public/tab_interface.h"
@@ -2949,6 +3529,7 @@ index 0000000000000..8770e0e5f6087
 +#include "content/public/test/browser_test_utils.h"
 +#include "net/test/embedded_test_server/embedded_test_server.h"
 +#include "third_party/skia/include/core/SkColor.h"
++#include "ui/base/base_window.h"
 +#include "url/gurl.h"
 +
 +namespace {
@@ -2970,6 +3551,11 @@ index 0000000000000..8770e0e5f6087
 +  void SetUpOnMainThread() override {
 +    VerticalTabsBrowserTestMixin<InProcessBrowserTest>::SetUpOnMainThread();
 +    ASSERT_TRUE(embedded_test_server()->Start());
++  }
++
++  void TearDownOnMainThread() override {
++    spaces::PinMirror::SetTabDragForTesting(false);
++    VerticalTabsBrowserTestMixin<InProcessBrowserTest>::TearDownOnMainThread();
 +  }
 +
 +  static spaces::SpaceModel& Model(BrowserWindowInterface* window) {
@@ -3067,6 +3653,52 @@ index 0000000000000..8770e0e5f6087
 +
 +  GURL Page(const char* path) { return embedded_test_server()->GetURL(path); }
 +
++  // The tab of `window` whose token is `id`, or null.
++  static tabs::TabInterface* TabOf(BrowserWindowInterface* window,
++                                   const std::string& id) {
++    TabStripModel* const strip = window->GetTabStripModel();
++    for (int i = 0; i < strip->count(); ++i) {
++      if (Token(strip->GetTabAtIndex(i)) == id) {
++        return strip->GetTabAtIndex(i);
++      }
++    }
++    return nullptr;
++  }
++
++  // The paths of `window`'s tabs that are neither pins nor essentials.
++  static std::set<std::string> LoosePaths(BrowserWindowInterface* window) {
++    std::set<std::string> paths;
++    TabStripModel* const strip = window->GetTabStripModel();
++    for (int i = 0; i < strip->count(); ++i) {
++      tabs::TabInterface* const tab = strip->GetTabAtIndex(i);
++      if (!tab->IsPinned() && !Model(window).IsSpacePinned(tab)) {
++        paths.insert(std::string(tab->GetContents()->GetVisibleURL().path()));
++      }
++    }
++    return paths;
++  }
++
++  // Runs the tasks of `delay`, as several turns of a drag's move loop do.
++  static void RunFor(base::TimeDelta delay) {
++    base::RunLoop loop;
++    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
++        FROM_HERE, loop.QuitClosure(), delay);
++    loop.Run();
++  }
++
++  // As a tab drag tears a tab off: a window made with no tab, and the tab
++  // moved into it.
++  BrowserWindowInterface* TearOff(tabs::TabInterface* tab) {
++    BrowserWindowInterface* const torn = CreateBrowserWindow(
++        BrowserWindowCreateParams(browser()->GetProfile(),
++                                  /*from_user_gesture=*/true));
++    TabStripModel* const strip = browser()->GetTabStripModel();
++    chrome::MoveTabsToExistingWindow(browser(), torn,
++                                     {strip->GetIndexOfTab(tab)});
++    torn->GetWindow()->Show();
++    return torn;
++  }
++
 +  // The folder `tab` is right in, or null.
 +  static const tabs::FolderTabCollection* FolderOf(tabs::TabInterface* tab) {
 +    const tabs::TabCollection* const parent = tab->GetParentCollection();
@@ -3116,6 +3748,9 @@ index 0000000000000..8770e0e5f6087
 +      base::test::RunUntil([&] { return Pins(second).size() == 2u; }));
 +
 +  stedding::SetTabName(browser(), a, u"Alpha");
++  // Each change goes out on its own: the new home is not carried by the
++  // rename's publish.
++  base::RunLoop().RunUntilIdle();
 +  Model(browser()).SetHomeUrl(b, Page("/title3.html"));
 +  ASSERT_TRUE(base::test::RunUntil([&] {
 +    const std::vector<tabs::TabInterface*> there = Pins(second);
@@ -3163,12 +3798,17 @@ index 0000000000000..8770e0e5f6087
 +            there->GetContents()->GetLastCommittedURL());
 +  ASSERT_TRUE(content::NavigateToURL(there->GetContents(),
 +                                     Page("/title2.html")));
++  base::RunLoop().RunUntilIdle();
 +  // The first window's tab stays where it was.
 +  EXPECT_EQ(Page("/title1.html"), pin->GetContents()->GetLastCommittedURL());
 +  EXPECT_NE(pin->GetContents(), there->GetContents());
-+  // Drifting is not a change of home.
++  // Drifting is not a change of home, in the window that drifted or in the
++  // other.
++  EXPECT_EQ(Page("/title1.html"),
++            Model(second).HomeUrl(there).value_or(GURL()));
 +  EXPECT_EQ(Page("/title1.html"),
 +            Model(browser()).HomeUrl(pin).value_or(GURL()));
++  EXPECT_EQ(Page("/title1.html"), Store().records().front().home);
 +}
 +
 +// windows G15: unpinning in one window closes an asleep copy elsewhere and
@@ -3245,7 +3885,8 @@ index 0000000000000..8770e0e5f6087
 +}
 +
 +// windows G21: a deleted Space's pins move once, to the Space that takes its
-+// tabs, and every window follows.
++// tabs in the window that deletes it, and every window follows, a window that
++// shows another Space too.
 +IN_PROC_BROWSER_TEST_F(PinsEveryWindowTest,
 +                       ADeletedSpacesPinsMoveOnceInEveryWindow) {
 +  spaces::SpaceModel& model = Model(browser());
@@ -3253,6 +3894,9 @@ index 0000000000000..8770e0e5f6087
 +  spaces::Space* const doomed = model.AddSpace("Doomed", SK_ColorBLUE);
 +  ASSERT_TRUE(doomed);
 +  const spaces::SpaceId doomed_id = doomed->id();
++  spaces::Space* const third = model.AddSpace("Third", SK_ColorGREEN);
++  ASSERT_TRUE(third);
++  const spaces::SpaceId third_id = third->id();
 +  tabs::TabInterface* const pin = PinPage(browser(), Page("/title1.html"));
 +  model.SetSpaceForTab(pin, doomed_id);
 +  base::RunLoop().RunUntilIdle();
@@ -3260,16 +3904,28 @@ index 0000000000000..8770e0e5f6087
 +  BrowserWindowInterface* const second = OpenWindow();
 +  ASSERT_TRUE(
 +      base::test::RunUntil([&] { return Pins(second).size() == 1u; }));
++  // Each window would refile the deleted Space's tabs to the Space it shows:
++  // the second window shows Third.
++  ASSERT_TRUE(Model(second).SetActiveSpace(third_id));
++  base::RunLoop().RunUntilIdle();
++  ASSERT_EQ(first, model.SpaceTakingTabsOf(doomed_id));
 +
 +  ASSERT_TRUE(model.RemoveSpace(doomed_id));
++  // Once, for the profile, as the Space goes.
++  ASSERT_EQ(1u, Store().records().size());
++  EXPECT_EQ(first, Store().records().front().space)
++      << "the record did not move with the deletion";
 +  ASSERT_TRUE(base::test::RunUntil([&] {
 +    return Pins(second).size() == 1u &&
 +           Model(second).FindSpaceForTab(Pins(second).front()) == first;
 +  })) << "the second window's pin did not follow to the Space that took it";
++  base::RunLoop().RunUntilIdle();
 +  ASSERT_EQ(1u, Store().records().size());
-+  EXPECT_EQ(first, Store().records().front().space);
++  EXPECT_EQ(first, Store().records().front().space)
++      << "a window's own refile moved the record again";
 +  ASSERT_EQ(1u, Pins(browser()).size());
 +  EXPECT_EQ(first, model.FindSpaceForTab(Pins(browser()).front()));
++  EXPECT_EQ(first, Model(second).FindSpaceForTab(Pins(second).front()));
 +}
 +
 +// windows G20: sync reads one item for a pin in two windows.
@@ -3300,6 +3956,17 @@ index 0000000000000..8770e0e5f6087
 +  ASSERT_TRUE(base::test::RunUntil([&] {
 +    return Pins(second).size() == 1u && Essentials(second).size() == 1u;
 +  }));
++  // A record no window shows (its Space is none of theirs): only the store
++  // read back from its preference has it, and a fill from the windows would
++  // not.
++  spaces::PinRecord kept;
++  kept.id = "kept-by-the-store";
++  kept.tier = spaces::PinTier::kSpacePin;
++  kept.space = spaces::SpaceId::FromRawToken(base::Token::CreateRandom());
++  kept.has_space = true;
++  kept.home = GURL("https://kept.test/");
++  Store().Publish({}, {kept}, {});
++  ASSERT_EQ(3u, Store().records().size());
 +}
 +
 +IN_PROC_BROWSER_TEST_F(PinsEveryWindowTest, TwoWindowsComeBackWithOnePinList) {
@@ -3307,7 +3974,20 @@ index 0000000000000..8770e0e5f6087
 +    return Windows(browser()->GetProfile()).size() == 2u;
 +  }));
 +  base::RunLoop().RunUntilIdle();
-+  EXPECT_EQ(2u, Store().records().size());
++  // The store came back from its preference; it was not filled again.
++  EXPECT_TRUE(Store().ready());
++  EXPECT_EQ(3u, Store().records().size());
++  EXPECT_TRUE(Store().Find("kept-by-the-store"))
++      << "the store was filled from the windows, not read back";
++  std::string pin_id;
++  std::string essential_id;
++  for (const spaces::PinRecord& record : Store().records()) {
++    if (record.id == "kept-by-the-store") {
++      continue;
++    }
++    (record.tier == spaces::PinTier::kEssential ? essential_id : pin_id) =
++        record.id;
++  }
 +  for (BrowserWindowInterface* window : Windows(browser()->GetProfile())) {
 +    ASSERT_TRUE(base::test::RunUntil([&] {
 +      return Pins(window).size() == 1u && Essentials(window).size() == 1u;
@@ -3316,6 +3996,14 @@ index 0000000000000..8770e0e5f6087
 +    EXPECT_EQ("/title1.html",
 +              Model(window).HomeUrl(Pins(window).front()).value_or(GURL())
 +                  .path());
++    // Each restored tab is its record's, by id: none was let go as a loose
++    // tab and made again.
++    EXPECT_EQ(pin_id, Token(Pins(window).front()));
++    EXPECT_EQ(essential_id, Token(Essentials(window).front()));
++    const std::set<std::string> loose = LoosePaths(window);
++    EXPECT_FALSE(loose.contains("/title1.html") ||
++                 loose.contains("/title2.html"))
++        << "a restored pin or essential came back as a loose tab";
 +  }
 +}
 +
@@ -3353,6 +4041,21 @@ index 0000000000000..8770e0e5f6087
 +      paths.insert(std::string(home.path()));
 +    }
 +    EXPECT_EQ(want, paths);
++    // Every pin is a record's, by id, and no window's open pin became a loose
++    // tab: the second window's own /title2.html pin took the first window's
++    // record's id.
++    std::set<std::string> tokens;
++    for (tabs::TabInterface* const pin : Pins(window)) {
++      tokens.insert(Token(pin));
++    }
++    std::set<std::string> ids;
++    for (const spaces::PinRecord& record : Store().records()) {
++      ids.insert(record.id);
++    }
++    EXPECT_EQ(ids, tokens);
++    for (const std::string& path : LoosePaths(window)) {
++      EXPECT_FALSE(want.contains(path)) << path << " is a loose tab";
++    }
 +  }
 +}
 +
@@ -3509,6 +4212,296 @@ index 0000000000000..8770e0e5f6087
 +                contents->GetController().NeedsReload())
 +        << "a page loaded in the new window";
 +  }
++}
++
++// windows G16: the window a tab drag tears off takes no pin while the drag
++// runs, and no window is brought in line meanwhile. A drag cancelled (Esc
++// puts the tab back) or carried on into another window empties it, and it
++// closes; a drag that ends there gives it every pin and essential. The test
++// stands in for the drag by the gate the mirror reads: a real drag's move
++// loop cannot be driven here.
++IN_PROC_BROWSER_TEST_F(PinsEveryWindowTest,
++                       ADragsWindowTakesPinsOnlyOnceTheDragEnds) {
++  PinPage(browser(), Page("/title1.html"));
++  PinEssential(browser(), Page("/title2.html"));
++  ASSERT_EQ(2u, Store().records().size());
++  ASSERT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
++      browser(), Page("/title3.html"),
++      WindowOpenDisposition::NEW_FOREGROUND_TAB,
++      ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
++  TabStripModel* const strip = browser()->GetTabStripModel();
++  tabs::TabInterface* const dragged = strip->GetActiveTab();
++  const int here_before = strip->count();
++  Profile* const profile = browser()->GetProfile();
++
++  {
++    SCOPED_TRACE("a drag cancelled");
++    spaces::PinMirror::SetTabDragForTesting(true);
++    BrowserWindowInterface* const torn = TearOff(dragged);
++    RunFor(base::Milliseconds(800));
++    EXPECT_TRUE(Pins(torn).empty()) << "the drag's window took a pin";
++    EXPECT_TRUE(Essentials(torn).empty())
++        << "the drag's window took an essential";
++    EXPECT_EQ(1, torn->GetTabStripModel()->count());
++    // Esc: the tab goes back where it was, and the drag ends.
++    chrome::MoveTabsToExistingWindow(torn, browser(), {0});
++    spaces::PinMirror::SetTabDragForTesting(false);
++    ASSERT_TRUE(base::test::RunUntil([&] {
++      return Windows(profile).size() == 1u;
++    })) << "the drag's window stayed";
++    RunFor(base::Milliseconds(500));
++    EXPECT_EQ(here_before, strip->count());
++    EXPECT_EQ(1u, Pins(browser()).size());
++    EXPECT_EQ(1u, Essentials(browser()).size());
++    EXPECT_EQ(2u, Store().records().size());
++  }
++
++  {
++    SCOPED_TRACE("a drag that ends in its window");
++    spaces::PinMirror::SetTabDragForTesting(true);
++    BrowserWindowInterface* const torn = TearOff(dragged);
++    RunFor(base::Milliseconds(800));
++    EXPECT_TRUE(Pins(torn).empty()) << "the drag's window took a pin";
++    spaces::PinMirror::SetTabDragForTesting(false);
++    ASSERT_TRUE(base::test::RunUntil([&] {
++      return Pins(torn).size() == 1u && Essentials(torn).size() == 1u;
++    })) << "the window the drag made lacks a pin or essential";
++    EXPECT_NE(TabStripModel::kNoTab,
++              torn->GetTabStripModel()->GetIndexOfTab(dragged));
++    EXPECT_EQ(1u, Pins(browser()).size());
++    EXPECT_EQ(1u, Essentials(browser()).size());
++    EXPECT_EQ(2u, Store().records().size());
++  }
++}
++
++// windows G13, G15: a window with a change of its own waiting to go out
++// sends that change alone. A pin removed and a pin renamed in another window
++// just before stay removed and renamed in the store and in every window.
++IN_PROC_BROWSER_TEST_F(PinsEveryWindowTest,
++                       APendingPublishWritesNothingBackOverAnotherWindow) {
++  tabs::TabInterface* const x = PinPage(browser(), Page("/title1.html"));
++  tabs::TabInterface* const y = PinPage(browser(), Page("/title2.html"));
++  const std::string y_id = Token(y);
++  BrowserWindowInterface* const second = OpenWindow();
++  ASSERT_TRUE(base::test::RunUntil([&] { return Pins(second).size() == 2u; }));
++  base::RunLoop().RunUntilIdle();
++
++  // The first window's unpin and rename go out first. The second window's
++  // own change, a loose tab opened there, waits behind them, so it is still
++  // to be published when the store tells it of the first window's.
++  Model(browser()).SetSpacePinned(x, false);
++  stedding::SetTabName(browser(), y, u"Renamed");
++  chrome::AddTabAt(second, GURL(url::kAboutBlankURL), -1,
++                   /*foreground=*/false);
++  base::RunLoop().RunUntilIdle();
++
++  ASSERT_EQ(1u, Store().records().size()) << "the unpinned pin came back";
++  EXPECT_EQ(y_id, Store().records().front().id);
++  EXPECT_EQ(u"Renamed", Store().records().front().name)
++      << "the rename was undone";
++  ASSERT_TRUE(base::test::RunUntil([&] {
++    const std::vector<tabs::TabInterface*> there = Pins(second);
++    return there.size() == 1u &&
++           stedding::TabName(there.front()->GetContents()) == u"Renamed";
++  })) << "the second window kept the unpinned pin or the old name";
++  ASSERT_EQ(1u, Pins(browser()).size());
++  EXPECT_EQ(y, Pins(browser()).front());
++  EXPECT_EQ(u"Renamed", stedding::TabName(y->GetContents()));
++}
++
++// windows G16: a pin's tab moved into a window that has its own tab of the
++// pin takes that tab's place, in the record's folder. The record is not
++// written over from where the moved tab landed (the end of the strip, in no
++// folder).
++IN_PROC_BROWSER_TEST_F(PinsEveryWindowTest,
++                       AMovedPinTakesThePlaceOfTheTabThere) {
++  tabs::TabInterface* const pin = PinPage(browser(), Page("/title1.html"));
++  TabStripModel* const strip = browser()->GetTabStripModel();
++  tabs::FolderTabCollection* const folder =
++      strip->AddToNewFolder({strip->GetIndexOfTab(pin)});
++  ASSERT_TRUE(folder);
++  ASSERT_TRUE(Model(browser()).IsFolderSpacePinned(folder));
++  const tabs::FolderId folder_id = folder->id();
++  base::RunLoop().RunUntilIdle();
++  const std::string id = Token(pin);
++  ASSERT_TRUE(Store().Find(id));
++  const std::string path = Store().Find(id)->folder_path;
++  ASSERT_FALSE(path.empty());
++  BrowserWindowInterface* const second = OpenWindow();
++  ASSERT_TRUE(base::test::RunUntil([&] {
++    return Pins(second).size() == 1u && FolderOf(Pins(second).front());
++  }));
++  TabStripModel* const there = second->GetTabStripModel();
++  const int there_before = there->count();
++  strip->ActivateTabAt(strip->GetIndexOfTab(pin));
++
++  chrome::MoveTabsToExistingWindow(browser(), second,
++                                   {strip->GetIndexOfTab(pin)});
++  ASSERT_TRUE(base::test::RunUntil([&] {
++    return Pins(second).size() == 1u && Pins(second).front() == pin &&
++           FolderOf(pin) && Pins(browser()).size() == 1u &&
++           FolderOf(Pins(browser()).front());
++  })) << "the moved pin did not take the place of the tab there, or the "
++         "window it left has no pin in the folder";
++  base::RunLoop().RunUntilIdle();
++  ASSERT_EQ(1u, Store().records().size());
++  EXPECT_EQ(path, Store().records().front().folder_path)
++      << "the moved tab wrote its own place over the record";
++  EXPECT_EQ(folder_id, FolderOf(pin)->id());
++  EXPECT_EQ(folder_id, FolderOf(Pins(browser()).front())->id());
++  EXPECT_EQ(there_before, there->count())
++      << "the tab there was kept beside the moved one";
++  EXPECT_EQ(Page("/title1.html"), pin->GetContents()->GetLastCommittedURL());
++}
++
++// windows G15, splits J4: a pin let go in one window because another window
++// unpinned it leaves its split there. The split's other pane stays a pin,
++// and the pin let go does not come back as a record.
++IN_PROC_BROWSER_TEST_F(PinsEveryWindowTest,
++                       APinLetGoLeavesItsSplitAndTheOtherPaneAPin) {
++  tabs::TabInterface* const x = PinPage(browser(), Page("/title1.html"));
++  tabs::TabInterface* const y = PinPage(browser(), Page("/title2.html"));
++  TabStripModel* const strip = browser()->GetTabStripModel();
++  strip->ActivateTabAt(strip->GetIndexOfTab(x));
++  strip->AddToNewSplit({strip->GetIndexOfTab(y)},
++                       split_tabs::SplitTabVisualData(),
++                       split_tabs::SplitTabCreatedSource::kTabContextMenu);
++  ASSERT_TRUE(x->IsSplit());
++  ASSERT_TRUE(y->IsSplit());
++  ASSERT_TRUE(Model(browser()).IsSpacePinned(x));
++  ASSERT_TRUE(Model(browser()).IsSpacePinned(y));
++  base::RunLoop().RunUntilIdle();
++  ASSERT_EQ(2u, Store().records().size());
++  const std::string x_id = Token(x);
++  const std::string y_id = Token(y);
++  BrowserWindowInterface* const second = OpenWindow();
++  ASSERT_TRUE(base::test::RunUntil([&] { return Pins(second).size() == 2u; }));
++
++  // There the two are separate pins: the first alone is unpinned.
++  tabs::TabInterface* const x_there = TabOf(second, x_id);
++  ASSERT_TRUE(x_there);
++  ASSERT_FALSE(x_there->IsSplit());
++  Model(second).SetSpacePinned(x_there, false);
++  ASSERT_TRUE(base::test::RunUntil([&] {
++    return !Model(browser()).IsSpacePinned(x);
++  })) << "the first window kept the pin unpinned elsewhere";
++  base::RunLoop().RunUntilIdle();
++  EXPECT_TRUE(Model(browser()).IsSpacePinned(y))
++      << "the split's other pane was let go too";
++  EXPECT_FALSE(x->IsSplit());
++  EXPECT_NE(x_id, Token(x));
++  ASSERT_EQ(1u, Pins(browser()).size());
++  EXPECT_EQ(y, Pins(browser()).front());
++
++  // A later change in the first window publishes no record of the pane let
++  // go.
++  chrome::AddTabAt(browser(), GURL(url::kAboutBlankURL), -1,
++                   /*foreground=*/false);
++  base::RunLoop().RunUntilIdle();
++  ASSERT_EQ(1u, Store().records().size());
++  EXPECT_EQ(y_id, Store().records().front().id);
++  EXPECT_EQ(1u, Pins(second).size());
++}
++
++// windows G13, spaces B6: an own essential moved to another Space in one
++// window moves in every window, and stays that Space's own (ADR 0028).
++IN_PROC_BROWSER_TEST_F(PinsEveryWindowTest,
++                       AnOwnEssentialsMoveReachesEveryWindow) {
++  spaces::SpaceModel& model = Model(browser());
++  spaces::Space* const one = model.AddSpace("One", SK_ColorBLUE);
++  ASSERT_TRUE(one);
++  const spaces::SpaceId one_id = one->id();
++  spaces::Space* const two = model.AddSpace("Two", SK_ColorGREEN);
++  ASSERT_TRUE(two);
++  const spaces::SpaceId two_id = two->id();
++  model.SetSpaceIsolated(one_id, true);
++  model.SetSpaceIsolated(two_id, true);
++  // Pinned while filed in One, which has a session of its own, it is One's
++  // own essential.
++  ASSERT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
++      browser(), Page("/title1.html"),
++      WindowOpenDisposition::NEW_FOREGROUND_TAB,
++      ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
++  TabStripModel* const strip = browser()->GetTabStripModel();
++  tabs::TabInterface* const essential = strip->GetActiveTab();
++  model.SetSpaceForTab(essential, one_id);
++  strip->SetTabPinned(strip->GetIndexOfTab(essential), true);
++  base::RunLoop().RunUntilIdle();
++  ASSERT_TRUE(model.IsOwnEssential(essential));
++  ASSERT_EQ(1u, Store().records().size());
++  ASSERT_TRUE(Store().records().front().has_space);
++  ASSERT_EQ(one_id, Store().records().front().space);
++  BrowserWindowInterface* const second = OpenWindow();
++  ASSERT_TRUE(
++      base::test::RunUntil([&] { return Essentials(second).size() == 1u; }));
++  tabs::TabInterface* const there = Essentials(second).front();
++  ASSERT_TRUE(Model(second).IsOwnEssential(there));
++  ASSERT_EQ(one_id, Model(second).FindSpaceForTab(there));
++
++  model.SetSpaceForTab(essential, two_id);
++  ASSERT_TRUE(base::test::RunUntil([&] {
++    return Store().records().size() == 1u &&
++           Store().records().front().space == two_id;
++  })) << "the move did not reach the store";
++  ASSERT_TRUE(base::test::RunUntil([&] {
++    return Essentials(second).size() == 1u &&
++           Model(second).FindSpaceForTab(Essentials(second).front()) == two_id;
++  })) << "the second window's own essential stayed in its old Space";
++  base::RunLoop().RunUntilIdle();
++  EXPECT_TRUE(Model(second).IsOwnEssential(Essentials(second).front()));
++  EXPECT_EQ(two_id, model.FindSpaceForTab(essential));
++  EXPECT_TRUE(model.IsOwnEssential(essential));
++  ASSERT_EQ(1u, Store().records().size());
++  EXPECT_EQ(two_id, Store().records().front().space);
++  EXPECT_EQ(spaces::PinTier::kEssential, Store().records().front().tier);
++}
++
++// windows G13, folders F38: a pinned folder renamed in the same turn as one
++// of its rows stops being a pin, that row still in the folder when the
++// window publishes: the rename goes out once the folder is all pins again,
++// and is not reset from the store.
++IN_PROC_BROWSER_TEST_F(PinsEveryWindowTest,
++                       AFolderRenamedAsARowLeavesItKeepsItsName) {
++  tabs::TabInterface* const a = PinPage(browser(), Page("/title1.html"));
++  tabs::TabInterface* const b = PinPage(browser(), Page("/title2.html"));
++  TabStripModel* const strip = browser()->GetTabStripModel();
++  tabs::FolderTabCollection* const folder =
++      strip->AddToNewFolder({strip->GetIndexOfTab(a), strip->GetIndexOfTab(b)});
++  ASSERT_TRUE(folder);
++  folder->SetTitle("Work");
++  ASSERT_TRUE(Model(browser()).IsFolderSpacePinned(folder));
++  base::RunLoop().RunUntilIdle();
++  ASSERT_EQ(2u, Store().records().size());
++  const std::string a_id = Token(a);
++  BrowserWindowInterface* const second = OpenWindow();
++  ASSERT_TRUE(base::test::RunUntil([&] {
++    const std::vector<tabs::TabInterface*> there = Pins(second);
++    return there.size() == 2u && FolderOf(there[0]) &&
++           FolderOf(there[0])->title() == "Work";
++  }));
++
++  // One turn: the folder renamed, and `b` no pin, left where it is.
++  folder->SetTitle("Desk");
++  Model(browser()).SetSpacePinnedInPlace(b, false);
++  base::RunLoop().RunUntilIdle();
++  // Then `b` leaves the folder, which is all pins again.
++  if (FolderOf(b)) {
++    strip->MoveTabOutOfFolders(strip->GetIndexOfTab(b));
++  }
++  base::RunLoop().RunUntilIdle();
++
++  ASSERT_EQ(folder, FolderOf(a));
++  EXPECT_EQ("Desk", folder->title()) << "the rename was reset from the store";
++  ASSERT_EQ(1u, Store().records().size());
++  EXPECT_EQ(a_id, Store().records().front().id);
++  EXPECT_NE(std::string::npos,
++            Store().records().front().folder_path.find("Desk"))
++      << "the rename never reached the store";
++  ASSERT_TRUE(base::test::RunUntil([&] {
++    const std::vector<tabs::TabInterface*> there = Pins(second);
++    return there.size() == 1u && FolderOf(there[0]) &&
++           FolderOf(there[0])->title() == "Desk";
++  })) << "the rename did not reach the other window";
 +}
 +
 +}  // namespace

@@ -24,18 +24,18 @@ Removable when: not removable; the folder sync of S-282 is built on it.
  .../settings/stedding_page/stedding_page.ts   |   8 +
  .../browser/ui/spaces/arc_sidebar_importer.cc | 388 ++++++++++--
  .../browser/ui/spaces/arc_sidebar_importer.h  |  26 +-
- chrome/browser/ui/spaces/sidebar_backup.cc    | 289 ++++++---
+ chrome/browser/ui/spaces/sidebar_backup.cc    | 288 ++++++---
  chrome/browser/ui/spaces/sidebar_backup.h     |  32 +-
  .../ui/spaces/sidebar_backup_unittest.cc      | 576 +++++++++++++++++-
  chrome/browser/ui/spaces/space_model.cc       |  11 +
- chrome/browser/ui/stedding/tab_parents.cc     |  99 ++-
- chrome/browser/ui/stedding/tab_parents.h      |  29 +-
+ chrome/browser/ui/stedding/tab_parents.cc     | 105 +++-
+ chrome/browser/ui/stedding/tab_parents.h      |  34 +-
  .../browser/ui/webui/settings/settings_ui.cc  |   6 +-
  .../webui/settings/stedding_spaces_handler.cc |  32 +
  .../webui/settings/stedding_spaces_handler.h  |   3 +
  chrome/test/stedding/BUILD.gn                 |   1 +
  .../test/stedding/sidebar_file_browsertest.cc | 272 +++++++++
- 15 files changed, 1596 insertions(+), 177 deletions(-)
+ 15 files changed, 1605 insertions(+), 178 deletions(-)
  create mode 100644 chrome/test/stedding/sidebar_file_browsertest.cc
 
 diff --git a/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts b/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
@@ -694,10 +694,10 @@ index 3c9fca3d2b2d2..7b79ff61771ee 100644
                                 const ArcImportPlan& plan,
                                 const ArcImportOptions& options);
 diff --git a/chrome/browser/ui/spaces/sidebar_backup.cc b/chrome/browser/ui/spaces/sidebar_backup.cc
-index 8332fcbee229e..143c4c03d14da 100644
+index 8332fcbee229e..5f17d8e072d97 100644
 --- a/chrome/browser/ui/spaces/sidebar_backup.cc
 +++ b/chrome/browser/ui/spaces/sidebar_backup.cc
-@@ -4,25 +4,31 @@
+@@ -4,14 +4,19 @@
  
  #include "chrome/browser/ui/spaces/sidebar_backup.h"
  
@@ -719,10 +719,7 @@ index 8332fcbee229e..143c4c03d14da 100644
  #include "base/strings/stringprintf.h"
  #include "base/strings/utf_string_conversions.h"
  #include "base/task/thread_pool.h"
-+#include "base/uuid.h"
- #include "base/values.h"
- #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
- #include "chrome/browser/ui/spaces/space.h"
+@@ -21,8 +26,8 @@
  #include "chrome/browser/ui/spaces/space_model.h"
  #include "chrome/browser/ui/stedding/pin_home.h"
  #include "chrome/browser/ui/stedding/tab_names.h"
@@ -732,7 +729,7 @@ index 8332fcbee229e..143c4c03d14da 100644
  #include "components/tabs/public/folder_tab_collection.h"
  #include "components/tabs/public/tab_collection.h"
  #include "components/tabs/public/tab_interface.h"
-@@ -34,20 +40,46 @@ namespace {
+@@ -34,20 +39,46 @@ namespace {
  
  using Node = ArcImportPlan::Node;
  
@@ -757,7 +754,7 @@ index 8332fcbee229e..143c4c03d14da 100644
 +std::string TabId(Snapshot& snapshot, tabs::TabInterface* tab) {
 +  std::string token = stedding::EnsureTabToken(tab);
 +  if (!snapshot.tokens.insert(token).second) {
-+    token = base::Uuid::GenerateRandomV4().AsLowercaseString();
++    token = stedding::NewTabToken();
 +    stedding::SetTabToken(tab, token);
 +    snapshot.tokens.insert(token);
 +  }
@@ -785,7 +782,7 @@ index 8332fcbee229e..143c4c03d14da 100644
    // The user's name for the tab first (tabs R15), then the page title.
    node.title = stedding::TabName(contents);
    if (node.title.empty()) {
-@@ -56,7 +88,7 @@ Node TabNode(SpaceModel* model, tabs::TabInterface* tab) {
+@@ -56,7 +87,7 @@ Node TabNode(SpaceModel* model, tabs::TabInterface* tab) {
    // A pin's home is what it comes back as (pins H1), when that is a web page
    // (H13). A pin with any other home is written as the page it shows, so the
    // file never carries a javascript: or file: home to the next import.
@@ -794,7 +791,7 @@ index 8332fcbee229e..143c4c03d14da 100644
    node.url = home && stedding::IsAllowedPinHome(*home)
                   ? *home
                   : contents->GetLastCommittedURL();
-@@ -78,66 +110,79 @@ std::vector<const tabs::TabCollection*> FolderChain(tabs::TabInterface* tab) {
+@@ -78,66 +109,79 @@ std::vector<const tabs::TabCollection*> FolderChain(tabs::TabInterface* tab) {
    return chain;
  }
  
@@ -923,7 +920,7 @@ index 8332fcbee229e..143c4c03d14da 100644
    ArcImportPlan::Space entry;
    entry.arc_id = space.id().ToString();
    // The Space's own name, none for an unnamed Space (archive A8 keeps the
-@@ -146,9 +191,26 @@ ArcImportPlan::Space SpaceEntry(const Space& space) {
+@@ -146,9 +190,26 @@ ArcImportPlan::Space SpaceEntry(const Space& space) {
    entry.title = space.name();
    entry.emoji = space.icon();
    entry.color = space.color();
@@ -950,7 +947,7 @@ index 8332fcbee229e..143c4c03d14da 100644
  base::DictValue ItemContainer(const std::string& id,
                                const std::vector<std::string>& children,
                                const char* type) {
-@@ -221,18 +283,48 @@ double Channel(unsigned channel) {
+@@ -221,18 +282,48 @@ double Channel(unsigned channel) {
  ArcImportPlan SnapshotSpace(BrowserWindowInterface* browser,
                              const SpaceId& id) {
    ArcImportPlan plan;
@@ -1005,7 +1002,7 @@ index 8332fcbee229e..143c4c03d14da 100644
  std::string PlanToJson(const ArcImportPlan& plan) {
    base::ListValue spaces;
    base::ListValue items;
-@@ -268,6 +360,25 @@ std::string PlanToJson(const ArcImportPlan& plan) {
+@@ -268,6 +359,25 @@ std::string PlanToJson(const ArcImportPlan& plan) {
        custom.Set("windowTheme", std::move(theme));
      }
      entry.Set("customInfo", std::move(custom));
@@ -1031,7 +1028,7 @@ index 8332fcbee229e..143c4c03d14da 100644
      spaces.Append(space.arc_id);
      spaces.Append(std::move(entry));
  
-@@ -283,6 +394,17 @@ std::string PlanToJson(const ArcImportPlan& plan) {
+@@ -283,6 +393,17 @@ std::string PlanToJson(const ArcImportPlan& plan) {
      for (const Node& node : space.unpinned) {
        AppendItem(node, unpinned_id, &items);
      }
@@ -1049,7 +1046,7 @@ index 8332fcbee229e..143c4c03d14da 100644
    }
    const std::string top_id = "essentials";
    items.Append(top_id);
-@@ -319,23 +441,24 @@ std::string PlanToJson(const ArcImportPlan& plan) {
+@@ -319,23 +440,24 @@ std::string PlanToJson(const ArcImportPlan& plan) {
  
  namespace {
  
@@ -1084,7 +1081,7 @@ index 8332fcbee229e..143c4c03d14da 100644
      std::move(done).Run(std::nullopt);
      return;
    }
-@@ -360,11 +483,19 @@ base::FilePath WriteExportOnPool(const base::FilePath& directory,
+@@ -360,11 +482,19 @@ base::FilePath WriteExportOnPool(const base::FilePath& directory,
                               exploded.minute))
            .value();
    base::i18n::ReplaceIllegalCharactersInPath(&name, '_');
@@ -1107,7 +1104,7 @@ index 8332fcbee229e..143c4c03d14da 100644
               ? path
               : base::FilePath();
  }
-@@ -380,7 +511,7 @@ void ImportSidebarFileAsync(BrowserWindowInterface* browser,
+@@ -380,7 +510,7 @@ void ImportSidebarFileAsync(BrowserWindowInterface* browser,
    }
    base::ThreadPool::PostTaskAndReplyWithResult(
        FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
@@ -1866,7 +1863,7 @@ index af9ada97a70b0..11914c38f0800 100644
  
  std::vector<std::pair<std::string, std::string>>
 diff --git a/chrome/browser/ui/stedding/tab_parents.cc b/chrome/browser/ui/stedding/tab_parents.cc
-index 144b1604afd62..f3ac0ef90363a 100644
+index 144b1604afd62..cd7552c595d7a 100644
 --- a/chrome/browser/ui/stedding/tab_parents.cc
 +++ b/chrome/browser/ui/stedding/tab_parents.cc
 @@ -13,6 +13,7 @@
@@ -1913,7 +1910,17 @@ index 144b1604afd62..f3ac0ef90363a 100644
  void AppendRebuildCommands(BrowserWindowInterface* browser,
                             SessionRebuildCommands* commands) {
    TabStripModel* const tabs = browser->GetTabStripModel();
-@@ -127,6 +143,31 @@ std::string TabParentToken(const content::WebContents* contents) {
+@@ -121,12 +137,41 @@ std::string TabToken(const content::WebContents* contents) {
+   return data ? data->token() : std::string();
+ }
+ 
++std::string NewTabToken() {
++  return base::Uuid::GenerateRandomV4().AsLowercaseString();
++}
++
+ std::string TabParentToken(const content::WebContents* contents) {
+   const TabParentData* const data =
+       contents ? TabParentData::FromWebContents(contents) : nullptr;
    return data ? data->parent() : std::string();
  }
  
@@ -1925,7 +1932,7 @@ index 144b1604afd62..f3ac0ef90363a 100644
 +  if (std::string token = TabToken(contents); !token.empty()) {
 +    return token;
 +  }
-+  const std::string token = base::Uuid::GenerateRandomV4().AsLowercaseString();
++  const std::string token = NewTabToken();
 +  SetTabToken(tab, token);
 +  return token;
 +}
@@ -1945,7 +1952,7 @@ index 144b1604afd62..f3ac0ef90363a 100644
  tabs::TabInterface* ParentOfNewTab(const TabStripModel& model, int index) {
    if (index < 0 || index >= model.count() || model.IsTabPinned(index)) {
      return nullptr;
-@@ -138,6 +179,16 @@ tabs::TabInterface* ParentOfNewTab(const TabStripModel& model, int index) {
+@@ -138,6 +183,16 @@ tabs::TabInterface* ParentOfNewTab(const TabStripModel& model, int index) {
    }
    tabs::TabInterface* parent = nullptr;
    if (content::RenderFrameHost* const frame = contents->GetOpener()) {
@@ -1962,7 +1969,16 @@ index 144b1604afd62..f3ac0ef90363a 100644
      // A page's own window.open names its page. Chromium takes the tab on
      // screen as the new tab's opener, which is another tab when a page in
      // the background opens one.
-@@ -193,21 +244,45 @@ void ReparentChildrenOf(BrowserWindowInterface* browser,
+@@ -176,7 +231,7 @@ void SetTabParent(BrowserWindowInterface* browser,
+   }
+   TabParentData& parent_data = DataFor(parent_contents);
+   if (parent_data.token().empty()) {
+-    parent_data.set_token(base::Uuid::GenerateRandomV4().AsLowercaseString());
++    parent_data.set_token(NewTabToken());
+   }
+   DataFor(child_contents).set_parent(parent_data.token());
+   // Written a turn later, once every observer of the insertion, the
+@@ -193,21 +248,45 @@ void ReparentChildrenOf(BrowserWindowInterface* browser,
      return;
    }
    const std::string grandparent = TabParentToken(closed);
@@ -2021,7 +2037,7 @@ index 144b1604afd62..f3ac0ef90363a 100644
    const std::string token = TabToken(from);
    const std::string parent = TabParentToken(from);
 diff --git a/chrome/browser/ui/stedding/tab_parents.h b/chrome/browser/ui/stedding/tab_parents.h
-index 1f4d5d9daeb33..b2adfc82df3ad 100644
+index 1f4d5d9daeb33..5a8e6fa7df225 100644
 --- a/chrome/browser/ui/stedding/tab_parents.h
 +++ b/chrome/browser/ui/stedding/tab_parents.h
 @@ -10,6 +10,8 @@
@@ -2033,7 +2049,7 @@ index 1f4d5d9daeb33..b2adfc82df3ad 100644
  class BrowserWindowInterface;
  class TabStripModel;
  
-@@ -34,9 +36,24 @@ inline constexpr char kSessionTabParentKey[] = "stedding.parent";
+@@ -34,9 +36,29 @@ inline constexpr char kSessionTabParentKey[] = "stedding.parent";
  // The deepest a row nests, folders and children together (R57).
  inline constexpr int kMaxNestDepth = 5;
  
@@ -2042,6 +2058,11 @@ index 1f4d5d9daeb33..b2adfc82df3ad 100644
 +// been written to a sidebar file (docs/features/sidebar-file.md Sf2).
  std::string TabToken(const content::WebContents* contents);
  
++// sidebar-file Sf2: a new tab token, a lower-case UUID, the one form a
++// sidebar file and sync take as a tab's id ("tab:<token>"). Every token
++// Stedding makes for a tab is made here.
++std::string NewTabToken();
++
 +// sidebar-file Sf2: the tab's token, made now when it has none, so a pin or
 +// an essential written to a sidebar file has an id that survives a restart
 +// ("tab:<token>"). The token goes to the session a turn later, as a
@@ -2059,7 +2080,7 @@ index 1f4d5d9daeb33..b2adfc82df3ad 100644
  // The token of the tab `contents` was opened from, empty for a tab with no
  // parent.
  std::string TabParentToken(const content::WebContents* contents);
-@@ -55,11 +72,19 @@ void SetTabParent(BrowserWindowInterface* browser,
+@@ -55,11 +77,19 @@ void SetTabParent(BrowserWindowInterface* browser,
  
  // R59: when a parent closes, each of its children takes the parent's own
  // parent, or none, and moves up a level in its place. `closed` is the closing

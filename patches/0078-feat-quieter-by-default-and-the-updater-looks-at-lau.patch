@@ -51,8 +51,8 @@ its own (patches/README.md).
  chrome/browser/ui/stedding/app_updater_mac.h  |  30 ++
  chrome/browser/ui/stedding/app_updater_mac.mm |  47 ++-
  .../ui/stedding/app_updater_mac_unittest.mm   | 374 ++++++++++++++++++
- chrome/browser/ui/stedding/app_updater_win.cc |  68 ++--
- .../ui/stedding/app_updater_win_unittest.cc   | 142 ++++++-
+ chrome/browser/ui/stedding/app_updater_win.cc | 101 +++--
+ .../ui/stedding/app_updater_win_unittest.cc   | 194 ++++++++-
  chrome/browser/ui/stedding/stedding_prefs.cc  |  11 +-
  chrome/browser/ui/stedding/stedding_prefs.h   |  16 +-
  .../ui/stedding/stedding_prefs_unittest.cc    |  20 +-
@@ -68,7 +68,7 @@ its own (patches/README.md).
  chrome/test/stedding/restore_browsertest.cc   |  69 +++-
  .../stedding/settings_spaces_browsertest.cc   |  28 ++
  chrome/test/stedding/tab_drop_browsertest.cc  |   8 +-
- 31 files changed, 1218 insertions(+), 66 deletions(-)
+ 31 files changed, 1301 insertions(+), 68 deletions(-)
  create mode 100644 chrome/browser/ui/stedding/app_updater_mac.h
  create mode 100644 chrome/browser/ui/stedding/app_updater_mac_unittest.mm
  create mode 100644 chrome/test/stedding/fullscreen_hint_browsertest.cc
@@ -885,7 +885,7 @@ index 0000000000000..dcd4b3ce44c9f
 +}  // namespace
 +}  // namespace stedding
 diff --git a/chrome/browser/ui/stedding/app_updater_win.cc b/chrome/browser/ui/stedding/app_updater_win.cc
-index e24128e26faad..50eccb6cee0d6 100644
+index e24128e26faad..ae011542bf378 100644
 --- a/chrome/browser/ui/stedding/app_updater_win.cc
 +++ b/chrome/browser/ui/stedding/app_updater_win.cc
 @@ -4,7 +4,8 @@
@@ -981,7 +981,7 @@ index e24128e26faad..50eccb6cee0d6 100644
    }
  
    ~WinAppUpdater() override = default;
-@@ -297,17 +302,22 @@ class WinAppUpdater : public AppUpdater {
+@@ -297,24 +302,47 @@ class WinAppUpdater : public AppUpdater {
      return local_state_->GetBoolean(prefs::kUpdatesAutomatic);
    }
  
@@ -1009,7 +1009,33 @@ index e24128e26faad..50eccb6cee0d6 100644
      }
      timer_.Start(FROM_HERE, delay,
                   base::BindOnce(&WinAppUpdater::Check, base::Unretained(this)));
-@@ -337,12 +347,12 @@ class WinAppUpdater : public AppUpdater {
+   }
+ 
+   void OnAutomaticChanged() {
+-    if (busy_ || state() == State::kReady || state() == State::kInstalling) {
++    if (state() == State::kReady || state() == State::kInstalling) {
++      return;
++    }
++    if (busy_) {
++      // updates Up20 (bug hunt 2026-11-16): turned off while a check the
++      // user did not ask for is reading the feed or downloading the
++      // installer: the request stops now. It went on, and the installer,
++      // about 170 MB, came down only to be thrown away. Between the steps
++      // (the feed being read, a try waiting) each step asks again before it
++      // starts the next.
++      if (!Automatic() && !user_asked_ && loader_) {
++        stall_timer_.Stop();
++        timer_.Stop();
++        loader_.reset();
++        if (state() == State::kDownloading) {
++          Forget(download_, /*keep_log=*/false);
++        }
++        Finish(State::kIdle);
++      }
+       return;
+     }
+     ScheduleCheck();
+@@ -337,12 +365,12 @@ class WinAppUpdater : public AppUpdater {
    void OnFeed(std::optional<std::string> body) {
      loader_.reset();
      if (!body) {
@@ -1024,11 +1050,31 @@ index e24128e26faad..50eccb6cee0d6 100644
      local_state_->SetTime(prefs::kUpdatesLastCheck, base::Time::Now());
      // updates Up15: nothing in a feed is read until its signature verifies.
      const std::optional<std::string_view> signed_body =
-@@ -402,7 +412,13 @@ class WinAppUpdater : public AppUpdater {
+@@ -382,6 +410,13 @@ class WinAppUpdater : public AppUpdater {
+       Finish(State::kUpToDate);
+       return;
+     }
++    // updates Up20 (bug hunt 2026-11-16): automatic updates went off while
++    // the feed was fetched or read: a check the user did not ask for
++    // downloads nothing.
++    if (!user_asked_ && !Automatic()) {
++      Finish(State::kIdle);
++      return;
++    }
+     item_ = *item;
+     SetVersion(base::UTF8ToUTF16(item_.version));
+     SetProgress(0);
+@@ -402,7 +437,19 @@ class WinAppUpdater : public AppUpdater {
      // version (LaterWindowsItem): digits, dots and "-beta.".
      download_ = dir.AppendASCII(
          base::StrCat({"Stedding-", item_.version, "-win-x64.exe"}));
 -    loader_ = MakeLoader(item_.url, kDownloadTimeout);
++    // updates Up20: and while its folder was being made.
++    if (!user_asked_ && !Automatic()) {
++      Forget(download_, /*keep_log=*/false);
++      Finish(State::kIdle);
++      return;
++    }
 +    // updates Up14 (BACKLOG S-279): not at IDLE, the request's default, which
 +    // has SimpleURLLoader write the file on a BEST_EFFORT sequence. While the
 +    // browser was busy (a UI Automation client reading the window every few
@@ -1039,7 +1085,7 @@ index e24128e26faad..50eccb6cee0d6 100644
      loader_->SetOnDownloadProgressCallback(base::BindRepeating(
          &WinAppUpdater::OnProgress, weak_factory_.GetWeakPtr()));
      loader_->DownloadToFile(
-@@ -423,6 +439,10 @@ class WinAppUpdater : public AppUpdater {
+@@ -423,6 +470,10 @@ class WinAppUpdater : public AppUpdater {
      loader_.reset();
      if (path.empty()) {
        Forget(download_, /*keep_log=*/false);
@@ -1050,7 +1096,7 @@ index e24128e26faad..50eccb6cee0d6 100644
        Fail(u"The new version could not be downloaded.");
        return;
      }
-@@ -496,8 +516,8 @@ class WinAppUpdater : public AppUpdater {
+@@ -496,8 +547,8 @@ class WinAppUpdater : public AppUpdater {
  
    // A check that found nothing, or failed: an answer for the user who asked,
    // or for anyone watching once a download had begun (the pill, About), and
@@ -1062,10 +1108,18 @@ index e24128e26faad..50eccb6cee0d6 100644
      busy_ = false;
      if (user_asked_ || state() == State::kChecking ||
 diff --git a/chrome/browser/ui/stedding/app_updater_win_unittest.cc b/chrome/browser/ui/stedding/app_updater_win_unittest.cc
-index b5b9d0a12b3a6..2b45290c1c318 100644
+index b5b9d0a12b3a6..cba893574961e 100644
 --- a/chrome/browser/ui/stedding/app_updater_win_unittest.cc
 +++ b/chrome/browser/ui/stedding/app_updater_win_unittest.cc
-@@ -29,6 +29,8 @@
+@@ -16,6 +16,7 @@
+ #include "base/files/file_util.h"
+ #include "base/files/scoped_temp_dir.h"
+ #include "base/functional/bind.h"
++#include "base/functional/callback.h"
+ #include "base/strings/strcat.h"
+ #include "base/strings/string_number_conversions.h"
+ #include "base/synchronization/lock.h"
+@@ -29,6 +30,8 @@
  #include "chrome/browser/ui/stedding/stedding_prefs.h"
  #include "components/prefs/testing_pref_service.h"
  #include "net/base/net_errors.h"
@@ -1074,7 +1128,7 @@ index b5b9d0a12b3a6..2b45290c1c318 100644
  #include "services/data_decoder/public/cpp/test_support/in_process_data_decoder.h"
  #include "services/network/public/cpp/url_loader_completion_status.h"
  #include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
-@@ -137,6 +139,14 @@ class WinAppUpdaterTest : public testing::Test, public AppUpdater::Observer {
+@@ -137,8 +140,21 @@ class WinAppUpdaterTest : public testing::Test, public AppUpdater::Observer {
      loader_factory_.AddResponse(kInstallerUrl, installer);
    }
  
@@ -1087,9 +1141,26 @@ index b5b9d0a12b3a6..2b45290c1c318 100644
 +  }
 +
    // AppUpdater::Observer:
-   void OnAppUpdaterChanged() override { states_.push_back(updater_->state()); }
+-  void OnAppUpdaterChanged() override { states_.push_back(updater_->state()); }
++  void OnAppUpdaterChanged() override {
++    states_.push_back(updater_->state());
++    if (on_change_) {
++      on_change_.Run();
++    }
++  }
  
-@@ -244,7 +254,8 @@ TEST_F(WinAppUpdaterTest, NothingLaterIsUpToDateAndAFailedInstallSaysSo) {
+   int installer_runs() {
+     base::AutoLock hold(lock_);
+@@ -154,6 +170,8 @@ class WinAppUpdaterTest : public testing::Test, public AppUpdater::Observer {
+   const Key key_;
+   std::unique_ptr<AppUpdater> updater_;
+   std::vector<State> states_;
++  // Runs at each change the updater tells its observers of.
++  base::RepeatingClosure on_change_;
+   int restarts_ = 0;
+   base::Lock lock_;
+   int installer_runs_ = 0;
+@@ -244,7 +262,8 @@ TEST_F(WinAppUpdaterTest, NothingLaterIsUpToDateAndAFailedInstallSaysSo) {
  }
  
  // updates Up20: with automatic updates off no request is made until the
@@ -1099,7 +1170,7 @@ index b5b9d0a12b3a6..2b45290c1c318 100644
  TEST_F(WinAppUpdaterTest, AutomaticOffAsksNothingUntilTheUserDoes) {
    const std::string installer = "MZ the beta 19 installer";
    Serve(SignedFeed(key_, "156.2.0.19", key_.Sign(installer), installer.size()),
-@@ -260,16 +271,86 @@ TEST_F(WinAppUpdaterTest, AutomaticOffAsksNothingUntilTheUserDoes) {
+@@ -260,16 +279,86 @@ TEST_F(WinAppUpdaterTest, AutomaticOffAsksNothingUntilTheUserDoes) {
    EXPECT_EQ(State::kReady, updater_->state());
  
    updater_.reset();
@@ -1193,7 +1264,7 @@ index b5b9d0a12b3a6..2b45290c1c318 100644
  }
  
  // updates Up17: an update installed and not yet restarted into offers the
-@@ -328,6 +409,51 @@ TEST_F(WinAppUpdaterTest, AnOfflineCheckTriesAgainWithinTheHour) {
+@@ -328,6 +417,51 @@ TEST_F(WinAppUpdaterTest, AnOfflineCheckTriesAgainWithinTheHour) {
    EXPECT_EQ(2u, loader_factory_.total_requests());
  }
  
@@ -1245,6 +1316,55 @@ index b5b9d0a12b3a6..2b45290c1c318 100644
  // updates Up20 (BACKLOG S-249): automatic updates turned off while a check
  // the user did not ask for downloads: the download is not installed.
  TEST_F(WinAppUpdaterTest, TurningAutomaticOffDuringADownloadInstallsNothing) {
+@@ -345,6 +479,48 @@ TEST_F(WinAppUpdaterTest, TurningAutomaticOffDuringADownloadInstallsNothing) {
+   EXPECT_NE(State::kReady, updater_->state());
+ }
+ 
++// updates Up20 (bug hunt 2026-11-16): automatic updates turned off while a
++// check the user did not ask for waits for the feed: the request stops, and
++// no installer is asked for. The check went on, and the installer, about
++// 170 MB, came down only to be thrown away.
++TEST_F(WinAppUpdaterTest, TurningAutomaticOffDuringTheFeedDownloadsNothing) {
++  const std::string installer = "MZ the beta 19 installer";
++  Start();
++  task_environment_.FastForwardBy(base::Seconds(11));
++  ASSERT_EQ(1, loader_factory_.NumPending()) << "the feed is asked for";
++  local_state_.SetBoolean(prefs::kUpdatesAutomatic, false);
++  Serve(SignedFeed(key_, "156.2.0.19", key_.Sign(installer), installer.size()),
++        installer);
++  task_environment_.RunUntilIdle();
++  EXPECT_EQ(1u, loader_factory_.total_requests()) << "the installer was asked for";
++  EXPECT_EQ(0, installer_runs());
++  EXPECT_EQ(State::kIdle, updater_->state());
++  task_environment_.FastForwardBy(base::Days(1));
++  EXPECT_EQ(1u, loader_factory_.total_requests());
++}
++
++// updates Up20 (bug hunt 2026-11-16): turned off as the download begins, in
++// the moment its folder is made: the installer is not asked for.
++TEST_F(WinAppUpdaterTest, TurningAutomaticOffAsTheDownloadBeginsAsksNothing) {
++  const std::string installer = "MZ the beta 19 installer";
++  Serve(SignedFeed(key_, "156.2.0.19", key_.Sign(installer), installer.size()),
++        installer);
++  on_change_ = base::BindLambdaForTesting([&]() {
++    if (updater_->state() == State::kDownloading &&
++        local_state_.GetBoolean(prefs::kUpdatesAutomatic)) {
++      local_state_.SetBoolean(prefs::kUpdatesAutomatic, false);
++    }
++  });
++  Start();
++  task_environment_.FastForwardBy(base::Seconds(11));
++  task_environment_.RunUntilIdle();
++  ASSERT_FALSE(local_state_.GetBoolean(prefs::kUpdatesAutomatic))
++      << "no download began";
++  EXPECT_EQ(1u, loader_factory_.total_requests()) << "the installer was asked for";
++  EXPECT_EQ(0, installer_runs());
++  EXPECT_EQ(State::kIdle, updater_->state());
++}
++
+ // updates Up17 (BACKLOG S-249): a failed install's log is kept in the
+ // temporary folder for a report, where the download's folder goes.
+ TEST_F(WinAppUpdaterTest, AFailedInstallKeepsItsLog) {
 diff --git a/chrome/browser/ui/stedding/stedding_prefs.cc b/chrome/browser/ui/stedding/stedding_prefs.cc
 index b5ed193301331..b5f4f80486abe 100644
 --- a/chrome/browser/ui/stedding/stedding_prefs.cc

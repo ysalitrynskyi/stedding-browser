@@ -45,15 +45,17 @@ Removable when: never; part of Stedding's own sync.
  .../sidebar_sync_extensions_unittest.cc       |  221 ++++
  chrome/browser/ui/spaces/sidebar_sync_file.cc |   14 +-
  chrome/browser/ui/spaces/sidebar_sync_file.h  |    9 +
- .../browser/ui/spaces/sidebar_sync_ledger.cc  |   57 +
+ .../browser/ui/spaces/sidebar_sync_ledger.cc  |   74 +-
  .../browser/ui/spaces/sidebar_sync_ledger.h   |   22 +
  .../browser/ui/spaces/sidebar_sync_parts.cc   |  532 +++++++++
  chrome/browser/ui/spaces/sidebar_sync_parts.h |  220 ++++
- .../browser/ui/spaces/sidebar_sync_service.cc |  788 ++++++++++++-
+ .../browser/ui/spaces/sidebar_sync_service.cc |  813 ++++++++++++-
  .../browser/ui/spaces/sidebar_sync_service.h  |   84 +-
  .../ui/spaces/sidebar_sync_service_factory.cc |    4 +
  .../spaces/sidebar_sync_settings_unittest.cc  |  425 +++++++
- .../ui/spaces/sidebar_sync_unittest.cc        |   49 +
+ .../browser/ui/spaces/sidebar_sync_state.cc   |   81 ++
+ chrome/browser/ui/spaces/sidebar_sync_state.h |   10 +
+ .../ui/spaces/sidebar_sync_unittest.cc        |  141 +++
  chrome/browser/ui/stedding/BUILD.gn           |   20 +
  chrome/browser/ui/stedding/stedding_prefs.cc  |    5 +
  chrome/browser/ui/stedding/stedding_prefs.h   |   11 +
@@ -70,7 +72,7 @@ Removable when: never; part of Stedding's own sync.
  .../sidebar_sync_extensions_browsertest.cc    |  487 ++++++++
  .../sidebar_sync_settings_browsertest.cc      | 1036 +++++++++++++++++
  components/infobars/core/infobar_delegate.h   |    3 +
- 33 files changed, 4778 insertions(+), 25 deletions(-)
+ 35 files changed, 4998 insertions(+), 30 deletions(-)
  create mode 100644 chrome/browser/ui/spaces/sidebar_sync_extensions.cc
  create mode 100644 chrome/browser/ui/spaces/sidebar_sync_extensions.h
  create mode 100644 chrome/browser/ui/spaces/sidebar_sync_extensions_unittest.cc
@@ -984,7 +986,7 @@ index 1dda4cb91de5e..2a5b32f7fa8c8 100644
  // Sf30: whether `path` is a file a cloud provider has not downloaded
  // (iCloud Drive's dataless files on the Mac, OneDrive's placeholders on
 diff --git a/chrome/browser/ui/spaces/sidebar_sync_ledger.cc b/chrome/browser/ui/spaces/sidebar_sync_ledger.cc
-index 150f380cc3054..a5e9b7ba495f9 100644
+index 150f380cc3054..3cdce0a690d00 100644
 --- a/chrome/browser/ui/spaces/sidebar_sync_ledger.cc
 +++ b/chrome/browser/ui/spaces/sidebar_sync_ledger.cc
 @@ -47,6 +47,29 @@ std::optional<int64_t> WholeNumber(const base::DictValue& dict,
@@ -1072,6 +1074,30 @@ index 150f380cc3054..a5e9b7ba495f9 100644
    if (const base::ListValue* const journal = local->FindList("journal")) {
      for (const base::Value& entry : *journal) {
        if (const base::DictValue* const dict = entry.GetIfDict()) {
+@@ -368,9 +425,20 @@ base::FilePath WriteBackup(const base::FilePath& profile_dir,
+       !base::ImportantFileWriter::WriteFileAtomically(path, json)) {
+     return base::FilePath();
+   }
+-  const std::vector<base::FilePath> backups = ListBackups(profile_dir);
+-  for (size_t i = kBackupsKept; i < backups.size(); ++i) {
+-    base::DeleteFile(backups[i]);
++  // Sf35 (bug hunt 2026-11-16): the backup just written is always one of the
++  // five kept. Kept by their names' times alone, it was deleted at once when
++  // five others carried a later time, the wall clock having run ahead when
++  // they were made, and its path still came back as written.
++  size_t kept = 1;
++  for (const base::FilePath& backup : ListBackups(profile_dir)) {
++    if (backup == path) {
++      continue;
++    }
++    if (kept < kBackupsKept) {
++      ++kept;
++      continue;
++    }
++    base::DeleteFile(backup);
+   }
+   return path;
+ }
 diff --git a/chrome/browser/ui/spaces/sidebar_sync_ledger.h b/chrome/browser/ui/spaces/sidebar_sync_ledger.h
 index b06fd72c60580..65a363b8ff444 100644
 --- a/chrome/browser/ui/spaces/sidebar_sync_ledger.h
@@ -1870,7 +1896,7 @@ index 0000000000000..ee61166ebea8a
 +
 +#endif  // CHROME_BROWSER_UI_SPACES_SIDEBAR_SYNC_PARTS_H_
 diff --git a/chrome/browser/ui/spaces/sidebar_sync_service.cc b/chrome/browser/ui/spaces/sidebar_sync_service.cc
-index c9dfbc7b10115..c1c630174cd85 100644
+index c9dfbc7b10115..700070ecb11be 100644
 --- a/chrome/browser/ui/spaces/sidebar_sync_service.cc
 +++ b/chrome/browser/ui/spaces/sidebar_sync_service.cc
 @@ -16,6 +16,7 @@
@@ -2065,7 +2091,28 @@ index c9dfbc7b10115..c1c630174cd85 100644
    // Sf26: tombstones received more than 180 days ago go, once a launch;
    // nothing waits on a decision yet.
    if (sidebar_sync::PruneTombstones(ledger_->state,
-@@ -1016,8 +1079,12 @@ void SidebarSyncService::Scan() {
+@@ -968,7 +1031,10 @@ void SidebarSyncService::Commit() {
+   // Sf41: the same overflow rule on every computer.
+   const bool overflow =
+       sidebar_sync::MoveEssentialsPastTheCap(ledger_->state, stamp);
+-  changed |= overflow;
++  // Sf15, Sf33: a move here that closes a folder cycle with another
++  // computer's move not shown yet is cut as the merge cuts one.
++  const bool cut = sidebar_sync::BreakFolderCycles(ledger_->state, stamp);
++  changed |= overflow || cut;
+   last_view_ = std::move(now);
+   if (!changed) {
+     return;
+@@ -978,7 +1044,7 @@ void SidebarSyncService::Commit() {
+   ledger_->folder_behind = true;
+   SaveLedger();
+   WriteOwnFile();
+-  if (overflow) {
++  if (overflow || cut) {
+     Apply();
+   }
+   NotifyObservers();
+@@ -1016,8 +1082,12 @@ void SidebarSyncService::Scan() {
  
  void SidebarSyncService::ReadFolderNow() {
    sidebar_sync::StatCache cache;
@@ -2080,7 +2127,7 @@ index c9dfbc7b10115..c1c630174cd85 100644
    }
    io_runner_->PostTaskAndReplyWithResult(
        FROM_HERE,
-@@ -1081,6 +1148,7 @@ void SidebarSyncService::OnScanned(base::OnceClosure done, ScanResult result) {
+@@ -1081,6 +1151,7 @@ void SidebarSyncService::OnScanned(base::OnceClosure done, ScanResult result) {
    }
    // The user's own edits are stamped before anything is merged.
    Commit();
@@ -2088,7 +2135,7 @@ index c9dfbc7b10115..c1c630174cd85 100644
    bool merged = false;
    const int64_t now = NowMs();
    for (sidebar_sync::PeerRead& peer : result.peers) {
-@@ -1130,6 +1198,8 @@ void SidebarSyncService::OnScanned(base::OnceClosure done, ScanResult result) {
+@@ -1130,6 +1201,8 @@ void SidebarSyncService::OnScanned(base::OnceClosure done, ScanResult result) {
      }
      clock_ahead_.erase(peer.install);
      merged |= MergePeer(peer.install, peer.parsed, /*force=*/false);
@@ -2097,7 +2144,7 @@ index c9dfbc7b10115..c1c630174cd85 100644
      // Sf22, Sf23: a held batch lives only here until the user answers, so
      // its file is read again at every scan: after a restart it is asked
      // again rather than taken as read.
-@@ -1140,7 +1210,28 @@ void SidebarSyncService::OnScanned(base::OnceClosure done, ScanResult result) {
+@@ -1140,7 +1213,28 @@ void SidebarSyncService::OnScanned(base::OnceClosure done, ScanResult result) {
    if (merged) {
      ledger_->folder_behind = true;
    }
@@ -2126,7 +2173,34 @@ index c9dfbc7b10115..c1c630174cd85 100644
    // Sf52: a place that cannot be reached is not written to from every read;
    // a failed write follows Sf31.
    if (ledger_->folder_behind && (!bridge_ || result.reachable)) {
-@@ -1297,7 +1388,7 @@ void SidebarSyncService::WriteOwnFile() {
+@@ -1169,6 +1263,14 @@ bool SidebarSyncService::MergePeer(const std::string& install,
+   sidebar_sync::MergeState(merged, parsed.state);
+   merged = sidebar_sync::Canonicalize(
+       merged, sidebar_sync::ResolveAliases(merged.aliases));
++  // Sf15, Sf33 (bug hunt 2026-11-16): two computers' folder moves can close
++  // a cycle no file held alone. It went into this computer's file whole, and
++  // every other computer refused that file.
++  const Stamp cut_stamp{
++      sidebar_sync::NextTime(NowMs(),
++                             std::max(ledger_->hlc, merged.MaxTime())),
++      profile_->GetPrefs()->GetString(stedding::prefs::kSidebarSyncInstallId)};
++  const bool cut = sidebar_sync::BreakFolderCycles(merged, cut_stamp);
+   const Batch batch = sidebar_sync::Diff(ledger_->state, merged);
+   if (merged == ledger_->state) {
+     held_batches_.erase(install);
+@@ -1235,6 +1337,11 @@ bool SidebarSyncService::MergePeer(const std::string& install,
+   }
+   ledger_->state = std::move(merged);
+   ledger_->hlc = std::max(ledger_->hlc, parsed.state.MaxTime());
++  if (cut) {
++    // The cut is this computer's edit, for the other computers to read.
++    ledger_->hlc = std::max(ledger_->hlc, cut_stamp.t);
++    ledger_->folder_behind = true;
++  }
+   ledger_->NoteTombstones(NowMs());
+   return true;
+ }
+@@ -1297,7 +1404,7 @@ void SidebarSyncService::WriteOwnFile() {
    SaveLedger(base::BindOnce(
        &SidebarSyncService::WriteOwnFileOnceNoted, weak_factory_.GetWeakPtr(),
        folder(), sidebar_sync::FileNameFor(meta.install),
@@ -2135,7 +2209,7 @@ index c9dfbc7b10115..c1c630174cd85 100644
  }
  
  void SidebarSyncService::WriteOwnFileOnceNoted(base::FilePath dir,
-@@ -1681,13 +1772,24 @@ void SidebarSyncService::OnJoinScanned(PreviewCallback done, JoinScan scan) {
+@@ -1681,13 +1788,24 @@ void SidebarSyncService::OnJoinScanned(PreviewCallback done, JoinScan scan) {
    preview.Set("here", sidebar_sync::Counts(join->local));
    preview.Set("pairs", std::move(pairs));
    preview.Set("deviceName", DeviceName());
@@ -2161,7 +2235,7 @@ index c9dfbc7b10115..c1c630174cd85 100644
    if (!pending_join_) {
      return false;
    }
-@@ -1702,7 +1804,7 @@ bool SidebarSyncService::ConfirmJoin(bool combine,
+@@ -1702,7 +1820,7 @@ bool SidebarSyncService::ConfirmJoin(bool combine,
    const State local = join->local;
    TakeBackup(local, base::BindOnce(&SidebarSyncService::FinishJoin,
                                     weak_factory_.GetWeakPtr(), std::move(join),
@@ -2170,7 +2244,7 @@ index c9dfbc7b10115..c1c630174cd85 100644
    return true;
  }
  
-@@ -1710,6 +1812,7 @@ void SidebarSyncService::FinishJoin(std::unique_ptr<PendingJoin> join,
+@@ -1710,6 +1828,7 @@ void SidebarSyncService::FinishJoin(std::unique_ptr<PendingJoin> join,
                                      bool combine,
                                      std::string device_name,
                                      std::vector<size_t> accepted,
@@ -2178,7 +2252,7 @@ index c9dfbc7b10115..c1c630174cd85 100644
                                      bool backed_up) {
    if (!backed_up) {
      // Nothing is changed without its backup: sync stays off, and Settings
-@@ -1769,9 +1872,21 @@ void SidebarSyncService::FinishJoin(std::unique_ptr<PendingJoin> join,
+@@ -1769,9 +1888,21 @@ void SidebarSyncService::FinishJoin(std::unique_ptr<PendingJoin> join,
      ledger.seq = own.meta.seq;
      ledger.NoteWrite(sidebar_sync::WriteRecord{own.meta.nonce, own.meta.seq,
                                                 own.meta.written_ms});
@@ -2200,11 +2274,16 @@ index c9dfbc7b10115..c1c630174cd85 100644
      sidebar_sync::PeerStat stat;
      stat.device = peer.meta.device;
      stat.seq = peer.meta.seq;
-@@ -1780,7 +1895,13 @@ void SidebarSyncService::FinishJoin(std::unique_ptr<PendingJoin> join,
+@@ -1780,7 +1911,18 @@ void SidebarSyncService::FinishJoin(std::unique_ptr<PendingJoin> join,
    }
    ledger.state = sidebar_sync::Canonicalize(
        ledger.state, sidebar_sync::ResolveAliases(ledger.state.aliases));
 -  ledger.hlc = std::max<int64_t>(0, ledger.state.MaxTime());
++  // Sf15, Sf33: a folder cycle the files make together is cut at the join.
++  sidebar_sync::BreakFolderCycles(
++      ledger.state,
++      Stamp{sidebar_sync::NextTime(NowMs(), ledger.state.MaxTime()),
++            prefs->GetString(stedding::prefs::kSidebarSyncInstallId)});
 +  sidebar_sync::CanonicalizeSettings(
 +      ledger.settings, sidebar_sync::ResolveAliases(ledger.state.aliases));
 +  // Sf69: a join reads every file whole.
@@ -2215,7 +2294,7 @@ index c9dfbc7b10115..c1c630174cd85 100644
    const std::map<std::string, std::string> resolved =
        sidebar_sync::ResolveAliases(ledger.state.aliases);
    std::set<std::string> present;
-@@ -1808,12 +1929,23 @@ void SidebarSyncService::FinishJoin(std::unique_ptr<PendingJoin> join,
+@@ -1808,12 +1950,23 @@ void SidebarSyncService::FinishJoin(std::unique_ptr<PendingJoin> join,
      prefs->SetString(stedding::prefs::kSidebarSyncPlaceSignIn, place->sealed);
      bridge_ = std::move(place->bridge);
    }
@@ -2239,7 +2318,7 @@ index c9dfbc7b10115..c1c630174cd85 100644
    WriteOwnFile();
    SaveLedger();
    NotifyObservers();
-@@ -2145,6 +2277,9 @@ void SidebarSyncService::Stop(bool remove_own_file) {
+@@ -2145,6 +2298,9 @@ void SidebarSyncService::Stop(bool remove_own_file) {
    profile_->GetPrefs()->ClearPref(stedding::prefs::kSidebarSyncFolder);
    profile_->GetPrefs()->ClearPref(stedding::prefs::kSidebarSyncPlace);
    profile_->GetPrefs()->ClearPref(stedding::prefs::kSidebarSyncPlaceSignIn);
@@ -2249,7 +2328,7 @@ index c9dfbc7b10115..c1c630174cd85 100644
    profile_->GetPrefs()->CommitPendingWrite();
    StopObserving();
    ledger_runner_->PostTask(FROM_HERE, base::BindOnce(&sidebar_sync::DeleteLedger,
-@@ -2612,6 +2747,41 @@ base::DictValue SidebarSyncService::GetStatus() {
+@@ -2612,6 +2768,41 @@ base::DictValue SidebarSyncService::GetStatus() {
    }
    status.Set("backups", std::move(backups));
    status.Set("deferred", static_cast<int>(deferred_));
@@ -2291,7 +2370,7 @@ index c9dfbc7b10115..c1c630174cd85 100644
    return status;
  }
  
-@@ -2619,6 +2789,600 @@ void SidebarSyncService::CommitForTesting() {
+@@ -2619,6 +2810,600 @@ void SidebarSyncService::CommitForTesting() {
    Commit();
  }
  
@@ -3501,11 +3580,205 @@ index 0000000000000..a47e9d53a39cd
 +}
 +
 +}  // namespace spaces::sidebar_sync
+diff --git a/chrome/browser/ui/spaces/sidebar_sync_state.cc b/chrome/browser/ui/spaces/sidebar_sync_state.cc
+index 653c520f2bbc4..af1fdf1b49f7a 100644
+--- a/chrome/browser/ui/spaces/sidebar_sync_state.cc
++++ b/chrome/browser/ui/spaces/sidebar_sync_state.cc
+@@ -865,6 +865,87 @@ bool PruneTombstones(State& state,
+   return state.records.size() != before;
+ }
+ 
++bool BreakFolderCycles(State& state, const Stamp& stamp) {
++  bool changed = false;
++  for (const auto& [id, record] : state.records) {
++    if (record.kind != Kind::kFolder) {
++      continue;
++    }
++    // Up from `id`, folder by folder; a folder met again closes a cycle.
++    // Cut, the walk starts again, for a folder may lead into another one.
++    for (;;) {
++      std::vector<std::string> path;
++      std::optional<size_t> cycle;
++      std::string at = id;
++      for (;;) {
++        const auto it = state.records.find(at);
++        if (it == state.records.end() || it->second.kind != Kind::kFolder) {
++          break;
++        }
++        if (const auto seen = std::ranges::find(path, at);
++            seen != path.end()) {
++          cycle = static_cast<size_t>(seen - path.begin());
++          break;
++        }
++        path.push_back(at);
++        at = it->second.Get(kFieldParent);
++      }
++      if (!cycle) {
++        break;
++      }
++      // The folder whose place was written first; on the same stamp, the
++      // larger id, so every computer picks the same one.
++      std::string first;
++      Stamp first_stamp;
++      for (size_t i = *cycle; i < path.size(); ++i) {
++        const Record& folder = state.records.at(path[i]);
++        const auto parent = folder.f.find(kFieldParent);
++        const Stamp placed =
++            parent == folder.f.end() ? Stamp() : parent->second.s;
++        if (first.empty() || placed < first_stamp ||
++            (placed == first_stamp && first < path[i])) {
++          first = path[i];
++          first_stamp = placed;
++        }
++      }
++      std::string space;
++      if (const auto it = state.lists.find(kSpacesList);
++          it != state.lists.end()) {
++        for (const std::string& each : it->second.order) {
++          const Record* const record_of = state.FindAlive(each);
++          if (record_of && record_of->kind == Kind::kSpace) {
++            space = each;
++            break;
++          }
++        }
++      }
++      if (space.empty()) {
++        for (const auto& [each, record_of] : state.records) {
++          if (record_of.kind == Kind::kSpace && record_of.Alive()) {
++            space = each;
++            break;
++          }
++        }
++      }
++      Record& moved = state.records.at(first);
++      if (space.empty()) {
++        // No Space to go to: in no container, as nothing in a cycle was.
++        moved.f[kFieldParent] = Field{std::string(), stamp};
++      } else {
++        const std::string pins = PinsListOf(space);
++        moved.f[kFieldParent] = Field{pins, stamp};
++        List& run = state.lists[pins];
++        if (std::ranges::find(run.order, first) == run.order.end()) {
++          run.order.push_back(first);
++        }
++        run.s = std::max(run.s, stamp);
++      }
++      changed = true;
++    }
++  }
++  return changed;
++}
++
+ bool MoveEssentialsPastTheCap(State& state, const Stamp& stamp) {
+   const std::vector<std::string> row = state.ChildrenOf(kEssentialsList);
+   if (row.size() <= kEssentialsCap) {
+diff --git a/chrome/browser/ui/spaces/sidebar_sync_state.h b/chrome/browser/ui/spaces/sidebar_sync_state.h
+index 9f54321175261..0e5cbefc9cb93 100644
+--- a/chrome/browser/ui/spaces/sidebar_sync_state.h
++++ b/chrome/browser/ui/spaces/sidebar_sync_state.h
+@@ -290,6 +290,16 @@ bool PruneTombstones(State& state,
+ // Space's pinned run, stamped `stamp`. True when something moved.
+ bool MoveEssentialsPastTheCap(State& state, const Stamp& stamp);
+ 
++// Sf15, Sf33 (bug hunt 2026-11-16): two computers' folder moves, each fine in
++// its own file, can make a folder its own ancestor once merged: X into Y on
++// one, Y into X on the other. No file may hold that (Sf33): every other
++// computer refused this one's whole file, and nothing in such a cycle reached
++// a Space. In each cycle the folder placed first gives way to the move made
++// after it: it goes, with what it holds, to the end of the first Space's
++// pinned run, stamped `stamp`. Every computer cuts a cycle at the same
++// folder. True when something moved.
++bool BreakFolderCycles(State& state, const Stamp& stamp);
++
+ // The block written into the file and the ledger: records, lists, aliases.
+ base::DictValue StateToValue(const State& state);
+ // Nullopt for a block that is not well formed (Sf33).
 diff --git a/chrome/browser/ui/spaces/sidebar_sync_unittest.cc b/chrome/browser/ui/spaces/sidebar_sync_unittest.cc
-index 19f50a6faf2f1..b221eac510e4c 100644
+index 19f50a6faf2f1..c955ef82a6e44 100644
 --- a/chrome/browser/ui/spaces/sidebar_sync_unittest.cc
 +++ b/chrome/browser/ui/spaces/sidebar_sync_unittest.cc
-@@ -909,6 +909,55 @@ TEST(SidebarSyncFileTest, NoSecretTravels) {
+@@ -5,6 +5,7 @@
+ // docs/features/sidebar-file.md Sf10-Sf41: the folder sync's merge, its
+ // files and its ledger, without a browser.
+ 
++#include <algorithm>
+ #include <map>
+ #include <optional>
+ #include <set>
+@@ -800,6 +801,72 @@ TEST(SidebarSyncFileTest, ACycleIsRefused) {
+             ParseSyncFile(SerializeSyncFile(state, Meta(kOffice))).status);
+ }
+ 
++// Sf15, Sf33 (bug hunt 2026-11-16): Reading into Later on one computer, Later
++// into Reading on the other, each fine in its own file, made a cycle once
++// merged. This computer's file then held it, and every other computer refused
++// the file whole; nothing in the cycle reached a Space. The folder placed
++// first gives way to the move made after it, alike on both computers.
++TEST(SidebarSyncFileTest, ACycleTwoComputersMakeIsCutAlike) {
++  const std::string later = "folder:CCCCCCCCCCCCCCCCDDDDDDDDDDDDDDDD";
++  LocalView base = WorkView();
++  LocalItem reading;
++  reading.kind = Kind::kFolder;
++  reading.fields[kFieldTitle] = "Reading";
++  reading.fields[kFieldParent] = PinsListOf(kWork);
++  base.items[kFolder] = reading;
++  LocalItem waiting = reading;
++  waiting.fields[kFieldTitle] = "Later";
++  base.items[later] = waiting;
++  base.lists[PinsListOf(kWork)] = {kPinA, kPinB, kFolder, later};
++  const State start = StateOf(base, 100, kOffice);
++
++  LocalView into_later = base;
++  into_later.items[kFolder].fields[kFieldParent] = later;
++  into_later.lists[PinsListOf(kWork)] = {kPinA, kPinB, later};
++  into_later.lists[later] = {kFolder};
++  State office = start;
++  ASSERT_TRUE(
++      RecordLocalEdits(office, &base, into_later, {}, Stamp{200, kOffice}));
++  LocalView into_reading = base;
++  into_reading.items[later].fields[kFieldParent] = kFolder;
++  into_reading.lists[PinsListOf(kWork)] = {kPinA, kPinB, kFolder};
++  into_reading.lists[kFolder] = {later};
++  State laptop = start;
++  ASSERT_TRUE(
++      RecordLocalEdits(laptop, &base, into_reading, {}, Stamp{300, kLaptop}));
++  ASSERT_EQ(ParseStatus::kOk,
++            ParseSyncFile(SerializeSyncFile(office, Meta(kOffice))).status);
++  ASSERT_EQ(ParseStatus::kOk,
++            ParseSyncFile(SerializeSyncFile(laptop, Meta(kLaptop))).status);
++
++  State on_office = office;
++  MergeState(on_office, laptop);
++  EXPECT_TRUE(BreakFolderCycles(on_office, Stamp{400, kOffice}));
++  State on_laptop = laptop;
++  MergeState(on_laptop, office);
++  EXPECT_TRUE(BreakFolderCycles(on_laptop, Stamp{410, kLaptop}));
++  for (const State* state : {&on_office, &on_laptop}) {
++    EXPECT_EQ(ParseStatus::kOk,
++              ParseSyncFile(SerializeSyncFile(*state, Meta(kOffice))).status)
++        << "the merged sidebar is a file no computer reads";
++    EXPECT_EQ(kFolder, state->records.at(later).Get(kFieldParent))
++        << "the later move, Later into Reading, stands";
++    EXPECT_EQ(PinsListOf(kWork), state->records.at(kFolder).Get(kFieldParent));
++    EXPECT_EQ((std::vector<std::string>{kPinA, kPinB, kFolder}),
++              state->ChildrenOf(PinsListOf(kWork)));
++    EXPECT_EQ((std::vector<std::string>{later}), state->ChildrenOf(kFolder));
++  }
++
++  // Each reads the other's file and they settle on one sidebar, with no
++  // cycle left to cut.
++  State settled_office = on_office;
++  MergeState(settled_office, on_laptop);
++  State settled_laptop = on_laptop;
++  MergeState(settled_laptop, on_office);
++  EXPECT_EQ(settled_office.records, settled_laptop.records);
++  EXPECT_FALSE(BreakFolderCycles(settled_office, Stamp{500, kOffice}));
++}
++
+ TEST(SidebarSyncFileTest, AJavascriptHomeIsDropped) {
+   State state = StateOf(WorkView(), 100, kOffice);
+   state.records[kPinA].f[kFieldHome] =
+@@ -909,6 +976,55 @@ TEST(SidebarSyncFileTest, NoSecretTravels) {
    }
    EXPECT_EQ(std::string::npos, json.find("profile_id"));
    EXPECT_EQ(std::string::npos, json.find("partition"));
@@ -3561,6 +3834,38 @@ index 19f50a6faf2f1..b221eac510e4c 100644
  }
  
  // Sf9: the default name says what the computer is, never its own name.
+@@ -1055,6 +1171,31 @@ TEST(SidebarSyncLedgerTest, TheRotationKeepsTheNewerOfTwoBackupsInOneSecond) {
+   EXPECT_FALSE(base::PathExists(older));
+ }
+ 
++// Sf35 (bug hunt 2026-11-16): the backup just written is kept, whatever the
++// others' names say. Five made while the wall clock ran ahead sorted first,
++// so the rotation deleted each new one at once, and its path still came back
++// as written.
++TEST(SidebarSyncLedgerTest, TheBackupJustWrittenIsKept) {
++  base::ScopedTempDir profile;
++  ASSERT_TRUE(profile.CreateUniqueTempDir());
++  const base::Time now = base::Time::UnixEpoch() + base::Days(20000);
++  for (int i = 0; i < static_cast<int>(kBackupsKept); ++i) {
++    ASSERT_FALSE(WriteBackup(profile.GetPath(), "{}",
++                             now + base::Days(365) + base::Minutes(i))
++                     .empty());
++  }
++  for (int i = 0; i < 2; ++i) {
++    const base::FilePath path =
++        WriteBackup(profile.GetPath(), "{\"made\":\"now\"}",
++                    now + base::Minutes(i));
++    ASSERT_FALSE(path.empty());
++    EXPECT_TRUE(base::PathExists(path)) << "the backup just written is gone";
++    const std::vector<base::FilePath> backups = ListBackups(profile.GetPath());
++    EXPECT_EQ(kBackupsKept, backups.size());
++    EXPECT_TRUE(std::ranges::contains(backups, path));
++  }
++}
++
+ TEST(SidebarSyncLedgerTest, BackupNamesMatchNoSidebarPattern) {
+   base::ScopedTempDir profile;
+   ASSERT_TRUE(profile.CreateUniqueTempDir());
 diff --git a/chrome/browser/ui/stedding/BUILD.gn b/chrome/browser/ui/stedding/BUILD.gn
 index ef7f37e8b712d..6f2671ed2ea5a 100644
 --- a/chrome/browser/ui/stedding/BUILD.gn

@@ -45,7 +45,7 @@ Removable when: never; Stedding's own Spaces.
  .../browser/ui/spaces/isolation_mark_mac.mm   |  45 +++
  chrome/browser/ui/spaces/space_registry.cc    |   9 +
  chrome/browser/ui/spaces/space_registry.h     |   3 +
- .../ui/spaces/space_storage_partition.cc      | 103 ++++++-
+ .../ui/spaces/space_storage_partition.cc      | 149 ++++++++-
  .../ui/spaces/space_storage_partition.h       |  37 ++-
  .../space_storage_partition_unittest.cc       | 152 +++++++++-
  chrome/browser/ui/stedding/find_words.cc      |   5 +-
@@ -86,8 +86,8 @@ Removable when: never; Stedding's own Spaces.
  .../stedding/session_menus_mac_browsertest.mm | 204 +++++++++++++
  .../stedding/shared_session_browsertest.cc    |   2 +-
  .../stedding/sidebar_click_browsertest.cc     |  82 ++++-
- chrome/test/stedding/space_jar_browsertest.cc | 152 ++++++++--
- 59 files changed, 2014 insertions(+), 413 deletions(-)
+ chrome/test/stedding/space_jar_browsertest.cc | 185 +++++++++--
+ 59 files changed, 2090 insertions(+), 416 deletions(-)
  create mode 100644 chrome/browser/ui/spaces/isolation_mark_mac.mm
  create mode 100644 chrome/test/stedding/session_menus_mac_browsertest.mm
 
@@ -847,7 +847,7 @@ index 9d7673b8f4976..1437f6aa4ce7b 100644
    // list (S37), and returns its id. No Space is in it yet.
    std::string AddSession(std::string_view name);
 diff --git a/chrome/browser/ui/spaces/space_storage_partition.cc b/chrome/browser/ui/spaces/space_storage_partition.cc
-index a25472aed4785..4d67f8f5e8dad 100644
+index a25472aed4785..86f314c714673 100644
 --- a/chrome/browser/ui/spaces/space_storage_partition.cc
 +++ b/chrome/browser/ui/spaces/space_storage_partition.cc
 @@ -5,11 +5,13 @@
@@ -864,7 +864,27 @@ index a25472aed4785..4d67f8f5e8dad 100644
  #include "base/memory/weak_ptr.h"
  #include "base/strings/utf_string_conversions.h"
  #include "base/task/single_thread_task_runner.h"
-@@ -434,36 +436,113 @@ bool MoveFreshTabToSpaceJar(TabStripModel* tabs,
+@@ -17,6 +19,7 @@
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/tab_contents/tab_util.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+ #include "chrome/browser/ui/spaces/isolation_mark.h"
+ #include "chrome/browser/ui/spaces/space_model.h"
+ #include "chrome/browser/ui/spaces/space_registry.h"
+@@ -28,9 +31,11 @@
+ #include "components/sessions/content/content_serialized_navigation_builder.h"
+ #include "components/sessions/core/serialized_navigation_entry.h"
+ #include "components/tabs/public/tab_interface.h"
++#include "content/public/browser/back_forward_cache.h"
+ #include "content/public/browser/browser_context.h"
+ #include "content/public/browser/navigation_controller.h"
+ #include "content/public/browser/navigation_entry.h"
++#include "content/public/browser/render_frame_host.h"
+ #include "content/public/browser/restore_type.h"
+ #include "content/public/browser/visibility.h"
+ #include "content/public/browser/security_principal.h"
+@@ -434,36 +439,113 @@ bool MoveFreshTabToSpaceJar(TabStripModel* tabs,
    return true;
  }
  
@@ -990,6 +1010,70 @@ index a25472aed4785..4d67f8f5e8dad 100644
  }
  
  namespace {
+@@ -512,6 +594,32 @@ void ClearHttpCacheOf(base::WeakPtr<Profile> profile,
+                      /*cleared=*/true));
+ }
+ 
++// sessions S13, S17 (bug hunt 2026-11-16): the pages the tabs of every window
++// keep for Back and Forward in `partition` are dropped. They are the session
++// too: Clear Session Data went through StoragePartition::ClearData, which
++// leaves them, and Back then showed a page signed in, live, whose script could
++// write the session back into the jar just cleared. Chromium's own clear
++// (BrowsingDataRemover) drops them the same way.
++void DropPagesKeptForBack(content::BrowserContext* browser_context,
++                          content::StoragePartition* partition) {
++  if (!browser_context || !partition) {
++    return;
++  }
++  ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
++      [&](BrowserWindowInterface* window) {
++        TabStripModel* const tabs = window->GetTabStripModel();
++        for (int i = 0; tabs && i < tabs->count(); ++i) {
++          content::WebContents* const contents = tabs->GetWebContentsAt(i);
++          if (contents && contents->GetBrowserContext() == browser_context &&
++              contents->GetPrimaryMainFrame()->GetStoragePartition() ==
++                  partition) {
++            contents->GetController().GetBackForwardCache().Flush();
++          }
++        }
++        return true;
++      });
++}
++
+ }  // namespace
+ 
+ int SpacePartitionWipesBegunForTesting() {
+@@ -549,16 +657,27 @@ bool WipeIsolatedSpacePartition(content::BrowserContext* browser_context,
+     done = base::DoNothing();
+   }
+   ++g_wipes_begun;
++  DropPagesKeptForBack(browser_context, partition);
+   // `done` runs once both clears have finished (PLAN.md SPC-24), with
+   // whether both did: a deleted Space's jar whose HTTP cache was not cleared
+-  // stays on the pending list (BACKLOG S-345).
++  // stays on the pending list (BACKLOG S-345). A page left while the jar was
++  // being cleared was kept for Back with what it held before; it goes too.
+   const base::RepeatingCallback<void(bool)> both = base::BarrierCallback<bool>(
+       2, base::BindOnce(
+-             [](base::OnceCallback<void(bool)> done, std::vector<bool> each) {
++             [](base::WeakPtr<Profile> profile,
++                const content::StoragePartitionConfig& config,
++                base::OnceCallback<void(bool)> done, std::vector<bool> each) {
++               if (profile) {
++                 DropPagesKeptForBack(
++                     profile.get(),
++                     profile->GetStoragePartition(config,
++                                                  /*can_create=*/false));
++               }
+                std::move(done).Run(
+                    std::ranges::all_of(each, [](bool ok) { return ok; }));
+              },
+-             std::move(done)));
++             Profile::FromBrowserContext(browser_context)->GetWeakPtr(),
++             *config, std::move(done)));
+   // The HTTP cache is not site data to ClearData, and a page fetched while
+   // signed in is the session too.
+   ClearHttpCacheOf(Profile::FromBrowserContext(browser_context)->GetWeakPtr(),
 diff --git a/chrome/browser/ui/spaces/space_storage_partition.h b/chrome/browser/ui/spaces/space_storage_partition.h
 index d5ccabf2fefaf..308641c7c8618 100644
 --- a/chrome/browser/ui/spaces/space_storage_partition.h
@@ -1573,7 +1657,7 @@ index ab730dcd27f48..062589b3933c3 100644
   private:
    ui::ScopedUnownedUserData<TabMenuModelDelegate> scoped_unowned_user_data_;
 diff --git a/chrome/browser/ui/views/commandbar/command_bar_view.cc b/chrome/browser/ui/views/commandbar/command_bar_view.cc
-index 4b943d84565f5..9bd93dbbef5f0 100644
+index 2f5e13a979a19..98988f94d74bb 100644
 --- a/chrome/browser/ui/views/commandbar/command_bar_view.cc
 +++ b/chrome/browser/ui/views/commandbar/command_bar_view.cc
 @@ -53,6 +53,7 @@
@@ -1584,7 +1668,7 @@ index 4b943d84565f5..9bd93dbbef5f0 100644
  #include "chrome/browser/ui/views/spaces/space_dialogs.h"
  #include "chrome/browser/ui/spaces/space_query.h"
  #include "chrome/browser/ui/stedding/app_updater.h"
-@@ -543,16 +544,19 @@ class CommandBarView::ResultRow : public views::LabelButton {
+@@ -551,16 +552,19 @@ class CommandBarView::ResultRow : public views::LabelButton {
    }
  
    // sessions S32: the mark after the text of a row that names a Space with
@@ -1609,7 +1693,7 @@ index 4b943d84565f5..9bd93dbbef5f0 100644
      SetTooltipText(mark);
      GetViewAccessibility().SetDescription(mark);
    }
-@@ -884,6 +888,8 @@ void CommandBarView::BuildActions() {
+@@ -897,6 +901,8 @@ void CommandBarView::BuildActions() {
          // sessions S32: the tab would reload in that Space's own session.
          actions_.back().mark =
              spaces::IsolationMarkForSpace(spaces->registry(), id);
@@ -1618,7 +1702,7 @@ index 4b943d84565f5..9bd93dbbef5f0 100644
        }
        command(IDC_STEDDING_TOGGLE_SPACE_PIN, spaces->IsSpacePinned(active)
                                                   ? u"Unpin from This Space"
-@@ -1210,24 +1216,24 @@ void CommandBarView::BuildActions() {
+@@ -1223,24 +1229,24 @@ void CommandBarView::BuildActions() {
                     model->AddSpace(std::string(), choice.color)->id());
               },
               base::Unretained(spaces))});
@@ -1653,7 +1737,7 @@ index 4b943d84565f5..9bd93dbbef5f0 100644
      }
      actions_.push_back(
          {spaces->in_focus() ? u"Leave Focus" : u"Focus This Space",
-@@ -1650,7 +1656,8 @@ void CommandBarView::AddActionRows() {
+@@ -1663,7 +1669,8 @@ void CommandBarView::AddActionRows() {
                         .title = actions_[i].title,
                         .detail = actions_[i].chord,
                         .action = i,
@@ -1663,7 +1747,7 @@ index 4b943d84565f5..9bd93dbbef5f0 100644
      }
    }
    // T39: with no extension action to list, the chord's bar offers Manage
-@@ -1705,7 +1712,8 @@ void CommandBarView::Run(const Action& action) {
+@@ -1718,7 +1725,8 @@ void CommandBarView::Run(const Action& action) {
                          .title = actions_[i].title,
                          .detail = actions_[i].chord,
                          .action = i,
@@ -1673,7 +1757,7 @@ index 4b943d84565f5..9bd93dbbef5f0 100644
            break;
          }
        }
-@@ -2090,16 +2098,21 @@ void CommandBarView::UpdateResults(const std::u16string& query,
+@@ -2103,16 +2111,21 @@ void CommandBarView::UpdateResults(const std::u16string& query,
        // sessions S32: a Space named here is marked when it has an
        // Independent session.
        std::u16string mark;
@@ -1696,7 +1780,7 @@ index 4b943d84565f5..9bd93dbbef5f0 100644
        ++tab_rows;
      }
    }
-@@ -2166,6 +2179,10 @@ void CommandBarView::UpdateResults(const std::u16string& query,
+@@ -2179,6 +2192,10 @@ void CommandBarView::UpdateResults(const std::u16string& query,
        std::u16string mark =
            spaces ? stedding::IsolationMarkForArchivedTab(*spaces, tab)
                   : std::u16string();
@@ -1707,7 +1791,7 @@ index 4b943d84565f5..9bd93dbbef5f0 100644
        rows_.push_back(
            {.kind = RowKind::kArchived,
             .title = tab.title,
-@@ -2174,6 +2191,7 @@ void CommandBarView::UpdateResults(const std::u16string& query,
+@@ -2187,6 +2204,7 @@ void CommandBarView::UpdateResults(const std::u16string& query,
                           : u"Archived · " + base::UTF8ToUTF16(tab.space_name),
             .archived_id = tab.id,
             .mark = std::move(mark),
@@ -1715,7 +1799,7 @@ index 4b943d84565f5..9bd93dbbef5f0 100644
             .icon_page = tab.url});
        ++archived_rows;
      }
-@@ -2566,7 +2584,7 @@ void CommandBarView::RebuildRows() {
+@@ -2583,7 +2601,7 @@ void CommandBarView::RebuildRows() {
      if (!row.mark.empty()) {
        // The mark goes after the words that name its Space: the detail of a
        // tab or a closed tab, the title of a Move Tab row.
@@ -1725,10 +1809,10 @@ index 4b943d84565f5..9bd93dbbef5f0 100644
                                   row.kind == RowKind::kArchived);
      }
 diff --git a/chrome/browser/ui/views/commandbar/command_bar_view.h b/chrome/browser/ui/views/commandbar/command_bar_view.h
-index a97ee0e866fc1..1ec8a743990c8 100644
+index 5fc408e826aff..281e32e34d98b 100644
 --- a/chrome/browser/ui/views/commandbar/command_bar_view.h
 +++ b/chrome/browser/ui/views/commandbar/command_bar_view.h
-@@ -274,6 +274,9 @@ class CommandBarView : public views::View,
+@@ -282,6 +282,9 @@ class CommandBarView : public views::View,
      // draws the mark after its text and says this as its tooltip and its
      // accessible description. Empty for every other row.
      std::u16string mark;
@@ -1738,7 +1822,7 @@ index a97ee0e866fc1..1ec8a743990c8 100644
      // kTyped, as "keyword query" for an extension's omnibox keyword (K18,
      // BACKLOG S-352): the extension, and the query handed to it.
      std::string extension_id;
-@@ -306,8 +309,9 @@ class CommandBarView : public views::View,
+@@ -314,8 +317,9 @@ class CommandBarView : public views::View,
      // preference), so the row is found again once the state has changed.
      std::u16string key;
      // sessions S32: the row's mark (Row::mark), for a row that moves the tab
@@ -1750,10 +1834,10 @@ index a97ee0e866fc1..1ec8a743990c8 100644
      // row whose title names it by another word ("Add to Dock…" answers
      // "app" and "install"), each only from its start. Empty for most rows.
 diff --git a/chrome/browser/ui/views/commandbar/command_bar_view_unittest.cc b/chrome/browser/ui/views/commandbar/command_bar_view_unittest.cc
-index 6b6bc09661e74..fbd93adfe1a7d 100644
+index 1b7345e2b1f3d..b911df32a6d3b 100644
 --- a/chrome/browser/ui/views/commandbar/command_bar_view_unittest.cc
 +++ b/chrome/browser/ui/views/commandbar/command_bar_view_unittest.cc
-@@ -642,7 +642,9 @@ TEST_F(CommandBarViewTest, ActionRowsListSpacesAndCaptures) {
+@@ -654,7 +654,9 @@ TEST_F(CommandBarViewTest, ActionRowsListSpacesAndCaptures) {
    EXPECT_TRUE(HasTitle(*bar, u"Capture the Full Document"));
    EXPECT_TRUE(HasTitle(*bar, u"Collapse or Expand the Sidebar"));
    EXPECT_TRUE(HasTitle(*bar, u"New Space"));
@@ -1764,7 +1848,7 @@ index 6b6bc09661e74..fbd93adfe1a7d 100644
    EXPECT_TRUE(HasTitle(*bar, u"Short context menus: On"));
    EXPECT_TRUE(HasTitle(*bar, u"Link address on hover: On"));
    std::ignore = work;
-@@ -664,7 +666,8 @@ TEST_F(CommandBarViewTest, ARowNamingAnIndependentSessionCarriesItsMark) {
+@@ -676,7 +678,8 @@ TEST_F(CommandBarViewTest, ARowNamingAnIndependentSessionCarriesItsMark) {
      const size_t to_work = RowIndex(*bar, u"Move Tab to Work");
      ASSERT_LT(to_work, bar->row_count_for_testing());
      const std::u16string mark = bar->row_mark_for_testing(to_work);
@@ -1774,7 +1858,7 @@ index 6b6bc09661e74..fbd93adfe1a7d 100644
      views::View* const row = bar->row_view_for_testing(to_work);
      ASSERT_TRUE(row);
      EXPECT_EQ(mark, row->GetTooltipText());
-@@ -2900,9 +2903,11 @@ TEST_F(CommandBarViewTest, ArcsWordsFindAPlaceInSettings) {
+@@ -2948,9 +2951,11 @@ TEST_F(CommandBarViewTest, ArcsWordsFindAPlaceInSettings) {
      bar->ContentsChanged(bar->field_for_testing(), words);
      EXPECT_TRUE(HasTitle(*bar, u"Sites Routed to Spaces")) << words;
    }
@@ -3962,7 +4046,7 @@ index 6452411526d93..00c9f99d2bf12 100644
  // cannot see. Rows are chosen as a person chooses them -- a click, then a
  // click with the platform's add-to-selection key -- and a folder collapses at
 diff --git a/chrome/test/stedding/space_jar_browsertest.cc b/chrome/test/stedding/space_jar_browsertest.cc
-index ba6f9d23d9637..5cbde6e625d07 100644
+index ba6f9d23d9637..d96e654435f48 100644
 --- a/chrome/test/stedding/space_jar_browsertest.cc
 +++ b/chrome/test/stedding/space_jar_browsertest.cc
 @@ -13,6 +13,7 @@
@@ -3990,7 +4074,7 @@ index ba6f9d23d9637..5cbde6e625d07 100644
  #include "ui/views/controls/label.h"
  #include "ui/views/controls/styled_label.h"
  #include "ui/views/controls/textfield/textfield.h"
-@@ -1735,10 +1739,10 @@ IN_PROC_BROWSER_TEST_F(SpaceJarTest,
+@@ -1735,10 +1739,43 @@ IN_PROC_BROWSER_TEST_F(SpaceJarTest,
        << "the page's address was added to its history";
  }
  
@@ -3998,6 +4082,39 @@ index ba6f9d23d9637..5cbde6e625d07 100644
 -// Session, Delete Space -- run as a click on them runs them, and answered at
 -// the question the window asks first (PLAN.md TST-17, SPC-9, SPC-20), and the
 -// command bar's Independent Session row.
++// sessions S13 (bug hunt 2026-11-16): the pages a tab keeps for Back and
++// Forward are the session too. Clear Session Data kept them, so Back brought
++// back a page signed in, live, whose script could write the session into the
++// jar just cleared. They are dropped, and Back loads the page again.
++IN_PROC_BROWSER_TEST_F(SpaceJarTest, ClearingTheSessionDropsThePagesKeptForBack) {
++  ASSERT_TRUE(model_->SetActiveSpace(work_));
++  ASSERT_EQ(work_tab_.Get(), tabs()->GetActiveTab());
++  content::WebContents* const page = work_tab_.Get()->GetContents();
++  ASSERT_EQ(Url("a.test", "/title1.html"), page->GetLastCommittedURL());
++  content::RenderFrameHostWrapper kept(page->GetPrimaryMainFrame());
++  ASSERT_TRUE(content::NavigateToURL(page, Url("b.test", "/title2.html")));
++  ASSERT_EQ(page, work_tab_.Get()->GetContents()) << "the tab was remade";
++  ASSERT_TRUE(kept.get());
++  ASSERT_TRUE(kept->IsInLifecycleState(
++      content::RenderFrameHost::LifecycleState::kInBackForwardCache))
++      << "the page left was not kept for Back";
++  const int loads = RequestsFor("/title1.html");
++
++  base::test::TestFuture<void> wiped;
++  ASSERT_TRUE(model_->WipeIsolatedSession(work_, wiped.GetCallback()));
++  ASSERT_TRUE(wiped.Wait());
++  EXPECT_TRUE(base::test::RunUntil([&]() { return kept.IsDestroyed(); }))
++      << "the page signed in before the clear is still kept for Back";
++  ASSERT_TRUE(content::WaitForLoadStop(page));
++
++  content::TestNavigationObserver back(page);
++  page->GetController().GoBack();
++  back.Wait();
++  EXPECT_EQ(Url("a.test", "/title1.html"), page->GetLastCommittedURL());
++  EXPECT_EQ(loads + 1, RequestsFor("/title1.html"))
++      << "Back showed the page kept from before the clear";
++}
++
 +// The Space menu's own rows -- the Session submenu, Clear Session Data…,
 +// Delete Space -- run as a click on them runs them, and answered at the
 +// question the window asks first (PLAN.md TST-17, SPC-9, SPC-20), and the
@@ -4005,7 +4122,7 @@ index ba6f9d23d9637..5cbde6e625d07 100644
  class SpaceMenuJarTest : public SpaceJarTest {
   protected:
    void SetUpOnMainThread() override {
-@@ -1765,7 +1769,7 @@ class SpaceMenuJarTest : public SpaceJarTest {
+@@ -1765,7 +1802,7 @@ class SpaceMenuJarTest : public SpaceJarTest {
      return switcher ? switcher->BuildMenuForTesting(space) : nullptr;
    }
  
@@ -4014,7 +4131,7 @@ index ba6f9d23d9637..5cbde6e625d07 100644
                                       const std::u16string& label) {
      for (size_t i = 0; menu && i < menu->GetItemCount(); ++i) {
        if (menu->GetLabelAt(i) == label) {
-@@ -1775,12 +1779,33 @@ class SpaceMenuJarTest : public SpaceJarTest {
+@@ -1775,12 +1812,33 @@ class SpaceMenuJarTest : public SpaceJarTest {
      return std::nullopt;
    }
  
@@ -4053,7 +4170,7 @@ index ba6f9d23d9637..5cbde6e625d07 100644
      EXPECT_TRUE(menu) << "the sidebar has no Space switcher";
      const std::optional<size_t> row = RowOf(menu, label);
      EXPECT_TRUE(row.has_value()) << "the menu has no such row";
-@@ -1874,16 +1899,20 @@ IN_PROC_BROWSER_TEST_F(SpaceMenuJarTest,
+@@ -1874,16 +1932,20 @@ IN_PROC_BROWSER_TEST_F(SpaceMenuJarTest,
      ASSERT_FALSE(spaces::IsSpaceStoragePartition(JarOf(here)));
      ASSERT_FALSE(spaces::IsSpaceStoragePartition(JarOf(there)));
  
@@ -4078,7 +4195,7 @@ index ba6f9d23d9637..5cbde6e625d07 100644
  
      // A jar of its own: not the profile's and not Work's.
      EXPECT_NE(JarOf(here).partition_name(),
-@@ -1917,8 +1946,8 @@ IN_PROC_BROWSER_TEST_F(SpaceMenuJarTest,
+@@ -1917,8 +1979,8 @@ IN_PROC_BROWSER_TEST_F(SpaceMenuJarTest,
      ASSERT_EQ("jar=work", content::EvalJs(page, "document.body.innerText"));
  
      content::TestNavigationObserver reloaded(page);
@@ -4089,7 +4206,7 @@ index ba6f9d23d9637..5cbde6e625d07 100644
      reloaded.Wait();
      EXPECT_EQ("None", content::EvalJs(page, "document.body.innerText"))
          << "Work's tab is still signed in";
-@@ -1939,7 +1968,7 @@ IN_PROC_BROWSER_TEST_F(SpaceMenuJarTest,
+@@ -1939,7 +2001,7 @@ IN_PROC_BROWSER_TEST_F(SpaceMenuJarTest,
      ASSERT_FALSE(CookiesIn(work_jar).empty());
      ASSERT_TRUE(model_->SetActiveSpace(home_));
  
@@ -4098,7 +4215,7 @@ index ba6f9d23d9637..5cbde6e625d07 100644
                RunAndConfirm(work_, u"Delete Space"));
      EXPECT_FALSE(model_->GetSpace(work_)) << "the Space is still there";
      // The wipe is posted behind the tab's move out of the jar; once it has
-@@ -1962,22 +1991,22 @@ IN_PROC_BROWSER_TEST_F(SpaceMenuJarTest,
+@@ -1962,22 +2024,22 @@ IN_PROC_BROWSER_TEST_F(SpaceMenuJarTest,
  
  // sessions S18 (PLAN.md SPC-32, BACKLOG S-164): a Blank Window has no Space
  // registry, so its Spaces have no jars of their own. Its Space menu offers no
@@ -4127,7 +4244,7 @@ index ba6f9d23d9637..5cbde6e625d07 100644
    }
  
    // The window opens inside the command, so the waiter comes first.
-@@ -1995,17 +2024,88 @@ IN_PROC_BROWSER_TEST_F(SpaceMenuJarTest,
+@@ -1995,17 +2057,88 @@ IN_PROC_BROWSER_TEST_F(SpaceMenuJarTest,
          SpaceMenu(blank, blank_model->active_id());
      ASSERT_TRUE(menu) << "the Blank Window's sidebar has no Space switcher";
      EXPECT_TRUE(RowOf(menu, u"Rename Space").has_value());

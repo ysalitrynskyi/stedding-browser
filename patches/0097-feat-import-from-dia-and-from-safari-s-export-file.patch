@@ -35,8 +35,8 @@ I32, I41) and Dia's sidebar (I33) build on this.
  .../browser/resources/stedding_welcome/app.ts |  231 ++++
  chrome/browser/ui/DEPS                        |    5 +
  chrome/browser/ui/spaces/BUILD.gn             |    8 +
- chrome/browser/ui/spaces/arc_data_importer.cc |  173 ++-
- chrome/browser/ui/spaces/arc_data_importer.h  |   40 +-
+ chrome/browser/ui/spaces/arc_data_importer.cc |  263 ++++-
+ chrome/browser/ui/spaces/arc_data_importer.h  |   50 +-
  .../ui/spaces/chromium_family_importer.cc     |  829 +++++++++++++
  .../ui/spaces/chromium_family_importer.h      |  199 ++++
  .../chromium_family_importer_unittest.cc      |  444 +++++++
@@ -54,9 +54,9 @@ I32, I41) and Dia's sidebar (I33) build on this.
  .../stedding_welcome_handler.h                |   47 +-
  chrome/test/DEPS                              |    1 +
  chrome/test/stedding/BUILD.gn                 |   11 +
- .../stedding/safari_dia_import_browsertest.cc |  661 +++++++++++
+ .../stedding/safari_dia_import_browsertest.cc |  716 ++++++++++++
  .../user_data_importer/utility/BUILD.gn       |    3 +
- 24 files changed, 5914 insertions(+), 56 deletions(-)
+ 24 files changed, 6062 insertions(+), 63 deletions(-)
  create mode 100644 chrome/browser/ui/spaces/chromium_family_importer.cc
  create mode 100644 chrome/browser/ui/spaces/chromium_family_importer.h
  create mode 100644 chrome/browser/ui/spaces/chromium_family_importer_unittest.cc
@@ -402,10 +402,28 @@ index a482dbf196f2c..e0e7d6d625086 100644
      "bookmarks_to_pins_unittest.cc",
      "folder_commands_unittest.cc",
 diff --git a/chrome/browser/ui/spaces/arc_data_importer.cc b/chrome/browser/ui/spaces/arc_data_importer.cc
-index 51a51dfc0293a..ed7cc1182eda1 100644
+index 51a51dfc0293a..6191a38cf29ff 100644
 --- a/chrome/browser/ui/spaces/arc_data_importer.cc
 +++ b/chrome/browser/ui/spaces/arc_data_importer.cc
-@@ -29,6 +29,7 @@
+@@ -7,6 +7,8 @@
+ #include <algorithm>
+ #include <array>
+ #include <iterator>
++#include <set>
++#include <tuple>
+ #include <utility>
+ 
+ #include "base/base64.h"
+@@ -19,6 +21,8 @@
+ #include "base/memory/scoped_refptr.h"
+ #include "base/memory/weak_ptr.h"
+ #include "base/path_service.h"
++#include "base/strings/strcat.h"
++#include "base/strings/string_number_conversions.h"
+ #include "base/strings/string_view_util.h"
+ #include "base/strings/utf_string_conversions.h"
+ #include "base/task/thread_pool.h"
+@@ -29,10 +33,12 @@
  #include "chrome/browser/password_manager/factories/profile_password_store_factory.h"
  #include "chrome/browser/profiles/profile.h"
  #include "chrome/browser/ui/spaces/arc_sidebar_importer.h"
@@ -413,7 +431,12 @@ index 51a51dfc0293a..ed7cc1182eda1 100644
  #include "chrome/browser/ui/stedding/stedding_prefs.h"
  #include "components/history/core/browser/history_service.h"
  #include "components/history/core/browser/history_types.h"
-@@ -79,26 +80,17 @@ base::Time FromChromiumMicroseconds(int64_t value) {
+ #include "components/keyed_service/core/service_access_type.h"
++#include "components/password_manager/core/browser/import/csv_password.h"
+ #include "components/password_manager/core/browser/password_store/password_form_converters.h"
+ #include "components/password_manager/core/browser/password_store/password_store_interface.h"
+ #include "components/password_manager/core/browser/password_string.h"
+@@ -79,26 +85,17 @@ base::Time FromChromiumMicroseconds(int64_t value) {
    return base::Time::FromDeltaSinceWindowsEpoch(base::Microseconds(value));
  }
  
@@ -447,7 +470,7 @@ index 51a51dfc0293a..ed7cc1182eda1 100644
  }
  
  struct ReadOutcome {
-@@ -107,6 +99,7 @@ struct ReadOutcome {
+@@ -107,6 +104,7 @@ struct ReadOutcome {
    ~ReadOutcome();
    history::URLRows history;
    std::vector<password_manager::PasswordForm> logins;
@@ -455,7 +478,7 @@ index 51a51dfc0293a..ed7cc1182eda1 100644
    bool keychain_denied = false;
  };
  
-@@ -140,14 +133,17 @@ ReadOutcome ReadOnPool(std::optional<ArcDataPaths> given,
+@@ -140,14 +138,17 @@ ReadOutcome ReadOnPool(std::optional<ArcDataPaths> given,
          out.keychain_denied = true;
        } else {
          out.logins = ReadArcLogins(logins, *key, /*cap=*/10000,
@@ -475,7 +498,7 @@ index 51a51dfc0293a..ed7cc1182eda1 100644
        }
  #endif
      }
-@@ -160,6 +156,7 @@ void WriteOnUi(base::WeakPtr<Profile> profile,
+@@ -160,6 +161,7 @@ void WriteOnUi(base::WeakPtr<Profile> profile,
                 ReadOutcome read) {
    ArcDataResult result;
    result.keychain_denied = read.keychain_denied;
@@ -483,7 +506,7 @@ index 51a51dfc0293a..ed7cc1182eda1 100644
    if (!profile) {
      std::move(done).Run(result);
      return;
-@@ -168,17 +165,24 @@ void WriteOnUi(base::WeakPtr<Profile> profile,
+@@ -168,34 +170,134 @@ void WriteOnUi(base::WeakPtr<Profile> profile,
      if (history::HistoryService* const service =
              HistoryServiceFactory::GetForProfile(
                  profile.get(), ServiceAccessType::EXPLICIT_ACCESS)) {
@@ -518,10 +541,99 @@ index 51a51dfc0293a..ed7cc1182eda1 100644
        }
      }
    }
-@@ -197,6 +201,28 @@ void WriteOnUi(base::WeakPtr<Profile> profile,
+   if (!read.logins.empty()) {
+-    if (scoped_refptr<password_manager::PasswordStoreInterface> store =
+-            ProfilePasswordStoreFactory::GetForProfile(
+-                profile.get(), ServiceAccessType::EXPLICIT_ACCESS)) {
+-      for (password_manager::PasswordForm& form : read.logins) {
++    WriteArcLogins(*profile, std::move(read.logins),
++                   base::BindOnce(
++                       [](ArcDataResult result, ArcDataDoneCallback done,
++                          size_t written) {
++                         result.passwords = written;
++                         std::move(done).Run(result);
++                       },
++                       result, std::move(done)));
++    return;
++  }
++  std::move(done).Run(result);
++}
++
++// import I39: the Arc logins being written, held with the profile's other
++// imports, so the write outlives the page that asked for it and goes with
++// the profile.
++class ArcLoginsJob : public stedding::ImportJob {
++ public:
++  explicit ArcLoginsJob(Profile& profile) : writer_(profile) {}
++  stedding::ImportedPasswordsWriter& writer() { return writer_; }
++
++ private:
++  stedding::ImportedPasswordsWriter writer_;
++};
++
++// Each write of Arc's logins is a job of its own: two imports at once each
++// write theirs, as they did.
++int g_arc_login_writes = 0;
++
++}  // namespace
++
++void WriteArcLogins(Profile& profile,
++                    std::vector<password_manager::PasswordForm> logins,
++                    base::OnceCallback<void(size_t)> done) {
++  // import I23, I39 (bug hunt 2026-11-16): each login went in with
++  // AddLogin, which replaces a saved login for the same form, so an import
++  // put Arc's older password over one changed here since. They go through
++  // the writer the other browsers' logins go through, which keeps the saved
++  // one. A blocked site holds no login: it is added as it was, and counted
++  // as none.
++  std::vector<password_manager::CSVPassword> rows;
++  std::set<std::tuple<std::string, std::string, std::string>> seen;
++  for (password_manager::PasswordForm& form : logins) {
++    if (form.blocked_by_user) {
++      if (scoped_refptr<password_manager::PasswordStoreInterface> store =
++              ProfilePasswordStoreFactory::GetForProfile(
++                  &profile, ServiceAccessType::EXPLICIT_ACCESS)) {
+         store->AddLogin(password_manager::FromPasswordForm(std::move(form)));
+       }
+-      result.passwords = read.logins.size();
++      continue;
+     }
++    std::string username = base::UTF16ToUTF8(form.username_value);
++    std::string password = base::UTF16ToUTF8(form.password_value.value());
++    if (!seen.emplace(form.url.spec(), username, password).second) {
++      continue;
++    }
++    rows.emplace_back(form.url, std::move(username), std::move(password),
++                      std::string(), password_manager::CSVPassword::Status::kOK);
+   }
+-  std::move(done).Run(result);
++  if (rows.empty()) {
++    std::move(done).Run(0);
++    return;
++  }
++  const std::string key = base::StrCat(
++      {"arc-logins-", base::NumberToString(++g_arc_login_writes)});
++  auto job = std::make_unique<ArcLoginsJob>(profile);
++  ArcLoginsJob* const writing = job.get();
++  if (!stedding::ImportJobs::For(profile).Start(key, std::move(job))) {
++    std::move(done).Run(0);
++    return;
++  }
++  writing->writer().Write(
++      std::move(rows),
++      base::BindOnce(
++          [](base::WeakPtr<Profile> profile, std::string key,
++             base::OnceCallback<void(size_t)> done,
++             stedding::PasswordWriteResult written) {
++            if (profile) {
++              stedding::ImportJobs::For(*profile).Finish(key);
++            }
++            std::move(done).Run(written.added);
++          },
++          profile.GetWeakPtr(), key, std::move(done)));
+ }
  
- }  // namespace
- 
+-}  // namespace
 +base::FilePath CopyChromiumFileForReading(const base::FilePath& source,
 +                                          const base::FilePath& into) {
 +  if (source.empty() || !base::PathExists(source)) {
@@ -543,11 +655,10 @@ index 51a51dfc0293a..ed7cc1182eda1 100644
 +  }
 +  return copy;
 +}
-+
+ 
  ArcDataPaths ArcDataPathsFor(const base::FilePath& user_data_dir) {
    ArcDataPaths paths;
-   if (user_data_dir.empty()) {
-@@ -276,18 +302,32 @@ std::optional<std::u16string> DecryptArcValue(base::span<const uint8_t> sealed,
+@@ -276,18 +378,32 @@ std::optional<std::u16string> DecryptArcValue(base::span<const uint8_t> sealed,
  }
  
  std::optional<std::string> ReadArcKeychainPassword() {
@@ -589,7 +700,7 @@ index 51a51dfc0293a..ed7cc1182eda1 100644
    base::apple::ScopedCFTypeRef<CFTypeRef> result;
    if (SecItemCopyMatching(query.get(), result.InitializeInto()) !=
        errSecSuccess) {
-@@ -306,8 +346,13 @@ std::optional<std::string> ReadArcKeychainPassword() {
+@@ -306,8 +422,13 @@ std::optional<std::string> ReadArcKeychainPassword() {
  std::optional<std::vector<uint8_t>> ReadArcWindowsKey(
      const base::FilePath& local_state) {
  #if BUILDFLAG(IS_WIN)
@@ -604,7 +715,7 @@ index 51a51dfc0293a..ed7cc1182eda1 100644
      return std::nullopt;
    }
    const std::optional<base::DictValue> state =
-@@ -383,15 +428,21 @@ history::URLRows ReadArcHistory(const base::FilePath& history_copy,
+@@ -383,15 +504,21 @@ history::URLRows ReadArcHistory(const base::FilePath& history_copy,
    }
    // The web pages alone, and no more of them than the cap, in the query:
    // the rows the reader skipped did not count, so a file of other rows was
@@ -629,7 +740,7 @@ index 51a51dfc0293a..ed7cc1182eda1 100644
    while (rows.size() < cap && statement.Step()) {
      const GURL url(statement.ColumnString(0));
      if (!url.is_valid() || !url.SchemeIsHTTPOrHTTPS()) {
-@@ -417,7 +468,8 @@ std::vector<password_manager::PasswordForm> ReadArcLogins(
+@@ -417,7 +544,8 @@ std::vector<password_manager::PasswordForm> ReadArcLogins(
      const base::FilePath& logins_copy,
      base::span<const uint8_t> key,
      size_t cap,
@@ -639,7 +750,7 @@ index 51a51dfc0293a..ed7cc1182eda1 100644
    std::vector<password_manager::PasswordForm> forms;
    if (logins_copy.empty() || !base::PathExists(logins_copy)) {
      return forms;
-@@ -427,15 +479,25 @@ std::vector<password_manager::PasswordForm> ReadArcLogins(
+@@ -427,15 +555,25 @@ std::vector<password_manager::PasswordForm> ReadArcLogins(
    if (!db.Open(logins_copy)) {
      return forms;
    }
@@ -670,7 +781,7 @@ index 51a51dfc0293a..ed7cc1182eda1 100644
      password_manager::PasswordForm form;
      form.url = GURL(statement.ColumnString(0));
      if (!form.url.is_valid()) {
-@@ -466,11 +528,24 @@ std::vector<password_manager::PasswordForm> ReadArcLogins(
+@@ -466,11 +604,24 @@ std::vector<password_manager::PasswordForm> ReadArcLogins(
        form.username_element.clear();
        form.password_element.clear();
      } else {
@@ -698,7 +809,7 @@ index 51a51dfc0293a..ed7cc1182eda1 100644
        }
        // M155 keeps the plaintext in a PasswordString, built from an rvalue.
 diff --git a/chrome/browser/ui/spaces/arc_data_importer.h b/chrome/browser/ui/spaces/arc_data_importer.h
-index 8bccf7a9889ee..0ef177829d1bf 100644
+index 8bccf7a9889ee..4846c32ed9295 100644
 --- a/chrome/browser/ui/spaces/arc_data_importer.h
 +++ b/chrome/browser/ui/spaces/arc_data_importer.h
 @@ -65,6 +65,23 @@ std::optional<std::u16string> DecryptArcValue(base::span<const uint8_t> sealed,
@@ -725,7 +836,7 @@ index 8bccf7a9889ee..0ef177829d1bf 100644
  // import I27: how Arc sealed its passwords. On the Mac, "v10" and AES-128-CBC
  // under a key derived from its keychain item (I23); on Windows, as Chromium
  // seals them there: "v10", a 12-byte nonce, then AES-256-GCM's ciphertext and
-@@ -88,22 +105,37 @@ std::optional<std::u16string> DecryptArcWindowsValue(
+@@ -88,27 +105,52 @@ std::optional<std::u16string> DecryptArcWindowsValue(
  inline constexpr size_t kMaxArcHistoryRows = 100000;
  
  // The urls table of a History copy: http(s) rows that are not hidden, last
@@ -767,6 +878,21 @@ index 8bccf7a9889ee..0ef177829d1bf 100644
    // The keychain item could not be read: refused, or no item.
    bool keychain_denied = false;
  };
+ using ArcDataDoneCallback = base::OnceCallback<void(ArcDataResult)>;
+ 
++// import I23, I39 (bug hunt 2026-11-16): writes Arc's `logins`, as
++// ReadArcLogins reads them, into `profile`'s own password store as the other
++// browsers' logins are written (stedding::ImportedPasswordsWriter): a login
++// saved here for the same site and username keeps its password. A blocked
++// site stays blocked. `done` gets how many logins came in, blocked sites not
++// counted.
++void WriteArcLogins(Profile& profile,
++                    std::vector<password_manager::PasswordForm> logins,
++                    base::OnceCallback<void(size_t)> done);
++
+ // Copies the files to a temporary directory on the thread pool, reads them
+ // there, asks the keychain for Arc's password when `passwords` is set, and
+ // writes into `profile` back on the caller's sequence. `paths` defaults to
 diff --git a/chrome/browser/ui/spaces/chromium_family_importer.cc b/chrome/browser/ui/spaces/chromium_family_importer.cc
 new file mode 100644
 index 0000000000000..e9f43045d7353
@@ -5844,10 +5970,10 @@ index 7590467c35da8..3c9c6645df607 100644
      "//ui/actions",
 diff --git a/chrome/test/stedding/safari_dia_import_browsertest.cc b/chrome/test/stedding/safari_dia_import_browsertest.cc
 new file mode 100644
-index 0000000000000..21cdd769048ea
+index 0000000000000..0c366c1fea9ab
 --- /dev/null
 +++ b/chrome/test/stedding/safari_dia_import_browsertest.cc
-@@ -0,0 +1,661 @@
+@@ -0,0 +1,716 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -5886,6 +6012,7 @@ index 0000000000000..21cdd769048ea
 +#include "chrome/browser/password_manager/factories/profile_password_store_factory.h"
 +#include "chrome/browser/profiles/profile.h"
 +#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/spaces/arc_data_importer.h"
 +#include "chrome/browser/ui/spaces/chromium_family_importer.h"
 +#include "chrome/browser/ui/stedding/safari_export_importer.h"
 +#include "chrome/browser/ui/views/stedding_welcome/welcome_dialog_view.h"
@@ -6065,6 +6192,60 @@ index 0000000000000..21cdd769048ea
 +    return count;
 +  }
 +};
++
++// Arc's logins, written into the profile as an Arc import writes them.
++using ArcLoginsImportTest = ImportTestBase;
++
++// import I23, I39 (bug hunt 2026-11-16): Arc's logins come in as the other
++// browsers' do. A login saved here for the same site and username keeps its
++// password: Arc's older one went over it, so an import undid a password
++// changed since. A blocked site stays blocked, and is no password the result
++// counts.
++IN_PROC_BROWSER_TEST_F(ArcLoginsImportTest, ASavedLoginKeepsItsPassword) {
++  Profile* const profile = browser()->GetProfile();
++  scoped_refptr<password_manager::PasswordStoreInterface> store =
++      ProfilePasswordStoreFactory::GetForProfile(
++          profile, ServiceAccessType::EXPLICIT_ACCESS);
++  ASSERT_TRUE(store);
++  const auto login = [](std::string_view site, std::u16string_view username,
++                        std::u16string_view password) {
++    password_manager::PasswordForm form;
++    form.url = GURL(site);
++    form.signon_realm = std::string(site);
++    form.username_value = std::u16string(username);
++    form.password_value =
++        password_manager::PasswordString(std::u16string(password));
++    form.in_store = password_manager::PasswordForm::Store::kProfileStore;
++    return form;
++  };
++  base::RunLoop added;
++  store->AddLogin(password_manager::FromPasswordForm(login(
++                      "https://arc-login.example/", u"ann", u"changed-here")),
++                  added.QuitClosure());
++  added.Run();
++
++  std::vector<password_manager::PasswordForm> arc;
++  arc.push_back(login("https://arc-login.example/", u"ann", u"older-in-arc"));
++  arc.push_back(login("https://arc-other.example/", u"bob", u"newone"));
++  password_manager::PasswordForm blocked =
++      login("https://arc-never.example/", u"", u"");
++  blocked.blocked_by_user = true;
++  arc.push_back(std::move(blocked));
++  base::test::TestFuture<size_t> written;
++  spaces::WriteArcLogins(*profile, std::move(arc), written.GetCallback());
++  EXPECT_EQ(1u, written.Get()) << "counted: the new login alone";
++  EXPECT_EQ(u"changed-here",
++            PasswordFor(profile, "https://arc-login.example/", u"ann"))
++      << "Arc's older password went over the one saved here";
++  EXPECT_EQ(u"newone",
++            PasswordFor(profile, "https://arc-other.example/", u"bob"));
++  bool still_blocked = false;
++  for (const password_manager::StoredCredential& each : Logins(profile)) {
++    still_blocked |= each.signon_realm == "https://arc-never.example/" &&
++                     each.blocked_by_user;
++  }
++  EXPECT_TRUE(still_blocked) << "the site blocked in Arc is not blocked here";
++}
 +
 +class SafariExportImportTest : public ImportTestBase {
 + protected:

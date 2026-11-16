@@ -28,14 +28,15 @@ S-429, GitHub issue 82, tabs R67).
 Removable when: upstream's NativeWidgetMac::Show and Widget::Show allow for a
 widget that goes during the show.
 ---
- chrome/browser/ui/stedding/peek.cc            |  6 +-
- chrome/browser/ui/tabs/tab_dialog_manager.cc  |  4 +-
- chrome/browser/ui/views/peek/peek_overlay.cc  |  6 ++
- .../stedding/peek_over_page_browsertest.cc    | 90 +++++++++++++++++++
- ui/views/widget/native_widget_mac.mm          |  7 ++
- ui/views/widget/native_widget_mac_unittest.mm | 26 ++++++
- ui/views/widget/widget.cc                     | 16 +++-
- 7 files changed, 149 insertions(+), 6 deletions(-)
+ chrome/browser/ui/stedding/peek.cc            |   6 +-
+ chrome/browser/ui/tabs/tab_dialog_manager.cc  |   4 +-
+ .../ui/views/peek/peek_navigation_throttle.cc |   8 +-
+ chrome/browser/ui/views/peek/peek_overlay.cc  |   6 +
+ .../stedding/peek_over_page_browsertest.cc    | 122 ++++++++++++++++++
+ ui/views/widget/native_widget_mac.mm          |   7 +
+ ui/views/widget/native_widget_mac_unittest.mm |  26 ++++
+ ui/views/widget/widget.cc                     |  16 ++-
+ 8 files changed, 188 insertions(+), 7 deletions(-)
 
 diff --git a/chrome/browser/ui/stedding/peek.cc b/chrome/browser/ui/stedding/peek.cc
 index 8679d03c9a639..c5c87aed85cca 100644
@@ -71,6 +72,26 @@ index 4e82fbd0e6d34..12ffd23283040 100644
    }
    return false;
  }
+diff --git a/chrome/browser/ui/views/peek/peek_navigation_throttle.cc b/chrome/browser/ui/views/peek/peek_navigation_throttle.cc
+index d9dbec25d447c..f7083ab6beed9 100644
+--- a/chrome/browser/ui/views/peek/peek_navigation_throttle.cc
++++ b/chrome/browser/ui/views/peek/peek_navigation_throttle.cc
+@@ -232,8 +232,14 @@ bool MaybePeekInsteadOfNewTab(NavigateParams* params) {
+     params->contents_to_insert = PeekContentsInPinsJar(
+         tab, std::move(params->contents_to_insert), params->url);
+     content::WebContents* const page = params->contents_to_insert.get();
++    // tabs R67 (bug hunt 2026-11-16): a peek over the page closed as it first
++    // showed takes its page with it, and the window still comes back. Content
++    // then loaded the link into the page that had gone. Only a page that is
++    // still there is handed back, as OpenPeek loads one.
++    const base::WeakPtr<content::WebContents> shown = page->GetWeakPtr();
+     if (OpenPeekWithContents(tab, std::move(params->contents_to_insert),
+-                             params->url)) {
++                             params->url) &&
++        shown) {
+       params->navigated_or_inserted_contents = page;
+     }
+     return true;
 diff --git a/chrome/browser/ui/views/peek/peek_overlay.cc b/chrome/browser/ui/views/peek/peek_overlay.cc
 index aeea29d989e83..feb728baae98a 100644
 --- a/chrome/browser/ui/views/peek/peek_overlay.cc
@@ -90,7 +111,7 @@ index aeea29d989e83..feb728baae98a 100644
    page_->Focus();
    return true;
 diff --git a/chrome/test/stedding/peek_over_page_browsertest.cc b/chrome/test/stedding/peek_over_page_browsertest.cc
-index dd19ead421593..b24377f0669fb 100644
+index dd19ead421593..c68d7b52f3159 100644
 --- a/chrome/test/stedding/peek_over_page_browsertest.cc
 +++ b/chrome/test/stedding/peek_over_page_browsertest.cc
 @@ -11,8 +11,11 @@
@@ -159,7 +180,7 @@ index dd19ead421593..b24377f0669fb 100644
  class PeekOverPageTest : public InProcessBrowserTest {
   protected:
    void SetUpOnMainThread() override {
-@@ -155,6 +195,56 @@ class PeekOverPageTest : public InProcessBrowserTest {
+@@ -155,6 +195,88 @@ class PeekOverPageTest : public InProcessBrowserTest {
    }
  };
  
@@ -210,6 +231,38 @@ index dd19ead421593..b24377f0669fb 100644
 +      [&]() { return closer && closer->closed(); }));
 +  EXPECT_TRUE(WaitForNoPeek(pin));
 +  EXPECT_EQ(pin, tab());
++}
++
++// tabs R67 (bug hunt 2026-11-16): the same for a page the link made itself, a
++// target=_blank link without an opener. The page went with the peek, and
++// content was still handed it back and loaded the link into it.
++IN_PROC_BROWSER_TEST_F(PeekOverPageTest,
++                       AMadePageClosedAsItFirstShowsLeavesThePinAlone) {
++  ASSERT_NO_FATAL_FAILURE(OpenPin(Url("b.test", "/title3.html")));
++  tabs::TabInterface* const pin = tab();
++  ASSERT_TRUE(content::ExecJs(contents(),
++                              "document.getElementById('link').target = "
++                              "'_blank';"
++                              "document.getElementById('link').rel = "
++                              "'noopener';",
++                              content::EXECUTE_SCRIPT_NO_USER_GESTURE));
++  const int count = tabs().count();
++  std::unique_ptr<CloseAsItShows> closer;
++  views::AnyWidgetObserver widgets(views::test::AnyWidgetTestPasskey{});
++  widgets.set_initialized_callback(
++      base::BindLambdaForTesting([&](views::Widget* widget) {
++        if (widget->GetName() == "SteddingPeek") {
++          closer = std::make_unique<CloseAsItShows>(widget);
++        }
++      }));
++  ClickLink();
++  ASSERT_TRUE(base::test::RunUntil(
++      [&]() { return closer && closer->closed(); }));
++  EXPECT_TRUE(WaitForNoPeek(pin));
++  EXPECT_EQ(pin, tab());
++  EXPECT_EQ(count, tabs().count()) << "the link opened a tab";
++  // The browser lives on, and the pinned page still answers.
++  EXPECT_EQ(2, content::EvalJs(contents(), "1 + 1"));
 +}
 +#endif  // defined(USE_AURA)
 +

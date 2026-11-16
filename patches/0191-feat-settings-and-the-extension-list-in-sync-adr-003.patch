@@ -47,13 +47,13 @@ Removable when: never; part of Stedding's own sync.
  chrome/browser/ui/spaces/sidebar_sync_file.h  |   9 +
  .../browser/ui/spaces/sidebar_sync_ledger.cc  |  57 ++
  .../browser/ui/spaces/sidebar_sync_ledger.h   |  22 +
- .../browser/ui/spaces/sidebar_sync_parts.cc   | 532 ++++++++++++
+ .../browser/ui/spaces/sidebar_sync_parts.cc   | 532 ++++++++++
  chrome/browser/ui/spaces/sidebar_sync_parts.h | 220 +++++
- .../browser/ui/spaces/sidebar_sync_service.cc | 758 +++++++++++++++-
+ .../browser/ui/spaces/sidebar_sync_service.cc | 788 ++++++++++++++-
  .../browser/ui/spaces/sidebar_sync_service.h  |  84 +-
  .../ui/spaces/sidebar_sync_service_factory.cc |   4 +
- .../spaces/sidebar_sync_settings_unittest.cc  | 425 +++++++++
- .../ui/spaces/sidebar_sync_unittest.cc        |  49 ++
+ .../spaces/sidebar_sync_settings_unittest.cc  | 425 ++++++++
+ .../ui/spaces/sidebar_sync_unittest.cc        |  49 +
  chrome/browser/ui/stedding/BUILD.gn           |  20 +
  chrome/browser/ui/stedding/stedding_prefs.cc  |   5 +
  chrome/browser/ui/stedding/stedding_prefs.h   |  11 +
@@ -61,16 +61,16 @@ Removable when: never; part of Stedding's own sync.
  .../ui/stedding/synced_extensions_bar.h       |  34 +
  chrome/browser/ui/webui/settings/BUILD.gn     |   2 +
  .../browser/ui/webui/settings/settings_ui.cc  |  32 +
- .../settings/stedding_extension_install.cc    |  51 ++
+ .../settings/stedding_extension_install.cc    |  51 +
  .../settings/stedding_extension_install.h     |  36 +
  .../webui/settings/stedding_spaces_handler.cc |  57 +-
  .../webui/settings/stedding_spaces_handler.h  |   4 +
  chrome/test/stedding/BUILD.gn                 |   4 +
  .../test/stedding/sidebar_sync_browsertest.cc |   4 +
- .../sidebar_sync_extensions_browsertest.cc    | 487 +++++++++++
- .../sidebar_sync_settings_browsertest.cc      | 818 ++++++++++++++++++
+ .../sidebar_sync_extensions_browsertest.cc    | 487 ++++++++++
+ .../sidebar_sync_settings_browsertest.cc      | 917 ++++++++++++++++++
  components/infobars/core/infobar_delegate.h   |   3 +
- 33 files changed, 4514 insertions(+), 19 deletions(-)
+ 33 files changed, 4643 insertions(+), 19 deletions(-)
  create mode 100644 chrome/browser/ui/spaces/sidebar_sync_extensions.cc
  create mode 100644 chrome/browser/ui/spaces/sidebar_sync_extensions.h
  create mode 100644 chrome/browser/ui/spaces/sidebar_sync_extensions_unittest.cc
@@ -1870,7 +1870,7 @@ index 0000000000000..ee61166ebea8a
 +
 +#endif  // CHROME_BROWSER_UI_SPACES_SIDEBAR_SYNC_PARTS_H_
 diff --git a/chrome/browser/ui/spaces/sidebar_sync_service.cc b/chrome/browser/ui/spaces/sidebar_sync_service.cc
-index c9dfbc7b10115..0aa67c1bf739b 100644
+index c9dfbc7b10115..c1c630174cd85 100644
 --- a/chrome/browser/ui/spaces/sidebar_sync_service.cc
 +++ b/chrome/browser/ui/spaces/sidebar_sync_service.cc
 @@ -16,6 +16,7 @@
@@ -1917,7 +1917,7 @@ index c9dfbc7b10115..0aa67c1bf739b 100644
  }  // namespace
  
  // Sf13: FSEvents on the Mac (a recursive watch sees a file rewritten in
-@@ -202,6 +212,10 @@ struct ScanResult {
+@@ -202,6 +212,12 @@ struct ScanResult {
    std::optional<ParsedFile> own;
    // Sf31: the folder has this install's file, but it could not be read.
    bool own_unread = false;
@@ -1925,10 +1925,12 @@ index c9dfbc7b10115..0aa67c1bf739b 100644
 +  // once the folder was listed.
 +  bool listed = false;
 +  std::set<std::string> present;
++  // Sf69: other computers' files seen only as a cloud stub, not read.
++  size_t stubs = 0;
  };
  
  struct JoinScan {
-@@ -231,9 +245,16 @@ void ReadFolder(const base::FilePath& dir,
+@@ -231,9 +247,17 @@ void ReadFolder(const base::FilePath& dir,
                  std::vector<std::string>* conflict_copies,
                  std::optional<ParsedFile>* own,
                  bool* own_unread,
@@ -1937,7 +1939,8 @@ index c9dfbc7b10115..0aa67c1bf739b 100644
 -                             base::FileEnumerator::FILES);
 +                bool* denied,
 +                std::set<std::string>* present,
-+                bool* listed) {
++                bool* listed,
++                size_t* stubs) {
 +  // Sf31, Sf64: a listing that fails says so, so that what the folder seems
 +  // to lack is not taken as gone.
 +  base::FileEnumerator files(
@@ -1948,7 +1951,7 @@ index c9dfbc7b10115..0aa67c1bf739b 100644
    for (base::FilePath path = files.Next(); !path.empty();
         path = files.Next()) {
      if (base::IsLink(path)) {
-@@ -242,6 +263,15 @@ void ReadFolder(const base::FilePath& dir,
+@@ -242,6 +266,18 @@ void ReadFolder(const base::FilePath& dir,
      const std::string name = path.BaseName().AsUTF8Unsafe();
      switch (ClassifyFolderEntry(name, own_install)) {
        case EntryKind::kIgnore:
@@ -1959,12 +1962,15 @@ index c9dfbc7b10115..0aa67c1bf739b 100644
 +          const std::string inner = name.substr(1, name.size() - 8);
 +          if (ClassifyFolderEntry(inner, own_install) == EntryKind::kPeer) {
 +            present->insert(InstallOfName(inner));
++            if (stubs) {
++              ++*stubs;
++            }
 +          }
 +        }
          break;
        case EntryKind::kConflictCopy:
          conflict_copies->push_back(name);
-@@ -270,6 +300,9 @@ void ReadFolder(const base::FilePath& dir,
+@@ -270,6 +306,9 @@ void ReadFolder(const base::FilePath& dir,
          PeerRead read;
          read.name = name;
          read.install = InstallOfName(name);
@@ -1974,7 +1980,7 @@ index c9dfbc7b10115..0aa67c1bf739b 100644
          base::File::Info info;
          if (base::GetFileInfo(path, &info)) {
            read.mtime_ms = info.last_modified.InMillisecondsSinceUnixEpoch();
-@@ -294,7 +327,11 @@ void ReadFolder(const base::FilePath& dir,
+@@ -294,7 +333,11 @@ void ReadFolder(const base::FilePath& dir,
        }
      }
    }
@@ -1987,26 +1993,27 @@ index c9dfbc7b10115..0aa67c1bf739b 100644
  }
  
  ScanResult ScanOnSequence(const base::FilePath& dir,
-@@ -311,7 +348,8 @@ ScanResult ScanOnSequence(const base::FilePath& dir,
+@@ -311,7 +354,8 @@ ScanResult ScanOnSequence(const base::FilePath& dir,
      return result;
    }
    ReadFolder(dir, own_install, cache, &result.peers, &result.conflict_copies,
 -             &result.own, &result.own_unread, &result.denied);
 +             &result.own, &result.own_unread, &result.denied, &result.present,
-+             &result.listed);
++             &result.listed, &result.stubs);
    return result;
  }
  
-@@ -344,7 +382,7 @@ JoinScan ScanForJoin(const base::FilePath& picked,
+@@ -344,7 +388,8 @@ JoinScan ScanForJoin(const base::FilePath& picked,
      bool own_unread = false;
      bool denied = false;
      ReadFolder(scan.dir, own_install, StatCache(), &scan.peers,
 -               &scan.conflict_copies, &scan.own, &own_unread, &denied);
-+               &scan.conflict_copies, &scan.own, &own_unread, &denied, nullptr, nullptr);
++               &scan.conflict_copies, &scan.own, &own_unread, &denied,
++               /*present=*/nullptr, /*listed=*/nullptr, /*stubs=*/nullptr);
      if (denied) {
        scan.refusal = JoinScan::Refusal::kDenied;
      }
-@@ -465,6 +503,13 @@ SidebarSyncService::SidebarSyncService(Profile* profile)
+@@ -465,6 +510,13 @@ SidebarSyncService::SidebarSyncService(Profile* profile)
    prefs_.Add(stedding::prefs::kSidebarSyncFolder,
               base::BindRepeating(&SidebarSyncService::OnFolderPrefChanged,
                                   base::Unretained(this)));
@@ -2020,7 +2027,7 @@ index c9dfbc7b10115..0aa67c1bf739b 100644
    if (enabled()) {
      StartObserving();
    }
-@@ -475,6 +520,7 @@ SidebarSyncService::~SidebarSyncService() = default;
+@@ -475,6 +527,7 @@ SidebarSyncService::~SidebarSyncService() = default;
  void SidebarSyncService::Shutdown() {
    if (ready_ && ledger_) {
      Commit();
@@ -2028,7 +2035,7 @@ index c9dfbc7b10115..0aa67c1bf739b 100644
      SaveLedger();
    }
    StopObserving();
-@@ -549,12 +595,16 @@ void SidebarSyncService::StartObserving() {
+@@ -549,12 +602,16 @@ void SidebarSyncService::StartObserving() {
        base::BindRepeating(&SidebarSyncService::OnClosingAllBrowsers,
                            base::Unretained(this)));
    EnsureWatches();
@@ -2045,7 +2052,7 @@ index c9dfbc7b10115..0aa67c1bf739b 100644
    seen_window_ = false;
    loading_ledger_ = false;
    ready_ = false;
-@@ -769,6 +819,12 @@ void SidebarSyncService::BecomeReady() {
+@@ -769,6 +826,12 @@ void SidebarSyncService::BecomeReady() {
    // folder; a write that quitting cut short is made now. An edit made while
    // the ledger was read differs from the view taken before it.
    Commit();
@@ -2058,7 +2065,7 @@ index c9dfbc7b10115..0aa67c1bf739b 100644
    // Sf26: tombstones received more than 180 days ago go, once a launch;
    // nothing waits on a decision yet.
    if (sidebar_sync::PruneTombstones(ledger_->state,
-@@ -1016,8 +1072,12 @@ void SidebarSyncService::Scan() {
+@@ -1016,8 +1079,12 @@ void SidebarSyncService::Scan() {
  
  void SidebarSyncService::ReadFolderNow() {
    sidebar_sync::StatCache cache;
@@ -2073,7 +2080,7 @@ index c9dfbc7b10115..0aa67c1bf739b 100644
    }
    io_runner_->PostTaskAndReplyWithResult(
        FROM_HERE,
-@@ -1081,6 +1141,7 @@ void SidebarSyncService::OnScanned(base::OnceClosure done, ScanResult result) {
+@@ -1081,6 +1148,7 @@ void SidebarSyncService::OnScanned(base::OnceClosure done, ScanResult result) {
    }
    // The user's own edits are stamped before anything is merged.
    Commit();
@@ -2081,7 +2088,7 @@ index c9dfbc7b10115..0aa67c1bf739b 100644
    bool merged = false;
    const int64_t now = NowMs();
    for (sidebar_sync::PeerRead& peer : result.peers) {
-@@ -1130,6 +1191,8 @@ void SidebarSyncService::OnScanned(base::OnceClosure done, ScanResult result) {
+@@ -1130,6 +1198,8 @@ void SidebarSyncService::OnScanned(base::OnceClosure done, ScanResult result) {
      }
      clock_ahead_.erase(peer.install);
      merged |= MergePeer(peer.install, peer.parsed, /*force=*/false);
@@ -2090,12 +2097,16 @@ index c9dfbc7b10115..0aa67c1bf739b 100644
      // Sf22, Sf23: a held batch lives only here until the user answers, so
      // its file is read again at every scan: after a restart it is asked
      // again rather than taken as read.
-@@ -1140,7 +1203,24 @@ void SidebarSyncService::OnScanned(base::OnceClosure done, ScanResult result) {
+@@ -1140,7 +1210,28 @@ void SidebarSyncService::OnScanned(base::OnceClosure done, ScanResult result) {
    if (merged) {
      ledger_->folder_behind = true;
    }
 +  if (result.reachable && result.listed) {
-+    ledger_->parts_read = true;
++    // Sf69: only once every other computer's file was read whole; one that
++    // was only a cloud stub is read whole once it is downloaded.
++    if (result.stubs == 0) {
++      ledger_->parts_read = true;
++    }
 +    // Sf64: a computer whose file has left the folder offers nothing.
 +    std::erase_if(ledger_->peer_extensions, [&](const auto& entry) {
 +      return !result.present.contains(entry.first);
@@ -2115,7 +2126,7 @@ index c9dfbc7b10115..0aa67c1bf739b 100644
    // Sf52: a place that cannot be reached is not written to from every read;
    // a failed write follows Sf31.
    if (ledger_->folder_behind && (!bridge_ || result.reachable)) {
-@@ -1297,7 +1377,7 @@ void SidebarSyncService::WriteOwnFile() {
+@@ -1297,7 +1388,7 @@ void SidebarSyncService::WriteOwnFile() {
    SaveLedger(base::BindOnce(
        &SidebarSyncService::WriteOwnFileOnceNoted, weak_factory_.GetWeakPtr(),
        folder(), sidebar_sync::FileNameFor(meta.install),
@@ -2124,7 +2135,7 @@ index c9dfbc7b10115..0aa67c1bf739b 100644
  }
  
  void SidebarSyncService::WriteOwnFileOnceNoted(base::FilePath dir,
-@@ -1681,13 +1761,24 @@ void SidebarSyncService::OnJoinScanned(PreviewCallback done, JoinScan scan) {
+@@ -1681,13 +1772,24 @@ void SidebarSyncService::OnJoinScanned(PreviewCallback done, JoinScan scan) {
    preview.Set("here", sidebar_sync::Counts(join->local));
    preview.Set("pairs", std::move(pairs));
    preview.Set("deviceName", DeviceName());
@@ -2150,7 +2161,7 @@ index c9dfbc7b10115..0aa67c1bf739b 100644
    if (!pending_join_) {
      return false;
    }
-@@ -1702,7 +1793,7 @@ bool SidebarSyncService::ConfirmJoin(bool combine,
+@@ -1702,7 +1804,7 @@ bool SidebarSyncService::ConfirmJoin(bool combine,
    const State local = join->local;
    TakeBackup(local, base::BindOnce(&SidebarSyncService::FinishJoin,
                                     weak_factory_.GetWeakPtr(), std::move(join),
@@ -2159,7 +2170,7 @@ index c9dfbc7b10115..0aa67c1bf739b 100644
    return true;
  }
  
-@@ -1710,6 +1801,7 @@ void SidebarSyncService::FinishJoin(std::unique_ptr<PendingJoin> join,
+@@ -1710,6 +1812,7 @@ void SidebarSyncService::FinishJoin(std::unique_ptr<PendingJoin> join,
                                      bool combine,
                                      std::string device_name,
                                      std::vector<size_t> accepted,
@@ -2167,7 +2178,7 @@ index c9dfbc7b10115..0aa67c1bf739b 100644
                                      bool backed_up) {
    if (!backed_up) {
      // Nothing is changed without its backup: sync stays off, and Settings
-@@ -1769,9 +1861,21 @@ void SidebarSyncService::FinishJoin(std::unique_ptr<PendingJoin> join,
+@@ -1769,9 +1872,21 @@ void SidebarSyncService::FinishJoin(std::unique_ptr<PendingJoin> join,
      ledger.seq = own.meta.seq;
      ledger.NoteWrite(sidebar_sync::WriteRecord{own.meta.nonce, own.meta.seq,
                                                 own.meta.written_ms});
@@ -2189,7 +2200,7 @@ index c9dfbc7b10115..0aa67c1bf739b 100644
      sidebar_sync::PeerStat stat;
      stat.device = peer.meta.device;
      stat.seq = peer.meta.seq;
-@@ -1780,7 +1884,13 @@ void SidebarSyncService::FinishJoin(std::unique_ptr<PendingJoin> join,
+@@ -1780,7 +1895,13 @@ void SidebarSyncService::FinishJoin(std::unique_ptr<PendingJoin> join,
    }
    ledger.state = sidebar_sync::Canonicalize(
        ledger.state, sidebar_sync::ResolveAliases(ledger.state.aliases));
@@ -2204,7 +2215,7 @@ index c9dfbc7b10115..0aa67c1bf739b 100644
    const std::map<std::string, std::string> resolved =
        sidebar_sync::ResolveAliases(ledger.state.aliases);
    std::set<std::string> present;
-@@ -1808,12 +1918,23 @@ void SidebarSyncService::FinishJoin(std::unique_ptr<PendingJoin> join,
+@@ -1808,12 +1929,23 @@ void SidebarSyncService::FinishJoin(std::unique_ptr<PendingJoin> join,
      prefs->SetString(stedding::prefs::kSidebarSyncPlaceSignIn, place->sealed);
      bridge_ = std::move(place->bridge);
    }
@@ -2228,7 +2239,7 @@ index c9dfbc7b10115..0aa67c1bf739b 100644
    WriteOwnFile();
    SaveLedger();
    NotifyObservers();
-@@ -2145,6 +2266,9 @@ void SidebarSyncService::Stop(bool remove_own_file) {
+@@ -2145,6 +2277,9 @@ void SidebarSyncService::Stop(bool remove_own_file) {
    profile_->GetPrefs()->ClearPref(stedding::prefs::kSidebarSyncFolder);
    profile_->GetPrefs()->ClearPref(stedding::prefs::kSidebarSyncPlace);
    profile_->GetPrefs()->ClearPref(stedding::prefs::kSidebarSyncPlaceSignIn);
@@ -2238,7 +2249,7 @@ index c9dfbc7b10115..0aa67c1bf739b 100644
    profile_->GetPrefs()->CommitPendingWrite();
    StopObserving();
    ledger_runner_->PostTask(FROM_HERE, base::BindOnce(&sidebar_sync::DeleteLedger,
-@@ -2612,6 +2736,41 @@ base::DictValue SidebarSyncService::GetStatus() {
+@@ -2612,6 +2747,41 @@ base::DictValue SidebarSyncService::GetStatus() {
    }
    status.Set("backups", std::move(backups));
    status.Set("deferred", static_cast<int>(deferred_));
@@ -2280,7 +2291,7 @@ index c9dfbc7b10115..0aa67c1bf739b 100644
    return status;
  }
  
-@@ -2619,6 +2778,581 @@ void SidebarSyncService::CommitForTesting() {
+@@ -2619,6 +2789,600 @@ void SidebarSyncService::CommitForTesting() {
    Commit();
  }
  
@@ -2523,12 +2534,19 @@ index c9dfbc7b10115..0aa67c1bf739b 100644
 +        *rule, *wire, *pref->GetValue(), spaces);
 +    // Another computer's file is not trusted: a value of another type is
 +    // never set.
-+    if (!value || value->type() != pref->GetType() ||
-+        *value == *pref->GetValue()) {
++    if (!value || value->type() != pref->GetType()) {
 +      continue;
 +    }
 +    const bool browser_wide =
 +        rule->scope == sidebar_sync::SettingScope::kBrowser;
++    if (*value == *pref->GetValue()) {
++      // Sf60: the ledger's value is in force here already: it counts as
++      // applied, so another profile's later value is not set back.
++      if (browser_wide) {
++        ledger_->browser_applied[path] = field.json;
++      }
++      continue;
++    }
 +    // Sf60: a browser-wide value is applied once for each new value of the
 +    // ledger's, so that two profiles syncing with different computers do not
 +    // take turns setting it at every read.
@@ -2645,6 +2663,18 @@ index c9dfbc7b10115..0aa67c1bf739b 100644
 +  // Sf62: what this profile applied before its box was last off says nothing
 +  // of what the person chose meanwhile; the start applies the chosen values.
 +  ledger_->browser_applied.clear();
++  // Sf60: a browser-wide value sync applied before, which the person has
++  // changed since, is no longer sync's: set back to it later, it is an edit.
++  if (PrefService* const local = g_browser_process->local_state()) {
++    ScopedDictPrefUpdate by_sync(local,
++                                 stedding::prefs::kSidebarSyncBrowserApplied);
++    for (const auto& [path, now] : ledger_->browser_seen) {
++      const std::string* const recorded = by_sync->FindString(path);
++      if (recorded && *recorded != now) {
++        by_sync->Remove(path);
++      }
++    }
++  }
 +  if (choice == sidebar_sync::StartFrom::kThere && others_have) {
 +    pending_settings_.clear();
 +    ApplySettings();
@@ -4073,7 +4103,7 @@ index 490ad9f779c62..d51e07fc63b03 100644
      "//chrome/browser/ui/spaces:sidebar_sync_fake_place",
      "//chrome/browser/ui/spaces:sidebar_sync_place",
 diff --git a/chrome/test/stedding/sidebar_sync_browsertest.cc b/chrome/test/stedding/sidebar_sync_browsertest.cc
-index d011d79f34e74..7372114700634 100644
+index 0824c48cc3a53..969404a4ce323 100644
 --- a/chrome/test/stedding/sidebar_sync_browsertest.cc
 +++ b/chrome/test/stedding/sidebar_sync_browsertest.cc
 @@ -392,6 +392,10 @@ IN_PROC_BROWSER_TEST_F(SidebarSyncTest, SyncIsOffUntilTheUserJoinsAFolder) {
@@ -4582,10 +4612,10 @@ index 0000000000000..f9f319257c860
 +}  // namespace
 diff --git a/chrome/test/stedding/sidebar_sync_settings_browsertest.cc b/chrome/test/stedding/sidebar_sync_settings_browsertest.cc
 new file mode 100644
-index 0000000000000..cc5fe07f26018
+index 0000000000000..85e5ff7a3a97f
 --- /dev/null
 +++ b/chrome/test/stedding/sidebar_sync_settings_browsertest.cc
-@@ -0,0 +1,818 @@
+@@ -0,0 +1,917 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -5401,6 +5431,105 @@ index 0000000000000..cc5fe07f26018
 +  EXPECT_EQ(1, local_state()->GetInteger(p::kSidebarDensity));
 +  ASSERT_TRUE(OwnFileSays(p::kSidebarDensity, "1"));
 +  EXPECT_EQ(OwnInstall(), OwnSetting(p::kSidebarDensity)->s.w);
++}
++
++// Sf60 (review finding): after a start that adopts this profile's own value,
++// setting it back, while this profile is closed, to a value sync applied
++// before the start is still the person's edit.
++IN_PROC_BROWSER_TEST_F(SidebarSyncPartsTest,
++                       AValueSetBackAfterAStartIsStillAnEdit) {
++  sb::FileParts parts;
++  parts.settings = Setting(p::kSidebarDensity, base::Value(1), NowMs());
++  WritePeer(PeerState(base::Token::CreateRandom().ToString(), NowMs()), 1,
++            parts);
++  Join(sb::JoinParts());
++  ASSERT_EQ(1, local_state()->GetInteger(p::kSidebarDensity));
++  service()->SetPart("settings", false, sb::StartFrom::kAuto);
++  local_state()->SetInteger(p::kSidebarDensity, 2);
++  service()->SetPart("settings", true, sb::StartFrom::kHere);
++  ASSERT_TRUE(OwnFileSays(p::kSidebarDensity, "2"));
++
++  const base::FilePath folder = service()->folder();
++  prefs()->ClearPref(p::kSidebarSyncFolder);
++  local_state()->SetInteger(p::kSidebarDensity, 1);
++  prefs()->SetFilePath(p::kSidebarSyncFolder, folder);
++  ASSERT_TRUE(base::test::RunUntil([&] {
++    return service()->GetStatus().FindBool("ready").value_or(false);
++  }));
++  EXPECT_EQ(1, local_state()->GetInteger(p::kSidebarDensity));
++  ASSERT_TRUE(OwnFileSays(p::kSidebarDensity, "1"));
++  EXPECT_EQ(OwnInstall(), OwnSetting(p::kSidebarDensity)->s.w);
++}
++
++// Sf60 (review finding): a value the ledger holds and this computer already
++// shows counts as applied at a start, so a value another profile's sync
++// applies later is not set back.
++IN_PROC_BROWSER_TEST_F(SidebarSyncPartsTest,
++                       AValueInForceAtAStartCountsAsApplied) {
++  sb::FileParts parts;
++  parts.settings = Setting(p::kSidebarDensity, base::Value(1), NowMs());
++  WritePeer(PeerState(base::Token::CreateRandom().ToString(), NowMs()), 1,
++            parts);
++  Join(sb::JoinParts());
++  ASSERT_EQ(1, local_state()->GetInteger(p::kSidebarDensity));
++  service()->SetPart("settings", false, sb::StartFrom::kAuto);
++  service()->SetPart("settings", true, sb::StartFrom::kThere);
++  ASSERT_EQ(1, local_state()->GetInteger(p::kSidebarDensity));
++  spaces::SidebarSyncService::ApplyBrowserValueForTesting(p::kSidebarDensity,
++                                                          base::Value(3));
++  Scan();
++  EXPECT_EQ(3, local_state()->GetInteger(p::kSidebarDensity));
++}
++
++// Sf69 (review finding): a file seen only as a cloud stub at the first read
++// after the update is read whole once it is downloaded, though unchanged.
++IN_PROC_BROWSER_TEST_F(SidebarSyncPartsTest,
++                       AFileThatWasACloudStubIsReadWholeOnceBack) {
++  const std::string space = base::Token::CreateRandom().ToString();
++  sb::FileParts parts;
++  parts.settings = Setting(p::kUiAnimate, base::Value(false), NowMs());
++  WritePeer(PeerState(space, NowMs()), 1, parts);
++  const base::FilePath file = sync_dir().AppendASCII(sb::FileNameFor(kPeer));
++  const base::FilePath stub = sync_dir().AppendASCII(
++      "." + sb::FileNameFor(kPeer) + ".icloud");
++  std::string with_parts;
++  base::Time mtime;
++  {
++    base::ScopedAllowBlockingForTesting allow;
++    ASSERT_TRUE(base::ReadFileToString(file, &with_parts));
++    std::string unread = with_parts;
++    const size_t at = unread.find("\"settings\":");
++    ASSERT_NE(std::string::npos, at);
++    unread.replace(at, 11, "\"setxxxxx\":");
++    ASSERT_TRUE(base::WriteFile(file, unread));
++    mtime = base::Time::Now() - base::Hours(1);
++    ASSERT_TRUE(base::TouchFile(file, mtime, mtime));
++  }
++  sb::JoinParts off;
++  off.settings = false;
++  off.extensions = false;
++  Join(off);
++  Scan();
++  {
++    base::ScopedAllowBlockingForTesting allow;
++    ASSERT_TRUE(base::WriteFile(file, with_parts));
++    ASSERT_TRUE(base::TouchFile(file, mtime, mtime));
++    // At the first read after the update, the file is only a stub.
++    ASSERT_TRUE(base::Move(file, stub));
++  }
++  service()->ForgetPartsReadForTesting();
++  Scan();
++  {
++    base::ScopedAllowBlockingForTesting allow;
++    ASSERT_TRUE(base::Move(stub, file));
++    ASSERT_TRUE(base::TouchFile(file, mtime, mtime));
++  }
++  Scan();
++  const base::DictValue status = service()->GetStatus();
++  const base::ListValue* const there = status.FindList("settingsThere");
++  ASSERT_TRUE(there);
++  ASSERT_EQ(1u, there->size());
++  EXPECT_EQ("Office PC", (*there)[0].GetString());
 +}
 +
 +}  // namespace

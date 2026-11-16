@@ -43,11 +43,11 @@ Removable when: never; Stedding's own model of pins.
  chrome/browser/ui/spaces/BUILD.gn             |   32 +
  chrome/browser/ui/spaces/pin_mirror.cc        | 1214 +++++++++++++++++
  chrome/browser/ui/spaces/pin_mirror.h         |  194 +++
- chrome/browser/ui/spaces/pin_store.cc         |  552 ++++++++
- chrome/browser/ui/spaces/pin_store.h          |  178 +++
+ chrome/browser/ui/spaces/pin_store.cc         |  610 +++++++++
+ chrome/browser/ui/spaces/pin_store.h          |  183 +++
  chrome/browser/ui/spaces/pin_store_factory.cc |   75 +
  chrome/browser/ui/spaces/pin_store_factory.h  |   47 +
- .../browser/ui/spaces/pin_store_unittest.cc   |  531 +++++++
+ .../browser/ui/spaces/pin_store_unittest.cc   |  645 +++++++++
  .../browser/ui/spaces/sidebar_sync_tracker.cc |    9 +-
  chrome/browser/ui/spaces/space_model.cc       |   12 +
  chrome/browser/ui/stedding/stedding_prefs.cc  |    2 +
@@ -61,7 +61,7 @@ Removable when: never; Stedding's own model of pins.
  .../test/stedding/command_bar_browsertest.cc  |   38 +-
  chrome/test/stedding/import_browsertest.cc    |   36 +-
  .../stedding/pins_every_window_browsertest.cc | 1029 ++++++++++++++
- 26 files changed, 4024 insertions(+), 17 deletions(-)
+ 26 files changed, 4201 insertions(+), 17 deletions(-)
  create mode 100644 chrome/browser/ui/spaces/pin_mirror.cc
  create mode 100644 chrome/browser/ui/spaces/pin_mirror.h
  create mode 100644 chrome/browser/ui/spaces/pin_store.cc
@@ -1672,10 +1672,10 @@ index 0000000000000..ac94d2eb2959e
 +#endif  // CHROME_BROWSER_UI_SPACES_PIN_MIRROR_H_
 diff --git a/chrome/browser/ui/spaces/pin_store.cc b/chrome/browser/ui/spaces/pin_store.cc
 new file mode 100644
-index 0000000000000..f282ae59102ff
+index 0000000000000..436838c411aaa
 --- /dev/null
 +++ b/chrome/browser/ui/spaces/pin_store.cc
-@@ -0,0 +1,552 @@
+@@ -0,0 +1,610 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -1686,6 +1686,7 @@ index 0000000000000..f282ae59102ff
 +#include <optional>
 +#include <utility>
 +
++#include "base/auto_reset.h"
 +#include "base/strings/utf_string_conversions.h"
 +#include "base/token.h"
 +#include "chrome/browser/ui/stedding/stedding_prefs.h"
@@ -1832,9 +1833,38 @@ index 0000000000000..f282ae59102ff
 +      published.push_back(record.id);
 +    }
 +  }
-+  const std::vector<std::string> merged =
-+      MergeOrder(current, published, removed);
-+  any |= merged != current;
++  // windows G13: each run (the essentials, or a Space's pins) merges on its
++  // own, so the order a window sends for one run never moves another run's
++  // rows. The runs keep the place they first have in the store.
++  std::vector<std::string> keys;
++  std::map<std::string, std::vector<std::string>> current_runs;
++  std::map<std::string, std::vector<std::string>> published_runs;
++  for (const std::string& id : current) {
++    const auto it = by_id.find(id);
++    if (it == by_id.end()) {
++      continue;
++    }
++    const std::string key = RunOf(it->second);
++    if (!current_runs.contains(key)) {
++      keys.push_back(key);
++    }
++    current_runs[key].push_back(id);
++  }
++  for (const std::string& id : published) {
++    const std::string key = RunOf(by_id.at(id));
++    if (!current_runs.contains(key) && !published_runs.contains(key)) {
++      keys.push_back(key);
++    }
++    published_runs[key].push_back(id);
++  }
++  std::vector<std::string> merged;
++  for (const std::string& key : keys) {
++    const std::vector<std::string>& was = current_runs[key];
++    const std::vector<std::string> run =
++        MergeOrder(was, published_runs[key], removed);
++    any |= run != was;
++    merged.insert(merged.end(), run.begin(), run.end());
++  }
 +  if (!any && !titles) {
 +    return;
 +  }
@@ -1890,13 +1920,18 @@ index 0000000000000..f282ae59102ff
 +    // a title alone stays a title.
 +    const PinRecord& was = *it->second;
 +    PinRecord merged = *Find(record.id);
-+    if (record.tier != was.tier) {
++    const PinRecord& theirs = *Find(record.id);
++    const auto same_part = [](const PinRecord& a, const PinRecord& b) {
++      return a.tier == b.tier && a.has_space == b.has_space &&
++             (!a.has_space || a.space == b.space);
++    };
++    if (!same_part(record, was)) {
 +      merged.tier = record.tier;
-+    }
-+    if (record.has_space != was.has_space ||
-+        (record.has_space && record.space != was.space)) {
 +      merged.has_space = record.has_space;
 +      merged.space = record.space;
++    }
++    if (record.folder_path != was.folder_path) {
++      merged.folder_path = record.folder_path;
 +    }
 +    if (record.home != was.home) {
 +      merged.home = record.home;
@@ -1910,13 +1945,24 @@ index 0000000000000..f282ae59102ff
 +    if (record.title != was.title) {
 +      merged.title = record.title;
 +    }
-+    if (record.folder_path != was.folder_path) {
-+      merged.folder_path = record.folder_path;
-+    }
 +    if (record.separator != was.separator) {
 +      merged.separator = record.separator;
 +    }
-+    if (!(merged == *Find(record.id))) {
++    // The row's tier and Space go as one. When both windows changed them, or
++    // the fields of two windows make a row neither had (a Space pin of no
++    // Space), this window's place is taken whole, folders included.
++    if ((!same_part(record, was) && !same_part(theirs, was)) ||
++        (merged.tier == PinTier::kSpacePin && !merged.has_space)) {
++      merged.tier = record.tier;
++      merged.has_space = record.has_space;
++      merged.space = record.space;
++      merged.folder_path = record.folder_path;
++    }
++    // An essential is in no folder (folders F38).
++    if (merged.tier == PinTier::kEssential) {
++      merged.folder_path.clear();
++    }
++    if (!(merged == theirs)) {
 +      changes.changed.push_back(std::move(merged));
 +    }
 +  }
@@ -2103,9 +2149,21 @@ index 0000000000000..f282ae59102ff
 +    prefs_->SetList(stedding::prefs::kPinStore, ToValue(records_));
 +    prefs_->SetBoolean(stedding::prefs::kPinStoreReady, ready_);
 +  }
-+  for (Observer& observer : observers_) {
-+    observer.OnPinStoreChanged();
++  // A window told of a change may publish one of its own at once (a reconcile
++  // with a publish pending), which changes the store again while the windows
++  // are still being told. Each is told again once the round is over, not
++  // inside it.
++  if (notifying_) {
++    changed_again_ = true;
++    return;
 +  }
++  base::AutoReset<bool> notifying(&notifying_, true);
++  do {
++    changed_again_ = false;
++    for (Observer& observer : observers_) {
++      observer.OnPinStoreChanged();
++    }
++  } while (changed_again_);
 +}
 +
 +// static
@@ -2230,10 +2288,10 @@ index 0000000000000..f282ae59102ff
 +}  // namespace spaces
 diff --git a/chrome/browser/ui/spaces/pin_store.h b/chrome/browser/ui/spaces/pin_store.h
 new file mode 100644
-index 0000000000000..0e3f97bacfa57
+index 0000000000000..63feeffeee367
 --- /dev/null
 +++ b/chrome/browser/ui/spaces/pin_store.h
-@@ -0,0 +1,178 @@
+@@ -0,0 +1,183 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -2343,14 +2401,16 @@ index 0000000000000..0e3f97bacfa57
 +  bool ready() const { return ready_; }
 +
 +  // windows G13, G15: what changed in a window. `order` is the ids of the
-+  // runs whose order changed there, in the window's order; a record it lacks
-+  // (a tab moved away, another run) keeps its place after the record it
-+  // followed, and an id the store does not know and `changed` does not bring
-+  // is ignored. Each of `changed`, the records whose tab changed there, is
-+  // added or updated; one `order` lacks keeps its place, and a new one goes
-+  // at the end. A record the window did not touch is never written back from
-+  // it (ChangesSince). Only `removed` removes: a tab missing from a window is
-+  // never a removal. Tells the observers if anything but a title changed.
++  // runs whose order changed there, in the window's order; each run (the
++  // essentials, or a Space's pins) merges on its own, so one run's order
++  // never moves another's rows. A record of the run the window lacks (a tab
++  // moved away) keeps its place after the record it followed, and an id the
++  // store does not know and `changed` does not bring is ignored. Each of
++  // `changed`, the records whose tab changed there, is added or updated; one
++  // `order` lacks keeps its place, and a new one goes at the end. A record the
++  // window did not touch is never written back from it (ChangesSince). Only
++  // `removed` removes: a tab missing from a window is never a removal. Tells
++  // the observers if anything but a title changed.
 +  void Publish(const std::vector<std::string>& order,
 +               const std::vector<PinRecord>& changed,
 +               const std::set<std::string>& removed);
@@ -2407,6 +2467,9 @@ index 0000000000000..0e3f97bacfa57
 +  std::vector<PinRecord> records_;
 +  bool ready_ = false;
 +  base::ObserverList<Observer> observers_;
++  // Changed() is telling the observers; a change meanwhile is told after.
++  bool notifying_ = false;
++  bool changed_again_ = false;
 +};
 +
 +}  // namespace spaces
@@ -2548,10 +2611,10 @@ index 0000000000000..01a52609a7866
 +#endif  // CHROME_BROWSER_UI_SPACES_PIN_STORE_FACTORY_H_
 diff --git a/chrome/browser/ui/spaces/pin_store_unittest.cc b/chrome/browser/ui/spaces/pin_store_unittest.cc
 new file mode 100644
-index 0000000000000..df2bb7d6311fe
+index 0000000000000..0a6994e57b104
 --- /dev/null
 +++ b/chrome/browser/ui/spaces/pin_store_unittest.cc
-@@ -0,0 +1,531 @@
+@@ -0,0 +1,645 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -2563,6 +2626,7 @@ index 0000000000000..df2bb7d6311fe
 +#include <string>
 +#include <vector>
 +
++#include "base/memory/raw_ref.h"
 +#include "base/scoped_observation.h"
 +#include "base/strings/utf_string_conversions.h"
 +#include "base/token.h"
@@ -3079,6 +3143,119 @@ index 0000000000000..df2bb7d6311fe
 +  const PinChanges more = store.ChangesSince(held, now);
 +  store.Publish(more.order, more.changed, {});
 +  EXPECT_THAT(Ids(store), ElementsAre("q", "p", "n", "r", "m"));
++}
++
++// windows G13: the order a window sends for one run never moves another
++// run's rows. A pin dragged into the first essentials slot leaves the Space's
++// pins in their order.
++TEST_F(PinStoreTest, ARunsOrderMovesNoOtherRunsRows) {
++  const SpaceId work = NewSpace();
++  PinStore store(&prefs_);
++  const std::vector<PinRecord> held = {Essential("e1", "https://e1.example/"),
++                                       Essential("e2", "https://e2.example/"),
++                                       Pin("p1", work, "https://p1.example/"),
++                                       Pin("p2", work, "https://p2.example/"),
++                                       Pin("x", work, "https://x.example/"),
++                                       Pin("p3", work, "https://p3.example/"),
++                                       Pin("p4", work, "https://p4.example/")};
++  Ready(store, held);
++  ASSERT_THAT(Ids(store), ElementsAre("e1", "e2", "p1", "p2", "x", "p3", "p4"));
++
++  const PinChanges changes =
++      store.ChangesSince(held, {Essential("x", "https://x.example/"),
++                                Essential("e1", "https://e1.example/"),
++                                Essential("e2", "https://e2.example/"),
++                                Pin("p1", work, "https://p1.example/"),
++                                Pin("p2", work, "https://p2.example/"),
++                                Pin("p3", work, "https://p3.example/"),
++                                Pin("p4", work, "https://p4.example/")});
++  store.Publish(changes.order, changes.changed, {});
++  EXPECT_THAT(Ids(store), ElementsAre("x", "e1", "e2", "p1", "p2", "p3", "p4"));
++  EXPECT_EQ(PinTier::kEssential, store.Find("x")->tier);
++}
++
++// windows G13: two windows that each changed a row's place never make a row
++// neither had. An essential takes no folder, and an own essential made shared
++// in one window and a Space pin in another is a Space pin of its Space.
++TEST_F(PinStoreTest, TwoWindowsPlacesMakeNoRowNeitherHad) {
++  const SpaceId work = NewSpace();
++  PinStore store(&prefs_);
++  PinRecord own = Essential("o", "https://o.example/");
++  own.space = work;
++  own.has_space = true;
++  const std::vector<PinRecord> held = {Pin("x", work, "https://x.example/"),
++                                       own};
++  Ready(store, held);
++  // Another window makes x an essential, and o a shared essential.
++  PublishAll(store,
++             {Essential("x", "https://x.example/"),
++              Essential("o", "https://o.example/")},
++             {});
++
++  // This window, behind, put x in a folder and made o a pin of Work.
++  PinRecord filed = Pin("x", work, "https://x.example/");
++  filed.folder_path = R"([{"id":"f","title":"Mail"}])";
++  const PinChanges changes =
++      store.ChangesSince(held, {filed, Pin("o", work, "https://o.example/")});
++  store.Publish(changes.order, changes.changed, {});
++
++  const PinRecord* const x = store.Find("x");
++  ASSERT_TRUE(x);
++  EXPECT_FALSE(x->tier == PinTier::kEssential && !x->folder_path.empty())
++      << "an essential in a folder";
++  const PinRecord* const o = store.Find("o");
++  ASSERT_TRUE(o);
++  EXPECT_EQ(PinTier::kSpacePin, o->tier);
++  EXPECT_TRUE(o->has_space) << "a Space pin of no Space";
++  EXPECT_EQ(work, o->space);
++}
++
++// windows G13: a window told of a change may publish one of its own at once
++// (a reconcile with a publish pending). The store tells every window of it
++// after the round, not inside it, so no window is told twice in a row while
++// another has not heard the first change.
++TEST_F(PinStoreTest, AChangeMadeWhileTellingIsToldAfter) {
++  const SpaceId work = NewSpace();
++  PinStore store(nullptr);
++  Ready(store, {Pin("a", work, "https://a.example/")});
++
++  class Window : public PinStore::Observer {
++   public:
++    Window(PinStore& store, std::string name, std::vector<std::string>& heard,
++           bool publishes)
++        : store_(store),
++          name_(std::move(name)),
++          heard_(heard),
++          publishes_(publishes) {}
++    void OnPinStoreChanged() override {
++      heard_->push_back(name_);
++      if (publishes_) {
++        publishes_ = false;
++        PinRecord b;
++        b.id = "b";
++        b.tier = PinTier::kEssential;
++        b.home = GURL("https://b.example/");
++        store_->Publish({"b"}, {b}, {});
++      }
++    }
++
++   private:
++    const raw_ref<PinStore> store_;
++    const std::string name_;
++    const raw_ref<std::vector<std::string>> heard_;
++    bool publishes_;
++  };
++  std::vector<std::string> heard;
++  Window first(store, "first", heard, /*publishes=*/true);
++  Window second(store, "second", heard, /*publishes=*/false);
++  base::ScopedObservation<PinStore, PinStore::Observer> watch_first(&first);
++  base::ScopedObservation<PinStore, PinStore::Observer> watch_second(&second);
++  watch_first.Observe(&store);
++  watch_second.Observe(&store);
++
++  PublishAll(store, {Pin("a", work, "https://a.example/new")}, {});
++  EXPECT_THAT(heard, ElementsAre("first", "second", "first", "second"));
++  EXPECT_NE(nullptr, store.Find("b"));
 +}
 +
 +}  // namespace

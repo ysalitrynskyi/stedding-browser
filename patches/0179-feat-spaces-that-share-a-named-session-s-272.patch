@@ -54,15 +54,15 @@ Removable when: never; this is the feature.
  .../stedding_page/stedding_sync_section.ts    |  14 +-
  .../resources/stedding_welcome/from_arc.ts    |   8 +-
  chrome/browser/ui/spaces/app_jar.cc           |   9 +-
- .../browser/ui/spaces/arc_sidebar_importer.cc |  55 +-
- .../browser/ui/spaces/arc_sidebar_importer.h  |  11 +-
+ .../browser/ui/spaces/arc_sidebar_importer.cc | 121 +++-
+ .../browser/ui/spaces/arc_sidebar_importer.h  |  21 +-
  .../spaces/arc_sidebar_importer_unittest.cc   |   4 +-
  chrome/browser/ui/spaces/isolation_mark.cc    |  26 +
  chrome/browser/ui/spaces/isolation_mark.h     |  19 +
  chrome/browser/ui/spaces/new_tab_space.cc     |   6 +
  chrome/browser/ui/spaces/sidebar_backup.cc    |  31 +-
  .../ui/spaces/sidebar_backup_unittest.cc      | 205 +++++-
- .../browser/ui/spaces/sidebar_sync_apply.cc   |  25 +-
+ .../browser/ui/spaces/sidebar_sync_apply.cc   |  28 +-
  chrome/browser/ui/spaces/sidebar_sync_file.cc |   3 +
  .../browser/ui/spaces/sidebar_sync_service.cc |  35 +-
  .../browser/ui/spaces/sidebar_sync_state.cc   |  23 +-
@@ -94,8 +94,8 @@ Removable when: never; this is the feature.
  .../stedding/isolation_mark_browsertest.cc    |  45 +-
  .../stedding/settings_spaces_browsertest.cc   | 177 ++++-
  .../stedding/shared_session_browsertest.cc    | 667 ++++++++++++++++++
- .../test/stedding/sidebar_sync_browsertest.cc | 276 ++++++++
- 48 files changed, 2466 insertions(+), 127 deletions(-)
+ .../test/stedding/sidebar_sync_browsertest.cc | 354 ++++++++++
+ 48 files changed, 2621 insertions(+), 129 deletions(-)
  create mode 100644 chrome/test/stedding/shared_session_browsertest.cc
 
 diff --git a/chrome/app/stedding_strings.grdp b/chrome/app/stedding_strings.grdp
@@ -368,10 +368,18 @@ index 71738fa404851..d6e695e6476ec 100644
  
  }  // namespace spaces
 diff --git a/chrome/browser/ui/spaces/arc_sidebar_importer.cc b/chrome/browser/ui/spaces/arc_sidebar_importer.cc
-index 222995edf69f1..fec592d17b14d 100644
+index 222995edf69f1..c18075297b93a 100644
 --- a/chrome/browser/ui/spaces/arc_sidebar_importer.cc
 +++ b/chrome/browser/ui/spaces/arc_sidebar_importer.cc
-@@ -49,6 +49,7 @@
+@@ -32,6 +32,7 @@
+ #include "base/strings/string_number_conversions.h"
+ #include "base/strings/string_util.h"
+ #include "base/strings/utf_string_conversions.h"
++#include "base/supports_user_data.h"
+ #include "base/task/thread_pool.h"
+ #include "base/token.h"
+ #include "base/uuid.h"
+@@ -49,6 +50,7 @@
  #include "chrome/browser/ui/spaces/space_model.h"
  #include "chrome/browser/ui/spaces/tab_space_restore_data.h"
  #include "chrome/browser/ui/spaces/unloaded_tab.h"
@@ -379,7 +387,70 @@ index 222995edf69f1..fec592d17b14d 100644
  #include "chrome/browser/ui/stedding/stedding_prefs.h"
  #include "chrome/browser/ui/stedding/tab_names.h"
  #include "chrome/browser/ui/stedding/tab_parents.h"
-@@ -1078,7 +1079,8 @@ void InsertEssentials(ApplyContext& ctx,
+@@ -617,8 +619,50 @@ struct ApplyContext {
+   std::map<std::string, std::vector<raw_ptr<tabs::TabInterface>>> panes;
+   // I7: how each of those splits is laid out.
+   std::map<std::string, split_tabs::SplitTabVisualData> split_looks;
++  // Sf10, Sf35: each id a sidebar sync join shares that names an item here
++  // under its own id, to that id (SharedToHere).
++  std::map<std::string, std::string> shared_to_here;
+ };
+ 
++// Sf10, Sf35: the sidebar sync's resolved aliases, kept on the profile
++// (SetSyncAliasesForImport).
++constexpr char kSyncAliasesKey[] = "stedding_sync_aliases_for_import";
++
++struct SyncAliases : public base::SupportsUserData::Data {
++  explicit SyncAliases(std::map<std::string, std::string> aliases)
++      : resolved(std::move(aliases)) {}
++
++  std::map<std::string, std::string> resolved;
++};
++
++// Sf10, Sf35: each id a sync join shares that names a Space, tab or folder
++// here under its own id, to that id. An item here that has the shared id
++// itself keeps it.
++std::map<std::string, std::string> SharedToHere(
++    Profile* profile,
++    const SpaceModel& model,
++    const std::set<std::string>& open) {
++  std::map<std::string, std::string> out;
++  const auto* const aliases =
++      profile ? static_cast<const SyncAliases*>(
++                    profile->GetUserData(kSyncAliasesKey))
++              : nullptr;
++  if (!aliases || aliases->resolved.empty()) {
++    return out;
++  }
++  std::set<std::string> here = open;
++  for (const std::unique_ptr<Space>& space : model.spaces()) {
++    here.insert(space->id().ToString());
++  }
++  for (const std::string& id : here) {
++    const auto it = aliases->resolved.find(id);
++    if (it != aliases->resolved.end() && !here.contains(it->second)) {
++      out.try_emplace(it->second, id);
++    }
++  }
++  return out;
++}
++
+ // I3: a tab that shows its title and loads on its first activation, the way
+ // session restore creates the tabs it does not load (unloaded_tab.h). A name
+ // the person gave it in Arc is its name, as a rename here makes one, so it
+@@ -689,6 +733,11 @@ bool Remembered(const ApplyContext& ctx, const std::string& id) {
+ // against what is open alone, so a tab closed since comes back (Sf2,
+ // docs/history/plan-2026-09-26.md WEB-19).
+ bool Present(const ApplyContext& ctx, const std::string& id) {
++  // Sf10: an item a sidebar sync join paired is here under its own id.
++  if (const auto paired = ctx.shared_to_here.find(id);
++      paired != ctx.shared_to_here.end() && ctx.open.contains(paired->second)) {
++    return true;
++  }
+   return ctx.open.contains(id) ||
+          (Remembered(ctx, id) && ctx.ids->Contains(id));
+ }
+@@ -1078,7 +1127,8 @@ void InsertEssentials(ApplyContext& ctx,
      const tabs::TabInterface* const tab = ctx.tabs->GetTabAtIndex(i);
      const bool counts =
          own ? (ctx.model->IsOwnEssential(tab) &&
@@ -389,7 +460,7 @@ index 222995edf69f1..fec592d17b14d 100644
              : ctx.model->IsSharedEssential(tab);
      if (counts) {
        ++in_row;
-@@ -1204,7 +1206,7 @@ size_t ArcImportPlan::folder_count() const {
+@@ -1204,7 +1254,7 @@ size_t ArcImportPlan::folder_count() const {
    return folders;
  }
  
@@ -398,7 +469,7 @@ index 222995edf69f1..fec592d17b14d 100644
    std::vector<std::string> out;
    for (const Space& space : spaces) {
      if (!space.profile.empty() &&
-@@ -1280,6 +1282,15 @@ std::optional<ArcImportPlan> ParseArcSidebar(std::string_view json) {
+@@ -1280,6 +1330,15 @@ std::optional<ArcImportPlan> ParseArcSidebar(std::string_view json) {
        }
        space.dark_color = ColorFromText(StringAt(*own, "darkColor"));
        space.isolated = own->FindBool("isolated").value_or(false);
@@ -414,7 +485,7 @@ index 222995edf69f1..fec592d17b14d 100644
        if (const auto it = items.find(StringAt(*own, "essentials"));
            it != items.end()) {
          TakeTabs(BuildChildren(it->second, walk), space.essentials, walk);
-@@ -1541,9 +1552,9 @@ std::u16string SummariseArcImport(const ArcImportPlan& plan) {
+@@ -1541,9 +1600,9 @@ std::u16string SummariseArcImport(const ArcImportPlan& plan) {
      text += base::StrCat(
          {u" \u00B7 ", count(plan.routes.size(), u"route", u"routes")});
    }
@@ -426,7 +497,30 @@ index 222995edf69f1..fec592d17b14d 100644
      for (size_t i = 0; i < profiles.size(); ++i) {
        text += base::StrCat({i ? u", " : u"", base::UTF8ToUTF16(profiles[i])});
      }
-@@ -1823,6 +1834,8 @@ ArcImportResult ApplyArcImport(BrowserWindowInterface* browser,
+@@ -1797,6 +1856,14 @@ void ApplyArcArchive(const ArcImportPlan& plan,
+ 
+ }  // namespace
+ 
++void SetSyncAliasesForImport(Profile* profile,
++                             std::map<std::string, std::string> resolved) {
++  if (profile) {
++    profile->SetUserData(kSyncAliasesKey,
++                         std::make_unique<SyncAliases>(std::move(resolved)));
++  }
++}
++
+ ArcImportResult ApplyArcImport(BrowserWindowInterface* browser,
+                                const ArcImportPlan& plan,
+                                const ArcImportOptions& options) {
+@@ -1813,6 +1880,7 @@ ArcImportResult ApplyArcImport(BrowserWindowInterface* browser,
+   ApplyContext ctx{browser, model, tabs, profile, &ids, &result};
+   ctx.durable = plan.written_by_stedding;
+   ctx.open = OpenIds(browser);
++  ctx.shared_to_here = SharedToHere(profile, *model, ctx.open);
+   // Every tab here knows its Space; no route moves it (routing D2).
+   SpaceModel::ScopedRoutingPause no_routing(model);
+ 
+@@ -1823,16 +1891,23 @@ ArcImportResult ApplyArcImport(BrowserWindowInterface* browser,
  
    if (options.spaces) {
      bool default_taken = false;
@@ -435,7 +529,24 @@ index 222995edf69f1..fec592d17b14d 100644
      for (size_t i = 0; i < plan.spaces.size(); ++i) {
        const ArcImportPlan::Space& arc_space = plan.spaces[i];
        Space* space = nullptr;
-@@ -1848,6 +1861,7 @@ ArcImportResult ApplyArcImport(BrowserWindowInterface* browser,
+       if (const std::optional<SpaceId> known = ids.SpaceFor(arc_space.arc_id)) {
+         space = model->GetSpace(*known);
+       }
+-      // A snapshot of this profile names Spaces by their own ids (I18).
++      // A snapshot of this profile names Spaces by their own ids (I18); a
++      // Space a sidebar sync join paired is here under its own id (Sf10).
+       if (!space) {
++        const auto paired = ctx.shared_to_here.find(arc_space.arc_id);
++        const std::string own_id = paired == ctx.shared_to_here.end()
++                                       ? arc_space.arc_id
++                                       : paired->second;
+         if (const std::optional<SpaceId> own = SpaceId::FromOptionalToken(
+-                base::Token::FromString(arc_space.arc_id));
++                base::Token::FromString(own_id));
+             own && model->GetSpace(*own)) {
+           space = model->GetSpace(*own);
+         }
+@@ -1848,6 +1923,7 @@ ArcImportResult ApplyArcImport(BrowserWindowInterface* browser,
          continue;
        }
        if (!space) {
@@ -443,7 +554,7 @@ index 222995edf69f1..fec592d17b14d 100644
          // A lone unnamed default Space is the first Space's to take.
          const bool take_default = !default_taken && model->size() == 1 &&
                                    model->spaces().front()->name().empty();
-@@ -1860,6 +1874,7 @@ ArcImportResult ApplyArcImport(BrowserWindowInterface* browser,
+@@ -1860,6 +1936,7 @@ ArcImportResult ApplyArcImport(BrowserWindowInterface* browser,
                arc_space.title,
                arc_space.color.value_or(
                    kSpaceColors.at(model->size() % kSpaceColors.size()).color));
@@ -451,7 +562,7 @@ index 222995edf69f1..fec592d17b14d 100644
          }
          if (!arc_space.emoji.empty()) {
            model->SetSpaceIcon(space->id(), arc_space.emoji);
-@@ -1869,13 +1884,43 @@ ArcImportResult ApplyArcImport(BrowserWindowInterface* browser,
+@@ -1869,13 +1946,43 @@ ArcImportResult ApplyArcImport(BrowserWindowInterface* browser,
            model->SetSpaceColors(space->id(), *arc_space.color,
                                  arc_space.dark_color);
          }
@@ -497,10 +608,26 @@ index 222995edf69f1..fec592d17b14d 100644
          // A file Stedding wrote leaves no id in the profile's list (Sf2):
          // the Space is found again by the token it is remembered under.
 diff --git a/chrome/browser/ui/spaces/arc_sidebar_importer.h b/chrome/browser/ui/spaces/arc_sidebar_importer.h
-index c56e61808dbb3..d8d0100aaf762 100644
+index c56e61808dbb3..d01f8460e6457 100644
 --- a/chrome/browser/ui/spaces/arc_sidebar_importer.h
 +++ b/chrome/browser/ui/spaces/arc_sidebar_importer.h
-@@ -76,7 +76,12 @@ struct ArcImportPlan {
+@@ -5,6 +5,7 @@
+ #ifndef CHROME_BROWSER_UI_SPACES_ARC_SIDEBAR_IMPORTER_H_
+ #define CHROME_BROWSER_UI_SPACES_ARC_SIDEBAR_IMPORTER_H_
+ 
++#include <map>
+ #include <optional>
+ #include <string>
+ #include <string_view>
+@@ -18,6 +19,7 @@
+ #include "url/gurl.h"
+ 
+ class BrowserWindowInterface;
++class Profile;
+ 
+ namespace spaces {
+ 
+@@ -76,7 +78,12 @@ struct ArcImportPlan {
      // sessions S32: the Space has its own session. A Space an import makes
      // takes a jar of its own, empty: what was signed in does not travel.
      bool isolated = false;
@@ -514,7 +641,7 @@ index c56e61808dbb3..d8d0100aaf762 100644
      std::string profile;
      std::vector<Node> pinned;
      std::vector<Node> unpinned;
-@@ -151,7 +156,7 @@ struct ArcImportPlan {
+@@ -151,7 +158,7 @@ struct ArcImportPlan {
    size_t folder_count() const;
    // I7: the splits with two panes that can come across.
    size_t split_count() const;
@@ -523,7 +650,7 @@ index c56e61808dbb3..d8d0100aaf762 100644
  };
  
  // The essentials row holds this many at most (I11).
-@@ -169,7 +174,7 @@ void ParseArcRoutes(std::string_view json, ArcImportPlan& plan);
+@@ -169,7 +176,7 @@ void ParseArcRoutes(std::string_view json, ArcImportPlan& plan);
  void ParseArcArchive(std::string_view json, ArcImportPlan& plan);
  
  // The one line the welcome flow and the settings row show before anything
@@ -532,6 +659,21 @@ index c56e61808dbb3..d8d0100aaf762 100644
  // twelve (I11) named.
  std::u16string SummariseArcImport(const ArcImportPlan& plan);
  
+@@ -251,6 +258,14 @@ ArcImportResult ApplyArcImport(BrowserWindowInterface* browser,
+                                const ArcImportPlan& plan,
+                                const ArcImportOptions& options);
+ 
++// sidebar-file Sf10, Sf35: the ids a sidebar sync join made one item, as the
++// sync resolves them (an id to the shared id), kept on `profile` for the
++// import. A file that names a shared id -- a backup an older version wrote,
++// a sync file -- then finds the Space, pin or folder that is here under its
++// own id, and makes no second copy. The sidebar sync sets them.
++void SetSyncAliasesForImport(Profile* profile,
++                             std::map<std::string, std::string> resolved);
++
+ // I4: whether this Mac has the file, learned once off the UI thread at the
+ // first window, so the bar can offer the import from its first opening.
+ void PrimeArcSidebarPresence();
 diff --git a/chrome/browser/ui/spaces/arc_sidebar_importer_unittest.cc b/chrome/browser/ui/spaces/arc_sidebar_importer_unittest.cc
 index cdf4592fe0c9c..d93eb565879b1 100644
 --- a/chrome/browser/ui/spaces/arc_sidebar_importer_unittest.cc
@@ -964,10 +1106,10 @@ index 019b440f1981f..403ebf29c6ec2 100644
  // its own session has as its own is written with that Space, which is
  // written as having its own session. One Space's export carries its own
 diff --git a/chrome/browser/ui/spaces/sidebar_sync_apply.cc b/chrome/browser/ui/spaces/sidebar_sync_apply.cc
-index 545982133dc48..414d863c57554 100644
+index 545982133dc48..b625323257047 100644
 --- a/chrome/browser/ui/spaces/sidebar_sync_apply.cc
 +++ b/chrome/browser/ui/spaces/sidebar_sync_apply.cc
-@@ -13,6 +13,7 @@
+@@ -13,9 +13,11 @@
  #include "base/memory/raw_ptr.h"
  #include "base/memory/raw_ref.h"
  #include "base/strings/utf_string_conversions.h"
@@ -975,7 +1117,11 @@ index 545982133dc48..414d863c57554 100644
  #include "base/token.h"
  #include "chrome/browser/profiles/profile.h"
  #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
-@@ -54,6 +55,12 @@ bool IsFolder(const std::string& id) {
++#include "chrome/browser/ui/spaces/arc_sidebar_importer.h"
+ #include "chrome/browser/ui/spaces/sidebar_ids.h"
+ #include "chrome/browser/ui/spaces/sidebar_sync_file.h"
+ #include "chrome/browser/ui/spaces/sidebar_sync_tracker.h"
+@@ -54,6 +56,12 @@ bool IsFolder(const std::string& id) {
    return FolderIdOf(id).has_value();
  }
  
@@ -988,7 +1134,7 @@ index 545982133dc48..414d863c57554 100644
  // The jar a Space's tabs use: its own while it has one, else the profile's.
  std::string JarOf(const SpaceRegistry& registry, const SpaceId& id) {
    const RegistryEntry* const entry = registry.Find(id);
-@@ -221,6 +228,8 @@ class Applier {
+@@ -221,6 +229,8 @@ class Applier {
            ColorFromHex(record.Get(kFieldDarkColor));
        const bool chosen = record.Get(kFieldColorChosen) == "1";
        const bool isolated = record.Get(kFieldIsolated) == "1";
@@ -997,7 +1143,7 @@ index 545982133dc48..414d863c57554 100644
        if (!found) {
          RegistryEntry made(
              *space, name,
-@@ -230,9 +239,12 @@ class Applier {
+@@ -230,9 +240,12 @@ class Applier {
          made.dark_color = dark;
          registry_->AddExisting(made);
          // Sf24: a Space made here with its own session takes a jar of its
@@ -1012,7 +1158,7 @@ index 545982133dc48..414d863c57554 100644
          }
          ledger_->pending_adds.erase(id);
          ++out_->applied;
-@@ -259,11 +271,14 @@ class Applier {
+@@ -259,11 +272,14 @@ class Applier {
        if (changed) {
          ++out_->applied;
        }
@@ -1030,6 +1176,15 @@ index 545982133dc48..414d863c57554 100644
            out_->isolation_questions.push_back(id);
          }
        }
+@@ -765,6 +781,8 @@ ApplyOutcome ApplyToWindows(Profile* profile,
+                             Ledger& ledger,
+                             const Resolved& resolved,
+                             const std::set<std::string>& move_now) {
++  // Sf10, Sf35: an import finds what a join paired by its id here.
++  SetSyncAliasesForImport(profile, resolved);
+   ApplyOutcome out;
+   Applier(profile, ledger, resolved, move_now, out).Run();
+   return out;
 diff --git a/chrome/browser/ui/spaces/sidebar_sync_file.cc b/chrome/browser/ui/spaces/sidebar_sync_file.cc
 index f8f230f389511..29049c0affc0e 100644
 --- a/chrome/browser/ui/spaces/sidebar_sync_file.cc
@@ -3543,7 +3698,7 @@ index 0000000000000..b48e5a9da684d
 +
 +}  // namespace
 diff --git a/chrome/test/stedding/sidebar_sync_browsertest.cc b/chrome/test/stedding/sidebar_sync_browsertest.cc
-index 5fa7aa49c2cd7..d011d79f34e74 100644
+index 5fa7aa49c2cd7..0824c48cc3a53 100644
 --- a/chrome/test/stedding/sidebar_sync_browsertest.cc
 +++ b/chrome/test/stedding/sidebar_sync_browsertest.cc
 @@ -6,6 +6,7 @@
@@ -3562,7 +3717,7 @@ index 5fa7aa49c2cd7..d011d79f34e74 100644
  #include "chrome/browser/ui/spaces/sidebar_ids.h"
  #include "chrome/browser/ui/spaces/sidebar_sync_file.h"
  #include "chrome/browser/ui/spaces/sidebar_sync_ledger.h"
-@@ -559,6 +561,280 @@ IN_PROC_BROWSER_TEST_F(SidebarSyncTest, OnlyTheUsersOwnRemovalTravels) {
+@@ -559,6 +561,358 @@ IN_PROC_BROWSER_TEST_F(SidebarSyncTest, OnlyTheUsersOwnRemovalTravels) {
  // Sf25: a loaded pin another computer moves out of a Space with its own
  // session onto the shared essentials row, which is in the profile's
  // session, waits for Move now like a move into another Space's session.
@@ -3834,6 +3989,84 @@ index 5fa7aa49c2cd7..d011d79f34e74 100644
 +    ASSERT_TRUE(done.Get().has_value()) << name;
 +    EXPECT_EQ(0u, done.Get()->spaces) << name;
 +  }
++  EXPECT_EQ(spaces_before, registry().entries().size())
++      << "the paired Space was made a second time";
++  EXPECT_TRUE(TabWithToken(mine_id));
++  EXPECT_FALSE(TabWithToken(paired)) << "the paired pin came in twice";
++}
++
++// Sf10, Sf35: a backup an older version wrote names what a join paired by
++// the shared ids; importing it finds the Space and the pin here under their
++// own ids and makes no second Space and no second pin.
++IN_PROC_BROWSER_TEST_F(SidebarSyncTest,
++                       ABackupUnderTheSharedIdsImportsWithoutCopies) {
++  const spaces::SpaceId here_id = model().active_id();
++  const std::string here = here_id.ToString();
++  model().SetSpaceName(here_id, "Work");
++  tabs::TabInterface* const mine = OpenPin();
++  ASSERT_TRUE(mine);
++  const std::string mine_id =
++      spaces::TabSyncId(stedding::EnsureTabToken(mine));
++  ASSERT_NE("tab:", mine_id);
++  const GURL home = mine->GetContents()->GetLastCommittedURL();
++  // The other computer's ids are the smaller: they become the shared ones.
++  std::string there = base::Token::CreateRandom().ToString();
++  while (there >= here) {
++    there = base::Token::CreateRandom().ToString();
++  }
++  std::string paired = NewTabId();
++  while (paired >= mine_id) {
++    paired = NewTabId();
++  }
++  // Its Work holds the same pin and one of its own, whose arrival shows
++  // the join has been applied.
++  const std::string extra = NewTabId();
++  const int64_t start = NowMs();
++  sb::State peer = PeerState(there, {extra}, start, "Work");
++  {
++    const sb::Stamp stamp{start, kPeer};
++    sb::Record pin(sb::Kind::kTab);
++    pin.f[sb::kFieldHome] = sb::Field{home.spec(), stamp};
++    pin.f[sb::kFieldName] = sb::Field{"", stamp};
++    pin.f[sb::kFieldParent] = sb::Field{sb::PinsListOf(there), stamp};
++    peer.records[paired] = pin;
++    std::vector<std::string>& run = peer.lists[sb::PinsListOf(there)].order;
++    run.insert(run.begin(), paired);
++  }
++  WritePeer(peer, 1);
++  const size_t spaces_before = registry().entries().size();
++  {
++    const base::DictValue preview = Preview(shared_.GetPath());
++    ASSERT_FALSE(preview.FindString("refusal"));
++    const base::ListValue* const pairs = preview.FindList("pairs");
++    ASSERT_TRUE(pairs);
++    ASSERT_EQ(2u, pairs->size()) << preview.DebugString();
++  }
++  ASSERT_TRUE(
++      service()->ConfirmJoin(/*combine=*/true, "Test computer", {0, 1}));
++  ASSERT_TRUE(base::test::RunUntil([&] { return service()->enabled(); }));
++  ASSERT_TRUE(
++      base::test::RunUntil([&] { return TabWithToken(extra) != nullptr; }));
++  ASSERT_EQ(spaces_before, registry().entries().size());
++
++  // The backup 0.5 wrote when a held batch was applied: the ledger as it
++  // is, under the shared ids.
++  const sb::Ledger* const ledger = service()->ledger_for_testing();
++  ASSERT_TRUE(ledger);
++  const spaces::ArcImportPlan plan = sb::LedgerToPlan(ledger->state);
++  ASSERT_EQ(1u, plan.spaces.size());
++  ASSERT_EQ(there, plan.spaces[0].arc_id);
++  const base::FilePath older =
++      shared_.GetPath().AppendASCII("before-sync-older.json");
++  {
++    base::ScopedAllowBlockingForTesting allow;
++    ASSERT_TRUE(base::WriteFile(older, spaces::PlanToJson(plan)));
++  }
++
++  base::test::TestFuture<std::optional<spaces::ArcImportResult>> done;
++  spaces::ImportSidebarFileAsync(browser(), older, done.GetCallback());
++  ASSERT_TRUE(done.Get().has_value());
++  EXPECT_EQ(0u, done.Get()->spaces);
 +  EXPECT_EQ(spaces_before, registry().entries().size())
 +      << "the paired Space was made a second time";
 +  EXPECT_TRUE(TabWithToken(mine_id));

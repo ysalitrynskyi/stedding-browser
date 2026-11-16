@@ -7,7 +7,8 @@ What was built, newest first. Nothing here is needed to do a task: `AGENTS.md` c
 The owner gave the day to finishing 0.6.0's items, with the Mac in use: every build and test ran
 on the Windows PC. Each item was reviewed by readers who had not written it, each claim checked by a
 second reader trying to refute it, and every fault that survived was fixed with a test; then the
-fixes were reviewed the same way, twice; what the last review found is S-495.
+fixes were reviewed the same way, twice, and the eight faults the last review found (S-495) were fixed
+the same day.
 
 - S-479 (ADR 0037; patch 0191; sidebar-file Sf58-Sf69, settings T73, T74; GitHub issue 109):
   Stedding's own settings and the sites routed to Spaces travel with sync, each keeping its later

@@ -2,6 +2,32 @@
 
 What was built, newest first. Nothing here is needed to do a task: `AGENTS.md` carries what is true now, `BACKLOG.md` the order of work, `PLAN.md` the owner's decisions. This file was the "State of the project" section of `AGENTS.md` until 2026-09-30. This log starts at 2026-10-15. Closed work from before that is the table in [docs/history/archive.md](history/archive.md).
 
+## 2026-11-16 -- pins and essentials in every window; a title runs to the row's end
+
+The owner planned 0.6.0 on 2026-11-15, one decision at a time (`BACKLOG.md`, "The next
+release"), and said "Yes, start" to its first item.
+
+- S-94's second slice (windows G2, G13-G22; ADR 0035, option B; GitHub issue 111; patch 0190):
+  pins and essentials are the profile's. `PinStore`, a profile service, keeps one record per pin
+  and essential in `stedding.pins.store`; a `PinMirror` per registry window publishes what changed
+  there and gives the window a tab of each record, asleep until chosen, in its Space, its pinned
+  folder and its place. A pinned folder is one folder in every window, by id, with its name, icon
+  and open or closed state. A pin removed in one window closes the asleep copies elsewhere without
+  a trace and leaves an open one as a loose tab. The first launch fills the store from every
+  restored window after a backup of each sidebar. "Switch to this tab" for a pin's page goes to
+  this window's own tab of it, and the command bar no longer lists another window's tab of a pin.
+  The DCHECK build found the store's factory registered after the profile's services were built
+  (98 tests stopped at one check); it is now registered beside the Space registry. Checked on
+  Windows: the release build's 22 pin, import and bar tests three of three and 615 related browser
+  tests (one crash in a parallel run, S-492, passed three of three alone), the DCHECK build's 102
+  and ASan's 111. Owed: the Mac and a pass on a real build in two windows.
+- S-491 (tabs R2; patches 0173 and 0182): the owner found the fade at the end of a tab's title far
+  from the sidebar's edge. The row kept the close button's place even when the button was hidden.
+  Of three rendered options the owner chose "room on hover": at rest the title runs to the row's
+  end, and the row under the pointer, or with its close button focused, makes room for it.
+  `SidebarClickTest.ATitleRunsToTheEndUntilThePointerComes` failed on the old layout and passed
+  three of three with the change; 119 related tests passed. The Mac is owed.
+
 ## 2026-11-14 -- 0.5.1: the Mac's right-click, a row in a colour the page never shows, Shift-click for a peek, a menu on the download toast
 
 The owner, on the signed 0.5.0: a right-click on a link closed the browser, and the first tab at

@@ -84,6 +84,6 @@ A synced file is that export plus a `stedding_sync` block: the format number, th
 - A Space's own essential comes in as its own only when the Space has its own session here. Otherwise it joins the shared row.
 - Arc's folders in a pinned run still come in under the Clear line. Only a file Stedding wrote says a folder was pinned.
 - A computer away for more than 180 days can bring removed items back as additions. A large batch is held (Sf22).
-- Pins in a closed window stay in the ledger and keep travelling. They come back through **Bring them here** (Sf20) or by reopening the window, until windows G2 (S-94) shows pins in every window.
+- Pins are the profile's and every window shows them (windows G2, G20): a pin in two windows is one item. A pin kept in the ledger from before the profile's store, in a window that was closed, comes back through **Bring them here** (Sf20) or by reopening the window.
 - The order of pins inside a run, a folder or an essentials row is not applied to the windows (Sf16). A pin another computer added joins the end of its run.
 - Not built: a computer first seen later asking before its same-named Space pairs (Sf11); waiting for a drag to end (Sf25); a notice that an item was kept because another computer changed it after it was removed here.

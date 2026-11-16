@@ -3,7 +3,7 @@
 Status: **H1–H6 and H8–H29 built. H7 partial** (Peek reads the stored home; no browser test drifts a pin and follows its link).
 Owner docs: `docs/PRODUCT.md` §1, `docs/features/spaces.md` (the two tiers).
 
-A pin remembers its home page. ⌘W puts it to sleep instead of closing it. Pins and essentials are going to be the profile's, a tab of each in every window (`docs/features/windows.md` G2, G13–G22; ADR 0035; not built), and each rule below then holds for each window's tab. While "Show when a pinned tab leaves its page" is on, a drifted pin shows a mark and can be sent home from its favicon.
+A pin remembers its home page. ⌘W puts it to sleep instead of closing it. Pins and essentials are the profile's, a tab of each in every window (`docs/features/windows.md` G2, G13–G22; ADR 0035), and each rule below holds for each window's tab. While "Show when a pinned tab leaves its page" is on, a drifted pin shows a mark and can be sent home from its favicon.
 
 ## Behaviours
 

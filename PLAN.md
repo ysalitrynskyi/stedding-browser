@@ -104,6 +104,13 @@ still open is a BACKLOG row that names its id.
     pins to a store for the profile: pins and essentials in every window (ADR 0035), settings and
     the extension list in sync (ADR 0037), and Live Folders for GitHub if they pass the gate in
     time (ADR 0036). A release that only fixes bugs is a patch release of the current minor.
+24. The owner, 2026-11-16, from pictured options: (a) on Windows with the address in the sidebar, the
+    window's buttons show only from a thin strip along the window's top edge, never over the page,
+    and stay while the pointer is on them (GitHub issues 118, 119); (b) closing the last tab of a
+    Space shows only a row or essential that is awake, else the Space's own page: nothing asleep or
+    never opened is woken (issue 121); (c) compact mode can hide the title bar too, shown on hover, in
+    0.6.0 (issue 120); (d) the player inside the window is option A, the audio card grows a 16:9 video
+    above its row (S-95's Mp1, discussion 104), built after 0.6.0.
 
 The operator's own request in chat comes before any of this and before BACKLOG's order.
 

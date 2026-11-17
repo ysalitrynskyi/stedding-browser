@@ -34,12 +34,12 @@ Removable when: never as behaviour.
  chrome/browser/ui/stedding/stedding_prefs.h   |   3 +
  .../ui/stedding/stedding_prefs_unittest.cc    |   2 +-
  .../ui/views/peek/peek_navigation_throttle.cc |   3 +
- .../ui/views/tabs/vertical/sidebar_address.cc |  12 +-
- .../ui/views/tabs/vertical/sidebar_address.h  |   7 +-
+ .../ui/views/tabs/vertical/sidebar_address.cc |  37 +++-
+ .../ui/views/tabs/vertical/sidebar_address.h  |  26 ++-
  .../browser/ui/webui/settings/settings_ui.cc  |   8 +
  .../stedding/little_window_browsertest.cc     | 186 ++++++++++++++++++
  .../stedding/sidebar_address_browsertest.cc   |  70 +++++++
- 14 files changed, 346 insertions(+), 9 deletions(-)
+ 14 files changed, 385 insertions(+), 14 deletions(-)
 
 diff --git a/chrome/browser/extensions/api/settings_private/prefs_util.cc b/chrome/browser/extensions/api/settings_private/prefs_util.cc
 index 1403b25828ca1..4323fa36f85d6 100644
@@ -220,10 +220,18 @@ index fd2fddbcf35c8..d9dbec25d447c 100644
    if (!handle.IsInPrimaryMainFrame() || !handle.IsRendererInitiated()) {
      return;
 diff --git a/chrome/browser/ui/views/tabs/vertical/sidebar_address.cc b/chrome/browser/ui/views/tabs/vertical/sidebar_address.cc
-index 120ec0d63aaa0..d2c9454bf38a4 100644
+index 120ec0d63aaa0..ff13973afd9ac 100644
 --- a/chrome/browser/ui/views/tabs/vertical/sidebar_address.cc
 +++ b/chrome/browser/ui/views/tabs/vertical/sidebar_address.cc
-@@ -376,6 +376,7 @@ class WindowCornerButtons::Watcher : public ui::EventObserver {
+@@ -54,6 +54,7 @@
+ #include "url/url_constants.h"
+ #include "chrome/browser/ui/stedding/stedding_prefs.h"
+ #include "chrome/browser/ui/views/frame/browser_view.h"
++#include "chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h"
+ #include "chrome/browser/ui/views/page_action/stedding_copy_link_page_action_controller.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "ui/views/view_class_properties.h"
+@@ -376,6 +377,7 @@ class WindowCornerButtons::Watcher : public ui::EventObserver {
  
    // ui::EventObserver:
    void OnEvent(const ui::Event& event) override {
@@ -231,17 +239,35 @@ index 120ec0d63aaa0..d2c9454bf38a4 100644
      if (event.IsLocatedEvent()) {
        corner_->OnPointerAt(event.AsLocatedEvent()->root_location_f());
      }
-@@ -424,12 +425,17 @@ bool WindowCornerButtons::InCorner(const gfx::Point& point) const {
+@@ -424,13 +426,40 @@ bool WindowCornerButtons::InCorner(const gfx::Point& point) const {
    return wanted_ && GetMirroredBounds().Contains(point);
  }
  
 -void WindowCornerButtons::OnPointerAt(const gfx::PointF& root_location) {
++gfx::Rect WindowCornerButtons::RevealStrip() const {
++  if (!wanted_ || !parent()) {
++    return gfx::Rect();
++  }
++  // The corner is at the parent's top, which is the window's top edge, the
++  // screen's when the window is maximized. A window that is not maximized
++  // has its top resize border there: the strip shows the buttons all the
++  // same, and the border still resizes (BrowserFrameViewWin's hit test puts
++  // its HTTOP before the client's answer).
++  const int gutter = VerticalTabStripRegionView::SteddingCardGutter(
++      views::AsViewClass<BrowserView>(parent()));
++  gfx::Rect strip = GetMirroredBounds();
++  strip.set_height(
++      std::min(strip.height(), std::max(kRevealStripMinimum, gutter)));
++  return strip;
++}
++
 +void WindowCornerButtons::OnPointerAt(const gfx::PointF& screen_location) {
    if (!wanted_ || !parent() || !GetWidget()) {
      return;
    }
 -  gfx::Point point = gfx::ToFlooredPoint(root_location);
 -  views::View::ConvertPointFromWidget(parent(), &point);
+-  SetRevealed(InCorner(point));
 +  // GitHub issue 45, a comment on 0.4.0 beta 8: the window's event monitor
 +  // hands over the pointer in screen coordinates. Read as the widget's, it
 +  // was off by the window's place on the screen: a maximized window sits at
@@ -249,23 +275,64 @@ index 120ec0d63aaa0..d2c9454bf38a4 100644
 +  // moved, missed its own corner and they never did.
 +  gfx::Point point = gfx::ToFlooredPoint(screen_location);
 +  views::View::ConvertPointFromScreen(parent(), &point);
-   SetRevealed(InCorner(point));
++  // GitHub issues 118 and 119: the whole corner showed them, over the page's
++  // own controls there -- a site's menu, its account button -- and a press
++  // meant for those met the window's buttons. They now show from the strip
++  // along the window's top alone, where the pointer goes on purpose, and
++  // stay while it is on them.
++  SetRevealed(revealed_ ? InCorner(point) : RevealStrip().Contains(point));
  }
  
+ void WindowCornerButtons::OnMouseExited(const ui::MouseEvent& event) {
 diff --git a/chrome/browser/ui/views/tabs/vertical/sidebar_address.h b/chrome/browser/ui/views/tabs/vertical/sidebar_address.h
-index f751fc5e4dd44..3ea9f20ff2283 100644
+index f751fc5e4dd44..cc91cf92e80e0 100644
 --- a/chrome/browser/ui/views/tabs/vertical/sidebar_address.h
 +++ b/chrome/browser/ui/views/tabs/vertical/sidebar_address.h
-@@ -174,9 +174,10 @@ class WindowCornerButtons : public views::View {
-   // shows the buttons.
+@@ -148,8 +148,10 @@ class SidebarWindowButtons : public views::View, public views::WidgetObserver {
+ // sidebar at the window's leading edge, the window's own buttons are at the
+ // window's top trailing corner, where they are with the sidebar at the
+ // trailing edge (Y42), not on the sidebar's top row, which they crowded. They
+-// sit over the page's corner on the window's own ground and show only while
+-// the pointer is there; hidden, the page has its corner.
++// sit over the page's corner on the window's own ground. They show when the
++// pointer comes into a thin strip along the window's top edge over the
++// corner, and stay while it is anywhere on the corner; hidden, the page has
++// its corner (GitHub issues 118, 119; the owner, 2026-11-16).
+ class WindowCornerButtons : public views::View {
+   METADATA_HEADER(WindowCornerButtons, views::View)
+ 
+@@ -157,6 +159,9 @@ class WindowCornerButtons : public views::View {
+   // The corner's size beyond the buttons, and the ground's rounded corner.
+   static constexpr int kPadding = 6;
+   static constexpr int kRadius = 10;
++  // The strip that shows the buttons is the card's top gutter, and this tall
++  // at least: with the page flush against the window there is no gutter.
++  static constexpr int kRevealStripMinimum = 5;
+ 
+   explicit WindowCornerButtons(BrowserWindowInterface* browser);
+   WindowCornerButtons(const WindowCornerButtons&) = delete;
+@@ -170,13 +175,20 @@ class WindowCornerButtons : public views::View {
+   bool revealed() const { return revealed_; }
+   SidebarWindowButtons* buttons() { return buttons_; }
+ 
+-  // Whether `point`, in the parent's coordinates, is in the corner that
+-  // shows the buttons.
++  // Whether `point`, in the parent's coordinates, is on the corner, which
++  // keeps the buttons shown once they are.
    bool InCorner(const gfx::Point& point) const;
  
 -  // The pointer, or a touch, at `root_location` in the widget: over the
 -  // corner it shows them, anywhere else it hides them.
 -  void OnPointerAt(const gfx::PointF& root_location);
++  // The strip along the window's top edge over the corner that shows the
++  // buttons, in the parent's coordinates: the card's top gutter, which is
++  // the window's own ground and never the page, at least
++  // kRevealStripMinimum tall. Empty while the corner is not wanted.
++  gfx::Rect RevealStrip() const;
++
 +  // The pointer, or a touch, at `screen_location`, as the window's event
-+  // monitor reports it: over the corner it shows them, anywhere else it
-+  // hides them.
++  // monitor reports it: in the strip it shows them, on the corner it keeps
++  // them shown, anywhere else it hides them.
 +  void OnPointerAt(const gfx::PointF& screen_location);
  
    // views::View:

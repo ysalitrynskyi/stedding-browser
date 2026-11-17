@@ -20,11 +20,11 @@ issue 83, private V10).
 
 Removable when: the Space model no longer owns the address row.
 ---
- .../ui/browser_window/internal/BUILD.gn       |  1 +
- .../internal/browser_window_features.cc       |  4 ++
- .../public/browser_window_features.h          |  4 ++
- .../stedding/sidebar_address_browsertest.cc   | 70 +++++++++++++++++++
- 4 files changed, 79 insertions(+)
+ .../ui/browser_window/internal/BUILD.gn       |   1 +
+ .../internal/browser_window_features.cc       |   4 +
+ .../public/browser_window_features.h          |   4 +
+ .../stedding/sidebar_address_browsertest.cc   | 275 +++++++++++++++++-
+ 4 files changed, 274 insertions(+), 10 deletions(-)
 
 diff --git a/chrome/browser/ui/browser_window/internal/BUILD.gn b/chrome/browser/ui/browser_window/internal/BUILD.gn
 index 6262faed52915..284f430c14d27 100644
@@ -83,10 +83,21 @@ index ea46594fd7464..542b86dc50362 100644
    std::unique_ptr<ttc::AiOverlayDialogController> ai_overlay_dialog_controller_;
  
 diff --git a/chrome/test/stedding/sidebar_address_browsertest.cc b/chrome/test/stedding/sidebar_address_browsertest.cc
-index 919916f2112ec..bcd41808a8d02 100644
+index 919916f2112ec..bebcec4c47649 100644
 --- a/chrome/test/stedding/sidebar_address_browsertest.cc
 +++ b/chrome/test/stedding/sidebar_address_browsertest.cc
-@@ -18,6 +18,7 @@
+@@ -9,6 +9,10 @@
+ #include <string>
+ #include <vector>
+ 
++#include "base/command_line.h"
++#include "base/i18n/base_i18n_switches.h"
++#include "base/i18n/rtl.h"
++#include "base/run_loop.h"
+ #include "base/strings/stringprintf.h"
+ #include "base/test/run_until.h"
+ #include "build/build_config.h"
+@@ -18,6 +22,7 @@
  #include "chrome/browser/ui/animation/browser_animation_controller.h"
  #include "chrome/browser/ui/browser_commands.h"
  #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
@@ -94,10 +105,106 @@ index 919916f2112ec..bcd41808a8d02 100644
  #include "chrome/browser/ui/stedding/stedding_command_ids.h"
  #include "chrome/browser/ui/stedding/stedding_prefs.h"
  #include "chrome/browser/ui/tabs/tab_strip_model.h"
-@@ -132,6 +133,75 @@ class SidebarAddressTest
+@@ -130,7 +135,170 @@ class SidebarAddressTest
+   static bool Shows(views::View* view) {
+     return view && view->IsDrawn() && !view->bounds().IsEmpty();
    }
++
++#if BUILDFLAG(IS_WIN)
++  // sidebar Y54 (GitHub issues 118, 119): the window's buttons at the corner
++  // show from the strip `strip` DIP tall along the window's top edge over the
++  // corner, never from the page under it, stay while the pointer is on them
++  // and go when it leaves. The pointer moves as the window's event monitor
++  // sees it; points are in the window's view, as drawn.
++  void CheckTheCornersStrip(int strip) {
++    views::Widget* const widget = browser_view()->GetWidget();
++    views::test::RunScheduledLayout(widget);
++    stedding::WindowCornerButtons* const corner =
++        browser_view()->stedding_corner_buttons_for_testing();
++    ASSERT_TRUE(corner && corner->wanted());
++    ui::test::EventGenerator generator(views::GetRootWindow(widget),
++                                       widget->GetNativeWindow());
++    const auto move_to = [&](gfx::Point point) {
++      views::View::ConvertPointToScreen(browser_view(), &point);
++      generator.MoveMouseTo(point);
++      base::RunLoop().RunUntilIdle();
++    };
++    views::View* const web_view = browser_view()->GetActiveContentsWebView();
++    gfx::Point page_origin;
++    views::View::ConvertPointToTarget(web_view, browser_view(), &page_origin);
++    const gfx::Rect page(page_origin, web_view->size());
++    const gfx::Rect bounds = corner->GetMirroredBounds();
++    const int x = bounds.CenterPoint().x();
++    // Beside the corner, toward the page: the left of it, or its right in a
++    // right-to-left window, whose corner is at the top left.
++    const int beside =
++        base::i18n::IsRTL() ? bounds.right() + 3 : bounds.x() - 3;
++    ASSERT_GT(strip, 0);
++    ASSERT_LT(strip, bounds.height());
++    ASSERT_TRUE(page.Contains(bounds.CenterPoint()))
++        << "the corner is not over the page: " << bounds.ToString()
++        << " and the page " << page.ToString();
++    if (strip > 5) {
++      EXPECT_GE(page.y(), strip) << "the strip is over the page";
++    }
++
++    move_to(page.CenterPoint());
++    ASSERT_FALSE(corner->GetVisible());
++    // The page's corner, under the strip, is the page's: a site's own
++    // controls there take the pointer. A DIP off each side of the strip's
++    // edge, which a fractional scale rounds through pixels.
++    move_to(gfx::Point(x, strip + 1));
++    EXPECT_FALSE(corner->GetVisible()) << "the row under the strip showed them";
++    move_to(bounds.CenterPoint());
++    EXPECT_FALSE(corner->GetVisible()) << "the page's corner showed them";
++
++    // The strip's last row shows them, and the pointer can go down onto
++    // them: they stay while it is anywhere on the corner.
++    move_to(gfx::Point(x, strip - 1));
++    ASSERT_TRUE(corner->GetVisible()) << "the strip did not show them";
++    views::test::RunScheduledLayout(widget);
++    gfx::Point on_close =
++        corner->buttons()->close()->GetLocalBounds().CenterPoint();
++    views::View::ConvertPointToTarget(corner->buttons()->close(),
++                                      browser_view(), &on_close);
++    ASSERT_GT(on_close.y(), strip + 1) << "Close is in the strip";
++    ASSERT_TRUE(page.Contains(on_close)) << "Close is not over the page";
++    move_to(on_close);
++    EXPECT_TRUE(corner->GetVisible()) << "they went under the pointer";
++    move_to(gfx::Point(
++        base::i18n::IsRTL() ? bounds.right() - 2 : bounds.x() + 1,
++        bounds.bottom() - 2));
++    EXPECT_TRUE(corner->GetVisible()) << "they went at the corner's far end";
++    // Off the corner onto the page they go, and do not come back from it.
++    move_to(gfx::Point(beside, bounds.CenterPoint().y()));
++    EXPECT_FALSE(corner->GetVisible()) << "they stayed off the corner";
++    move_to(on_close);
++    EXPECT_FALSE(corner->GetVisible()) << "the hidden Close showed them";
++
++    // The window's very top shows them, as far as the corner reaches; the
++    // top beside the corner does not.
++    move_to(gfx::Point(x, 0));
++    EXPECT_TRUE(corner->GetVisible()) << "the top edge did not show them";
++    move_to(gfx::Point(beside, 0));
++    EXPECT_FALSE(corner->GetVisible()) << "the top past the corner kept them";
++    move_to(gfx::Point(beside, 1));
++    EXPECT_FALSE(corner->GetVisible()) << "the top past the corner showed them";
++    move_to(page.CenterPoint());
++  }
++#endif  // BUILDFLAG(IS_WIN)
++};
++
++#if BUILDFLAG(IS_WIN)
++class SidebarAddressRtlTest : public SidebarAddressTest {
++ protected:
++  void SetUpCommandLine(base::CommandLine* command_line) override {
++    SidebarAddressTest::SetUpCommandLine(command_line);
++    command_line->AppendSwitchASCII(switches::kForceUIDirection,
++                                    switches::kForceDirectionRTL);
++  }
  };
- 
++#endif  // BUILDFLAG(IS_WIN)
++
 +// private V10, toolbar T8, T10, T50, T51 (GitHub issue 83, BACKLOG S-439): a
 +// private or Guest window has no Space model, which makes a normal window's
 +// address row, so the window makes its own. The settings are the normal
@@ -166,7 +273,143 @@ index 919916f2112ec..bcd41808a8d02 100644
 +    EXPECT_TRUE(row_is(true));
 +  }
 +}
-+
+ 
  // sidebar Y46, toolbar T50 (GitHub issue 45): off by default. On, the open
  // sidebar's top row has Back, Forward and Reload on the toggle's line and the
- // page's site under it; the address row hides while the sidebar is open,
+@@ -501,11 +669,16 @@ IN_PROC_BROWSER_TEST_F(SidebarAddressTest, TheWindowsButtonsGoToTheCorner) {
+     views::View::ConvertPointToScreen(view, &point);
+     return point;
+   };
+-  const gfx::Point in_corner =
+-      screen_point(browser_view(), corner->bounds().CenterPoint());
+-  generator.MoveMouseTo(in_corner);
++  // The strip along the window's top over the corner shows them (GitHub
++  // issues 118, 119), and they stay while the pointer is on the corner.
++  generator.MoveMouseTo(screen_point(
++      browser_view(), gfx::Point(corner->bounds().CenterPoint().x(), 1)));
+   ASSERT_TRUE(base::test::RunUntil([&]() { return corner->GetVisible(); }))
+-      << "the pointer in the corner did not show the buttons";
++      << "the pointer at the window's top did not show the buttons";
++  generator.MoveMouseTo(
++      screen_point(browser_view(), corner->bounds().CenterPoint()));
++  base::RunLoop().RunUntilIdle();
++  ASSERT_TRUE(corner->GetVisible());
+   views::test::RunScheduledLayout(widget);
+   stedding::SidebarWindowButtons* const buttons = corner->buttons();
+   EXPECT_TRUE(buttons->close()->IsDrawn());
+@@ -533,8 +706,8 @@ IN_PROC_BROWSER_TEST_F(SidebarAddressTest, TheWindowsButtonsGoToTheCorner) {
+     return top()->ShowsWindowButtons() && !corner->wanted() &&
+            !frame_buttons_shown();
+   }));
+-  generator.MoveMouseTo(
+-      screen_point(browser_view(), corner->bounds().CenterPoint()));
++  generator.MoveMouseTo(screen_point(
++      browser_view(), gfx::Point(corner->bounds().CenterPoint().x(), 1)));
+   base::RunLoop().RunUntilIdle();
+   EXPECT_FALSE(corner->GetVisible()) << "two sets of the window's buttons";
+   prefs()->SetBoolean(stedding::prefs::kSidebarOnRight, false);
+@@ -582,11 +755,13 @@ IN_PROC_BROWSER_TEST_F(SidebarAddressTest, ASecondWindowHasTheCornersButtons) {
+     EXPECT_EQ(view->width(), corner->bounds().right());
+     ui::test::EventGenerator generator(views::GetRootWindow(widget),
+                                        widget->GetNativeWindow());
+-    gfx::Point in_corner = corner->bounds().CenterPoint();
+-    views::View::ConvertPointToScreen(view, &in_corner);
+-    generator.MoveMouseTo(in_corner);
++    // The strip along the window's top over the corner (GitHub issues 118,
++    // 119).
++    gfx::Point at_top(corner->bounds().CenterPoint().x(), 1);
++    views::View::ConvertPointToScreen(view, &at_top);
++    generator.MoveMouseTo(at_top);
+     EXPECT_TRUE(base::test::RunUntil([&]() { return corner->GetVisible(); }))
+-        << "the pointer in the corner did not show the buttons";
++        << "the pointer at the window's top did not show the buttons";
+   };
+   {
+     SCOPED_TRACE("the first window");
+@@ -617,6 +792,86 @@ IN_PROC_BROWSER_TEST_F(SidebarAddressTest, ASecondWindowHasTheCornersButtons) {
+     ASSERT_NO_FATAL_FAILURE(check(blank));
+   }
+ }
++
++// sidebar Y54 (GitHub issues 118, 119; the owner, 2026-11-16, PLAN.md
++// decision 24): the window's buttons at the corner show only from a thin
++// strip along the window's top edge over the corner -- the card's top
++// gutter, the window's own ground -- never from the page's corner under it,
++// where sites keep their own controls; once shown they stay while the
++// pointer is on them. With the page flush against the window there is no
++// gutter and the strip is the page's top 5 DIP. A maximized window's strip
++// is the screen's top.
++IN_PROC_BROWSER_TEST_F(SidebarAddressTest, TheCornersButtonsShowFromTheTopEdge) {
++  ASSERT_FALSE(prefs()->GetBoolean(stedding::prefs::kSidebarOnRight));
++  prefs()->SetBoolean(stedding::prefs::kSidebarAddressInSidebar, true);
++  ASSERT_TRUE(
++      ui_test_utils::NavigateToURL(browser(), Page("a.test", "/title1.html")));
++  views::Widget* const widget = browser_view()->GetWidget();
++  ASSERT_TRUE(base::test::RunUntil([&]() {
++    views::test::RunScheduledLayout(widget);
++    const stedding::WindowCornerButtons* const corner =
++        browser_view()->stedding_corner_buttons_for_testing();
++    return corner && corner->wanted() && !browser_view()->IsToolbarVisible();
++  }));
++  const int gutter =
++      VerticalTabStripRegionView::SteddingCardGutter(browser_view());
++  ASSERT_GE(gutter, 5);
++  {
++    SCOPED_TRACE("the card's gutter");
++    ASSERT_NO_FATAL_FAILURE(CheckTheCornersStrip(gutter));
++  }
++  {
++    SCOPED_TRACE("the page flush against the window");
++    prefs()->SetBoolean(stedding::prefs::kSidebarPageFlush, true);
++    ASSERT_TRUE(base::test::RunUntil([&]() {
++      views::test::RunScheduledLayout(widget);
++      return VerticalTabStripRegionView::SteddingCardGutter(browser_view()) ==
++             0;
++    }));
++    ASSERT_NO_FATAL_FAILURE(CheckTheCornersStrip(5));
++    prefs()->SetBoolean(stedding::prefs::kSidebarPageFlush, false);
++  }
++  {
++    SCOPED_TRACE("maximized");
++    widget->Maximize();
++    ASSERT_TRUE(base::test::RunUntil([&]() {
++      views::test::RunScheduledLayout(widget);
++      const stedding::WindowCornerButtons* const corner =
++          browser_view()->stedding_corner_buttons_for_testing();
++      return widget->IsMaximized() && corner->wanted() &&
++             corner->bounds().right() == browser_view()->width() &&
++             VerticalTabStripRegionView::SteddingCardGutter(browser_view()) ==
++                 gutter;
++    }));
++    ASSERT_NO_FATAL_FAILURE(CheckTheCornersStrip(gutter));
++    widget->Restore();
++  }
++}
++
++// sidebar Y54, Y34: right to left the sidebar is on the right, the corner at
++// the window's top left, and its strip there.
++IN_PROC_BROWSER_TEST_F(SidebarAddressRtlTest,
++                       TheCornersButtonsShowFromTheTopEdge) {
++  ASSERT_TRUE(base::i18n::IsRTL());
++  // The sidebar on the right, the reading side: the window's leading edge.
++  prefs()->SetBoolean(stedding::prefs::kSidebarOnRight, true);
++  prefs()->SetBoolean(stedding::prefs::kSidebarAddressInSidebar, true);
++  ASSERT_TRUE(
++      ui_test_utils::NavigateToURL(browser(), Page("a.test", "/title1.html")));
++  ASSERT_TRUE(base::test::RunUntil([&]() {
++    views::test::RunScheduledLayout(browser_view()->GetWidget());
++    const stedding::WindowCornerButtons* const corner =
++        browser_view()->stedding_corner_buttons_for_testing();
++    return corner && corner->wanted() && !browser_view()->IsToolbarVisible();
++  })) << "the sidebar on the right has no corner buttons";
++  EXPECT_EQ(0, browser_view()
++                   ->stedding_corner_buttons_for_testing()
++                   ->GetMirroredBounds()
++                   .x())
++      << "the corner is not at the window's top left";
++  ASSERT_NO_FATAL_FAILURE(CheckTheCornersStrip(
++      VerticalTabStripRegionView::SteddingCardGutter(browser_view())));
++}
+ #endif  // BUILDFLAG(IS_WIN)
+ 
+ // sidebar Y51: on a top line too narrow for Back, Forward, Reload and the

@@ -90,6 +90,13 @@ edge on the sidebar’s side and the sidebar slides back. The same section sets 
 height, text size, width and **Page flush against the window**. **Sidebar on the
 right** moves the sidebar, and that edge, to the right.
 
+**Can the address row hide with the sidebar too?**
+Yes. Settings → Stedding → Sidebar → **Show the address row only on hover**. With the
+sidebar closed (⌘S, Ctrl+S), the address row hides too, and on Windows the window’s
+buttons with it, so the page has the window’s top. Rest the pointer on the window’s top
+edge and the row slides in over the page; move off it and it goes. ⇧⌘D (Ctrl+Shift+D)
+shows it in that window until the sidebar opens.
+
 **What does closing a pinned tab do?**
 ⌘W (Ctrl+W), a middle click on its sidebar row, or **Close** on its menu unloads it
 and puts it back on the page you pinned, in its place, so it costs nothing until you

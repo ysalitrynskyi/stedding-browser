@@ -38,37 +38,47 @@ Settings (T3, T46; GitHub issue 74): the little-window row says first that
 a link from another app opens in a window of its own whatever the peek
 settings say, and "Show a peek" that it is for a link from a pinned tab.
 
+The last tab of a Space (tabs R37, R34; spaces B3, B4; GitHub issue
+121): its close showed the essential the Space used last, else the first
+one, or a pin beside the tab, even one asleep or never opened since the
+launch, which then loaded. It now shows only a pin or an essential that is
+awake, the one used most recently first, else the Space's page, as a sleep
+does; coming back to a Space left on its page wakes nothing there either.
+
 Why: the owner, 2026-11-04 (a screenshot of an empty Space beside an
-extension's tab group; the Install chip), and GitHub issues 45, 74 and 76.
+extension's tab group; the Install chip), and GitHub issues 45, 74 and
+76; for GitHub issue 121, the owner's choice of 2026-11-16 (PLAN.md
+decision 24).
 Removable when: never as behaviour.
 ---
  .../browser/resources/stedding_space/app.ts   |   9 +-
- chrome/browser/ui/spaces/space_model.cc       | 105 ++++++++++++++----
- chrome/browser/ui/spaces/space_model.h        |  17 ++-
- .../ui/spaces/space_model_window_unittest.cc  |  83 ++++++++++++--
- chrome/browser/ui/stedding/empty_space.cc     |  19 +++-
- chrome/browser/ui/stedding/empty_space.h      |   9 ++
+ chrome/browser/ui/spaces/space_model.cc       | 241 +++++++++++++----
+ chrome/browser/ui/spaces/space_model.h        |  58 +++-
+ .../ui/spaces/space_model_window_unittest.cc  | 254 +++++++++++++++++-
+ chrome/browser/ui/stedding/empty_space.cc     |  19 +-
+ chrome/browser/ui/stedding/empty_space.h      |   9 +
  .../ui/stedding/tab_numbers_unittest.cc       |   6 +-
  chrome/browser/ui/toasts/toast_view.cc        |   9 +-
- .../ui/views/tabs/vertical/sidebar_address.cc |  33 ++++++
- .../ui/views/tabs/vertical/sidebar_address.h  |   9 ++
+ .../ui/views/tabs/vertical/sidebar_address.cc |  33 +++
+ .../ui/views/tabs/vertical/sidebar_address.h  |   9 +
  .../pwa_install_page_action.cc                |  11 +-
  .../browser/ui/webui/settings/settings_ui.cc  |   9 +-
  .../browser/ui/webui/stedding_space/BUILD.gn  |   1 +
- .../stedding_space/stedding_space_handler.cc  |  15 +++
+ .../stedding_space/stedding_space_handler.cc  |  15 ++
  chrome/test/stedding/BUILD.gn                 |   3 +
- .../test/stedding/clear_space_browsertest.cc  |  26 ++++-
- chrome/test/stedding/defaults_browsertest.cc  |  40 +++++++
+ .../test/stedding/clear_space_browsertest.cc  |  26 +-
+ chrome/test/stedding/defaults_browsertest.cc  |  40 +++
  .../test/stedding/folder_tabs_browsertest.cc  |   3 +
  .../stedding/isolation_mark_browsertest.cc    |   4 +
- chrome/test/stedding/peek_browsertest.cc      |  14 ++-
- .../test/stedding/pinned_run_browsertest.cc   |  24 ++++
- chrome/test/stedding/restore_browsertest.cc   |  37 +++++-
- .../stedding/sidebar_address_browsertest.cc   |  78 +++++++++++++
- .../stedding/site_controls_browsertest.cc     |  15 +++
- .../test/stedding/space_switch_browsertest.cc |  16 ++-
+ chrome/test/stedding/peek_browsertest.cc      |  14 +-
+ .../test/stedding/pinned_run_browsertest.cc   | 140 ++++++++++
+ chrome/test/stedding/restore_browsertest.cc   |  37 ++-
+ .../stedding/sidebar_address_browsertest.cc   |  78 ++++++
+ .../stedding/sidebar_click_browsertest.cc     |  15 +-
+ .../stedding/site_controls_browsertest.cc     |  15 ++
+ .../test/stedding/space_switch_browsertest.cc |  16 +-
  .../bookmarks/browser/bookmark_utils.cc       |   6 +-
- 26 files changed, 535 insertions(+), 66 deletions(-)
+ 27 files changed, 974 insertions(+), 106 deletions(-)
 
 diff --git a/chrome/browser/resources/stedding_space/app.ts b/chrome/browser/resources/stedding_space/app.ts
 index fb513bd223b22..916176b32b208 100644
@@ -100,7 +110,7 @@ index fb513bd223b22..916176b32b208 100644
  }
  
 diff --git a/chrome/browser/ui/spaces/space_model.cc b/chrome/browser/ui/spaces/space_model.cc
-index 9d5e675cc8f4a..c21fc34b6ce3f 100644
+index 9d5e675cc8f4a..a9f8abc8afd2f 100644
 --- a/chrome/browser/ui/spaces/space_model.cc
 +++ b/chrome/browser/ui/spaces/space_model.cc
 @@ -89,6 +89,19 @@ namespace spaces {
@@ -123,7 +133,23 @@ index 9d5e675cc8f4a..c21fc34b6ce3f 100644
  // windows G4: set by SetNextWindowBlank, consumed by the next model made.
  bool& NextWindowIsBlank() {
    static bool blank = false;
-@@ -438,15 +451,17 @@ SpaceModel::SpaceModel(BrowserWindowInterface& browser) : SpaceModel() {
+@@ -298,6 +311,15 @@ void ForgetUsesOfRows(const std::vector<tabs::TabInterface*>& rows) {
+     }
+   }
+ }
++
++// tabs R5, R37 (GitHub issues 72, 121): whether `tab` has its page loaded.
++// One put to sleep, or brought back by a restore and not shown since (never
++// opened in this run), would load if it came on screen.
++bool IsAwake(const tabs::TabInterface* tab) {
++  content::WebContents* const contents = tab->GetContents();
++  return contents && !contents->WasDiscarded() &&
++         !contents->GetController().NeedsReload();
++}
+ }  // namespace
+ 
+ // SpaceId has no default constructor by design — an id that names nothing is
+@@ -438,15 +460,17 @@ SpaceModel::SpaceModel(BrowserWindowInterface& browser) : SpaceModel() {
          return model->HidesTab(tab);
        },
        base::Unretained(this)));
@@ -146,7 +172,7 @@ index 9d5e675cc8f4a..c21fc34b6ce3f 100644
        },
        base::Unretained(this)));
    // B4: a close never leaves another Space's tab on screen. Unretained for
-@@ -472,6 +487,8 @@ SpaceModel::SpaceModel(BrowserWindowInterface& browser) : SpaceModel() {
+@@ -472,6 +496,8 @@ SpaceModel::SpaceModel(BrowserWindowInterface& browser) : SpaceModel() {
    // before its first tab, so this normally observes an empty strip; any tab
    // already there joins now so the two paths cannot disagree.
    tab_strip_model_->AddObserver(this);
@@ -155,7 +181,7 @@ index 9d5e675cc8f4a..c21fc34b6ce3f 100644
    for (int i = 0; i < tab_strip_model_->count(); ++i) {
      SpaceForTab(tab_strip_model_->GetTabAtIndex(i));
    }
-@@ -532,6 +549,7 @@ SpaceModel::~SpaceModel() {
+@@ -532,6 +558,7 @@ SpaceModel::~SpaceModel() {
      tab_strip_model_->SetNewTabIndexCallback(
          TabStripModel::NewTabIndexCallback());
      tab_strip_model_->RemoveObserver(this);
@@ -163,8 +189,125 @@ index 9d5e675cc8f4a..c21fc34b6ce3f 100644
      tab_strip_model_ = nullptr;
    }
  }
-@@ -1274,14 +1292,18 @@ void SpaceModel::EnsureActiveSpaceHasAVisibleTab(bool essential_gives_way) {
+@@ -763,6 +790,7 @@ void SpaceModel::SyncWithRegistry(bool seed) {
+   for (const SpaceId& id : removed) {
+     last_active_.erase(id);
+     history_.erase(id);
++    left_on_its_page_.erase(id);
+     sleep_timers_.erase(id);
+     RefileTabs(id, active_id_);
+   }
+@@ -1023,6 +1051,15 @@ bool SpaceModel::SetActiveSpace(const SpaceId& id, tabs::TabInterface* show) {
+   // spaces B32: the views draw the Space being left once more before any of
+   // the switch reaches them.
+   observers_.Notify(&Observer::OnActiveSpaceWillChange, active_id_, id);
++  // tabs R37 (GitHub issue 121): the Space is left on its page, which closes
++  // once another row shows; coming back shows it again unless the Space has
++  // a row by then (EnsureActiveSpaceHasAVisibleTab).
++  if (tab_strip_model_ &&
++      stedding::IsEmptySpaceStandIn(tab_strip_model_->GetActiveTab())) {
++    left_on_its_page_.insert(active_id_);
++  } else {
++    left_on_its_page_.erase(active_id_);
++  }
+   in_focus_ = false;
+   // switcher X1: a run ends where it is when the user leaves the Space.
+   EndCycle();
+@@ -1173,11 +1210,36 @@ void SpaceModel::EnsureActiveSpaceHasAVisibleTab(bool essential_gives_way) {
+   // SPC-16).
+   const tabs::TabInterface* const active = tab_strip_model_->GetActiveTab();
+   const bool on_an_essential = active && active->IsPinned();
++  const bool left_on_its_page = left_on_its_page_.erase(active_id_) > 0;
+   if (active && IsTabInActiveSpace(active) &&
+       !(essential_gives_way && on_an_essential)) {
      return;
+   }
+ 
++  // tabs R37 (GitHub issue 121; PLAN.md decision 24): a Space with no tab of
++  // its own -- none at all, or none but its pins when the user left it on
++  // its page -- shows only an essential or a row that is awake, the one it
++  // used most recently first, else its page: coming back wakes nothing
++  // asleep or never opened, as the close that emptied it did not. A Space
++  // with only pins that the user did not leave on its page shows its pin
++  // used last, as after a launch (GitHub issue 42). A row under a collapsed
++  // folder is the Space's too: it shows under the header (folders F3).
++  bool has_own_row = false;
++  bool has_loose_row = false;
++  for (int i = 0; i < tab_strip_model_->count() && !has_loose_row; ++i) {
++    tabs::TabInterface* const tab = tab_strip_model_->GetTabAtIndex(i);
++    if (tab->IsPinned() || !IsTabInActiveSpace(tab) ||
++        stedding::IsEmptySpaceStandIn(tab)) {
++      continue;
++    }
++    has_own_row = true;
++    has_loose_row = !IsSpacePinned(tab);
++  }
++  const bool awake_only = !has_loose_row && (left_on_its_page || !has_own_row);
++  const auto may_show = [&](const tabs::TabInterface* tab) {
++    return !awake_only || IsAwake(tab);
++  };
++
+   // This run's uses of the Space, most recent first. An essential the Space
+   // shows counts: RecordActivation filed it under the Space that was active
+   // when it was used. last_active_ never holds one, and reading it first came
+@@ -1192,7 +1254,7 @@ void SpaceModel::EnsureActiveSpaceHasAVisibleTab(bool essential_gives_way) {
+       const int index = used ? tab_strip_model_->GetIndexOfTab(used)
+                              : TabStripModel::kNoTab;
+       if (index == TabStripModel::kNoTab || !IsTabInActiveSpace(used) ||
+-          tab_strip_model_->IsTabCollapsed(index)) {
++          tab_strip_model_->IsTabCollapsed(index) || !may_show(used)) {
+         continue;
+       }
+       tab_strip_model_->ActivateTabAt(
+@@ -1208,7 +1270,7 @@ void SpaceModel::EnsureActiveSpaceHasAVisibleTab(bool essential_gives_way) {
+     if (tabs::TabInterface* const remembered = it->second.Get()) {
+       const int index = tab_strip_model_->GetIndexOfTab(remembered);
+       if (index != TabStripModel::kNoTab && IsTabInActiveSpace(remembered) &&
+-          !tab_strip_model_->IsTabCollapsed(index)) {
++          !tab_strip_model_->IsTabCollapsed(index) && may_show(remembered)) {
+         tab_strip_model_->ActivateTabAt(
+             index, TabStripUserGestureDetails(
+                        TabStripUserGestureDetails::GestureType::kOther));
+@@ -1241,7 +1303,11 @@ void SpaceModel::EnsureActiveSpaceHasAVisibleTab(bool essential_gives_way) {
+       if (!IsOwnEssential(tab)) {
+         continue;
+       }
+-    } else if (first_own == TabStripModel::kNoTab) {
++    }
++    if (!may_show(tab)) {
++      continue;
++    }
++    if (!tab->IsPinned() && first_own == TabStripModel::kNoTab) {
+       first_own = i;
+     }
+     const base::Time shown = tab->GetContents()->GetLastActiveTime();
+@@ -1260,28 +1326,36 @@ void SpaceModel::EnsureActiveSpaceHasAVisibleTab(bool essential_gives_way) {
+   }
+   if (essentials != TabStripModel::kNoTab) {
+     // No tab of the Space's own: an essential on screen stays there, and
+-    // otherwise the one the Space used last shows, else the first, so no new
+-    // tab opens: what the close that emptied it showed (tabs R37).
+-    // An essential this Space does not show (a shared one in a Space with
+-    // its own session, spaces B6) gives way too.
+-    if (!on_an_essential || !IsTabInActiveSpace(active)) {
+-      tabs::TabInterface* const essential = EssentialToShow({});
++    // otherwise the one awake the Space used last shows, else the first one
++    // awake, so no new tab opens: what the close that emptied it showed (tabs
++    // R37). An essential asleep stays asleep, and the Space shows its page
++    // below (GitHub issue 121). An essential this Space does not show (a
++    // shared one in a Space with its own session, spaces B6) gives way too.
++    if (on_an_essential && IsTabInActiveSpace(active)) {
++      return;
++    }
++    if (tabs::TabInterface* const essential = EssentialToShow({})) {
+       tab_strip_model_->ActivateTabAt(
+-          essential ? tab_strip_model_->GetIndexOfTab(essential) : essentials,
++          tab_strip_model_->GetIndexOfTab(essential),
+           TabStripUserGestureDetails(
+               TabStripUserGestureDetails::GestureType::kOther));
++      return;
+     }
+-    return;
    }
  
 -  // Nothing to show: the Space is empty. A window cannot have no active tab,
@@ -174,7 +317,8 @@ index 9d5e675cc8f4a..c21fc34b6ce3f 100644
 -  if (TabStripModelDelegate* const delegate = tab_strip_model_->delegate()) {
 -    delegate->AddTabAt(GURL(chrome::kChromeUINewTabURL), /*index=*/-1,
 -                       /*foreground=*/true);
-+  // Nothing to show: the Space is empty. A window cannot have no active tab:
++  // Nothing to show: the Space is empty, or nothing of it is awake (tabs
++  // R37). A window cannot have no active tab:
 +  // the Space shows its own page, a stand-in the sidebar does not list (tabs
 +  // R66; the owner, 2026-11-04). It opened a New Tab, a row the Space had not
 +  // asked for. The insertion observer files it under the active Space, and
@@ -189,7 +333,28 @@ index 9d5e675cc8f4a..c21fc34b6ce3f 100644
  }
  
  void SpaceModel::KeepAVisibleTabAsTabsLeave(
-@@ -1310,7 +1332,15 @@ void SpaceModel::KeepAVisibleTabAsTabsLeave(
+@@ -1297,12 +1371,14 @@ void SpaceModel::KeepAVisibleTabAsTabsLeave(
+       (closing && !tab_strip_model_->IsTabClosable(active))) {
+     return;
+   }
+-  // A tab of this Space or an essential left on screen: the strip picks it.
+-  for (int i = 0; i < tab_strip_model_->count(); ++i) {
+-    if (!std::ranges::contains(leaving, tab_strip_model_->GetTabAtIndex(i)) &&
+-        !tab_strip_model_->IsTabHidden(i)) {
+-      return;
+-    }
++  // A row the Space shows next: the strip picks it. When `leaving` take the
++  // Space's last tab, that is a row or an essential that is awake (tabs R37;
++  // GitHub issue 121, PLAN.md decision 24): a pin or an essential asleep, or
++  // never opened since the launch, is left as it is, and the Space shows its
++  // page below. A loose row that stays -- the other pane, when one pane of a
++  // split goes alone (splits J9) -- is the strip's to pick, as before.
++  if (KeepsALooseRow(leaving) || TabToShowAsTabsLeave(leaving)) {
++    return;
+   }
+   for (const tabs::TabInterface* const tab : leaving) {
+     if (closing && tab->GetContents() &&
+@@ -1310,7 +1386,15 @@ void SpaceModel::KeepAVisibleTabAsTabsLeave(
        return;
      }
    }
@@ -206,7 +371,7 @@ index 9d5e675cc8f4a..c21fc34b6ce3f 100644
    if (TabStripModelDelegate* const delegate = tab_strip_model_->delegate()) {
      delegate->AddTabAt(GURL(chrome::kChromeUINewTabURL), /*index=*/-1,
                         /*foreground=*/false);
-@@ -1373,6 +1403,22 @@ void SpaceModel::OnTabStripModelChanged(
+@@ -1373,6 +1457,22 @@ void SpaceModel::OnTabStripModelChanged(
      }
    }
  
@@ -229,7 +394,7 @@ index 9d5e675cc8f4a..c21fc34b6ce3f 100644
    // Remember where the user is in the active Space, but only a tab that is
    // really in it: an essentials tab is in every Space and remembering it would
    // make every Space reopen on the same tab.
-@@ -1577,10 +1623,28 @@ void SpaceModel::SettleReplacedContents(tabs::TabHandle handle,
+@@ -1577,10 +1677,28 @@ void SpaceModel::SettleReplacedContents(tabs::TabHandle handle,
  
  void SpaceModel::OnTabStripModelDestroyed(TabStripModel* tab_strip_model) {
    if (tab_strip_model == tab_strip_model_) {
@@ -258,7 +423,85 @@ index 9d5e675cc8f4a..c21fc34b6ce3f 100644
  void SpaceModel::SetActiveSpaceByIndex(size_t index) {
    if (in_focus_) {
      return;
-@@ -2028,18 +2092,19 @@ void SpaceModel::ClearUnpinnedTabs() {
+@@ -1788,9 +1906,9 @@ tabs::TabInterface* SpaceModel::RowToShowAfter(
+   // pinned run's pins (R35).
+   // After a sleep, not one that is asleep: shown, it would wake (GitHub
+   // issue 72: the pins put to sleep one by one woke each other in turn).
++  // Nor after a close of the Space's last tab (R37, GitHub issue 121).
+   const auto awake = [&](tabs::TabInterface* tab) {
+-    return !awake_only ||
+-           (tab->GetContents() && !tab->GetContents()->WasDiscarded());
++    return !awake_only || IsAwake(tab);
+   };
+   const auto shows = [&](tabs::TabInterface* tab) {
+     const int index = tab_strip_model_->GetIndexOfTab(tab);
+@@ -1855,17 +1973,44 @@ void SpaceModel::SetRowInViewCallback(RowInViewCallback row_in_view) {
+   row_in_view_ = std::move(row_in_view);
+ }
+ 
+-tabs::TabInterface* SpaceModel::TabToShowAsTabsLeave(
++bool SpaceModel::KeepsALooseRow(
+     const std::vector<tabs::TabInterface*>& leaving) const {
+-  if (tabs::TabInterface* const row = RowToShowAfter(leaving)) {
+-    return row;
++  if (!tab_strip_model_) {
++    return false;
++  }
++  // Only the tabs that leave: the other pane of a split that loses one pane
++  // stays (splits J9). IsTabHidden passes over another Space's tabs, the
++  // Space's page and a collapsed folder's rows (spaces B33).
++  for (int i = 0; i < tab_strip_model_->count(); ++i) {
++    tabs::TabInterface* const tab = tab_strip_model_->GetTabAtIndex(i);
++    if (!tab->IsPinned() && !IsSpacePinned(tab) &&
++        !tab_strip_model_->IsTabHidden(i) &&
++        !std::ranges::contains(leaving, tab)) {
++      return true;
++    }
+   }
+-  // R37: the Space has no row of its own left on screen, so it stays empty
+-  // and shows an essential; with none, spaces B4 has added its new tab
+-  // before the close, and that is a row of the Space's own.
++  return false;
++}
++
++tabs::TabInterface* SpaceModel::TabToShowAsTabsLeave(
++    const std::vector<tabs::TabInterface*>& leaving) const {
+   if (!tab_strip_model_ || tab_strip_model_->closing_all()) {
+     return nullptr;
+   }
++  // R37 (GitHub issue 121; PLAN.md decision 24): when `leaving` take the
++  // Space's last tab, and no row of it but its pins stays on screen, only a
++  // pin or an essential that is awake shows, the one used most recently
++  // first, else a pin beside it (R34): one asleep, or never opened since the
++  // launch, is not woken. With none, KeepAVisibleTabAsTabsLeave has opened
++  // the Space's page before the close (R66, spaces B4), as a sleep shows it
++  // (R5, pins H11).
++  const bool last_tab = !KeepsALooseRow(leaving);
++  if (tabs::TabInterface* const row =
++          RowToShowAfter(leaving, /*awake_only=*/last_tab)) {
++    return row;
++  }
++  // The Space has no row of its own left on screen, so it stays empty and
++  // shows an essential that is awake.
+   return EssentialToShow(leaving);
+ }
+ 
+@@ -1874,10 +2019,13 @@ tabs::TabInterface* SpaceModel::EssentialToShow(
+   if (!tab_strip_model_) {
+     return nullptr;
+   }
++  // R37 (GitHub issue 121): never one asleep, or never opened since the
++  // launch: shown, it would load.
+   const auto shows = [&](tabs::TabInterface* tab) {
+     const int index = tab_strip_model_->GetIndexOfTab(tab);
+     return index != TabStripModel::kNoTab && tab->IsPinned() &&
+-           !tab_strip_model_->IsTabHidden(index) && !IsLeaving(tab, leaving);
++           !tab_strip_model_->IsTabHidden(index) && !IsLeaving(tab, leaving) &&
++           IsAwake(tab);
+   };
+   if (const auto it = history_.find(active_id_); it != history_.end()) {
+     for (const tabs::TabHandle& handle : it->second) {
+@@ -2028,18 +2176,19 @@ void SpaceModel::ClearUnpinnedTabs() {
      if (!tab_strip_model_->IsTabClosable(tab)) {
        continue;
      }
@@ -286,7 +529,7 @@ index 9d5e675cc8f4a..c21fc34b6ce3f 100644
    for (const tabs::TabHandle& handle : doomed) {
      tabs::TabInterface* const tab = handle.Get();
 diff --git a/chrome/browser/ui/spaces/space_model.h b/chrome/browser/ui/spaces/space_model.h
-index cbcfb0b72234b..6bec24b8fa21f 100644
+index cbcfb0b72234b..7dd44fc0c85f6 100644
 --- a/chrome/browser/ui/spaces/space_model.h
 +++ b/chrome/browser/ui/spaces/space_model.h
 @@ -32,6 +32,7 @@
@@ -307,7 +550,30 @@ index cbcfb0b72234b..6bec24b8fa21f 100644
   public:
    DECLARE_USER_DATA(SpaceModel);
  
-@@ -639,7 +641,20 @@ class SpaceModel : public TabStripModelObserver,
+@@ -303,7 +305,8 @@ class SpaceModel : public TabStripModelObserver,
+   // has no such row, and without a window. `awake_only`: a sleep passes over
+   // rows that are asleep too, so that putting the row on screen to sleep
+   // wakes no other (tabs R5, pins H3; GitHub issue 72, the owner,
+-  // 2026-11-02).
++  // 2026-11-02), and so does a close that takes the Space's last tab (tabs
++  // R37; GitHub issue 121, PLAN.md decision 24).
+   tabs::TabInterface* RowToShowAfter(
+       const std::vector<tabs::TabInterface*>& leaving,
+       bool awake_only = false) const;
+@@ -318,7 +321,11 @@ class SpaceModel : public TabStripModelObserver,
+   // tabs R33, R37: what TabStripModel shows when the tab on screen leaves
+   // the strip with `leaving`: RowToShowAfter(), and when the Space has no
+   // row of its own left, the essential used most recently in it, else the
+-  // first one. Null when there is none of those either.
++  // first one. When `leaving` take the Space's last tab -- no row of it but
++  // its pins stays on screen -- each of those is one that is awake: one
++  // asleep, or never opened since the launch, would load (GitHub issue 121;
++  // PLAN.md decision 24). Null when there is none of those either, and the
++  // Space then shows its page (tabs R66).
+   tabs::TabInterface* TabToShowAsTabsLeave(
+       const std::vector<tabs::TabInterface*>& leaving) const;
+ 
+@@ -639,7 +646,20 @@ class SpaceModel : public TabStripModelObserver,
        const TabStripSelectionChange& selection) override;
    void OnTabStripModelDestroyed(TabStripModel* tab_strip_model) override;
  
@@ -328,8 +594,60 @@ index cbcfb0b72234b..6bec24b8fa21f 100644
    // Writes the Spaces into the session, so they come back after a restart.
    void SaveToSession();
  
+@@ -753,20 +773,33 @@ class SpaceModel : public TabStripModelObserver,
+   // as not visible too: it is in every Space and says nothing of where the
+   // user is, so the row this Space used last wins -- an essential only when
+   // it is that row (GitHub issue 42) -- and the essential stays while the
+-  // Space has no tab of its own (PLAN.md SPC-16). No-op without a tab strip,
+-  // while the window is closing, or when the strip is empty.
++  // Space has no tab of its own (PLAN.md SPC-16). A Space with no tab of its
++  // own, or one left on its page with none but its pins, shows only an
++  // essential or a row that is awake, else its page (tabs R37, R66). No-op
++  // without a tab strip, while the window is closing, or when the strip is
++  // empty.
+   void EnsureActiveSpaceHasAVisibleTab(bool essential_gives_way);
+ 
+   // B4, before `leaving` close (`closing`) or leave for another window's
+-  // strip: when they take the tab on screen and leave nothing the user can
+-  // see, adds the active Space's new tab first, so the strip activates it
+-  // and no tab of another Space is active, not even for the turn
+-  // EnsureActiveSpaceHasAVisibleTab waits, and none wakes. A page that may
+-  // still refuse to close (a beforeunload handler) is left to that fix,
+-  // after the close; a tab leaving for another window always goes.
++  // strip: when they take the tab on screen and leave nothing the Space
++  // would show (TabToShowAsTabsLeave), adds the Space's page or a new tab
++  // first, so the strip activates it and no tab of another Space is active,
++  // not even for the turn EnsureActiveSpaceHasAVisibleTab waits, and none
++  // wakes. A page that may still refuse to close (a beforeunload handler) is
++  // left to that fix, after the close; a tab leaving for another window
++  // always goes.
+   void KeepAVisibleTabAsTabsLeave(
+       bool closing,
+       const std::vector<tabs::TabInterface*>& leaving);
++  // tabs R37: whether a tab of the active Space other than its pins and the
++  // essentials -- a loose row -- stays on screen once `leaving` go. Without
++  // one, `leaving` take the Space's last tab.
++  bool KeepsALooseRow(const std::vector<tabs::TabInterface*>& leaving) const;
++  // tabs R37 (GitHub issue 121): the Spaces the user left while each showed
++  // its page (tabs R66). Coming back to one that still has no tab but its
++  // pins shows only what is awake, as the close that emptied it did. Spent
++  // by the next EnsureActiveSpaceHasAVisibleTab in that Space.
++  std::set<SpaceId> left_on_its_page_;
+ 
+   // windows G1: the registry this window mirrors, or null for a blank
+   // window, a test model, or a private window.
+@@ -833,7 +866,8 @@ class SpaceModel : public TabStripModelObserver,
+   void OnSessionRestored(Profile* profile, int tabs_restored);
+   base::CallbackListSubscription session_restored_;
+   // tabs R37: the essential the active Space used most recently, else the
+-  // first essential, never one of `leaving`; null when there is none.
++  // first essential, never one of `leaving` and never one asleep (GitHub
++  // issue 121); null when there is none.
+   tabs::TabInterface* EssentialToShow(
+       const std::vector<tabs::TabInterface*>& leaving) const;
+   struct Cycle {
 diff --git a/chrome/browser/ui/spaces/space_model_window_unittest.cc b/chrome/browser/ui/spaces/space_model_window_unittest.cc
-index cb0cb3a947b6e..cf189f8f0daf1 100644
+index cb0cb3a947b6e..f74cffcc17a2d 100644
 --- a/chrome/browser/ui/spaces/space_model_window_unittest.cc
 +++ b/chrome/browser/ui/spaces/space_model_window_unittest.cc
 @@ -462,17 +462,34 @@ TEST_F(SpaceWindowTest, ComingBackWithNoUseThisRunLandsOnTheTabLastShown) {
@@ -400,7 +718,185 @@ index cb0cb3a947b6e..cf189f8f0daf1 100644
  }
  
  // tabs R33-R38 (BACKLOG S-112): which tab is shown after the one on screen
-@@ -2966,6 +2992,7 @@ TEST_F(SpaceWindowTest, ACollapsedFolderKeepsAnAwakePinListed) {
+@@ -919,6 +945,177 @@ TEST_F(SpaceWindowTest, AnEmptiedSpaceShowsTheSameWhenYouComeBack) {
+   EXPECT_EQ(count - 1, tabs().count()) << "coming back opened a tab";
+ }
+ 
++// tabs R37, spaces B3, B4 (GitHub issue 121; PLAN.md decision 24): closing
++// a Space's last tab wakes nothing. With every essential and pin asleep, or
++// never opened since the launch, the Space shows its page: the essential the
++// close took had never been opened in the window, and the pin above the tab
++// woke too (tabs R34). A switch to a Space with no tab wakes none either.
++TEST_F(SpaceWindowTest, ClosingTheLastTabWakesNothingAsleep) {
++  AppendRow(tabs(), profile(), true);
++  // Two essentials not opened since the launch: one the restore put to
++  // sleep, one with only the entry the restore gave it.
++  tabs::TabInterface* const slept = AppendRow(tabs(), profile());
++  tabs().SetTabPinned(tabs().GetIndexOfTab(slept), true);
++  tabs::TabInterface* const unopened = AppendRow(tabs(), profile());
++  tabs().SetTabPinned(tabs().GetIndexOfTab(unopened), true);
++  ASSERT_TRUE(slept->IsPinned() && unopened->IsPinned());
++  slept->GetContents()->SetWasDiscarded(true);
++  unopened->GetContents()->GetController().SetNeedsReload();
++
++  const SpaceId work = model().AddSpace("Work", kBlue)->id();
++  {
++    SCOPED_TRACE("a switch to a Space with no tab");
++    ShownTabs shown(tabs());
++    ASSERT_TRUE(model().SetActiveSpace(work));
++    task_environment()->RunUntilIdle();
++    EXPECT_TRUE(stedding::IsEmptySpaceStandIn(tabs().GetActiveTab()))
++        << "the Space did not show its page";
++    EXPECT_FALSE(shown.Showed(slept)) << "an essential asleep came on screen";
++    EXPECT_FALSE(shown.Showed(unopened)) << "an essential never opened did";
++  }
++
++  // Work's one tab, and a pin above it that is asleep.
++  tabs::TabInterface* const own = AppendRow(tabs(), profile(), true);
++  tabs::TabInterface* const pin = AppendRow(tabs(), profile());
++  model().SetSpacePinned(pin, true);
++  pin->GetContents()->SetWasDiscarded(true);
++  task_environment()->RunUntilIdle();
++  Use(tabs(), own);
++  ASSERT_EQ(work, model().SpaceForTab(own));
++  ASSERT_EQ(work, model().SpaceForTab(pin));
++  ASSERT_LT(tabs().GetIndexOfTab(pin), tabs().GetIndexOfTab(own));
++  const int count = tabs().count();
++
++  ShownTabs shown(tabs());
++  chrome::ExecuteCommand(browser(), IDC_CLOSE_TAB);
++  task_environment()->RunUntilIdle();
++  tabs::TabInterface* const now = tabs().GetActiveTab();
++  EXPECT_TRUE(stedding::IsEmptySpaceStandIn(now)) << "the Space's page";
++  EXPECT_EQ(work, model().SpaceForTab(now));
++  EXPECT_EQ(work, model().active_id());
++  EXPECT_EQ(count, tabs().count()) << "one tab closed, the page opened";
++  EXPECT_FALSE(shown.Showed(slept)) << "an essential asleep came on screen";
++  EXPECT_FALSE(shown.Showed(unopened)) << "an essential never opened did";
++  EXPECT_FALSE(shown.Showed(pin)) << "the pin above, asleep, did";
++  EXPECT_TRUE(slept->GetContents()->WasDiscarded());
++  EXPECT_TRUE(unopened->GetContents()->GetController().NeedsReload());
++  EXPECT_TRUE(pin->GetContents()->WasDiscarded());
++}
++
++// tabs R37, R34 (GitHub issue 121): the Space's last tab closing shows what
++// is awake: the essential or pin used most recently that is, passing over
++// one used since that is asleep; with none used, the nearest pin awake
++// above the tab, passing over a pin asleep nearer to it.
++TEST_F(SpaceWindowTest, ClosingTheLastTabShowsWhatIsAwake) {
++  AppendRow(tabs(), profile(), true);
++  // The first essential never opened since the launch; the switch to Work
++  // shows the first one awake.
++  tabs::TabInterface* const first = AppendRow(tabs(), profile());
++  tabs().SetTabPinned(tabs().GetIndexOfTab(first), true);
++  first->GetContents()->SetWasDiscarded(true);
++  tabs::TabInterface* const used_awake = AppendRow(tabs(), profile());
++  tabs().SetTabPinned(tabs().GetIndexOfTab(used_awake), true);
++  tabs::TabInterface* const used_asleep = AppendRow(tabs(), profile());
++  tabs().SetTabPinned(tabs().GetIndexOfTab(used_asleep), true);
++  ASSERT_EQ(first, tabs().GetTabAtIndex(0));
++
++  const SpaceId work = model().AddSpace("Work", kBlue)->id();
++  ASSERT_TRUE(model().SetActiveSpace(work));
++  ASSERT_EQ(used_awake, tabs().GetActiveTab()) << "not the first one awake";
++  // Two pins: the first awake, the second, nearer the tab, asleep.
++  tabs::TabInterface* const pin_awake = AppendRow(tabs(), profile());
++  model().SetSpacePinned(pin_awake, true);
++  tabs::TabInterface* const pin_asleep = AppendRow(tabs(), profile());
++  model().SetSpacePinned(pin_asleep, true);
++  pin_asleep->GetContents()->SetWasDiscarded(true);
++  ASSERT_LT(tabs().GetIndexOfTab(pin_awake), tabs().GetIndexOfTab(pin_asleep));
++  const auto open_the_last_tab = [&]() {
++    tabs::TabInterface* const own = AppendRow(tabs(), profile(), true);
++    task_environment()->RunUntilIdle();
++    EXPECT_EQ(work, model().SpaceForTab(own));
++    EXPECT_LT(tabs().GetIndexOfTab(pin_asleep), tabs().GetIndexOfTab(own));
++    return own;
++  };
++
++  {
++    SCOPED_TRACE("the essential awake used most recently");
++    tabs::TabInterface* const own = open_the_last_tab();
++    for (tabs::TabInterface* const tab : {used_awake, used_asleep, own}) {
++      Use(tabs(), tab);
++    }
++    used_asleep->GetContents()->SetWasDiscarded(true);
++    ShownTabs shown(tabs());
++    chrome::ExecuteCommand(browser(), IDC_CLOSE_TAB);
++    task_environment()->RunUntilIdle();
++    EXPECT_EQ(used_awake, tabs().GetActiveTab());
++    EXPECT_FALSE(shown.Showed(used_asleep)) << "the essential asleep woke";
++    EXPECT_FALSE(shown.Showed(pin_asleep));
++  }
++  {
++    SCOPED_TRACE("none used awake: the nearest pin awake above");
++    tabs::TabInterface* const own = open_the_last_tab();
++    Use(tabs(), own);
++    used_awake->GetContents()->SetWasDiscarded(true);
++    ShownTabs shown(tabs());
++    chrome::ExecuteCommand(browser(), IDC_CLOSE_TAB);
++    task_environment()->RunUntilIdle();
++    EXPECT_EQ(pin_awake, tabs().GetActiveTab()) << "R34: the pin awake above";
++    EXPECT_FALSE(shown.Showed(pin_asleep)) << "the pin asleep woke";
++    EXPECT_FALSE(shown.Showed(first));
++    EXPECT_FALSE(shown.Showed(used_awake));
++    EXPECT_FALSE(shown.Showed(used_asleep));
++  }
++}
++
++// tabs R37, spaces B3 (GitHub issue 121): coming back to a Space its last
++// tab's close left on its page wakes nothing there either: not the
++// essential it used before, asleep since, nor its pin asleep, which a switch
++// to a Space of only pins shows (GitHub issue 42).
++TEST_F(SpaceWindowTest, AnEmptiedSpaceWakesNothingWhenYouComeBack) {
++  const SpaceId home = model().active_id();
++  tabs::TabInterface* const at_home = AppendRow(tabs(), profile(), true);
++  tabs::TabInterface* const essential = AppendRow(tabs(), profile());
++  tabs().SetTabPinned(tabs().GetIndexOfTab(essential), true);
++
++  const SpaceId work = model().AddSpace("Work", kBlue)->id();
++  ASSERT_TRUE(model().SetActiveSpace(work));
++  tabs::TabInterface* const pin = AppendRow(tabs(), profile());
++  model().SetSpacePinned(pin, true);
++  pin->GetContents()->SetWasDiscarded(true);
++  tabs::TabInterface* const own = AppendRow(tabs(), profile(), true);
++  task_environment()->RunUntilIdle();
++  ASSERT_EQ(work, model().SpaceForTab(own));
++  Use(tabs(), essential);
++  Use(tabs(), own);
++  essential->GetContents()->SetWasDiscarded(true);
++
++  chrome::ExecuteCommand(browser(), IDC_CLOSE_TAB);
++  task_environment()->RunUntilIdle();
++  ASSERT_TRUE(stedding::IsEmptySpaceStandIn(tabs().GetActiveTab()));
++
++  ASSERT_TRUE(model().SetActiveSpace(home));
++  task_environment()->RunUntilIdle();
++  ASSERT_EQ(at_home, tabs().GetActiveTab());
++  const int count = tabs().count();
++  ShownTabs shown(tabs());
++  ASSERT_TRUE(model().SetActiveSpace(work));
++  task_environment()->RunUntilIdle();
++  EXPECT_TRUE(stedding::IsEmptySpaceStandIn(tabs().GetActiveTab()))
++      << "the Space's page did not come back";
++  EXPECT_EQ(work, model().SpaceForTab(tabs().GetActiveTab()));
++  EXPECT_FALSE(shown.Showed(essential)) << "the essential used before woke";
++  EXPECT_FALSE(shown.Showed(pin)) << "the pin woke";
++  EXPECT_EQ(count + 1, tabs().count()) << "the page, and no other tab";
++
++  // A row of the Space used again: the next switch shows it, as before.
++  Use(tabs(), pin);
++  task_environment()->RunUntilIdle();
++  ASSERT_TRUE(model().SetActiveSpace(home));
++  ASSERT_TRUE(model().SetActiveSpace(work));
++  task_environment()->RunUntilIdle();
++  EXPECT_EQ(pin, tabs().GetActiveTab());
++}
++
+ // tabs R38: a window without Spaces -- a private one -- keeps Chromium's
+ // rule, which shows the tab that opened the closing one; a window with
+ // Spaces shows the row used before.
+@@ -2966,6 +3163,7 @@ TEST_F(SpaceWindowTest, ACollapsedFolderKeepsAnAwakePinListed) {
    std::ranges::sort(indices);
    tabs::FolderTabCollection* const folder = tabs().AddToNewFolder(indices);
    ASSERT_NE(nullptr, folder);
@@ -408,7 +904,7 @@ index cb0cb3a947b6e..cf189f8f0daf1 100644
    folder->SetCollapsed(true);
    tabs::TabInterface* const elsewhere = OpenTab();
    tabs().ActivateTabAt(tabs().GetIndexOfTab(elsewhere));
-@@ -2982,6 +3009,46 @@ TEST_F(SpaceWindowTest, ACollapsedFolderKeepsAnAwakePinListed) {
+@@ -2982,6 +3180,46 @@ TEST_F(SpaceWindowTest, ACollapsedFolderKeepsAnAwakePinListed) {
        << "the collapsed folder listed a pin that is asleep";
  }
  
@@ -952,10 +1448,26 @@ index f2aaf880f8882..8c1c1485f4358 100644
  
  // P14: a click on the window closes the peek; the same link opens it again
 diff --git a/chrome/test/stedding/pinned_run_browsertest.cc b/chrome/test/stedding/pinned_run_browsertest.cc
-index 09e58f733c313..d6e259ee0945a 100644
+index 09e58f733c313..ed1b22422f856 100644
 --- a/chrome/test/stedding/pinned_run_browsertest.cc
 +++ b/chrome/test/stedding/pinned_run_browsertest.cc
-@@ -339,6 +339,24 @@ IN_PROC_BROWSER_TEST_F(PinnedRunTest, CmdWOnAPinShowsARowOfItsSpace) {
+@@ -12,6 +12,7 @@
+ #include <algorithm>
+ #include <memory>
+ #include <optional>
++#include <set>
+ #include <string>
+ #include <utility>
+ #include <vector>
+@@ -36,6 +37,7 @@
+ #include "chrome/browser/ui/spaces/space_id.h"
+ #include "chrome/browser/ui/spaces/space_model.h"
+ #include "chrome/browser/ui/stedding/empty_space.h"
++#include "chrome/browser/ui/stedding/sleep_tabs.h"
+ #include "chrome/browser/ui/stedding/stedding_prefs.h"
+ #include "chrome/browser/ui/tabs/split_tab_metrics.h"
+ #include "chrome/browser/ui/tabs/tab_enums.h"
+@@ -339,6 +341,24 @@ IN_PROC_BROWSER_TEST_F(PinnedRunTest, CmdWOnAPinShowsARowOfItsSpace) {
    }
  }
  
@@ -980,7 +1492,7 @@ index 09e58f733c313..d6e259ee0945a 100644
  // tabs R66 (BACKLOG S-396, GitHub issue 72): Cmd-W on a Space's only row, a
  // pin, leaves nothing awake there, and the window shows the Space with no
  // page: a stand-in the sidebar does not list, on chrome://stedding-space,
-@@ -388,6 +406,12 @@ IN_PROC_BROWSER_TEST_F(PinnedRunTest, ASpaceWithNothingAwakeShowsItsPage) {
+@@ -388,6 +408,12 @@ IN_PROC_BROWSER_TEST_F(PinnedRunTest, ASpaceWithNothingAwakeShowsItsPage) {
                               "document.getElementById('title').textContent")
                   .ExtractString() == "Nothing open in Quiet";
      })) << "the page did not follow the Space's new name";
@@ -993,6 +1505,127 @@ index 09e58f733c313..d6e259ee0945a 100644
      EXPECT_FALSE(ShouldTrackURLForRestore(GURL(stedding::kEmptySpaceURL)))
          << "the session would keep the Space's page";
    }
+@@ -415,6 +441,120 @@ IN_PROC_BROWSER_TEST_F(PinnedRunTest, ASpaceWithNothingAwakeShowsItsPage) {
+   }
+ }
+ 
++// Every tab the strip had on screen at any of its changes.
++class TabsShown : public TabStripModelObserver {
++ public:
++  explicit TabsShown(TabStripModel& strip) { strip.AddObserver(this); }
++
++  void OnTabStripModelChanged(
++      TabStripModel* strip,
++      const TabStripModelChange& change,
++      const TabStripSelectionChange& selection) override {
++    if (tabs::TabInterface* const active = strip->GetActiveTab()) {
++      shown_.insert(active->GetHandle());
++    }
++  }
++
++  bool Showed(const tabs::TabInterface* tab) const {
++    return shown_.contains(tab->GetHandle());
++  }
++
++ private:
++  std::set<tabs::TabHandle> shown_;
++};
++
++// tabs R37, spaces B3, B4 (GitHub issue 121; PLAN.md decision 24): Cmd-W on
++// a Space's last tab, with its pin and every essential asleep, as a launch
++// leaves them, shows the Space's page and wakes none of them. The first
++// essential came on screen and loaded, never opened in the window until
++// then. Coming back to the Space wakes none either. With an essential the
++// Space used awake, the close shows that one.
++IN_PROC_BROWSER_TEST_F(PinnedRunTest, CmdWOnTheLastTabWakesNothingAsleep) {
++  tabs::TabInterface* const home_tab = tabs().GetActiveTab();
++  ASSERT_TRUE(home_tab);
++  const spaces::SpaceId home = model().active_id();
++  tabs::TabInterface* const essential = AddBlankTab();
++  tabs().SetTabPinned(tabs().GetIndexOfTab(essential), true);
++  tabs::TabInterface* const used = AddBlankTab();
++  tabs().SetTabPinned(tabs().GetIndexOfTab(used), true);
++  ASSERT_EQ(essential, tabs().GetTabAtIndex(0));
++  // Solo: a pin, and one tab below it.
++  const spaces::SpaceId solo = model().AddSpace("Solo", SK_ColorGREEN)->id();
++  tabs::TabInterface* const pin = AddBlankTab();
++  tabs::TabInterface* const last = AddBlankTab();
++  tabs().ActivateTabAt(tabs().GetIndexOfTab(home_tab));
++  model().MoveTabsToSpace({pin, last}, solo);
++  ASSERT_TRUE(model().SetActiveSpace(solo));
++  model().SetSpacePinned(pin, true);
++  tabs().ActivateTabAt(tabs().GetIndexOfTab(last));
++  ASSERT_EQ(last, tabs().GetActiveTab());
++  ASSERT_LT(tabs().GetIndexOfTab(pin), tabs().GetIndexOfTab(last));
++  const auto asleep = [](tabs::TabInterface* tab) {
++    return tab->GetContents()->WasDiscarded();
++  };
++  for (tabs::TabInterface* const tab : {essential, used, pin}) {
++    stedding::UnloadTabNow(tab);
++  }
++  ASSERT_TRUE(base::test::RunUntil([&]() {
++    return asleep(essential) && asleep(used) && asleep(pin);
++  }));
++  ASSERT_TRUE(stedding::test::WaitForRowsToSettle(widget()));
++  const int count = tabs().count();
++
++  {
++    SCOPED_TRACE("Cmd-W on the Space's last tab");
++    TabsShown shown(tabs());
++    const tabs::TabHandle closing = last->GetHandle();
++    chrome::ExecuteCommand(browser(), IDC_CLOSE_TAB);  // Cmd-W
++    ASSERT_TRUE(base::test::RunUntil([&]() { return !closing.Get(); }));
++    tabs::TabInterface* const now = tabs().GetActiveTab();
++    EXPECT_TRUE(stedding::IsEmptySpaceStandIn(now))
++        << "the Space's page did not show";
++    EXPECT_EQ(solo, model().SpaceForTab(now));
++    EXPECT_EQ(solo, model().active_id());
++    EXPECT_EQ(count, tabs().count()) << "the tab closed, the page opened";
++    EXPECT_FALSE(shown.Showed(essential)) << "the first essential came on";
++    EXPECT_FALSE(shown.Showed(used)) << "the other essential came on";
++    EXPECT_FALSE(shown.Showed(pin)) << "the pin above the tab came on";
++    EXPECT_TRUE(asleep(essential) && asleep(used) && asleep(pin))
++        << "an essential or the pin woke";
++  }
++
++  {
++    SCOPED_TRACE("coming back to the Space");
++    ASSERT_TRUE(model().SetActiveSpace(home));
++    ASSERT_TRUE(base::test::RunUntil([&]() {
++      return tabs().GetActiveTab() == home_tab && tabs().count() == count - 1;
++    })) << "Home's tab did not show, or the Space's page stayed";
++    TabsShown shown(tabs());
++    ASSERT_TRUE(model().SetActiveSpace(solo));
++    EXPECT_TRUE(stedding::IsEmptySpaceStandIn(tabs().GetActiveTab()))
++        << "the Space's page did not come back";
++    EXPECT_FALSE(shown.Showed(essential));
++    EXPECT_FALSE(shown.Showed(used));
++    EXPECT_FALSE(shown.Showed(pin)) << "the pin, Solo's only row, came on";
++    EXPECT_TRUE(asleep(essential) && asleep(used) && asleep(pin));
++  }
++
++  {
++    SCOPED_TRACE("an essential the Space used, awake");
++    tabs().ActivateTabAt(tabs().GetIndexOfTab(used));
++    ASSERT_TRUE(base::test::RunUntil([&]() {
++      return !asleep(used) && tabs().count() == count - 1;
++    })) << "the essential did not load, or the Space's page stayed";
++    tabs::TabInterface* const another = AddBlankTab();
++    ASSERT_EQ(solo, model().SpaceForTab(another));
++    TabsShown shown(tabs());
++    chrome::ExecuteCommand(browser(), IDC_CLOSE_TAB);  // Cmd-W
++    ASSERT_TRUE(base::test::RunUntil(
++        [&]() { return tabs().count() == count - 1; }));
++    EXPECT_EQ(used, tabs().GetActiveTab());
++    EXPECT_FALSE(shown.Showed(essential)) << "the first essential came on";
++    EXPECT_FALSE(shown.Showed(pin));
++    EXPECT_TRUE(asleep(essential) && asleep(pin));
++  }
++}
++
+ // pins H17: Collapse Pinned Tabs in the Space menu hides the pin rows and
+ // keeps the Clear line; the selected pin keeps its row, and it alone; Expand
+ // Pinned Tabs brings every pin row back.
 diff --git a/chrome/test/stedding/restore_browsertest.cc b/chrome/test/stedding/restore_browsertest.cc
 index 86bf1b8ddbad2..737699b057f54 100644
 --- a/chrome/test/stedding/restore_browsertest.cc
@@ -1162,6 +1795,44 @@ index 5b446df3bb55e..936da33d5fafb 100644
  // sidebar Y46: the site, as the field shows it, for each kind of page.
  IN_PROC_BROWSER_TEST_F(SidebarAddressTest, TheFieldShowsTheSite) {
    EXPECT_EQ(u"example.com",
+diff --git a/chrome/test/stedding/sidebar_click_browsertest.cc b/chrome/test/stedding/sidebar_click_browsertest.cc
+index 62839771acfba..137ae4cfceeed 100644
+--- a/chrome/test/stedding/sidebar_click_browsertest.cc
++++ b/chrome/test/stedding/sidebar_click_browsertest.cc
+@@ -48,6 +48,7 @@
+ #include "chrome/browser/ui/color/chrome_color_id.h"
+ #include "chrome/browser/ui/spaces/space.h"
+ #include "chrome/browser/ui/spaces/space_model.h"
++#include "chrome/browser/ui/stedding/empty_space.h"
+ #include "chrome/browser/ui/stedding/pin_lifecycle.h"
+ #include "chrome/browser/ui/stedding/stedding_prefs.h"
+ #include "chrome/browser/ui/stedding/tab_names.h"
+@@ -2012,14 +2013,22 @@ IN_PROC_BROWSER_TEST_F(SidebarClickTest,
+       TabView* const row = RowFor(tab_strip_model()->GetIndexOfTab(plain));
+       ASSERT_TRUE(row);
+       MiddleClickRow(row);
+-      ASSERT_TRUE(base::test::RunUntil([&]() {
+-        return tab_strip_model()->count() == count - 1 && !closed.Get();
+-      })) << "a middle click on a plain row did not close it";
++      ASSERT_TRUE(base::test::RunUntil([&]() { return !closed.Get(); }))
++          << "a middle click on a plain row did not close it";
+       EXPECT_NE(TabStripModel::kNoTab,
+                 tab_strip_model()->GetIndexOfTab(space_pin));
+       EXPECT_NE(TabStripModel::kNoTab,
+                 tab_strip_model()->GetIndexOfTab(essential));
+       EXPECT_FALSE(ShownBar());
++      // The Space's last tab, with its pin and the essentials asleep: the
++      // Space shows its page in the row's place, and none of them wakes
++      // (tabs R37; GitHub issue 121).
++      EXPECT_EQ(count, tab_strip_model()->count());
++      EXPECT_TRUE(
++          stedding::IsEmptySpaceStandIn(tab_strip_model()->GetActiveTab()));
++      for (tabs::TabInterface* const pin : {space_pin, essential, homeless}) {
++        EXPECT_TRUE(pin->GetContents()->WasDiscarded()) << "a pin woke";
++      }
+     }
+   }();
+ 
 diff --git a/chrome/test/stedding/site_controls_browsertest.cc b/chrome/test/stedding/site_controls_browsertest.cc
 index e2e99a08184f5..79b594944a0ae 100644
 --- a/chrome/test/stedding/site_controls_browsertest.cc

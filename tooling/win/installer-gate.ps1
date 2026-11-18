@@ -14,7 +14,7 @@ release's image sits beside it as dist\Stedding-<From>-win-x64.exe.
 
 Run it in the operator's session (run-in-session.ps1; trap 40). It refuses, changing nothing,
 while Stedding runs from the installed folder: that is the owner's browser (trap 62). The log
-(-Log, default %TEMP%\stedding-gate\installer-<Version>.log) ends in INSTALLER_GATE_DONE.
+(-Log, default %TEMP%\stedding-gate\installer-<Version>.log) ends in INSTALLER_CHECKS_DONE.
 
   tooling\win\installer-gate.ps1 -Version 0.6.1 -From 0.6.0
 #>
@@ -43,7 +43,7 @@ if (@(Get-Process chrome -ErrorAction SilentlyContinue | Where-Object { $_.Path 
 }
 if ($refuse.Count -gt 0) {
   "refusing, nothing done: $($refuse -join '; ')" | Add-Content $Log
-  "INSTALLER_GATE_DONE refused" | Add-Content $Log
+  "INSTALLER_CHECKS_DONE refused" | Add-Content $Log
   exit 1
 }
 
@@ -91,4 +91,4 @@ Step 'status' 'status-upgraded' @{}
 Step 'uninstall-keep' 'uninstall-2' @{ Backup = $backup }
 Step 'install' 'install-new' @{ Installer = $new }
 Step 'status' 'status-end' @{}
-"INSTALLER_GATE_DONE $(Get-Date -Format HH:mm:ss); installed: $(Installed)" | Add-Content $Log
+"INSTALLER_CHECKS_DONE $(Get-Date -Format HH:mm:ss); installed: $(Installed)" | Add-Content $Log

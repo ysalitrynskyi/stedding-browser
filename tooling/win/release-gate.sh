@@ -118,7 +118,7 @@ run_ps package-installer.ps1 -Config win-release -Src "$STEDDING_CHROMIUM_SRC" 2
 mark "packaged: $(cat "dist/Stedding-$version-win-x64.exe.sha256" 2>/dev/null)"
 if [ -f "dist/Stedding-$from-win-x64.exe" ]; then
   run_ps installer-gate.ps1 -Version "$version" -From "$from" -Log "$(win "$D/installer-$version.log")"
-  grep -a -E 'refusing|installed:|after install|pill:|before the update|pins after|pin store|application dir|uninstall entry|^---|INSTALLER_GATE_DONE' \
+  grep -a -E 'refusing|installed:|after install|pill:|before the update|pins after|pin store|application dir|uninstall entry|^---|INSTALLER_CHECKS_DONE' \
     "$D/installer-$version.log" | cut -c1-240
 else
   mark "no dist/Stedding-$from-win-x64.exe: the update and the cycle did not run"

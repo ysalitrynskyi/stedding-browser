@@ -16,7 +16,7 @@ Before patch 0041 the Windows build was Chromium in every key Windows uses: `%LO
 - **The installer is Chromium’s `mini_installer`.** It is built from `win-release` ([win-release.gn](../../tooling/args/win-release.gn): non-component, no symbols) by `tooling/win/build.ps1`, packaged as `dist/Stedding-<VERSION>-win-x64.exe` with its sha256 by `tooling/win/package-installer.ps1`, and published by `tooling/publish-release`. A release the other platform already made is joined.
 - **The published install is per user.** The browser is `%LOCALAPPDATA%\Stedding\Application`. The profile is `%LOCALAPPDATA%\Stedding\User Data` ([windows.md](../features/windows.md) N3, N6). A system-wide install is not part of what we publish (`BACKLOG.md` S-169).
 - **The install mode is Stedding’s** (`chrome/install_static/chromium_install_modes.h`, patch 0041). The product path, app name, app id and ProgIDs (`SteddingHTM`, `SteddingPDF`) are Stedding’s, the launch scheme is `stedding:`, and the Active Setup GUID, the toast activator, the elevator, the tracing service and the sandbox SID prefix are Stedding’s own. A Stedding install and a Chromium install share no registry key, COM class or app container.
-- **The installer is unsigned.** SmartScreen warns. The release notes give the two clicks: More info, then Run anyway (`docs/release-notes/v0.3.0-beta.22.md`). Signing is S-56.
+- **The installer is unsigned.** SmartScreen warns. Each release's notes give the two clicks: More info, then Run anyway. Signing is S-56.
 - **Windows updates itself.** The updater, the feed and the key are 0023 and 0026. [ROADMAP.md](../ROADMAP.md) M8: from 0.2.0 beta 19.
 
 ## Consequences

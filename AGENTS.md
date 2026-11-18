@@ -75,7 +75,7 @@ Details are in `docs/ARCHITECTURE.md`.
 3. `docs/HANDOFF.md`: the "Fast path" and the trap index at its top. Read a trap when
    its topic comes up.
 4. Ask the operator **once**, in one message, for what you would otherwise find out
-   hours in (the list under "How to work", rule 2).
+   hours in (`docs/AGENT-LOOP.md`, "Ask once, up front").
 5. Use the product before any long job: launch it, click it, look at it.
 
 ## How to work here
@@ -87,14 +87,10 @@ The short form. `docs/AGENT-LOOP.md` has the detail.
    Mac, `win-release` on Windows). Then a build with DCHECKs and the dangling-pointer
    detector (`win-checks`, or `mac-checks` on the Mac). Then ASan (`win-asan`). A
    debug build only if a check needs one.
-2. **Ask once, up front.** May you drive the screen and keyboard. May you push, and
-   release when done (neither happens without a yes in chat). Which output directories
-   may you delete. Is the machine yours for the night. Is there a setting only the
-   operator may flip (Windows clipboard history, for the Win+V check). Will they close
-   their own Stedding for the installer test: only an installer of the version already
-   installed still repairs, and it cannot replace a running browser (trap 62). Will
-   they quit Arc and any clipboard manager before the keyboard checks: Arc takes ⌥⌘N
-   (trap 64) and a clipboard manager takes ⇧⌘C (trap 94) from every app while it runs.
+2. **Ask once, up front:** driving the screen, pushing and releasing, what you may
+   delete, the machine overnight, settings only the operator flips, closing their own
+   Stedding for the installer test, quitting Arc and clipboard managers before the
+   keyboard checks. The list, with its reasons, is in `docs/AGENT-LOOP.md`.
 3. **Supervise long jobs; do not poll them.** A build or run past a few minutes is one
    detached job. On Windows, `tooling\win\build-until-done.ps1` writes a status file
    and ends it with `SUPERVISOR_EXIT=`. Wait for that line. Post one status line, with a number in it, before
@@ -102,7 +98,8 @@ The short form. `docs/AGENT-LOOP.md` has the detail.
    stuck: the supervisor stops with exit 4 and names it (trap 57). Time that step by hand.
 4. **One pass should find everything.** A check that aborts at its first failure hides
    the rest. Collect every distinct failure per run, read them through
-   `tooling/digest-sanitizer`, and fix in batches.
+   `tooling/digest-sanitizer`, and fix in batches. A browser sweep runs its failures again
+   alone and says which fail on their own; all of them stay failures.
 5. **Every finding gets a test, and its fix goes into the patch that owns the code**
    (`tooling/fold-fix`). Then use the product again: a fix is done when the thing you
    saw has stopped happening on the real build.
@@ -154,10 +151,10 @@ commands.
 |---|---|
 | `docs/README.md` | The index of everything under `docs/`, grouped by who it is for |
 | `docs/INSTALL.md`, `docs/SHORTCUTS.md`, `docs/FAQ.md` | Installing and verifying, every shortcut on both platforms, questions and answers. Plain language; keep them true when behaviour changes |
-| `docs/AGENT-LOOP.md` | The working procedure: order of evidence, ask once, supervise long jobs, one pass finds everything, then research, spec, test, implement, patch; and what Arc switchers ask for |
+| `docs/AGENT-LOOP.md` | The working procedure: ask once, order of evidence, long jobs, one pass finds everything, then research, spec, test, implement, patch |
 | `docs/features/` | One spec per feature: numbered behaviours, each with its test. `acceptance.md` holds the scripts run on a real build before a release, and the record of each run |
 | `PLAN.md` | The owner's standing decisions, and when an item counts as done |
-| `docs/history/` | `plan-2026-09-26.md`, the 2026-09-26 audit (TAB-1, SPC-4, ...), which the code cites by that path; and `archive.md`: the closed backlog. S-179 to S-210, the code review, are rows in that table |
+| `docs/history/` | `plan-2026-09-26.md`, the 2026-09-26 audit (TAB-1, SPC-4, ...), which the code cites by that path; `archive.md`, the closed backlog (S-179 to S-210 are the code review); what Arc switchers asked for in 2026-08 |
 | `BACKLOG.md` | The one list of open work, by id, in priority order. Other docs cite ids; closed items move to `docs/history/archive.md` |
 | `docs/HANDOFF.md` | Where things live, the fast path, dev parameters, the traps already paid for (with an index) |
 | `docs/PROJECT-LOG.md` | What was built since 2026-10-15, round by round, with the evidence. History, not instructions |

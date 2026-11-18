@@ -1,26 +1,25 @@
 # Performance measurements
 
-**There is no current measurement.** The budgets in `docs/ROADMAP.md#the-quality-bar` are overhead against vanilla Chromium at the same pin, configuration and hardware. The only comparison on record is from 2026-09-02, below. The pin and the series have moved since (`tooling/dev status`), and nothing has been measured again. The release steps build `release` on the Mac and `win-release` on Windows (`docs/HANDOFF.md`, "Release channel"). The record below was taken with the `official` arguments, and it is a record of that build, not of a published release.
+**There is no current measurement.** The budgets in `docs/ROADMAP.md#the-quality-bar` are overhead against vanilla Chromium at the same pin, configuration and hardware. The only comparison on record is from 2026-09-02, below. The pin and the series have moved since (`tooling/dev status`), and nothing has been measured again. That record was taken with the `official` arguments; published releases are `release` on the Mac and `win-release` on Windows (`docs/HANDOFF.md`, "Release channel"), so it is a record of that build, not of a release.
 
 ## How to measure
 
-Run `tooling/measure/harness.py` on an otherwise idle Mac, and not while a build is running. It reads a macOS app bundle and stops on any other system. Windows budgets are still open (`docs/ROADMAP.md`, M8).
+Run `tooling/measure/harness.py` on an otherwise idle Mac, and not while a build is running. It reads a macOS app bundle and stops on any other system, so Windows has no budget measurement yet (`docs/ROADMAP.md`, M8).
 
 ```bash
 tooling/measure/harness.py all --sites local --app <vanilla app> --out docs/perf/<date>-vanilla-<config>-local.json
 tooling/measure/harness.py all --sites local --app <Stedding app> --out docs/perf/<date>-<config>-local.json
 ```
 
-Measure the two builds one after the other, at the same pin and in the same configuration. `tooling/args/vanilla.gn` has the same arguments as `tooling/args/official.gn`. Build the vanilla app from the checkout detached at the pin, after `tooling/apply-branding --revert`. `tooling/build-chromium` builds only a checkout that is at the pin, or a descendant of it.
+Measure the two builds one after the other, at the same pin and in the same configuration, the official arguments: `release` leaves out PGO and LTO. `tooling/args/vanilla.gn` has the same arguments as `tooling/args/official.gn`. Build the vanilla app from the checkout detached at the pin, after `tooling/apply-branding --revert`. `tooling/build-chromium` builds only a checkout that is at the pin, or a descendant of it. Name each new file with the build, the configuration and the pin.
 
-`--sites local` loads the ten pages in `tooling/measure/local-sites/` (`sites-local.txt`) as `file:` URLs, with no network. That list is the one for the overhead budgets. `--sites live` loads the ten sites in `tooling/measure/sites.txt`. Warm startup and memory use the list `--sites` names. Cold startup always times a trivial local page. The harness does not measure the sidebar tab switch or the command bar. Name each new file with the build, the configuration and the pin.
+`--sites local` loads the ten pages in `tooling/measure/local-sites/` (`sites-local.txt`) as `file:` URLs, with no network. That list is the one for the overhead budgets. `--sites live` loads the ten sites in `tooling/measure/sites.txt`, and needs the network. Warm startup and memory use the list `--sites` names. Cold startup always times a trivial local page. The harness does not measure the sidebar tab switch or the command bar.
 
 What the harness records:
 
-- **Startup** is the time from launch to the first painted frame of a trivial local page. That is the working reading of "first accepted input". One warm-up launch is discarded. A binary's first run also pays to fault it into the page cache, once per machine, not once per start.
-- **Memory** is physical footprint, the figure Activity Monitor shows, read with `proc_pid_rusage` and summed over the launched process and its descendants. Summed RSS counts every shared page once per process. The harness records 9599 MB of RSS for a session whose footprint was 3104 MB.
+- **Startup** is the time from launch to the first painted frame of a trivial local page, ten runs of each mode. That is the working reading of "first accepted input". One warm-up launch is discarded. A binary's first run also pays to fault it into the page cache, once per machine, not once per start.
+- **Memory** is physical footprint, the figure Activity Monitor shows, read with `proc_pid_rusage` and summed over the launched process and its descendants. Each of five runs waits 30 seconds for the pages to load and 60 seconds idle. Summed RSS would count every shared page once per process: the harness recorded 9599 MB of RSS for a session whose footprint was 3104 MB.
 - **Processes.** The harness prints how many processes it summed. A count that differs between the two builds is itself a finding.
-- Take the numbers from a build with the official arguments. `release` leaves out PGO and LTO (`tooling/args/release.gn`). `--sites local` needs no network. `--sites live` does. Startup is ten runs of each mode. Each memory run waits 30 seconds for the pages to load and 60 seconds idle, five runs.
 
 ## The record of 2026-09-02
 

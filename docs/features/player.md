@@ -1,6 +1,6 @@
 # Feature: Mini player
 
-Status: **Mp5 built. Mp2, Mp4 and Mp6 being built** for the next release, with Chromium's own picture-in-picture window (the owner, 2026-11-13: "you can start with window"). **Mp3 and Mp7 to Mp10 built** for the next release (patch 0183): the background audio card, the one the owner chose from rendered options (2026-11-13: "B, Card"). **Mp1 planned** (BACKLOG S-95).
+Status: **Mp2 to Mp10 built and released in 0.5.0**: a playing video pops out into Chromium's own picture-in-picture window (patch 0181; the owner, 2026-11-13: "you can start with window"), and a card at the sidebar's foot shows what plays in the background (patch 0183; the owner chose it from rendered options, "B, Card"). Mp5 is patch 0060. **Mp1 planned**: the player inside the window (BACKLOG S-95; PLAN decision 24).
 Owner docs: `docs/PRODUCT.md` §9. Patches: 0060 (Mp5), 0181 (Mp2, Mp4, Mp6), 0183 (Mp3, Mp7-Mp10).
 
 Picture-in-picture is meant to be a child of the page card, not Chromium's always-on-top window. No model. Until Mp1 exists, ⌥⇧⌘P opens Chromium's own window.

@@ -13,8 +13,8 @@ profile, so one site can be signed in as work in one Space and as you in another
 switch turns every website dark. A web page can become an app with a window of its own.
 **Clear Site Cookies and Reload** clears the cookies of the site in front of you, in
 that tab’s sign-in, and reloads it; other sites are left alone. Arc still has Boosts,
-Easels, the sidebar’s mini player, the Library panel and Live Folders, shared Spaces,
-and AI. Both lists are in the README: [What Arc never had](../README.md#what-arc-never-had)
+Easels, the sidebar’s mini player, the Library panel, shared Spaces, and AI. Live
+Folders came in 0.6.0, for GitHub pull requests. Both lists are in the README: [What Arc never had](../README.md#what-arc-never-had)
 and [what Arc has that Stedding does not](../README.md#what-arc-has-that-stedding-does-not).
 
 **Is it a fork of Arc?**
@@ -42,7 +42,7 @@ One maintainer, in the open. Bug reports go to GitHub.
 **Is there a warranty?**
 No. Stedding comes as is under its [BSD-3-Clause license](../LICENSE), which says its
 authors and contributors are not liable for what comes of using it. Bug reports are
-welcome and are fixed as time allows. As with any beta, keep a copy of anything
+welcome and are fixed as time allows. Before 1.0, keep a copy of anything
 important.
 
 ## Installing and updating
@@ -404,7 +404,7 @@ turns the pictures off.
 ## Contributing
 
 **How can I help?**
-Use a beta for a day and open an issue for each thing that is worse than what you
+Use the latest release for a day and open an issue for each thing that is worse than what you
 use now. See [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 **I found a security problem.**

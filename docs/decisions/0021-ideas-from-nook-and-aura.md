@@ -11,7 +11,7 @@ Nook (`nook-browser/Nook`) is a WebKit browser for macOS, in Swift, GPL-3.0, wit
 
 Their behaviours are rebuilt from written descriptions. Nothing of theirs is copied: no code, scripts, data files, shortcut tables, icons or layout constants, and no translation of those.
 
-A third-party piece comes from its own project, under its own license, and gets an ADR first. Ad and tracker blocking is [ADR 0030](0030-ad-and-tracker-blocking.md): Chromium's subresource filter, lists fetched at run time, nothing from a list built in. Phase 1 is patch 0098, off by default. ADR 0030 is still Proposed.
+A third-party piece comes from its own project, under its own license, and gets an ADR first. Ad and tracker blocking is [ADR 0030](0030-ad-and-tracker-blocking.md): Chromium's subresource filter, lists fetched at run time, nothing from a list built in.
 
 AI stays out ([ADR 0020](0020-no-bundled-model.md)). Boosts stay deferred ([ADR 0012](0012-defer-boosts-and-easels.md)). If they return, the shape is a live preview while typing and a switch per site in the page menu, with the CSS applied as the page starts loading.
 
@@ -21,7 +21,7 @@ Read, and left out:
 
 - YouTube and social-site tweaks, including hiding Shorts and sponsored posts, and SponsorBlock. That is a script host per site, the reason Boosts are deferred, and extensions already do it.
 - A cookie and cache inspector, and a score of how risky a site is. Chromium's site-data pages cover the data.
-- An address field in the sidebar. The address row stays on the page card (toolbar T1 to T5).
+- An address field in the sidebar. The address row stays on the page card (toolbar T1 to T5). Amended 2026-11-18: later built as an option, off by default, as at the top of Arc's sidebar (sidebar Y46, GitHub issue 45).
 - Daily sidebar backups, cut on 2026-09-26 (import I17, I19).
 - A history of its own per Space. Essentials of a Space with its own session were later taken ([ADR 0028](0028-a-spaces-own-essentials.md)).
 - Drag previews that change shape, and trackpad haptics.

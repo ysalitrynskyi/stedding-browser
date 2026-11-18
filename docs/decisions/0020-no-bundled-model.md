@@ -11,7 +11,7 @@ Date: 2026-09-16
 
 Stedding ships no bundled model. Not in the app, not as a default key, and not as an API Stedding operates. Chrome's Lens, Gemini and AI Mode rows stay hidden (patches 0024 and 0061).
 
-Tidy downloads use no model. The hover preview is a picture of the tab, with no model (pins H19). Tidy titles, if they ship, are an optional local heuristic, with no model. There is no spec row for them yet.
+Tidy downloads use no model. The hover preview is a picture of the tab, with no model (pins H19). Tidy titles, if they ship, are an optional local heuristic, with no model. Amended 2026-11-18: they shipped that way in 0.4.0 beta 8, local rules off by default (tabs R65, S-398).
 
 Ask on Page, command-bar chat, Instant Links' "Folder of …", and a persistent agent, with or without a Space's cookies, are never. A chatbot is an extension.
 

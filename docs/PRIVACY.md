@@ -2,9 +2,9 @@
 
 Privacy in Stedding is a set of shipped defaults. This page states the
 principles, then what the browser does: what is on, what is a choice, and what
-is still Chromium's. How Google services in the Chromium base are removed or
-replaced is in [ARCHITECTURE.md](ARCHITECTURE.md#de-googling-stance). This page
-is the product contract that work must satisfy.
+is still Chromium's. It is the product contract that work must satisfy. How
+Google services in the Chromium base are removed or replaced is in
+[ARCHITECTURE.md](ARCHITECTURE.md#de-googling-stance).
 
 A network connection the shipping browser makes that is not listed here is a
 bug. Report it through [SECURITY.md](../SECURITY.md). An endpoint that is not
@@ -15,8 +15,8 @@ This is how the browser is built to behave, as a best effort. A build can have
 bugs. Stedding comes as is, without warranty, under its BSD-3-Clause licence
 ([LICENSE](../LICENSE)). Sites you visit, extensions you install, the search
 engine you pick, and services such as GitHub, Google's update servers, or a
-sync tool or storage you choose are run by others, under their own terms. Using them is
-your choice.
+sync tool or storage you choose are run by others, under their own terms.
+Using them is your choice.
 
 ## Principles
 
@@ -41,14 +41,14 @@ your choice.
 
 | Connection | To | Contains | Why |
 |---|---|---|---|
-| Browser update check | GitHub. The feed is on `raw.githubusercontent.com`. A new version's image (the Mac DMG, the Windows installer) is fetched from `github.com`, which redirects to `release-assets.githubusercontent.com`. At launch, ten seconds in, when the last check is more than an hour old, and every six hours while the browser runs. Off in Settings › Stedding › Updates. Detail under "The update check". | A plain HTTPS GET. On the Mac, Sparkle's user agent, which names the browser and its version. On Windows, the browser's own network stack, cache disabled, Chromium's reduced user agent (Chrome's major version and the Windows platform). No cookies, no install id, no machine id. | Security updates for a Chromium fork. |
-| Thank-you pages | stedding.dev: `/thanks/` when the welcome flow ends, once per installation; `/thanks/updated/#v`*version* on the first launch of each later version. The second is turned off with "Show a thank-you page after an update". | A plain page request. The version is in the fragment, which the browser does not send. The pages are not on the update path and load nothing from another host ([ADR 0022](decisions/0022-sparkle-updates-the-mac.md)). | The project's thanks, and a link to sponsor it. |
+| Browser update check | GitHub: the feed on `raw.githubusercontent.com`; a new version's image from `github.com`, which redirects to `release-assets.githubusercontent.com`. Shortly after a launch when the last check is more than an hour old, and every six hours while the browser runs ("The update check"). Off in Settings › Stedding › Updates. | A plain HTTPS GET with no cookies, no install id and no machine id. The user agent and the rest are under "The update check". | Security updates for a Chromium fork. |
+| Thank-you pages | stedding.dev: `/thanks/` when the welcome flow ends, once per installation, with no switch; `/thanks/updated/#v`*version* on the first launch of each later version, turned off with "Show a thank-you page after an update". | A plain page request. The version is in the fragment, which the browser does not send. The pages are not on the update path, so the update installs if the site is down, and they load nothing from another host ([ADR 0022](decisions/0022-sparkle-updates-the-mac.md)). | The project's thanks, and a link to sponsor it. |
 | Security component updates | Google's component updater, `update.googleapis.com`, with downloads from `edgedl.me.gvt1.com`, as in stock Chromium. One component is not registered: Google's Subresource Filter Rules (`features/blocker.md` Bk4). | Component name and version. | Security data Chromium ships as components, certificate revocation among it. Which components to mirror or drop is decided before 1.0 (`BACKLOG.md` S-241). |
 | Safe Browsing list updates | `safebrowsing.googleapis.com`. The request is made and refused: these builds carry no API key, so no page is checked. See "Safe Browsing". | The list-update request. Google does not receive your browsing history from it. The request does carry your IP. | The setting is on. The lists stay empty. |
 | Download check | `sb-ssl.google.com`, while Safe Browsing is on, for a file Chromium's download check covers. | The check, with the placeholder API key. | Not the page check above. Turning it off is open (`BACKLOG.md` S-238). |
 | Password leak check | `passwordsleakcheck-pa.googleapis.com`, when a password is saved. The preference defaults on. | A short hash of the username and an encrypted copy of the username and password, with the placeholder API key. No account. | Chromium's leak check. Turning it off is open (`BACKLOG.md` S-238). |
-| Translate | `translate.googleapis.com`, while Translate is on (the default), when a page is offered for translation. | The language list, and the translate script if the page is translated. | Turning it off is still to do. |
-| Network time | `clients2.google.com` | A request for the current time. | Chromium judges certificate dates with it. Turning it off is still to do. |
+| Translate | `translate.googleapis.com`, while Translate is on (the default), when a page is offered for translation. | The language list, and the translate script if the page is translated. | Turning it off is still to do (below). |
+| Network time | `clients2.google.com` | A request for the current time. | Chromium judges certificate dates with it. Turning it off is still to do (below). |
 | The user's own browsing | Sites the user visits, including the DNS, TLS (OCSP and certificate transparency) and favicon traffic that browsing implies. | Whatever the user does. | This is a web browser. |
 | Extension install and update | Chrome Web Store (Google). | Ordinary store traffic. | Only when the user installs or updates an extension. See "Extensions". |
 
@@ -57,7 +57,8 @@ your choice.
 | Connection | To | Contains | Why |
 |---|---|---|---|
 | Ad and tracker lists | `easylist.to` (`/easylist/easylist.txt` and `/easylist/easyprivacy.txt`), only while Settings › Stedding › Privacy › **Block ads and trackers** is on. It is off by default. Each list is fetched again when its own expiry says so (clamped to between one and fourteen days), and at once on **Update lists now**. | A conditional GET (If-None-Match, If-Modified-Since). No cookies, no cache, no query string, Chromium's own user agent. Nothing about the machine or the pages visited. | The filter lists. Nothing from them is built into the browser ([ADR 0030](decisions/0030-ad-and-tracker-blocking.md)). |
-| Live folder of GitHub pull requests | `api.github.com` (`/search/issues`), only once the user makes a live folder with a token they made on github.com (Settings › Stedding › Sync and import). A live folder, once made, asks `api.github.com` for its list on a timer, with the person's token, and nothing else: when it is made, every 10 minutes while a normal window of the profile is open, when such a window comes to the front and on Refresh, never more than once a minute. Deleting the folder stops it and forgets the token. | Four HTTPS GETs, one per search (pull requests the user opened, is assigned, is asked to review or is mentioned in), with the token in the Authorization header. Through the browser's own network context: no cookies, no cache shared with pages, nothing extensions see. Nothing about the pages visited. The token is kept sealed by the system's key store and never synced. | The folder's list ([ADR 0036](decisions/0036-live-folders-for-github.md), `features/live-folders.md`). |
+| Live folder of GitHub pull requests | `api.github.com` (`/search/issues`), only once the user makes a live folder with a token they made on github.com (Settings › Stedding › Sync and import), and nowhere else. It asks when the folder is made, every 10 minutes while a normal window of the profile is open, when such a window comes to the front, and on Refresh, never more than once a minute. Deleting the folder stops it and forgets the token. | Four HTTPS GETs, one per search (pull requests the user opened, is assigned, is asked to review or is mentioned in), with the token in the Authorization header. Through the browser's own network context: no cookies, no cache shared with pages, nothing extensions see. Nothing about the pages visited. The token is kept sealed by the system's key store and never synced. | The folder's list ([ADR 0036](decisions/0036-live-folders-for-github.md), `features/live-folders.md`). |
+| Sidebar sync through WebDAV or S3 | The address the user typed, and nowhere else, only while sync is set up there. Off by default. | The sync files, as plain text, with no cookies and no referrer. Details under "Sync". | The user's own storage carries the sidebar between computers ([ADR 0032](decisions/0032-sidebar-sync-through-webdav-or-s3.md)). |
 
 ### Never
 
@@ -78,9 +79,8 @@ your choice.
 - No certificate report. Chrome can send Google a sample of certificates
   (`safebrowsing.google.com/safebrowsing/clientreport/chrome-sct-auditing`)
   once it enforces certificate transparency, after a lookup at
-  `sctauditing-pa.googleapis.com`.
-  Stedding enforces certificate transparency and reports nothing, whatever the
-  Safe Browsing setting (`S-237`,
+  `sctauditing-pa.googleapis.com`. Stedding enforces certificate transparency
+  and reports nothing, whatever the Safe Browsing setting (`S-237`,
   `CertificateReportsTest.NoCertificateIsReported`).
 - No check-in with Google's push service (`android.clients.google.com`) at
   start, and no `accounts.google.com/ListAccounts`. A fresh profile does not
@@ -132,12 +132,9 @@ the list update is refused. The local lists stay empty. No page is checked,
 whichever mode is chosen. Settings › Privacy and security › Security says so,
 above the modes (`features/privacy.md` Q13,
 `SettingsSecurityTest.ThePageSaysSafeBrowsingDoesNotWork`). The requests still
-reach Google. A file Chromium's download check covers is still sent to
-`sb-ssl.google.com`, and saving a password is still sent to
-`passwordsleakcheck-pa.googleapis.com`. Both carry the placeholder API key.
-Turning them off is open (`BACKLOG.md` S-238). The route the owner chose,
-lists through stedding.dev with the key on the server (`BACKLOG.md` S-75),
-is set aside for now.
+reach Google, and so do the download check and the password leak check (the
+table above). The route the owner chose, lists through stedding.dev with the
+key on the server (`BACKLOG.md` S-75), is set aside for now.
 
 The stance, once it is settled:
 
@@ -161,15 +158,14 @@ import.
 ## A Space's own cookies
 
 A Space with a session of its own keeps its cookies, cache and site data in
-its own jar on this disk (`features/sessions.md`). **Delete browsing data**,
-`chrome.browsingData` and deleting one site's data reach every Space's jar,
-with the same time range and the same sites (sessions S24). **Clear Session
-Data…** empties that jar, for every Space that shares it. Several
-Spaces can share one session and so one jar. A jar stays while any Space names
-it, and also after its last Space has moved to another session: Settings →
-Stedding → Spaces lists such a session with **Delete Session…**, and **Delete
-browsing data** reaches it (sessions S43–S45). Deleting the Space deletes
-the jar.
+its own jar on this disk (`features/sessions.md`). Several Spaces can share one
+session, and so one jar. **Delete browsing data**, `chrome.browsingData` and
+deleting one site's data reach every Space's jar, with the same time range and
+the same sites (sessions S24). **Clear Session Data…** empties that jar, for
+every Space that shares it. A jar stays while any Space names it, and also
+after its last Space has moved to another session: Settings → Stedding →
+Spaces lists such a session with **Delete Session…**, and **Delete browsing
+data** reaches it (sessions S43–S45). Deleting the Space deletes the jar.
 
 A Space's own session keeps sign-ins apart, not permissions. A site's
 permissions are the profile's, in every Space: camera, location and
@@ -203,7 +199,7 @@ profile's favicon cache, never from a favicon server; a site with no icon
 there shows the default globe. File icons come from the system. The History
 panel reads local history through Chromium's own handler, which could read
 Google's web history only for a profile signed in with history sync. Stedding
-does not offer that (below). Copy File puts a downloaded file on the clipboard
+does not offer that ("Sync"). Copy File puts a downloaded file on the clipboard
 only when the user chooses it. Move to Trash moves a file to the system's
 Trash or Recycle Bin and does not delete it outright.
 
@@ -263,54 +259,54 @@ computer where `GOOGLE_DEFAULT_CLIENT_ID` and `GOOGLE_DEFAULT_CLIENT_SECRET`
 are set (`features/privacy.md` Q16,
 `BrowserSigninTest.NoOAuthClientTurnsSignInOn`). Signing in to Google websites
 works as in any browser. Nothing offers tabs from other devices, which only
-Google sync brings: neither the History page nor the History menu has
-"Tabs from other devices" (`features/privacy.md` Q18). There is no Stedding account or server. A sync
-service of our own is out of scope on the way to 1.0
-([ROADMAP.md](ROADMAP.md), "Out of scope for this ladder").
+Google sync brings: neither the History page nor the History menu has "Tabs
+from other devices" (`features/privacy.md` Q18). There is no Stedding account
+or server. A sync service of our own is out of scope on the way to 1.0
+([ROADMAP.md](ROADMAP.md#out-of-scope-for-this-ladder)).
 
-The sidebar travels as a file (`features/sidebar-file.md`). **Export Space…**
-writes one Space and **Export all Spaces…** writes every Space, to Downloads.
-**Import sidebar…** reads either file. The file holds each Space's name, icon,
-colours, whether it has its own session, and, for a session with a name, that
-name and its random id, and the addresses and titles of
-its pins, folders, essentials and open tabs. It never holds history, cookies,
-passwords, extensions or anything in a Space's own session. Stedding sends the
-file nowhere.
+**A file.** **Export Space…** writes one Space and **Export all Spaces…** writes
+every Space, to Downloads, and **Import sidebar…** reads either
+(`features/sidebar-file.md`). The file holds each Space's name, icon, colours,
+whether it has its own session (and, for a named session, its name and random
+id), and the addresses and titles of its pins, folders, essentials and open
+tabs. It never holds history, cookies, passwords, extensions or anything in a
+Space's own session. Stedding sends the file nowhere.
 
-Sync through a folder is off by default. It is not a sync service. Each
+**Sync through a folder** is off by default, and it is not a sync service. Each
 computer writes a file into a folder the user picks and reads the other
 computers' files from it. The user's own sync tool or shared drive carries
 them. Stedding makes no network request for it. The file holds Spaces (name,
 icon, colours, order, whether the Space has its own session, and a named
-session's name and random id), pins (home
-address and the user's own name), pinned folders, essentials, a random install
-id (16 hex characters) and the computer's name ("Mac" or "Windows PC" plus
-four characters of that id, or a name the user typed). It never holds open
-tabs, history, cookies, passwords, jars or the host name (Sf36). With their
-boxes on, it also holds the settings and the extension list described below. In its own
-profile, each computer also keeps a record of the merged sidebar, the last ten
-batches for Undo, and five backups (Sf7–Sf41, [ADR 0029](decisions/0029-sidebar-sync-through-a-folder.md)).
+session's name and random id), pins (home address and the user's own name),
+pinned folders, essentials, a random install id (16 hex characters) and the
+computer's name ("Mac" or "Windows PC" plus four characters of that id, or a
+name the user typed). It never holds open tabs, history, cookies, passwords,
+jars or the host name (Sf36). With their boxes on, it also holds the settings
+and the extension list described below. In its own profile, each computer also
+keeps a record of the merged sidebar, the last ten batches for Undo, and five
+backups (Sf7–Sf41, [ADR 0029](decisions/0029-sidebar-sync-through-a-folder.md)).
 **Stop syncing** leaves the sidebar as it is. This computer's file in the
 folder is removed only if that box is ticked.
 
-Two more parts of sync each have a box, **Settings** and **Extensions**, ticked
-on the join sheet for a new join and off for a computer that synced before
-them (Sf58–Sf69, [ADR 0037](decisions/0037-settings-and-extensions-in-sync.md)).
-Settings adds Stedding's own settings, those chosen in Settings › Stedding, and
-the sites routed to Spaces; sync's own name, place and sign-in, shortcuts, sizes
-measured against the screen and what only a Mac or only Windows has stay on
-each computer, and Chromium's own settings never travel. Extensions adds the
-list of extensions installed from the Chrome Web Store, each by its id and
-name, written to the person's own sync place like the rest of the file. It
-makes no network request of its own. Only when the person clicks **Install…** on
-an offer does Chromium's own Web Store installer ask the Chrome Web Store
-(Google) for that extension's details and icon, to show its confirmation; the
-extension is downloaded only after the person confirms it there. No extension's data, settings, logins, cookies,
-passwords or tokens travel, and nothing is removed because of another
-computer.
+**Settings and Extensions** each have a box, ticked on the join sheet for a new
+join and off for a computer that synced before them (Sf58–Sf69,
+[ADR 0037](decisions/0037-settings-and-extensions-in-sync.md)). Settings adds
+Stedding's own settings, those chosen in Settings › Stedding, and the sites
+routed to Spaces. Sync's own name, place and sign-in, shortcuts, sizes measured
+against the screen and what only a Mac or only Windows has stay on each
+computer, and Chromium's own settings never travel. Extensions adds the list of
+extensions installed from the Chrome Web Store, each by its id and name,
+written to the person's own sync place like the rest of the file. It makes no
+network request of its own. Only when the person clicks **Install…** on an
+offer does Chromium's own Web Store installer ask the Chrome Web Store (Google)
+for that extension's details and icon, to show its confirmation; the extension
+is downloaded only after the person confirms it there. No extension's data,
+settings, logins, cookies, passwords or tokens travel, and nothing is removed
+because of another computer.
 
-A profile can sync through a WebDAV folder or an S3 bucket the user sets up in
-place of a folder, also off by default (Sf43–Sf57, [ADR 0032](decisions/0032-sidebar-sync-through-webdav-or-s3.md)).
+**Sync through WebDAV or S3.** A profile can sync through a WebDAV folder or an
+S3 bucket the user sets up in place of a folder, also off by default
+(Sf43–Sf57, [ADR 0032](decisions/0032-sidebar-sync-through-webdav-or-s3.md)).
 Nothing for it ships with the browser: no provider, address, key or sign-in
 client. Then, and only then, Stedding makes network requests for sync, to the
 address the user typed and nowhere else: when a window comes to the front, at
@@ -368,16 +364,15 @@ exempts a site (`features/clean-links.md`; `features/privacy.md` Q15).
 
 **Block ads and trackers** (Settings › Stedding › Privacy;
 `features/blocker.md`, [ADR 0030](decisions/0030-ad-and-tracker-blocking.md))
-is off until the user turns it on. Then Stedding downloads EasyList and
-EasyPrivacy from `easylist.to`, each again when it says it expires, and
-converts them on this computer into rules Chromium's subresource filter blocks
-by. The request carries nothing about the user (the row above). The lists, the
-rules made from them and a LICENSE file naming each list stay in the `Stedding
-Blocker` folder of the data folder. Fetch times are in local state. Blocking
-keeps no per-site record of pages visited: the "ads blocked" icon is not
-shown, and Chromium's per-site ads data is not written. The only thing stored
-for a site is an exception the user made (the ADS content setting, in the
-profile's `Preferences` file). One made in a private window stays in that
+is off until the user turns it on. Then Stedding fetches EasyList and
+EasyPrivacy (the row above, which says what the request carries) and converts
+them on this computer into rules Chromium's subresource filter blocks by. The
+lists, the rules made from them and a LICENSE file naming each list stay in the
+`Stedding Blocker` folder of the data folder. Fetch times are in local state.
+Blocking keeps no per-site record of pages visited: the "ads blocked" icon is
+not shown, and Chromium's per-site ads data is not written. The only thing
+stored for a site is an exception the user made (the ADS content setting, in
+the profile's `Preferences` file). One made in a private window stays in that
 window's memory. Delete browsing data with "Site settings" ticked clears the
 exceptions. Turning blocking off stops the fetches. The downloaded lists stay
 on disk.
@@ -417,7 +412,7 @@ consequences:
 | Ad topics, site-suggested ads and ad measurement | Off, with no switch to turn them on | — |
 | Safe Browsing | The setting is on (hash-prefix only). Page checks are not active: list updates are refused without an API key. A checked download and a saved password are still sent | Turn off. Enhanced mode is still offered; see above |
 | Google sync | Not available | — |
-| Sidebar sync through a folder | Off. See "Sync" for what the file holds | Settings › Stedding › Sync and import |
+| Sidebar sync (a folder, or WebDAV or S3 storage) | Off. See "Sync" for what the files hold | Settings › Stedding › Sync and import |
 | WebRTC local IPs | Hidden (mDNS) | Stricter policies through an extension |
 | Global Privacy Control | On | Turn off. Takes effect after a restart |
 | Tracking parameters on links you open | Left as written. Nothing fetched | Turn on, in Settings or the welcome flow: they are removed and known redirect pages skipped. Keep a site's links in Settings |
@@ -433,8 +428,8 @@ needs an ADR in [decisions/](decisions/) and a release-notes entry.
 
 An unbranded build with no Google API key already leaves out metrics, crash
 upload to Google, RLZ, the variations seed, Google sign-in and Sync, and
-Google's own updater. Stedding's update check is separate, and is described
-below. No patch has changed these yet:
+Google's own updater. Stedding's update check is separate ("The update check",
+below). No patch has changed these yet:
 
 | Still to do | Today |
 |---|---|
@@ -448,10 +443,10 @@ below. No patch has changed these yet:
 
 On the Mac, Stedding updates itself with Sparkle 2 from a signed feed in this
 repository ([ADR 0022](decisions/0022-sparkle-updates-the-mac.md), which partly
-supersedes [ADR 0014](decisions/0014-github-releases-as-update-channel.md); the
-site stays off the update path; `features/updates.md`). It is the one endpoint
-this project deliberately adds, so it is described exactly. On Windows the
-browser reads a feed of its own and runs the installer it downloads
+supersedes [ADR 0014](decisions/0014-github-releases-as-update-channel.md);
+`features/updates.md`). It is the one endpoint this project deliberately adds,
+so it is described exactly. On Windows the browser reads a feed of its own and
+runs the installer it downloads
 ([ADR 0023](decisions/0023-updates-on-windows-and-linux.md),
 [ADR 0026](decisions/0026-a-windows-update-key.md)). The rows below say where
 the two differ.
@@ -486,11 +481,5 @@ the feed is one URL to move.
 start Sparkle at all: no request to GitHub until the user chooses Check for
 Updates. A version already downloaded before the switch went off still
 installs when the browser quits. On Windows the same setting stops the
-scheduled checks. A check the user asks for still runs.
-
-**The thank-you pages.** When the welcome flow ends, the browser opens
-`https://stedding.dev/thanks/` once per installation. On the first launch of
-each later version it opens `https://stedding.dev/thanks/updated/#v`*version*.
-The fragment is not sent. The pages are not on the update path: if the site is
-down, the update still installs. "Show a thank-you page after an update" turns
-the second page off. The first has no switch.
+scheduled checks, and a check already under way stops. A check the user asks
+for still runs.

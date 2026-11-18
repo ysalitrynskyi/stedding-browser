@@ -34,7 +34,7 @@ That covers a security defect as it covers any other defect.
 
 ## Scope
 
-Stedding publishes beta binaries on
+Stedding publishes pre-1.0 binaries on
 [Releases](https://github.com/ysalitrynskyi/stedding-browser/releases).
 The macOS file is an Apple silicon disk image, signed with the project's
 Developer ID and notarized by Apple. The Windows file is an x64 installer.
@@ -61,7 +61,7 @@ In scope:
   ([ADR 0014](docs/decisions/0014-github-releases-as-update-channel.md)).
 - Text in this repository that would lead someone into an unsafe configuration.
 
-Two properties of the current betas are not vulnerabilities:
+Two properties of the current releases are not vulnerabilities:
 
 - **The Windows installer is not code-signed** ([BACKLOG.md](BACKLOG.md) S-56).
   SmartScreen asks once. The release notes say to click **More info**, then
@@ -86,7 +86,7 @@ when there is one, goes into a newer release. It is not a promise of help or
 of a fix.
 
 Not every release includes both platforms, so the newest macOS image and the
-newest Windows installer can come from different betas. An older beta is
+newest Windows installer can come from different releases. An older release is
 superseded on the day a newer one for that platform is published, and it
 receives no fixes. There is no long-term support line, and there will not be
 one before 1.0.

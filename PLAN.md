@@ -12,24 +12,21 @@ still open is a BACKLOG row that names its id.
    crash, Stedding's views are torn down and rebuilt with the strip, menu ids are
    range-checked, and Spaces, pins and folders keep working in horizontal mode
    (`docs/features/spaces.md` B34, `docs/features/menus.md` M9).
-2. Peek is on by default (the owner, 2026-10-25; `S-93`). `stedding.peek.enabled` registers
-   true (`patches/0106-feat-peek-explains-itself-and-sync-says-what-folder.patch`).
-3. The Space sleep timer defaults to Never. `stedding.spaces.sleep_minutes` registers as 0.
-   A tab sleeps only when `MaySleep` in `sleep_tabs.cc` allows it. A Space pin or an essential sent home by decision 11 is the exception: it is unloaded whatever it is doing (`docs/features/tabs.md` R6).
-4. The cuts named in the message of
-   `patches/0055-fix-cut-unwired-helpers-and-close-the-open-holes.patch` are approved,
-   and that patch applied them (`S-61`). The sidebar folder stays withdrawn
-   (`docs/features/sidebar-file.md` Sf3). Sync through a folder, decision 18, is what
+2. Peek is on by default (the owner, 2026-10-25; `S-93`): `stedding.peek.enabled` registers
+   true.
+3. The Space sleep timer defaults to Never (`stedding.spaces.sleep_minutes` is 0). A tab
+   sleeps only when `MaySleep` in `sleep_tabs.cc` allows it; a pin or essential sent home by
+   decision 11 is unloaded whatever it is doing (`docs/features/tabs.md` R6).
+4. The cuts in patch 0055's message are approved and applied (`S-61`). The old sidebar folder
+   stays withdrawn (`docs/features/sidebar-file.md` Sf3); sync through a folder, decision 18,
    replaced it.
 5. ⌘9 selects the last visible row (`docs/features/tabs.md` R10, R11).
 6. Collapsing the folder that holds the active tab keeps that tab showing under the header.
    No tab switch (`docs/features/folders.md` F3).
 7. Deleting a Space asks first. Deleting the active Space then shows its neighbour. Only the
    last Space cannot be deleted (`docs/features/spaces.md` B5).
-8. Do not document an import from Chrome, Brave or Edge until that importer exists. The
-   history file's WEB-15 records that it was dropped. Patch 0057 removed the reader patch
-   0055 had added. Since 2026-11-01 it exists: Chrome, Edge, Brave and Vivaldi come in as
-   Dia does (`docs/features/import.md` I43), and the docs may say so.
+8. Document an importer only once it exists. Since 2026-11-01 Chrome, Edge, Brave, Vivaldi and
+   Opera come in as Dia does (`docs/features/import.md` I43; the earlier reader was dropped, WEB-15).
 9. Little windows get no Space commands. "Open in Stedding" is the way into the main window
    (`docs/features/little.md` E2, E7).
 10. Tests that pin a bug are decided from the spec row and Arc's behaviour. Ask the owner only
@@ -57,16 +54,14 @@ still open is a BACKLOG row that names its id.
     scroll and Ctrl with the wheel. No Control with the wheel on the Mac, and a vertical
     scroll never switches (`docs/features/spaces.md` B39).
 16. An issue a user files on GitHub is a suggestion unless it reports a bug (2026-10-21).
-    Bugs are fixed. A requested feature is built only once the owner has said yes. Nothing
-    is said or closed on GitHub (`AGENTS.md`, red lines). Labels are kept to the owner's
-    replies when the owner asks (2026-10-23; the set widened 2026-11-07 and 2026-11-08).
-    Each issue has a kind (`bug`, `enhancement`, `question`, with `crash` or `regression`
-    beside a bug), an `area: …`, a `platform: …` where it is one platform's, and a status:
-    `status: needs decision`, `status: needs info` (waits on the reporter),
-    `status: planned`, `status: later` (in the backlog, not planned now),
-    `status: in progress`, `status: fixed on main` (ships in the next release),
-    `status: released`, and `status: verify` (released, waiting for the reporter).
-    `upstream` is the pin's own workflow's.
+    Bugs are fixed; a requested feature is built only once the owner has said yes. Nothing
+    is said or closed on GitHub (`AGENTS.md`, red lines). Labels only when the owner asks
+    (2026-10-23, widened 2026-11-07 and -08): a kind (`bug`, `enhancement`, `question`;
+    `crash` or `regression` beside a bug), an `area: …`, a `platform: …` where it is one
+    platform's, and a status: `needs decision`, `needs info` (waits on the reporter),
+    `planned`, `later` (in the backlog), `in progress`, `fixed on main` (ships next),
+    `released`, `verify` (released, waiting for the reporter), each as `status: …`.
+    `upstream` is the pin workflow's own.
 17. The address does not jump when the field takes focus (2026-10-23, GitHub issue 14;
     `S-275`; `docs/features/toolbar.md` T18). The field is the whole row in every state
     (the owner, 2026-10-24; toolbar T34). Its width is a setting: full width, or a field
@@ -95,15 +90,12 @@ still open is a BACKLOG row that names its id.
     looked at as a user meets it (the owner, 2026-11-10). An item that is not ready moves to
     the next release; it does not go out half-checked. A capture that makes the browser look
     wrong is a defect, even when the browser is right.
-22. The next release is 0.5.0, the end of the 0.4.0 betas (the owner, 2026-11-13: "the next
-    version will be 0.5.0 or 0.5.1 whatever is better, time to move from 0.4.*"). 0.5.0, since a
-    new minor version starts at its first patch. Its pin is M157's newest point release at more
-    than 1% of users when the release is cut (ADR 0007; the owner, the same day: "bump chromium
-    version to the last stable 157 if available").
-23. The release after 0.5.1 is 0.6.0 (the owner, 2026-11-15), since it carries features and moves
-    pins to a store for the profile: pins and essentials in every window (ADR 0035), settings and
-    the extension list in sync (ADR 0037), and Live Folders for GitHub if they pass the gate in
-    time (ADR 0036). A release that only fixes bugs is a patch release of the current minor.
+22. The 0.4.0 betas ended at 0.5.0 (the owner, 2026-11-13). A release's pin is its milestone's
+    newest point release at more than 1% of users when the release is cut (ADR 0007), unless
+    the owner names another.
+23. A release that carries features is a new minor version (0.6.0, the owner, 2026-11-15:
+    pins in every window, ADR 0035; settings in sync, ADR 0037; Live Folders, ADR 0036). One
+    that only fixes bugs is a patch release of the current minor (0.6.1).
 24. The owner, 2026-11-16, from pictured options: (a) on Windows with the address in the sidebar, the
     window's buttons show only from a thin strip along the window's top edge, never over the page,
     and stay while the pointer is on them (GitHub issues 118, 119); (b) closing the last tab of a

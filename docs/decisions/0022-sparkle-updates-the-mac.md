@@ -5,7 +5,7 @@ Date: 2026-10-16
 
 ## Context
 
-[ADR 0014](0014-github-releases-as-update-channel.md) chose GitHub Releases as the channel and left applying an update for later. GitHub's latest-release endpoint returns only full releases, and Stedding's releases are pre-releases. That endpoint also cannot carry a signature made with a key only the project holds. The Mac image has been signed and notarized since beta 10, so an update can be checked before it replaces the app.
+[ADR 0014](0014-github-releases-as-update-channel.md) chose GitHub Releases as the channel and left applying an update for later. GitHub's latest-release endpoint returns only full releases, and Stedding's releases were then pre-releases. That endpoint also cannot carry a signature made with a key only the project holds. The Mac image has been signed and notarized since beta 10, so an update can be checked before it replaces the app.
 
 ## Decision
 

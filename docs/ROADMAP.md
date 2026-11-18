@@ -4,9 +4,9 @@ Milestones from zero to 1.0. Each ends in something a person can install, and a 
 is done when every criterion below passes. This is a sequence, not a schedule. The order
 changes only by an ADR in `docs/decisions/`.
 
-What is released is on the [GitHub Releases page](https://github.com/ysalitrynskyi/stedding-browser/releases).
-The notes for the current release are in `docs/release-notes/`. What is open is
-`BACKLOG.md`. What a feature does is its spec under `docs/features/`.
+What is released is on the [GitHub Releases page](https://github.com/ysalitrynskyi/stedding-browser/releases),
+with the current release's notes in `docs/release-notes/`. What is open is `BACKLOG.md`.
+What a feature does is its spec under `docs/features/`.
 
 "Installable" means a fresh account installs the artifact and runs it, without developer
 tools, a terminal or the build docs. The quality bar at the end of this page applies to
@@ -20,29 +20,26 @@ every release.
 | M1 — Branded build, installable image | Done: `Stedding.app`, bundle id `dev.stedding.Stedding` (ADR 0009), `tooling/package-dmg`, codecs (ADR 0008). | A recorded idle-network run on a real keychain, long enough for the push service (S-50) |
 | M2 — Sidebar with vertical tabs | Done, on Chromium's own vertical tabs (ADR 0010), with folders (ADR 0013), pinned tabs, the rail, density, and a sidebar that hides completely. | — |
 | M3 — Workspaces | Done as Spaces (ADR 0015, ADR 0016). A Space can have cookies of its own (ADR 0019). | — |
-| M4 — Command bar | Partly done (`docs/features/commandbar.md`). ⌘L opens the bar with the page's address in it. | A click on the address does not open the bar, and Move Tab acts on the active tab only (K12, S-127). Turn Bookmarks into Pinned Tabs stays listed with nothing to convert (K16, S-158). |
-| M5 — Split view | Done: Chromium's split view, the sidebar's verbs on both panes, a split made by dragging a tab onto the page (J10–J15), ⌘W and the number keys on a split, and a Space pin in a split (J2, J3, J5). | |
+| M4 — Command bar | Done (`docs/features/commandbar.md`). ⌘L opens the bar with the page's address in it; a click on the address edits in place (K12). | The leftovers in S-158 |
+| M5 — Split view | Done: Chromium's split view, the sidebar's verbs on both panes, a split made by dragging a tab onto the page (J10–J15), ⌘W and the number keys on a split, and a Space pin in a split (J2, J3, J5). | — |
 | M6 — Settings, import, polish | Done except the open rows. | A 400-tab import inside the budgets (S-103, I5). The rows still short of one test or one look, including a screen reader on the rail's New Tab and Archived rows (S-129, sidebar Y15). |
-| M7 — Signed, notarized, auto-updating; site live | The Mac image is signed and notarized (S-17) and updates itself from 0.2.0 beta 16 (ADR 0022). Windows updates itself from 0.2.0 beta 19 (ADR 0023, ADR 0026, S-215). The site is https://stedding.dev. | The rollback path tried for real. Updates on Linux are M9 (S-216). |
+| M7 — Signed, notarized, auto-updating; site live | The Mac image is signed and notarized from 0.2.0 beta 10 and updates itself from 0.2.0 beta 16 (ADR 0022). Windows updates itself from 0.2.0 beta 19 (ADR 0023, ADR 0026). The site is https://stedding.dev. | The rollback path tried for real. Updates on Linux are M9 (S-216). |
 
 ## M8 — Windows port
 
 **Goal:** feature parity on Windows x64, with a signed installer and updates.
 
-Windows x64 ships in the release and updates itself (from 0.2.0 beta 19, S-215). In
-already: the series and the window; the branding (N3–N4); Chromium's `mini_installer`
-(ADR 0018); the keyboard (N7); little windows (E10); import from Arc (S-81). The
-installer is not signed (S-56).
+Windows x64 ships in every release and updates itself: the series and the window, the
+branding (N3–N4), Chromium's `mini_installer` (ADR 0018), the keyboard (N7), little windows
+(E10) and import from Arc. What is left is in S-56:
 
-Still open:
-
-- Signing and SmartScreen (S-56).
+- Signing and SmartScreen.
 - A builder that builds the product. GitHub-hosted runners cannot build Chromium, so CI
   checks the repository only (S-49, `docs/ARCHITECTURE.md`, "CI reality").
 - Performance budgets on Windows. `tooling/measure/harness.py` takes a macOS app bundle.
-- A Space swipe that follows the fingers (B15, B35), which is the Mac's (TAB-31). On
-  Windows a sideways touchpad scroll steps one Space (B39); those tests pass, and a real
-  touchpad has not been tried.
+- A Space swipe that follows the fingers, as the Mac's does (B35). On Windows a sideways
+  touchpad scroll steps one Space (B39); those tests pass, and a real touchpad has not been
+  tried.
 
 Acceptance criteria:
 
@@ -69,38 +66,29 @@ Acceptance criteria:
 ## M10 — Beyond parity
 
 **Goal:** behaviour Arc does not have, taken from what Nook and Aura showed people want
-(ADR 0021). Their code is not used. Nook is Swift on WebKit under GPL-3.0; Aura is Swift
-on WebKit under MPL-2.0. Each item stands on its own, behind its spec rows and the quality
-bar, and `BACKLOG.md` sets the order. M10 runs alongside M8 and M9. Built-in AI stays out
-(ADR 0020).
+(ADR 0021). Their code is not used. Each item stands on its own, behind its spec rows and
+the quality bar, and `BACKLOG.md` sets the order. M10 runs alongside M8 and M9. Built-in AI
+stays out (ADR 0020).
 
-Released, with any leftover named in `BACKLOG.md`: ad and tracker blocking's first phase,
-off by default (S-88, Bk1–Bk13; ADR 0030 is Proposed); clean links (S-89); shortcuts the
-user can change (S-91); Peek rebuilt (S-93); the sidebar on the right (S-96); History and
-Downloads in the sidebar (S-98); dark pages, one switch with exceptions in both directions
-(S-100, `docs/features/dark-pages.md`); child tabs nested under the opener (S-92,
-R56–R59); Dia's bookmarks, history and passwords, and Safari's export file (S-101,
-I28–I32, I34–I42); site controls in the page-info panel (S-118, Si1–Si11); undo after
-closing tabs (S-97); S-119 to S-124; the copy button on the address (copy-link L7).
-
-Still open:
+What is released is marked in `docs/VISION.md` ("Competitors", the Nook and Aura tables)
+and as **[M10]** in `docs/PRODUCT.md`. What was read and left out is in ADR 0021. Still
+open:
 
 - Blocking's later slices: element hiding, the blocked-page card, optional lists, a count
-  (S-88, Bk20–Bk23). Lists are fetched at run time, never built in.
+  (S-88, Bk20–Bk23). Lists are fetched at run time, never built in. ADR 0030 waits on the
+  owner's acceptance.
 - A web app that binds the same chord gets the first press, and Stedding the second
   (S-90).
-- A pin shown in every window, a ghost row with "Show here / Go to window" (S-94). The
-  question itself is in, for a page found from another window (windows G11).
-- The mini player (S-95, Mp1–Mp4). Picture in picture by key is released (S-122, Mp5).
-- A Space's two-colour gradient, and the command bar's selected row in the Space's colour,
-  are not built. An emoji and a colour, including one each for light and dark, are released
-  (B41–B44, S-99).
+- Pins and essentials in every window are released. A window whose pinned run holds a split
+  does not follow another window's order (windows G13), and the Mac's checks are owed
+  (S-94).
+- The player inside the sidebar's audio card (S-95, Mp1). Picture in picture by key, the
+  pop-out and the audio card are released.
+- A Space's two-colour gradient, and the command bar's selected row in the Space's colour.
 - Dia's sidebar (S-101, I33).
-- Site controls' remaining check (S-118, Si12). Si1–Si11 are not yet seen live.
+- Site controls' captures (S-118, Si12).
 - Three conveniences (S-125): an empty essentials row that is a drop target; each Space's
   stored size in Settings; "Open in the system viewer" on the PDF toolbar.
-
-What was read and left out is in ADR 0021.
 
 Acceptance criteria:
 
@@ -129,21 +117,19 @@ Acceptance criteria:
 Mobile, a built-in model, a sync service of Stedding's own, and paid add-ons are not on
 the path to 1.0. Any of them entering the roadmap takes an ADR and a revision of this
 file. Sync through a folder the user's own tool keeps, or through WebDAV or S3 storage the
-user sets up, is not a service (ADR 0029, ADR 0032). ADR 0020 keeps models out. The AI features Nook and Aura carry — a sidebar chat, a tab
-organizer, an agent-control server, "Browse for Me" — are not taken (ADR 0021).
+user sets up, is not a service (ADR 0029, ADR 0032). ADR 0020 keeps models out, including
+the AI features Nook and Aura carry (ADR 0021).
 
 ## Deferred, with the intent to return
 
 Arc features that are specified in `docs/PRODUCT.md` and are not in the releases. They
-are listed here so they stay visible.
+are listed here so they stay visible. Deferred is not cancelled
+(`docs/decisions/0012-defer-boosts-and-easels.md`).
 
 | Feature | Why deferred | What brings it back |
 |---|---|---|
 | **Boosts** (per-site CSS/JS, Zap) | Extensions already cover it (Stylus, Violentmonkey, uBlock's element picker), and full extension support stays a hard requirement. A script host is security work nothing else here does. | The workflow features have shipped and meet the quality bar, and a threat model exists. The threat model comes first. Aura's editor is the model then: a live preview while typing, and a switch per site in the page menu (ADR 0021). |
 | **Easels** (whiteboards) | A drawing application inside a browser, and the largest item in `docs/PRODUCT.md`. It has almost nothing to do with browsing. | Capacity after the features people stay in Arc for, or evidence that users want it. |
-
-Deferred is not cancelled. Both stay specified in `docs/PRODUCT.md`. The reasoning is
-`docs/decisions/0012-defer-boosts-and-easels.md`.
 
 Page capture is not deferred. A capture is useful with or without a canvas.
 
@@ -161,17 +147,11 @@ has both, it is a target, and no release may be described as passing it.
 
 ### Performance budgets (relative to vanilla Chromium)
 
-Measured with `tooling/measure/harness.py all --sites local` against a vanilla build at
-the same pin. The live list (`--sites live`) is only for the two absolute budgets.
-There is no current measurement; the record is `docs/perf/README.md`. The harness takes
-a macOS app bundle, so Windows has no number yet (M8).
-
-The comparison is overhead against vanilla Chromium at the same pin, the same
-configuration and the same hardware. Absolute numbers depend on the machine and are not
-promised. The overhead budgets are.
-
-The budgets are re-measured when the Chromium base changes, and on each new platform
-(M8, M9).
+The budget is overhead against vanilla Chromium at the same pin, the same configuration and
+the same hardware. Absolute numbers depend on the machine and are not promised. How to
+measure, and the only record so far, is `docs/perf/README.md`: there is no current
+measurement, and none on Windows (M8). The budgets are re-measured when the Chromium base
+changes, and on each new platform (M8, M9).
 
 | Metric | Method | Budget vs. vanilla |
 |---|---|---|
@@ -182,12 +162,10 @@ The budgets are re-measured when the Chromium base changes, and on each new plat
 | Command bar open | Shortcut press to the bar rendered and accepting input, median of 20 | ≤ 100 ms absolute |
 | Page load / rendering | Identical to vanilla | No measurable regression. The series patches no renderer code. Its hunks in the network stack are listed in `docs/ARCHITECTURE.md` ("Where patches are allowed to live"). |
 
-How to run the harness, and what it measures, is in `docs/perf/README.md`. Published
-images are `release` builds. The budgets are measured on `official`. Which configuration
-ships is TBD (S-168).
-
-The sidebar tab switch and the command bar have no measurement in the harness, so both
-of those budgets are TBD. They are added to the harness rather than stubbed.
+The sidebar tab switch and the command bar have no measurement in the harness, so both of
+those budgets are TBD. They are added to the harness rather than stubbed. Published images
+are `release` builds, and the budgets are measured on `official`. Which configuration ships
+is TBD (S-168).
 
 A miss is a release blocker. The regression is fixed, or the budget is changed by an ADR
 with the reason on record.
@@ -265,15 +243,15 @@ Applies from M7 (the first auto-updating release) on.
   No identifier beyond what the mechanism needs.
 - A failed or interrupted update leaves the installed version working.
 
-How it works (ADR 0022, ADR 0023, `docs/features/updates.md`, `docs/HANDOFF.md`, "The
-updater"): a published release reaches installed copies only once it is offered in the
-signed feed (`tooling/publish-appcast`, `tooling/win/publish-appcast.ps1`), after it has
-been tried the way a user gets it. On the Mac the feed keeps the newest five releases,
+How it works (ADR 0022, ADR 0023, ADR 0031, `docs/features/updates.md`,
+`docs/HANDOFF.md`): a published release reaches installed copies only once it is offered
+in the signed feed (`tooling/publish-appcast`, `tooling/win/publish-appcast.ps1`), after it
+has been tried the way a user gets it. On the Mac the feed keeps the newest five releases,
 and Sparkle takes the newest one the system can run, so a copy that has the updater goes
-to the latest. Sparkle never installs an older version over a newer one. A bad release
-is taken back by removing it from the feed at once (a `git revert` of its offer commit)
-and fixing it in a later version. A profile a newer Chromium has opened is not promised
-to open in an older one.
+to the latest. Sparkle never installs an older version over a newer one. A bad release is
+taken back by removing it from the feed at once (a `git revert` of its offer commit) and
+fixing it in a later version. A profile a newer Chromium has opened is not promised to open
+in an older one.
 
 ### Security
 
@@ -283,9 +261,8 @@ to open in an older one.
   miss is recorded in the release notes, with the reason.
 - **The clock is started by a machine.** `.github/workflows/upstream.yml` runs daily,
   asks `tooling/check-pin` where the pin stands, and opens one tracking issue while the
-  pin is not current. The check reads stable on every desktop platform. A point release
-  on the milestone that ships reaches the other platforms at the same time, and a pulled
-  macOS rollout would otherwise hide it.
+  pin is not current. The check reads stable on every desktop platform, so a point release
+  on the milestone that ships is seen even when a macOS rollout is pulled.
 - **No bundled analytics or tracking SDKs.** No third-party analytics, no crash
   reporting to a third party, no advertising SDK, no attribution SDK. Checked by a
   dependency audit and by the network capture below.
@@ -293,19 +270,16 @@ to open in an older one.
   fresh profile at first run and at idle matches the list in `docs/PRIVACY.md`. An
   endpoint the list does not name is a release blocker.
 - **Signed releases** (from M7; on Windows from M8). Every published artifact is signed,
-  and notarized on macOS, and the checksums are published with the release. The macOS
-  image is signed and notarized from 0.2.0 beta 10. The Windows installer is not signed
-  yet (S-56).
+  and notarized on macOS, and the checksums are published with the release. The Windows
+  installer is not signed yet (S-56).
 - Vulnerability reports are handled as `SECURITY.md` says.
 
 ### Release checklist
 
 Every public release, from M7 on, ships only after each item is checked and the
-completed list is stored with the release records. Releases before M7 use the items
-that applied. Each beta's notes record what was checked ("How it was checked"). No
-complete checklist has been stored with a release yet. Before a public 1.0, the codec
-licence terms are recorded in an ADR that supersedes
-`docs/decisions/0008-proprietary-codecs.md`.
+completed list is stored with the release records. No complete checklist has been stored
+with a release yet. Before a public 1.0, the codec licence terms are recorded in an ADR
+that supersedes `docs/decisions/0008-proprietary-codecs.md`.
 
 1. The Chromium base is current stable, or the release notes say how it differs.
 2. The full patch series applies cleanly, and the build can be reproduced from the

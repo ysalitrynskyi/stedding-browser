@@ -68,13 +68,14 @@ Everything is where you expect it, sometimes under another name:
 | Auto-archive | The archive | Off until you turn it on |
 | Hidden sidebar | Folding sidebar | ⌘S (Ctrl+S) |
 | Sync | Sidebar sync | Settings → Stedding → Sync and import |
+| Live Folders | Live Folders, for GitHub pull requests | The sidebar's menu → **New Live Folder** |
 
 <details open>
 <summary><b>Questions people ask when they move</b></summary>
 
 **Can several Spaces use the same profile?** Yes, that is how it starts: every Space shares one
-profile until you give it an Independent session. Several Spaces sharing one separate session is
-built and not released yet (`S-272`).
+profile until you give it an Independent session. Several Spaces can also share one separate
+session: choose it under Edit Space, or in Settings' row for the Space.
 
 **Can one Space hold tabs from different profiles?** No, and it is not planned. A Space has one
 session. Arc did not do this either.
@@ -92,11 +93,13 @@ More in [the FAQ](docs/FAQ.md).
 <summary><b>Everything else you know from Arc</b></summary>
 
 - **The sidebar**: ⌘W (Ctrl+W) on a pinned tab sends it back to its page, asleep, in its place.
-  It folds to a rail of icons, sits on the left or the right, and holds History and Downloads.
+  Pinned tabs, folders and essentials are in every window. The sidebar folds to a rail of
+  icons, sits on the left or the right, and holds History and Downloads.
 - **Spaces**: a colour and an icon each, or one colour for light and another for dark. The
   mouse's sideways scroll over the sidebar switches them too.
-- **The address** on top, or in the sidebar with Back, Forward and Reload. The button at the
-  field's start opens the site panel.
+- **The address** on top, or in the sidebar with Back, Forward and Reload. With the sidebar
+  closed, the address row can hide too and come in when the pointer rests at the window's top.
+  The button at the field's start opens the site panel.
 - **Peek** on a click, or only on a held press, on a card or in a small window.
 - **Sleeping tabs**, **shortcuts you can change**, and **updates** in the sidebar, checked
   against a signature. A switch turns them off.
@@ -128,7 +131,6 @@ Safari's bookmarks.
 |---|---|
 | Boosts and Easels | Deferred ([ADR 0012](docs/decisions/0012-defer-boosts-and-easels.md)) |
 | The mini player in the sidebar | Planned (`S-95`). Until then a playing video can pop out into picture in picture, and the sidebar shows what's playing |
-| Live Folders for GitHub pull requests | Planned ([ADR 0036](docs/decisions/0036-live-folders-for-github.md)) |
 | The Library panel | Later (`S-61`) |
 | Shared Spaces and share links | No account or server, by design. Send a Space as a file |
 | AI (Arc Max) | Never, by choice ([ADR 0020](docs/decisions/0020-no-bundled-model.md)) |
@@ -221,7 +223,7 @@ To hear when a release is out, use **Watch → Custom → Releases** at the top 
 
 ## Status
 
-A beta. On a Mac with a second desktop, Mission Control takes ⌃1–⌃9 before Stedding does.
+Before 1.0. On a Mac with a second desktop, Mission Control takes ⌃1–⌃9 before Stedding does.
 The Spaces menu still has them, and Settings → Stedding → Shortcuts can move the Space keys
 to ⌘1–⌘9 or ⌃⌘1–⌃⌘9. While Arc runs it takes ⌥⌘N from every app; split with ⌃⌘N (`S-79`;
 [the FAQ](docs/FAQ.md) has the way round). Open work is in [BACKLOG.md](BACKLOG.md), the
@@ -262,7 +264,7 @@ tooling\win\package-installer.ps1
 
 ## Contributing
 
-The most useful thing now is a report from real use: install the latest beta, use it for a
+The most useful thing now is a report from real use: install the latest release, use it for a
 day, and open an issue for each thing that is worse than what you use today. See
 [CONTRIBUTING.md](CONTRIBUTING.md). Security issues go through private reporting
 ([SECURITY.md](SECURITY.md)). A pull request made with an AI tool's help says so, and each of

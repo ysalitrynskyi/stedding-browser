@@ -1,6 +1,6 @@
 # Contributing to Stedding Browser
 
-Stedding ships betas for macOS (Apple silicon) and Windows (x64). Downloads are on the
+Stedding ships releases for macOS (Apple silicon) and Windows (x64), before 1.0. Downloads are on the
 [Releases page](https://github.com/ysalitrynskyi/stedding-browser/releases). The Mac image
 is signed and notarized. The Windows installer is not code-signed
 ([BACKLOG.md](BACKLOG.md) S-56). Both update themselves. Linux is not shipped.
@@ -14,7 +14,7 @@ How to build is in the [README](README.md#building-from-source). Open work is
 
 ## What helps now
 
-- **Running the betas and saying what is wrong.** Install the latest release, use
+- **Using the latest release and saying what is wrong.** Install the latest release, use
   it, and open an issue for each thing that is worse. That is the fastest way to help.
 - **Bugs and ideas.** An issue that reports a bug is fixed. An issue that asks for a
   feature is a suggestion: it is built only after the owner agrees

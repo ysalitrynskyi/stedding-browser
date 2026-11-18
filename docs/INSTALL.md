@@ -1,6 +1,6 @@
 # Installing Stedding
 
-Stedding is in beta. Download it from the
+Stedding has not reached 1.0 yet. Download it from the
 [Releases page](https://github.com/ysalitrynskyi/stedding-browser/releases).
 Each release carries a file for each platform it was built for, and the release
 notes give a SHA-256 checksum for each file. Not every release has both: take

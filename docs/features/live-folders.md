@@ -1,6 +1,6 @@
 # Feature: Live folders (GitHub pull requests)
 
-Status: **Lf1–Lf13 built** (the 0.6.0 patch, not yet in a release; ADR 0036 lets it move to the next release if it misses the gate). Checked on Windows: the unit and browser tests below pass on `win-release`, and the Live Folders suites on `win-checks`. The Mac's suites and a pass on a real build with a real token are owed.
+Status: **Lf1–Lf13 built, released in 0.6.0** (patch 0192). The suites ran on both platforms' release and DCHECK builds in 0.6.0's gates; a pass on a real build with a real token is still owed (BACKLOG S-478).
 Owner: `docs/PRODUCT.md` (Live Folders), `docs/decisions/0036-live-folders-for-github.md` (option B), `docs/PRIVACY.md`, BACKLOG S-478, GitHub discussion 106.
 
 A live folder is a pinned folder of a Space whose rows Stedding keeps up to date from somewhere else. The first and only source is GitHub: the open pull requests the person opened, is assigned, is asked to review or is mentioned in, read from GitHub's REST API with a fine-grained, read-only token the person makes on github.com and pastes once. It is off until the person makes it, and nothing appears by itself. Arc read GitHub's web pages through the signed-in session and broke when GitHub changed them; the API is documented and versioned (ADR 0036).

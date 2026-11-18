@@ -49,8 +49,11 @@ Removable when: never; to be folded into the patches that own the code.
  .../commandbar/command_bar_view_unittest.cc   |  32 ++++
  .../frame/vertical_tab_strip_region_view.cc   | 151 +++++++++++++-----
  .../frame/vertical_tab_strip_region_view.h    |   7 +-
- .../ui/views/spaces/space_switcher_view.cc    |  36 +++++
- .../ui/views/spaces/space_switcher_view.h     |   9 ++
+ .../ui/views/spaces/space_switcher_rules.cc   |  75 +++++++++
+ .../ui/views/spaces/space_switcher_rules.h    |  39 +++++
+ .../spaces/space_switcher_rules_unittest.cc   |  59 +++++++
+ .../ui/views/spaces/space_switcher_view.cc    |  55 ++++++-
+ .../ui/views/spaces/space_switcher_view.h     |  10 ++
  .../views/tabs/common/clear_tabs_separator.h  |   7 +
  .../vertical_tab_strip_bottom_container.cc    |  60 -------
  .../vertical_tab_strip_bottom_container.h     |  15 --
@@ -59,9 +62,9 @@ Removable when: never; to be folded into the patches that own the code.
  .../test/stedding/clear_space_browsertest.cc  |  18 ++-
  .../stedding/privacy_defaults_browsertest.cc  | 107 +++++++++++++
  .../stedding/sidebar_panels_browsertest.cc    |  45 ++++--
- .../test/stedding/sidebar_rail_browsertest.cc |  21 +++
+ .../test/stedding/sidebar_rail_browsertest.cc |  36 +++++
  chrome/test/stedding/welcome_browsertest.cc   | 110 +++++++++++--
- 25 files changed, 553 insertions(+), 170 deletions(-)
+ 28 files changed, 754 insertions(+), 177 deletions(-)
 
 diff --git a/chrome/browser/resources/history/router.ts b/chrome/browser/resources/history/router.ts
 index 70901c4c9cbe2..6bd22bf3db484 100644
@@ -417,7 +420,7 @@ index 91af64ae9ce10..de7fc9abf55e0 100644
  // window offers none, in either mode.
  TEST_F(CommandBarViewTest, PrivateWindowsOfferNoNewDocuments) {
 diff --git a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
-index b0ece53df4130..07f042d4e6e18 100644
+index b0ece53df4130..4c48f980a889f 100644
 --- a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
 +++ b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
 @@ -86,6 +86,7 @@
@@ -640,12 +643,12 @@ index b0ece53df4130..07f042d4e6e18 100644
 -    history_button_->SetProperty(views::kMarginsKey,
 -                                 rail ? gfx::Insets::TLBR(0, 0, 8, 0)
 -                                      : gfx::Insets::TLBR(0, 2, 0, 0));
-+    // sidebar Y44: the chips centre on the whole row, the button's part of
-+    // it included, not on what the button leaves them.
++    // sidebar Y44 (BACKLOG S-545): the chips centre between the button's
++    // icon, at its centre, and the "+", not on what the button leaves them.
++    // The switcher starts where the button ends.
 +    if (space_switcher_) {
-+      space_switcher_->SetLeadingExtent(
-+          rail ? 0
-+               : open_left + downloads_button_->GetPreferredSize().width());
++      space_switcher_->SetLeadingCentre(
++          rail ? 0 : downloads_button_->GetPreferredSize().width() / 2);
 +    }
    }
    // The row's height follows its children (sidebar Y13); the orientation
@@ -682,8 +685,214 @@ index 6ba8921f481bf..53707d31a1f8b 100644
    raw_ptr<views::View> history_button_ = nullptr;
    // docs/features/sidebar-panels.md: the window's panels, in a window with
    // Spaces; the panel open in the content area's column, if any; the hold
+diff --git a/chrome/browser/ui/views/spaces/space_switcher_rules.cc b/chrome/browser/ui/views/spaces/space_switcher_rules.cc
+index dff40f9471b41..e37520c52c5ce 100644
+--- a/chrome/browser/ui/views/spaces/space_switcher_rules.cc
++++ b/chrome/browser/ui/views/spaces/space_switcher_rules.cc
+@@ -50,6 +50,81 @@ SwitcherRowForm SwitcherRowFormAt(int row_width, size_t chip_count) {
+           kSwitcherMinRowInset, /*dots=*/true};
+ }
+ 
++namespace {
++
++// Four times the chips' centre, in the row's coordinates, a whole number
++// whatever the chip's size: twice the button's centre, before the row's
++// start, and twice the "+"'s.
++int CentreTimesFour(int row_width, int chip, int leading_centre) {
++  return 2 * (row_width - kSwitcherTrailingInset) - chip - 2 * leading_centre;
++}
++
++// The widest run of chips, gaps included, that fits on the centre in a row
++// `row_width` wide whose "+" is `chip` DIP.
++int CentredRoom(int row_width, int chip, int leading_centre) {
++  const int centre4 = CentreTimesFour(row_width, chip, leading_centre);
++  const int plus_start = row_width - kSwitcherTrailingInset - chip;
++  return std::min((centre4 - 4 * kSwitcherMinRowInset) / 2,
++                  (4 * plus_start - centre4) / 2);
++}
++
++}  // namespace
++
++SwitcherRowForm SwitcherCentredRowFormAt(int row_width,
++                                         size_t chip_count,
++                                         int leading_centre) {
++  const SwitcherRowForm form = SwitcherRowFormAt(row_width, chip_count);
++  if (chip_count == 0) {
++    return form;
++  }
++  const int count = static_cast<int>(chip_count);
++  // The run as the form draws it at rest: every chip full, or the active chip
++  // full and the others dots.
++  const auto run = [count](const SwitcherRowForm& each) {
++    return each.dots ? each.chip + (count - 1) * kSwitcherDot + count * each.gap
++                     : count * (each.chip + each.gap);
++  };
++  // Each step takes from the row what its run lacked. A narrower row first
++  // takes from the leading inset, and dots' gaps close a DIP for every DIP
++  // per chip, so a step may leave the run as it was and the next takes more;
++  // every step narrows the row by a DIP at least, and dots at their narrowest
++  // gap end it.
++  int width = row_width;
++  SwitcherRowForm centred = form;
++  while (true) {
++    const int lacking =
++        run(centred) - CentredRoom(row_width, centred.chip, leading_centre);
++    if (lacking <= 0 ||
++        (centred.dots && centred.gap == kSwitcherMinDotGap)) {
++      return centred;
++    }
++    width -= lacking;
++    const SwitcherRowForm next = SwitcherRowFormAt(width, chip_count);
++    if (next.dots && !form.dots) {
++      return form;
++    }
++    centred = next;
++  }
++}
++
++SwitcherSpacerWidths SwitcherCentringSpacers(int row_width,
++                                             int run,
++                                             int inset,
++                                             int add,
++                                             int chip,
++                                             int leading_centre) {
++  const int spare = row_width - inset - run - add - kSwitcherTrailingInset;
++  if (spare <= 0) {
++    return {};
++  }
++  // The leading spacer puts the run's start on the centre less half the run;
++  // the trailing one takes the rest.
++  const int start =
++      (CentreTimesFour(row_width, chip, leading_centre) - 2 * run) / 4;
++  const int leading = std::clamp(start - inset, 0, spare);
++  return {leading, spare - leading};
++}
++
+ int SwitcherGlyphSize(int chip) {
+   return (chip * 2 + 1) / 3;
+ }
+diff --git a/chrome/browser/ui/views/spaces/space_switcher_rules.h b/chrome/browser/ui/views/spaces/space_switcher_rules.h
+index f865971e09ec6..1bf360a2fd669 100644
+--- a/chrome/browser/ui/views/spaces/space_switcher_rules.h
++++ b/chrome/browser/ui/views/spaces/space_switcher_rules.h
+@@ -62,6 +62,45 @@ struct SwitcherRowForm {
+ // between kSwitcherMinDotGap and kSwitcherChipGap.
+ SwitcherRowForm SwitcherRowFormAt(int row_width, size_t chip_count);
+ 
++// sidebar Y44 (BACKLOG S-545): the open row's chips centre between the icon
++// of the button before the row, its centre `leading_centre` DIP before the
++// row's start, and the "+", kSwitcherTrailingInset and half a chip from the
++// row's end. They centred on the whole row, button and all, and only while
++// the row had room to spare: the downloads button is wider than the "+", and
++// with nine Spaces the chips stood 7 DIP nearer the "+" (the owner,
++// 2026-11-18).
++//
++// SwitcherRowFormAt's form at the widest row whose chips' run, gaps included,
++// fits on that centre: no nearer the row's start than kSwitcherMinRowInset
++// and no nearer the "+" than its own box. Where only dots would fit there,
++// the form SwitcherRowFormAt gives `row_width`: a chip is not made a dot for
++// the sake of a DIP or two of centring. A row of dots closes its gaps to
++// centre, down to kSwitcherMinDotGap.
++SwitcherRowForm SwitcherCentredRowFormAt(int row_width,
++                                         size_t chip_count,
++                                         int leading_centre);
++
++// The widths of the open row's two spacers, the one before the chips and
++// the one after them, that put a run of chips `run` DIP wide (their margins
++// included) on that centre, the "+" `chip` DIP, the row `row_width` wide with
++// `inset` before the leading spacer and `add` (the "+", or 0) and
++// kSwitcherTrailingInset after the trailing one. Between them they take all
++// the row has to spare, so the row's flex layout shares nothing. A row with
++// too little room for the centre puts the run as near it as it can; one with
++// no room to spare gives both 0.
++struct SwitcherSpacerWidths {
++  int leading = 0;
++  int trailing = 0;
++
++  bool operator==(const SwitcherSpacerWidths&) const = default;
++};
++SwitcherSpacerWidths SwitcherCentringSpacers(int row_width,
++                                             int run,
++                                             int inset,
++                                             int add,
++                                             int chip,
++                                             int leading_centre);
++
+ // A chip's glyph, in pixels, at `chip` DIP: two thirds of it, rounded.
+ int SwitcherGlyphSize(int chip);
+ 
+diff --git a/chrome/browser/ui/views/spaces/space_switcher_rules_unittest.cc b/chrome/browser/ui/views/spaces/space_switcher_rules_unittest.cc
+index f86f7cb27a16e..7e58a36c1ac8a 100644
+--- a/chrome/browser/ui/views/spaces/space_switcher_rules_unittest.cc
++++ b/chrome/browser/ui/views/spaces/space_switcher_rules_unittest.cc
+@@ -189,6 +189,65 @@ TEST(SwitcherRulesTest, ChipsCloseUpAndShrinkBeforeTheyTurnToDots) {
+   EXPECT_EQ(kSwitcherMinDotGap, SwitcherRowFormAt(40, 3).gap);
+ }
+ 
++// sidebar Y44 (BACKLOG S-545): the open row's chips centre between the
++// downloads button's icon, half the button (16 DIP) before the row, and the
++// "+", at any width and count: the form gives up a DIP or two of its chips
++// where the row has no room to spare, as with the owner's nine Spaces, whose
++// chips stood 7 DIP nearer the "+", and a row of dots closes its gaps.
++TEST(SwitcherRulesTest, TheChipsCentreBetweenTheDownloadsIconAndThePlus) {
++  constexpr int kButtonHalf = 16;
++  // The owner's row: nine chips of 21, 4 apart, centred within a quarter DIP.
++  EXPECT_EQ((SwitcherRowForm{21, kSwitcherMinChipGap, 8}),
++            SwitcherCentredRowFormAt(274, 9, kButtonHalf));
++  EXPECT_EQ((SwitcherSpacerWidths{2, 12}),
++            SwitcherCentringSpacers(274, 9 * 25, kSwitcherMinRowInset, 21, 21,
++                                    kButtonHalf));
++  for (int width = 80; width <= 420; ++width) {
++    for (size_t count : {1u, 2u, 3u, 5u, 9u, 12u}) {
++      SCOPED_TRACE(testing::Message()
++                   << count << " chips in a row " << width << " wide");
++      const SwitcherRowForm form =
++          SwitcherCentredRowFormAt(width, count, kButtonHalf);
++      // At rest: every chip full, or at overflow the active one full and
++      // the others dots.
++      const int run =
++          form.dots ? form.chip + (static_cast<int>(count) - 1) * kSwitcherDot +
++                          static_cast<int>(count) * form.gap
++                    : static_cast<int>(count) * (form.chip + form.gap);
++      const SwitcherSpacerWidths spacers = SwitcherCentringSpacers(
++          width, run, kSwitcherMinRowInset, form.chip, form.chip, kButtonHalf);
++      const int spare =
++          width - kSwitcherMinRowInset - run - form.chip - kSwitcherTrailingInset;
++      // Only dots at their narrowest gap may run past a row this narrow, as
++      // they did.
++      if (spare < 0) {
++        EXPECT_TRUE(form.dots && form.gap == kSwitcherMinDotGap);
++        continue;
++      }
++      EXPECT_EQ(spare, spacers.leading + spacers.trailing)
++          << "the spacers leave the row's flex layout something to share";
++      const int start = kSwitcherMinRowInset + spacers.leading;
++      EXPECT_GE(start, kSwitcherMinRowInset);
++      EXPECT_LE(start + run, width - kSwitcherTrailingInset - form.chip);
++      // Only just above the dots may a row of chips keep them off the centre,
++      // and a row of dots whose gaps have closed all the way.
++      if ((!form.dots && SwitcherRowFormAt(width - 24, count).dots) ||
++          (form.dots && form.gap == kSwitcherMinDotGap)) {
++        continue;
++      }
++      const double icons_centre =
++          (-kButtonHalf + width - kSwitcherTrailingInset - form.chip / 2.0) /
++          2.0;
++      EXPECT_NEAR(icons_centre, start + run / 2.0, 0.75);
++      // A row with room to spare keeps its full form.
++      if (!form.dots && !SwitcherRowFormAt(width, count).dots &&
++          SwitcherRowFormAt(width, count).gap == kSwitcherChipGap) {
++        EXPECT_EQ(SwitcherRowFormAt(width, count).chip, form.chip);
++      }
++    }
++  }
++}
++
+ // A chip's glyph is two thirds of it, rounded.
+ TEST(SwitcherRulesTest, TheGlyphFollowsTheChip) {
+   EXPECT_EQ(16, SwitcherGlyphSize(kSwitcherChip));
 diff --git a/chrome/browser/ui/views/spaces/space_switcher_view.cc b/chrome/browser/ui/views/spaces/space_switcher_view.cc
-index a323a2d04a085..b931e547b6e52 100644
+index a323a2d04a085..87b29808919ba 100644
 --- a/chrome/browser/ui/views/spaces/space_switcher_view.cc
 +++ b/chrome/browser/ui/views/spaces/space_switcher_view.cc
 @@ -6,6 +6,7 @@
@@ -698,75 +907,117 @@ index a323a2d04a085..b931e547b6e52 100644
  
  SpaceSwitcherView::~SpaceSwitcherView() = default;
  
-+void SpaceSwitcherView::SetLeadingExtent(int extent) {
-+  if (leading_extent_ == extent) {
++void SpaceSwitcherView::SetLeadingCentre(int distance) {
++  if (leading_centre_ == distance) {
 +    return;
 +  }
-+  leading_extent_ = extent;
++  leading_centre_ = distance;
 +  ApplyOverflow();
 +}
 +
  void SpaceSwitcherView::SetCollapsed(bool collapsed) {
    if (collapsed_ == collapsed) {
      return;
-@@ -810,6 +819,33 @@ void SpaceSwitcherView::ApplyOverflow() {
+@@ -530,9 +539,14 @@ void SpaceSwitcherView::Rebuild() {
+   // menu or a drag ended without the pointer leaving it) would stay put.
+   HideHoverName();
+ 
++  // sidebar Y44 (BACKLOG S-545): each spacer is as wide as ApplyOverflow
++  // makes it, and between them they take the row's spare room. A margin on a
++  // spacer of no width, the fixed part that centred the chips, was dropped
++  // by the flex layout, which hides a child it shrinks to nothing: in a full
++  // row the "+" moved off its place by that margin and the chips with it.
+   const views::FlexSpecification stretch(
+-      views::MinimumFlexSizeRule::kScaleToZero,
+-      views::MaximumFlexSizeRule::kUnbounded);
++      views::MinimumFlexSizeRule::kPreferred,
++      views::MaximumFlexSizeRule::kPreferred);
+   // Made in either form; ApplyForm hides them in the rail.
+   const auto add_spacer = [&] {
+     views::View* const spacer =
+@@ -657,9 +671,12 @@ void SpaceSwitcherView::ApplyOverflow() {
+   // 2026-10-01).
+   // Before that the inset closes up and the chips get smaller, and between
+   // dots the gaps close so the "+" stays in the row (owner, 2026-10-21).
+-  const SwitcherRowForm form = collapsed_
+-                                   ? SwitcherRowForm()
+-                                   : SwitcherRowFormAt(width(), chips_.size());
++  // sidebar Y44 (BACKLOG S-545): the open row's form leaves its chips room to
++  // centre between the downloads button's icon and the "+".
++  const SwitcherRowForm form =
++      collapsed_ ? SwitcherRowForm()
++                 : SwitcherCentredRowFormAt(width(), chips_.size(),
++                                            leading_centre_);
+   const bool overflow =
+       collapsed_ ? SwitcherStackOverflows(chips_.size()) : form.dots;
+   const int gap = form.gap;
+@@ -669,8 +686,10 @@ void SpaceSwitcherView::ApplyOverflow() {
+   if (!collapsed_) {
+     if (auto* const row_layout =
+             static_cast<views::FlexLayout*>(icon_row_->GetLayoutManager())) {
+-      row_layout->SetInteriorMargin(
+-          gfx::Insets::TLBR(0, form.inset, 0, kSwitcherTrailingInset));
++      // The spacers take the rest of the leading inset: they centre the
++      // chips (sidebar Y44).
++      row_layout->SetInteriorMargin(gfx::Insets::TLBR(
++          0, kSwitcherMinRowInset, 0, kSwitcherTrailingInset));
+     }
+   }
+   // The "+" is the chips' size, in the rail too.
+@@ -810,6 +829,28 @@ void SpaceSwitcherView::ApplyOverflow() {
            gfx::Insets::TLBR(0, chip_gap / 2, 0, chip_gap - chip_gap / 2));
      }
    }
-+  // sidebar Y44: the chips centre on the row this view sits in. The side
-+  // with less before the chips -- the leading extent and inset on one, the
-+  // "+" and the trailing inset on the other -- takes the difference as a
-+  // fixed margin on its spacer, and the two spacers share what is left
-+  // equally. Never more than the row has to spare: a narrow row keeps every
-+  // chip and the "+" in it, as it did.
++  // sidebar Y44 (BACKLOG S-545): the chips centre between the downloads
++  // button's icon and the "+" (SwitcherCentringSpacers), the two spacers
++  // taking what the row has to spare. Never more than
++  // the row has to spare: a narrow row keeps every chip and the "+" in it, as
++  // it did. They centred on the whole row, the button's margin and box
++  // included, and only while the row had room for it.
 +  if (!collapsed_ && leading_spacer_ && trailing_spacer_) {
 +    const int add =
 +        add_button_ && add_button_->GetVisible() ? chip_size : 0;
-+    int used = form.inset + kSwitcherTrailingInset + add;
++    int run = 0;
 +    for (const auto& chip : chips_) {
 +      const gfx::Insets* const margins =
 +          chip.first->GetProperty(views::kMarginsKey);
-+      used += chip.first->GetPreferredSize().width() +
-+              (margins ? margins->width() : 0);
++      run += chip.first->GetPreferredSize().width() +
++             (margins ? margins->width() : 0);
 +    }
-+    const int imbalance =
-+        (leading_extent_ + form.inset) - (kSwitcherTrailingInset + add);
-+    const int shift =
-+        std::min(std::abs(imbalance), std::max(0, width() - used));
-+    leading_spacer_->SetProperty(
-+        views::kMarginsKey,
-+        gfx::Insets::TLBR(0, imbalance < 0 ? shift : 0, 0, 0));
-+    trailing_spacer_->SetProperty(
-+        views::kMarginsKey,
-+        gfx::Insets::TLBR(0, 0, 0, imbalance > 0 ? shift : 0));
++    const SwitcherSpacerWidths spacers =
++        SwitcherCentringSpacers(width(), run, kSwitcherMinRowInset, add,
++                                chip_size, leading_centre_);
++    leading_spacer_->SetPreferredSize(gfx::Size(spacers.leading, 0));
++    trailing_spacer_->SetPreferredSize(gfx::Size(spacers.trailing, 0));
 +  }
    if (collapsed_) {
      // As tall as the stack it holds, so the "+" is never laid out past the
      // window's bottom: a fixed height counted every chip full while the
 diff --git a/chrome/browser/ui/views/spaces/space_switcher_view.h b/chrome/browser/ui/views/spaces/space_switcher_view.h
-index 7f297d17f1a6f..e4ec2f87abc6a 100644
+index 7f297d17f1a6f..0e26ad6cf0186 100644
 --- a/chrome/browser/ui/views/spaces/space_switcher_view.h
 +++ b/chrome/browser/ui/views/spaces/space_switcher_view.h
-@@ -114,6 +114,13 @@ class SpaceSwitcherView : public views::View,
+@@ -114,6 +114,14 @@ class SpaceSwitcherView : public views::View,
    // row that ran out of the rail and over the page (operator, 2026-09-08).
    void SetCollapsed(bool collapsed);
  
-+  // sidebar Y44: how much of the row this view sits in comes before it (the
-+  // downloads button and its margin). The open row centres its chips on the
-+  // whole row, not on this view: the button at one end and the "+" at the
-+  // other differ in what they take, and the chips stood off the sidebar's
-+  // centre by half the difference (the owner, 2026-10-25).
-+  void SetLeadingExtent(int extent);
++  // sidebar Y44 (BACKLOG S-545): how far before this view's start the centre
++  // of the downloads button's icon stands. The open row centres its chips
++  // between that icon and the "+", not on this view: the button at one end
++  // and the "+" at the other differ in what they take, and the chips stood
++  // off the sidebar's centre by half the difference (the owner, 2026-10-25),
++  // and with many Spaces nearer the "+" (2026-11-18).
++  void SetLeadingCentre(int distance);
 +
    // tabs R11: on the Mac the chips show their Ctrl-N chord in place of the
    // glyph while Cmd is held.
    void SetNumberBadges(bool showing);
-@@ -256,6 +263,8 @@ class SpaceSwitcherView : public views::View,
+@@ -256,6 +264,8 @@ class SpaceSwitcherView : public views::View,
    raw_ptr<views::View> leading_spacer_ = nullptr;
    raw_ptr<views::View> trailing_spacer_ = nullptr;
    raw_ptr<views::View> add_button_ = nullptr;
-+  // SetLeadingExtent's.
-+  int leading_extent_ = 0;
++  // SetLeadingCentre's.
++  int leading_centre_ = 0;
  
    // The chip for each Space, in model order. Parallel to model_->spaces() and
    // rebuilt with it; spacer views between chips make lookups by child index
@@ -1219,7 +1470,7 @@ index 7740f1f4565e3..c08916632e4cb 100644
  
    browser()->GetProfile()->GetPrefs()->SetBoolean(
 diff --git a/chrome/test/stedding/sidebar_rail_browsertest.cc b/chrome/test/stedding/sidebar_rail_browsertest.cc
-index b80b88994236d..5f5349a05df8a 100644
+index b80b88994236d..0333c218c77bd 100644
 --- a/chrome/test/stedding/sidebar_rail_browsertest.cc
 +++ b/chrome/test/stedding/sidebar_rail_browsertest.cc
 @@ -13,6 +13,7 @@
@@ -1230,7 +1481,7 @@ index b80b88994236d..5f5349a05df8a 100644
  #include <map>
  #include <memory>
  #include <optional>
-@@ -1776,6 +1777,26 @@ IN_PROC_BROWSER_TEST_F(SidebarColumnTest, EveryGlyphStandsOnTheColumn) {
+@@ -1776,6 +1777,30 @@ IN_PROC_BROWSER_TEST_F(SidebarColumnTest, EveryGlyphStandsOnTheColumn) {
                    {"the downloads button's icon",
                     ImageCentreX(region()->downloads_button())},
                });
@@ -1250,13 +1501,35 @@ index b80b88994236d..5f5349a05df8a 100644
 +      chips_right =
 +          std::max<double>(chips_right, chip->GetBoundsInScreen().right());
 +    }
-+    EXPECT_NEAR(
-+        CentreX(region()->downloads_button()->parent()->GetBoundsInScreen()),
-+        (chips_left + chips_right) / 2, 1.0)
-+        << "the chips are off the row's centre";
++    // BACKLOG S-545: between the button's icon and the "+", with nine Spaces
++    // too, where they stood 7 DIP nearer the "+".
++    const std::optional<double> downloads =
++        ImageCentreX(region()->downloads_button());
++    ASSERT_TRUE(downloads) << "the downloads button's icon is not drawn";
++    EXPECT_NEAR((*downloads + *add) / 2, (chips_left + chips_right) / 2, 1.0)
++        << "the chips are off the centre between the downloads button's icon "
++           "and the \"+\"";
      // The name after the glyph starts where the rows' titles start, give
      // or take the first letters' own margins.
      TabView* const row = stedding::test::FindDrawnRow(root, plain);
+@@ -1901,6 +1926,17 @@ IN_PROC_BROWSER_TEST_F(SidebarColumnTest, EveryGlyphStandsOnTheColumn) {
+     browser()->GetProfile()->GetPrefs()->SetBoolean(
+         stedding::prefs::kSidebarPageFlush, false);
+   }
++  {
++    // BACKLOG S-545: nine Spaces, as many as the owner has, fill the open
++    // row; its chips still centre.
++    SCOPED_TRACE("nine Spaces, Comfortable");
++    local_state->SetInteger(stedding::prefs::kSidebarDensity, 0);
++    for (const char* name : {"Five", "Six", "Seven", "Eight", "Nine"}) {
++      ASSERT_TRUE(model->AddSpace(name, SK_ColorBLUE));
++    }
++    ASSERT_NO_FATAL_FAILURE(settle());
++    check_the_open_column();
++  }
+ }
+ 
+ 
 diff --git a/chrome/test/stedding/welcome_browsertest.cc b/chrome/test/stedding/welcome_browsertest.cc
 index d52be9ab56888..2e377049c2033 100644
 --- a/chrome/test/stedding/welcome_browsertest.cc

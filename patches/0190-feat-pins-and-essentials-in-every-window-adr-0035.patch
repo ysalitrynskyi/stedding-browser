@@ -31,6 +31,17 @@ each sidebar, merging the same pin found in two windows (G19). Sync sees
 one item per pin whatever the number of windows, an import reaches every
 window (G20), and a deleted Space's pins move once (G21).
 
+A window with many records to make (more than 40) makes them a Space at
+a time, a task each, the essentials and the Space on screen first. Each
+Space pin comes in already filed, as a restored tab does, at its place
+in the run, and the sidebar lays out and redraws its rows once per
+Space rather than once per tab (SpaceModel::ScopedBulkFiling,
+TabCollectionAnimatingLayoutManager::ScopedDeferTargets). An asleep tab
+shows the icon history keeps for its page, or its site's (S-496). With
+443 pins a new window took about 10 s with the browser standing still;
+its own Space now comes in under a second and no task takes more than
+about 0.7 s (S-546).
+
 Why: GitHub issue 111; the owner chose option B of ADR 0035
 (2026-11-15) for 0.6.0 (PLAN decision 23). Spec: windows G2, G13-G22.
 Removable when: never; Stedding's own model of pins.
@@ -41,29 +52,37 @@ Removable when: never; Stedding's own model of pins.
  .../internal/browser_window_features.cc       |    4 +
  .../public/browser_window_features.h          |    4 +
  .../browser/ui/navigator/browser_navigator.cc |   19 +-
- chrome/browser/ui/spaces/BUILD.gn             |   32 +
- chrome/browser/ui/spaces/pin_mirror.cc        | 1214 +++++++++++++++++
- chrome/browser/ui/spaces/pin_mirror.h         |  194 +++
- chrome/browser/ui/spaces/pin_store.cc         |  611 +++++++++
+ chrome/browser/ui/spaces/BUILD.gn             |   36 +
+ chrome/browser/ui/spaces/pin_mirror.cc        | 1292 ++++++++++++++++
+ chrome/browser/ui/spaces/pin_mirror.h         |  196 +++
+ chrome/browser/ui/spaces/pin_store.cc         |  611 ++++++++
  chrome/browser/ui/spaces/pin_store.h          |  183 +++
  chrome/browser/ui/spaces/pin_store_factory.cc |   75 +
  chrome/browser/ui/spaces/pin_store_factory.h  |   47 +
- .../browser/ui/spaces/pin_store_unittest.cc   |  649 +++++++++
+ .../browser/ui/spaces/pin_store_unittest.cc   |  649 ++++++++
  .../ui/spaces/sidebar_backup_unittest.cc      |   13 +
  .../browser/ui/spaces/sidebar_sync_tracker.cc |    9 +-
- chrome/browser/ui/spaces/space_model.cc       |   12 +
+ chrome/browser/ui/spaces/space_model.cc       |   29 +-
+ chrome/browser/ui/spaces/space_model.h        |   25 +
+ chrome/browser/ui/spaces/unloaded_tab.cc      |  112 +-
+ chrome/browser/ui/spaces/unloaded_tab.h       |   22 +
  chrome/browser/ui/stedding/stedding_prefs.cc  |    2 +
  chrome/browser/ui/stedding/stedding_prefs.h   |    6 +
  .../ui/stedding/stedding_prefs_unittest.cc    |    4 +
  chrome/browser/ui/stedding/tab_names.cc       |    7 +
- .../ui/tabs/stedding_folder_session.cc        |   11 +-
- .../browser/ui/tabs/stedding_folder_session.h |   13 +
+ .../ui/tabs/stedding_folder_session.cc        |   31 +-
+ .../browser/ui/tabs/stedding_folder_session.h |   17 +
  .../ui/views/commandbar/command_bar_view.cc   |   17 +
+ .../spaces/space_tab_visibility_controller.cc |   40 +-
+ .../spaces/space_tab_visibility_controller.h  |   10 +
+ ...tab_collection_animating_layout_manager.cc |   58 +-
+ .../tab_collection_animating_layout_manager.h |   21 +
+ ...ction_animating_layout_manager_unittest.cc |   41 +
  chrome/test/stedding/BUILD.gn                 |    2 +
  .../test/stedding/command_bar_browsertest.cc  |   38 +-
  chrome/test/stedding/import_browsertest.cc    |   36 +-
- .../stedding/pins_every_window_browsertest.cc | 1104 +++++++++++++++
- 28 files changed, 4311 insertions(+), 17 deletions(-)
+ .../stedding/pins_every_window_browsertest.cc | 1304 +++++++++++++++++
+ 36 files changed, 4957 insertions(+), 25 deletions(-)
  create mode 100644 chrome/browser/ui/spaces/pin_mirror.cc
  create mode 100644 chrome/browser/ui/spaces/pin_mirror.h
  create mode 100644 chrome/browser/ui/spaces/pin_store.cc
@@ -238,7 +257,7 @@ index f200375d60947..1ede02974f2b3 100644
    }
  
 diff --git a/chrome/browser/ui/spaces/BUILD.gn b/chrome/browser/ui/spaces/BUILD.gn
-index be2198237e7c2..a1f766ec9dc29 100644
+index be2198237e7c2..6f0feaa7236ef 100644
 --- a/chrome/browser/ui/spaces/BUILD.gn
 +++ b/chrome/browser/ui/spaces/BUILD.gn
 @@ -63,6 +63,8 @@ source_set("spaces") {
@@ -259,7 +278,18 @@ index be2198237e7c2..a1f766ec9dc29 100644
      "space_registry.cc",
      "space_registry_factory.cc",
      "space_commands.cc",
-@@ -283,6 +287,33 @@ source_set("sidebar_sync") {
+@@ -120,6 +124,10 @@ source_set("spaces") {
+     "//base:i18n",
+     "//third_party/icu",
+     "//chrome/browser/history",
++    # windows G2 (BACKLOG S-496): an asleep tab's icon from history.
++    "//chrome/browser/favicon",
++    "//components/favicon/core",
++    "//components/favicon_base",
+     "//chrome/browser/password_manager/factories",
+     "//components/keyed_service/core",
+     "//components/password_manager/core/browser/password_store:password_store_interface",
+@@ -283,6 +291,33 @@ source_set("sidebar_sync") {
    ]
  }
  
@@ -293,7 +323,7 @@ index be2198237e7c2..a1f766ec9dc29 100644
  source_set("unit_tests") {
    testonly = true
    sources = [
-@@ -293,6 +324,7 @@ source_set("unit_tests") {
+@@ -293,6 +328,7 @@ source_set("unit_tests") {
      "bookmarks_to_pins_unittest.cc",
      "folder_commands_unittest.cc",
      "pin_home_import_unittest.cc",
@@ -303,10 +333,10 @@ index be2198237e7c2..a1f766ec9dc29 100644
      "sidebar_sync_place_unittest.cc",
 diff --git a/chrome/browser/ui/spaces/pin_mirror.cc b/chrome/browser/ui/spaces/pin_mirror.cc
 new file mode 100644
-index 0000000000000..f865a656e845a
+index 0000000000000..c3bdf45acf8bb
 --- /dev/null
 +++ b/chrome/browser/ui/spaces/pin_mirror.cc
-@@ -0,0 +1,1214 @@
+@@ -0,0 +1,1292 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -316,6 +346,7 @@ index 0000000000000..f865a656e845a
 +#include <algorithm>
 +#include <map>
 +#include <optional>
++#include <set>
 +#include <utility>
 +#include <variant>
 +
@@ -335,6 +366,7 @@ index 0000000000000..f865a656e845a
 +#include "chrome/browser/ui/spaces/sidebar_backup.h"
 +#include "chrome/browser/ui/spaces/sidebar_sync_ledger.h"
 +#include "chrome/browser/ui/spaces/sidebar_sync_tracker.h"
++#include "chrome/browser/ui/spaces/tab_space_restore_data.h"
 +#include "chrome/browser/ui/spaces/unloaded_tab.h"
 +#include "chrome/browser/ui/stedding/tab_names.h"
 +#include "chrome/browser/ui/stedding/tab_parents.h"
@@ -487,6 +519,10 @@ index 0000000000000..f865a656e845a
 +
 +// windows G16: how soon what waited for a tab drag is tried again.
 +constexpr base::TimeDelta kDragRetry = base::Milliseconds(200);
++
++// windows G16 (BACKLOG S-546): a window with more records than this to make
++// makes them a Space at a time (ReconcileNow).
++constexpr size_t kMakeAtOnceUpTo = 40;
 +
 +}  // namespace
 +
@@ -1060,6 +1096,9 @@ index 0000000000000..f865a656e845a
 +bool PinMirror::ReconcileNow() {
 +  base::AutoReset<bool> reconciling(&reconciling_, true);
 +  SpaceModel::ScopedRoutingPause pause(model_.get());
++  // windows G16 (BACKLOG S-546): the sidebar redoes its list once, at the
++  // end, not for every tab made, filed or folded here.
++  SpaceModel::ScopedBulkFiling bulk(model_.get());
 +  TabStripModel* const strip = window_->GetTabStripModel();
 +
 +  // The records this window can show: a record's Space must be here, and a
@@ -1135,13 +1174,58 @@ index 0000000000000..f865a656e845a
 +  for (tabs::TabInterface* tab : came_back) {
 +    LetGo(tab, /*removed_here=*/false);
 +  }
++  // windows G16 (BACKLOG S-546): with many records to make (a new window of
++  // a profile with hundreds of pins) this pass makes the essentials and one
++  // Space's pins, the Space on screen first, then each other Space in the
++  // model's order, a task each. The window shows its own Space's pins at
++  // once, and the browser answers between Spaces: made all in one task, the
++  // window and every other stood still for seconds.
++  std::optional<SpaceId> making;
++  {
++    std::set<SpaceId> lacking;
++    size_t missing = 0;
++    for (const PinRecord* record : wanted) {
++      if (have.contains(record->id) || held_here.contains(record->id)) {
++        continue;
++      }
++      ++missing;
++      if (record->tier == PinTier::kSpacePin) {
++        lacking.insert(record->space);
++      }
++    }
++    if (missing > kMakeAtOnceUpTo && !lacking.empty()) {
++      if (lacking.contains(model_->active_id())) {
++        making = model_->active_id();
++      } else {
++        for (const std::unique_ptr<Space>& space : model_->spaces()) {
++          if (lacking.contains(space->id())) {
++            making = space->id();
++            break;
++          }
++        }
++      }
++    }
++  }
++  bool made_every_record = true;
++  // Each Space pin made here comes in after the essentials and the Space
++  // pins made before it, ahead of the loose tabs (Make); Order puts a run
++  // that holds older pins too in the store's order.
++  int space_pin_index = strip->IndexOfFirstNonPinnedTab();
 +  for (const PinRecord* record : wanted) {
 +    auto it = have.find(record->id);
 +    if (it == have.end() && held_here.contains(record->id)) {
 +      continue;
 +    }
++    if (it == have.end() && making && record->tier == PinTier::kSpacePin &&
++        record->space != *making) {
++      made_every_record = false;
++      continue;
++    }
 +    tabs::TabInterface* const tab =
-+        it != have.end() ? it->second : Make(*record);
++        it != have.end() ? it->second : Make(*record, space_pin_index);
++    if (it == have.end() && tab && record->tier == PinTier::kSpacePin) {
++      space_pin_index = strip->GetIndexOfTab(tab) + 1;
++    }
 +    if (tab) {
 +      Align(tab, *record);
 +    }
@@ -1149,6 +1233,12 @@ index 0000000000000..f865a656e845a
 +  Fold(wanted);
 +  Order(wanted);
 +  seen_ = std::move(wanted_ids);
++  // The next Space's pins, a task later.
++  if (!made_every_record) {
++    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
++        FROM_HERE,
++        base::BindOnce(&PinMirror::Reconcile, weak_factory_.GetWeakPtr()));
++  }
 +  // What this window now holds. A tab given its id just now (a pin with
 +  // none yet) is no record the store knows: it is published as one made
 +  // here.
@@ -1199,13 +1289,31 @@ index 0000000000000..f865a656e845a
 +  model_->SetSpacePinned(tab, false);
 +}
 +
-+tabs::TabInterface* PinMirror::Make(const PinRecord& record) {
++tabs::TabInterface* PinMirror::Make(const PinRecord& record,
++                                    int space_pin_index) {
 +  const GURL url = record.home.is_valid()   ? record.home
 +                   : record.page.is_valid() ? record.page
 +                                            : GURL(url::kAboutBlankURL);
-+  return InsertUnloadedTab(window_->GetTabStripModel(), window_->GetProfile(),
-+                           url, record.title.empty() ? record.name
-+                                                     : record.title);
++  const std::u16string& title = record.title.empty() ? record.name
++                                                     : record.title;
++  TabStripModel* const strip = window_->GetTabStripModel();
++  if (record.tier != PinTier::kSpacePin || !model_->GetSpace(record.space)) {
++    return InsertUnloadedTab(strip, window_->GetProfile(), url, title);
++  }
++  // windows G16 (BACKLOG S-546): a Space pin comes in filed, as a restored one
++  // does: in its Space, a pin, with its home, and ahead of the window's loose
++  // tabs, where its Space's run is. Made at the strip's end and then filed,
++  // pinned and moved into the run, each pin was a refiling and a move the
++  // sidebar redid its rows for, and a window of 443 pins took seconds.
++  // Align still checks every field.
++  return InsertUnloadedTabAt(
++      strip, window_->GetProfile(), url, title, space_pin_index,
++      [&](content::WebContents& contents) {
++        TabSpaceRestoreData::CreateForWebContents(
++            &contents, record.space.ToString(), /*space_pinned=*/true,
++            record.home.is_valid() ? record.home.spec() : std::string(),
++            /*own_essential=*/false);
++      });
 +}
 +
 +void PinMirror::LeaveSplitUnlessPeersFollow(tabs::TabInterface* tab,
@@ -1523,10 +1631,10 @@ index 0000000000000..f865a656e845a
 +}  // namespace spaces
 diff --git a/chrome/browser/ui/spaces/pin_mirror.h b/chrome/browser/ui/spaces/pin_mirror.h
 new file mode 100644
-index 0000000000000..ac94d2eb2959e
+index 0000000000000..56ca02e35314b
 --- /dev/null
 +++ b/chrome/browser/ui/spaces/pin_mirror.h
-@@ -0,0 +1,194 @@
+@@ -0,0 +1,196 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -1660,7 +1768,9 @@ index 0000000000000..ac94d2eb2959e
 +  bool ReconcileNow();
 +  // Reconcile's parts.
 +  void LetGo(tabs::TabInterface* tab, bool removed_here);
-+  tabs::TabInterface* Make(const PinRecord& record);
++  // A Space pin comes in at `space_pin_index` of the strip, filed as it
++  // arrives (windows G16, BACKLOG S-546); an essential at the strip's end.
++  tabs::TabInterface* Make(const PinRecord& record, int space_pin_index);
 +  void Align(tabs::TabInterface* tab, const PinRecord& record);
 +  // folders F38, windows G13: each pin in the folders its record names, made
 +  // here with the record's ids when this window lacks them, with their title,
@@ -3376,7 +3486,7 @@ index fee85058b04e6..bde06655e766d 100644
        if (!tokens.insert(token).second) {
          token = stedding::NewTabToken();
 diff --git a/chrome/browser/ui/spaces/space_model.cc b/chrome/browser/ui/spaces/space_model.cc
-index 8a50dc76cbe79..4be67f6e45a1c 100644
+index 8a50dc76cbe79..815ec87bf0909 100644
 --- a/chrome/browser/ui/spaces/space_model.cc
 +++ b/chrome/browser/ui/spaces/space_model.cc
 @@ -41,6 +41,8 @@
@@ -3405,6 +3515,286 @@ index 8a50dc76cbe79..4be67f6e45a1c 100644
    if (id == active_id_) {
      // PLAN.md decision 7: deleting the Space on screen shows its neighbour
      // first, as the user left it, and then the Space's tabs join it (B5). A
+@@ -2838,7 +2850,9 @@ const SpaceId& SpaceModel::SpaceForTab(tabs::TabInterface* tab) {
+   // of a pin dropped back from another window stayed under the line (pins H1,
+   // H2). A turn later: this answers a question, often from a view's own
+   // layout.
+-  if (!pinned_before && IsSpacePinned(tab)) {
++  // windows G16 (BACKLOG S-546): in a bulk filing OnBulkFilingEnded redraws
++  // every row once.
++  if (!pinned_before && IsSpacePinned(tab) && !in_bulk_filing()) {
+     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+         FROM_HERE, base::BindOnce(
+                        [](base::WeakPtr<SpaceModel> model,
+@@ -3177,6 +3191,19 @@ void SpaceModel::MoveFolderToSpace(tabs::FolderTabCollection* folder,
+ SpaceModel::LastRoute::LastRoute(tabs::TabHandle tab, SpaceId from, SpaceId to)
+     : tab(tab), from(from), to(to) {}
+ 
++SpaceModel::ScopedBulkFiling::ScopedBulkFiling(SpaceModel* model)
++    : model_(model ? model->GetWeakPtr() : nullptr) {
++  if (model_ && model_->bulk_filing_++ == 0) {
++    model_->observers_.Notify(&Observer::OnBulkFilingStarted);
++  }
++}
++
++SpaceModel::ScopedBulkFiling::~ScopedBulkFiling() {
++  if (model_ && --model_->bulk_filing_ == 0) {
++    model_->observers_.Notify(&Observer::OnBulkFilingEnded);
++  }
++}
++
+ SpaceModel::ScopedRoutingPause::ScopedRoutingPause(SpaceModel* model)
+     : model_(model) {
+   if (model_) {
+diff --git a/chrome/browser/ui/spaces/space_model.h b/chrome/browser/ui/spaces/space_model.h
+index 91dc58fa338de..1ecc923d64dfe 100644
+--- a/chrome/browser/ui/spaces/space_model.h
++++ b/chrome/browser/ui/spaces/space_model.h
+@@ -129,11 +129,34 @@ class SpaceModel : public TabStripModelObserver,
+     // Sf18: `folder` joined the pinned run or left it.
+     virtual void OnFolderSpacePinChanged(const tabs::FolderId& folder,
+                                          bool pinned) {}
++    // windows G16 (BACKLOG S-546): a ScopedBulkFiling ended. What its tabs'
++    // filings changed was not told tab by tab (OnTabSpaceChanged still is,
++    // while in_bulk_filing()); a view that filters by Space refreshes once.
++    virtual void OnBulkFilingEnded() {}
++    // The first ScopedBulkFiling began.
++    virtual void OnBulkFilingStarted() {}
+     // The model is going away with its window. Every observer stops
+     // observing here: the list CHECKs that none is left (PLAN.md SPC-1).
+     virtual void OnSpaceModelDestroying() = 0;
+   };
+ 
++  // windows G16 (BACKLOG S-546): while one of these lives, many tabs are
++  // being made and filed in one go (a new window's hundreds of pins). Views
++  // that redo their whole list on each filing wait for OnBulkFilingEnded,
++  // which the last one to end sends: each filing redid the list, and a
++  // window's 443 pins took seconds.
++  class ScopedBulkFiling {
++   public:
++    explicit ScopedBulkFiling(SpaceModel* model);
++    ~ScopedBulkFiling();
++    ScopedBulkFiling(const ScopedBulkFiling&) = delete;
++    ScopedBulkFiling& operator=(const ScopedBulkFiling&) = delete;
++
++   private:
++    const base::WeakPtr<SpaceModel> model_;
++  };
++  bool in_bulk_filing() const { return bulk_filing_ > 0; }
++
+   // Routing is off while one of these lives (the importer inserts hundreds
+   // of tabs that already know their Space).
+   class ScopedRoutingPause {
+@@ -1002,6 +1025,8 @@ class SpaceModel : public TabStripModelObserver,
+                    bool foreground);
+   std::optional<LastRoute> last_route_;
+   int routing_paused_ = 0;
++  // ScopedBulkFiling's depth.
++  int bulk_filing_ = 0;
+ 
+ 
+   base::WeakPtrFactory<SpaceModel> weak_factory_{this};
+diff --git a/chrome/browser/ui/spaces/unloaded_tab.cc b/chrome/browser/ui/spaces/unloaded_tab.cc
+index ed29a71417533..7b6f7b235a0c1 100644
+--- a/chrome/browser/ui/spaces/unloaded_tab.cc
++++ b/chrome/browser/ui/spaces/unloaded_tab.cc
+@@ -4,14 +4,31 @@
+ 
+ #include "chrome/browser/ui/spaces/unloaded_tab.h"
+ 
++#include <algorithm>
++#include <cmath>
+ #include <memory>
+ #include <optional>
+ #include <utility>
+ #include <vector>
+ 
++#include "base/functional/bind.h"
++#include "base/no_destructor.h"
++#include "base/task/cancelable_task_tracker.h"
++#include "chrome/browser/favicon/favicon_service_factory.h"
++#include "components/favicon/core/favicon_service.h"
++#include "components/favicon_base/favicon_types.h"
++#include "components/favicon_base/favicon_util.h"
++#include "components/keyed_service/core/service_access_type.h"
++#include "components/tabs/public/tab_interface.h"
++#include "content/public/browser/favicon_status.h"
++#include "content/public/browser/invalidate_type.h"
++#include "ui/gfx/favicon_size.h"
++#include "ui/gfx/image/image.h"
++
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/sessions/session_service.h"
+ #include "chrome/browser/sessions/session_service_factory.h"
++#include "chrome/browser/ui/tabs/tab_enums.h"
+ #include "chrome/browser/ui/tabs/tab_model.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "components/sessions/content/content_serialized_navigation_builder.h"
+@@ -27,10 +44,94 @@
+ 
+ namespace spaces {
+ 
++namespace {
++
++// A request the favicon service answers on this thread. The answer finds the
++// tab by its handle, so a tab closed meanwhile is simply not found.
++base::CancelableTaskTracker& IconRequests() {
++  static base::NoDestructor<base::CancelableTaskTracker> tracker;
++  return *tracker;
++}
++
++// windows G2, G16 (BACKLOG S-496): the icon history has for `page`, on the
++// tab's page while the tab is still asleep on it and has none of its own. The
++// tab may have new contents by now (a Space with a session of its own gives
++// a pin new contents when it files it); they are asleep on the same page.
++void OnHistoryIcon(tabs::TabHandle handle,
++                   const GURL& page,
++                   const favicon_base::FaviconRawBitmapResult& result) {
++  tabs::TabInterface* const tab = handle.Get();
++  if (!tab || !result.is_valid()) {
++    return;
++  }
++  content::WebContents* const contents = tab->GetContents();
++  content::NavigationController& controller = contents->GetController();
++  content::NavigationEntry* const entry = controller.GetLastCommittedEntry();
++  if (!entry || !controller.NeedsReload() || entry->GetURL() != page ||
++      entry->GetFavicon().valid) {
++    return;
++  }
++  const gfx::Image image = favicon_base::SelectFaviconFramesFromPNGs(
++      {result}, favicon_base::GetFaviconScales(), gfx::kFaviconSize);
++  if (image.IsEmpty()) {
++    return;
++  }
++  content::FaviconStatus& favicon = entry->GetFavicon();
++  favicon.image = image;
++  favicon.url = result.icon_url;
++  favicon.valid = true;
++  contents->NotifyNavigationStateChanged(content::INVALIDATE_TYPE_TAB);
++}
++
++}  // namespace
++
++void ShowHistoryIcon(tabs::TabInterface* tab) {
++  if (!tab) {
++    return;
++  }
++  content::WebContents* const contents = tab->GetContents();
++  content::NavigationEntry* const entry =
++      contents->GetController().GetLastCommittedEntry();
++  if (!entry || !entry->GetURL().SchemeIsHTTPOrHTTPS() ||
++      entry->GetFavicon().valid) {
++    return;
++  }
++  // A private profile reads the profile's icons, as its address field does.
++  favicon::FaviconService* const service = FaviconServiceFactory::GetForProfile(
++      Profile::FromBrowserContext(contents->GetBrowserContext()),
++      ServiceAccessType::EXPLICIT_ACCESS);
++  if (!service) {
++    return;
++  }
++  const std::vector<float> scales = favicon_base::GetFaviconScales();
++  const float largest =
++      scales.empty() ? 1.0f : *std::ranges::max_element(scales);
++  const GURL page = entry->GetURL();
++  // The page's own icon, else one of its site's: a pin's home is often a
++  // site's front page that only redirected, or one a later visit replaced.
++  service->GetRawFaviconForPageURL(
++      page, {favicon_base::IconType::kFavicon},
++      static_cast<int>(std::ceil(gfx::kFaviconSize * largest)),
++      /*fallback_to_host=*/true,
++      base::BindOnce(&OnHistoryIcon, tab->GetHandle(), page), &IconRequests());
++}
++
+ tabs::TabInterface* InsertUnloadedTab(TabStripModel* tabs,
+                                       Profile* profile,
+                                       const GURL& url,
+                                       const std::u16string& title) {
++  return InsertUnloadedTabAt(tabs, profile, url, title,
++                             tabs ? tabs->count() : 0,
++                             [](content::WebContents&) {});
++}
++
++tabs::TabInterface* InsertUnloadedTabAt(
++    TabStripModel* tabs,
++    Profile* profile,
++    const GURL& url,
++    const std::u16string& title,
++    int index,
++    base::FunctionRef<void(content::WebContents&)> prepare) {
+   if (!tabs || !profile) {
+     return nullptr;
+   }
+@@ -48,9 +149,12 @@ tabs::TabInterface* InsertUnloadedTab(TabStripModel* tabs,
+   contents->GetController().Restore(0, content::RestoreType::kRestored,
+                                     &entries);
+   contents->SetWasDiscarded(true);
++  prepare(*contents);
+   content::WebContents* const raw = contents.get();
+-  tabs->AppendTab(std::make_unique<tabs::TabModel>(std::move(contents), tabs),
+-                  /*foreground=*/false);
++  tabs->InsertDetachedTabAt(
++      std::clamp(index, 0, tabs->count()),
++      std::make_unique<tabs::TabModel>(std::move(contents), tabs),
++      AddTabTypes::ADD_NONE);
+   // sidebar-file Sf2, import I18: the session writes a tab's pages as they
+   // commit, and a tab that never loads commits none; until the session was
+   // next written whole from the windows, a quit lost every tab an import or a
+@@ -70,7 +174,9 @@ tabs::TabInterface* InsertUnloadedTab(TabStripModel* tabs,
+       session->SetSelectedNavigationIndex(window_id, tab_id, 0);
+     }
+   }
+-  return tabs->GetTabForWebContents(raw);
++  tabs::TabInterface* const tab = tabs->GetTabForWebContents(raw);
++  ShowHistoryIcon(tab);
++  return tab;
+ }
+ 
+ }  // namespace spaces
+diff --git a/chrome/browser/ui/spaces/unloaded_tab.h b/chrome/browser/ui/spaces/unloaded_tab.h
+index 518d74aac5c56..66d93222f41ca 100644
+--- a/chrome/browser/ui/spaces/unloaded_tab.h
++++ b/chrome/browser/ui/spaces/unloaded_tab.h
+@@ -7,10 +7,16 @@
+ 
+ #include <string>
+ 
++#include "base/functional/function_ref.h"
++
+ class GURL;
+ class Profile;
+ class TabStripModel;
+ 
++namespace content {
++class WebContents;
++}  // namespace content
++
+ namespace tabs {
+ class TabInterface;
+ }  // namespace tabs
+@@ -26,6 +32,22 @@ tabs::TabInterface* InsertUnloadedTab(TabStripModel* tabs,
+                                       const GURL& url,
+                                       const std::u16string& title);
+ 
++// The same tab at `index` of `tabs`, `prepare` run on its contents before it
++// goes in: a tab tagged there (TabSpaceRestoreData) is filed as it arrives,
++// as a restored one is (windows G16, BACKLOG S-546).
++tabs::TabInterface* InsertUnloadedTabAt(
++    TabStripModel* tabs,
++    Profile* profile,
++    const GURL& url,
++    const std::u16string& title,
++    int index,
++    base::FunctionRef<void(content::WebContents&)> prepare);
++
++// windows G2, G16 (BACKLOG S-496): `tab`, asleep on a page it has not
++// loaded, shows the icon history keeps for the page, or for its site, until
++// it loads. A tab that loaded meanwhile, or has an icon, keeps its own.
++void ShowHistoryIcon(tabs::TabInterface* tab);
++
+ }  // namespace spaces
+ 
+ #endif  // CHROME_BROWSER_UI_SPACES_UNLOADED_TAB_H_
 diff --git a/chrome/browser/ui/stedding/stedding_prefs.cc b/chrome/browser/ui/stedding/stedding_prefs.cc
 index 8e33159117dbb..c96b15794f254 100644
 --- a/chrome/browser/ui/stedding/stedding_prefs.cc
@@ -3476,10 +3866,18 @@ index bfeaad6a703d3..1008f0373146f 100644
  
  void CarryTabName(content::WebContents* from, content::WebContents* to) {
 diff --git a/chrome/browser/ui/tabs/stedding_folder_session.cc b/chrome/browser/ui/tabs/stedding_folder_session.cc
-index 5983f50aa0f54..03f4c06e3c667 100644
+index 5983f50aa0f54..49a237bed95dd 100644
 --- a/chrome/browser/ui/tabs/stedding_folder_session.cc
 +++ b/chrome/browser/ui/tabs/stedding_folder_session.cc
-@@ -77,12 +77,7 @@ std::string BuildPath(const tabs::TabInterface* tab) {
+@@ -31,6 +31,7 @@
+ #include "chrome/browser/sessions/stedding_session_rebuild.h"
+ #include "chrome/browser/ui/archive/archive_mark.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/spaces/space_model.h"
+ #include "chrome/browser/ui/spaces/tab_space_restore_data.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "components/sessions/content/session_tab_helper.h"
+@@ -77,12 +78,7 @@ std::string BuildPath(const tabs::TabInterface* tab) {
    return out;
  }
  
@@ -3493,7 +3891,7 @@ index 5983f50aa0f54..03f4c06e3c667 100644
  
  std::vector<RestoredEntry> ParsePath(const std::string& data) {
    std::vector<RestoredEntry> path;
-@@ -197,6 +192,10 @@ std::string FolderPathForTab(const tabs::TabInterface* tab) {
+@@ -197,6 +193,10 @@ std::string FolderPathForTab(const tabs::TabInterface* tab) {
    return BuildPath(tab);
  }
  
@@ -3504,8 +3902,37 @@ index 5983f50aa0f54..03f4c06e3c667 100644
  FolderSessionService::FolderSessionService(BrowserWindowInterface& browser)
      : browser_(browser), session_id_(browser.GetSessionID()) {
    // Once per process: the session rebuild must re-emit folder paths or they
+@@ -288,9 +288,28 @@ void FolderSessionService::PersistUnlessClosingAll() {
+   if (browser_->GetTabStripModel()->closing_all()) {
+     return;
+   }
++  // windows G16 (BACKLOG S-546): a bulk filing (a new window's pins) moves
++  // hundreds of tabs into folders; the paths are written once, after it, not
++  // whole again with every move.
++  if (const spaces::SpaceModel* const model =
++          spaces::SpaceModel::From(&browser_.get());
++      model && model->in_bulk_filing()) {
++    if (!persist_posted_) {
++      persist_posted_ = true;
++      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
++          FROM_HERE, base::BindOnce(&FolderSessionService::RunPostedPersist,
++                                    weak_factory_.GetWeakPtr()));
++    }
++    return;
++  }
+   PersistAllPaths();
+ }
+ 
++void FolderSessionService::RunPostedPersist() {
++  persist_posted_ = false;
++  PersistUnlessClosingAll();
++}
++
+ // static
+ void FolderSessionService::AppendRebuildCommands(
+     BrowserWindowInterface* browser,
 diff --git a/chrome/browser/ui/tabs/stedding_folder_session.h b/chrome/browser/ui/tabs/stedding_folder_session.h
-index 93e7d4b7bb7fa..d50c2a35893ec 100644
+index 93e7d4b7bb7fa..d3f7f58b99d64 100644
 --- a/chrome/browser/ui/tabs/stedding_folder_session.h
 +++ b/chrome/browser/ui/tabs/stedding_folder_session.h
 @@ -7,6 +7,7 @@
@@ -3535,6 +3962,24 @@ index 93e7d4b7bb7fa..d50c2a35893ec 100644
  // Keeps folders alive across restarts.
  //
  // Folders live in the tab collection tree, which the session service knows
+@@ -91,6 +104,8 @@ class FolderSessionService : public TabStripModelObserver,
+       const tabs::TabCollection::Handle& changed) override;
+ 
+   void PersistUnlessClosingAll();
++  // The persist PersistUnlessClosingAll put off during a bulk filing.
++  void RunPostedPersist();
+   void RebuildFromRestoredTabs();
+ 
+   // Fetched at each write. A cached pointer dangles after
+@@ -107,6 +122,8 @@ class FolderSessionService : public TabStripModelObserver,
+   std::map<SessionID, std::string> written_;
+   // True while a rebuild moves tabs; it writes once, when it is done.
+   bool rebuilding_ = false;
++  // A persist is posted for after a bulk filing (windows G16).
++  bool persist_posted_ = false;
+   base::CallbackListSubscription session_restored_subscription_;
+   base::WeakPtrFactory<FolderSessionService> weak_factory_{this};
+ };
 diff --git a/chrome/browser/ui/views/commandbar/command_bar_view.cc b/chrome/browser/ui/views/commandbar/command_bar_view.cc
 index 565624c4749c7..7599a60351cfe 100644
 --- a/chrome/browser/ui/views/commandbar/command_bar_view.cc
@@ -3577,6 +4022,336 @@ index 565624c4749c7..7599a60351cfe 100644
              std::u16string title = stedding::TabName(tab->GetContents());
              if (title.empty()) {
                title = tab->GetTitle();
+diff --git a/chrome/browser/ui/views/spaces/space_tab_visibility_controller.cc b/chrome/browser/ui/views/spaces/space_tab_visibility_controller.cc
+index fe33528f8ca88..cb3d43b3c04a4 100644
+--- a/chrome/browser/ui/views/spaces/space_tab_visibility_controller.cc
++++ b/chrome/browser/ui/views/spaces/space_tab_visibility_controller.cc
+@@ -8,6 +8,7 @@
+ #include <optional>
+ #include <set>
+ #include <string>
++#include <utility>
+ #include <variant>
+ #include <vector>
+ 
+@@ -586,12 +587,35 @@ void SpaceTabVisibilityController::OnSpaceModelDestroying() {
+ }
+ 
+ void SpaceTabVisibilityController::OnTabSpaceChanged(tabs::TabInterface* tab) {
++  // windows G16 (BACKLOG S-546): a bulk filing (a new window's pins) is
++  // told once, when it ends; each filing redid the title and every row.
++  if (model_ && model_->in_bulk_filing()) {
++    bulk_pending_ = true;
++    return;
++  }
+   if (on_space_changed_) {
+     on_space_changed_.Run();
+   }
+   UpdateTabVisibility();
+ }
+ 
++void SpaceTabVisibilityController::OnBulkFilingStarted() {
++  defer_targets_.emplace();
++}
++
++void SpaceTabVisibilityController::OnBulkFilingEnded() {
++  if (std::exchange(bulk_pending_, false)) {
++    if (on_space_changed_) {
++      on_space_changed_.Run();
++    }
++    UpdateTabVisibility();
++  }
++  // Then the lists lay out once, their new rows put in place, the rows hidden
++  // just now included (BACKLOG S-546): each row hidden with the lists laying
++  // out recalculated its whole list.
++  defer_targets_.reset();
++}
++
+ void SpaceTabVisibilityController::OnSpacePinsCollapsedChanged(
+     const SpaceId& id) {
+   // pins H17: the pin rows of the Space hide or come back at once, and the
+@@ -645,6 +669,11 @@ void SpaceTabVisibilityController::OnTabStripModelChanged(
+     UpdateTabVisibility();
+   }
+   if (change.type() == TabStripModelChange::Type::kInserted) {
++    // A tab a bulk filing brings in filed (a new window's pin) changes the
++    // title row and the Clear line once the filing ends.
++    if (model_ && model_->in_bulk_filing()) {
++      bulk_pending_ = true;
++    }
+     AdoptChildren(change);
+   } else if (change.type() == TabStripModelChange::Type::kRemoved) {
+     ReparentClosedParents(change);
+@@ -679,9 +708,16 @@ void SpaceTabVisibilityController::OnChildMoved(
+ 
+ void SpaceTabVisibilityController::OnCollectionDataChanged(
+     const tabs::TabCollection::Handle& changed) {
+-  if (!tab_strip_model_->closing_all()) {
+-    UpdateTabVisibility();
++  // A bulk filing's folders are named and closed as they are made: once,
++  // when it ends (OnBulkFilingEnded).
++  if (tab_strip_model_->closing_all()) {
++    return;
++  }
++  if (model_ && model_->in_bulk_filing()) {
++    bulk_pending_ = true;
++    return;
+   }
++  UpdateTabVisibility();
+ }
+ 
+ void SpaceTabVisibilityController::OnSplitTabChanged(
+diff --git a/chrome/browser/ui/views/spaces/space_tab_visibility_controller.h b/chrome/browser/ui/views/spaces/space_tab_visibility_controller.h
+index 1e7b2a63f843d..8f702679318b4 100644
+--- a/chrome/browser/ui/views/spaces/space_tab_visibility_controller.h
++++ b/chrome/browser/ui/views/spaces/space_tab_visibility_controller.h
+@@ -6,6 +6,7 @@
+ #define CHROME_BROWSER_UI_VIEWS_SPACES_SPACE_TAB_VISIBILITY_CONTROLLER_H_
+ 
+ #include <map>
++#include <optional>
+ 
+ #include "base/callback_list.h"
+ #include "base/functional/callback.h"
+@@ -14,6 +15,7 @@
+ #include "base/scoped_observation.h"
+ #include "chrome/browser/ui/spaces/space_id.h"
+ #include "chrome/browser/ui/spaces/space_model.h"
++#include "chrome/browser/ui/views/tabs/common/tab_collection_animating_layout_manager.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
+ #include "components/prefs/pref_change_registrar.h"
+ #include "components/tabs/public/tab_collection_observer.h"
+@@ -81,6 +83,8 @@ class SpaceTabVisibilityController : public SpaceModel::Observer,
+   void OnSpaceRemoved(const SpaceId& id) override;
+   void OnSpaceMetadataChanged(const SpaceId& id) override;
+   void OnTabSpaceChanged(tabs::TabInterface* tab) override;
++  void OnBulkFilingStarted() override;
++  void OnBulkFilingEnded() override;
+   void OnSpacePinsCollapsedChanged(const SpaceId& id) override;
+   void OnSpaceModelDestroying() override;
+ 
+@@ -171,6 +175,12 @@ class SpaceTabVisibilityController : public SpaceModel::Observer,
+   base::RepeatingCallback<void(const SpaceId&, const SpaceId&)>
+       on_active_space_will_change_;
+   const raw_ptr<SpaceModel> model_;
++  // windows G16 (BACKLOG S-546): something a bulk filing changed waits for
++  // OnBulkFilingEnded.
++  bool bulk_pending_ = false;
++  // While a bulk filing lasts, the sidebar's lists wait to lay out.
++  std::optional<TabCollectionAnimatingLayoutManager::ScopedDeferTargets>
++      defer_targets_;
+   const raw_ref<TabStripModel> tab_strip_model_;
+   // A pass is posted and has not run yet.
+   bool update_posted_ = false;
+diff --git a/chrome/browser/ui/views/tabs/common/tab_collection_animating_layout_manager.cc b/chrome/browser/ui/views/tabs/common/tab_collection_animating_layout_manager.cc
+index 1bdb9c3d618e5..cc11621bdb662 100644
+--- a/chrome/browser/ui/views/tabs/common/tab_collection_animating_layout_manager.cc
++++ b/chrome/browser/ui/views/tabs/common/tab_collection_animating_layout_manager.cc
+@@ -5,6 +5,8 @@
+ #include "chrome/browser/ui/views/tabs/common/tab_collection_animating_layout_manager.h"
+ 
+ #include <algorithm>
++#include <set>
++#include <utility>
+ #include <vector>
+ 
+ #include "base/check_deref.h"
+@@ -12,6 +14,7 @@
+ #include "base/containers/flat_set.h"
+ #include "base/functional/bind.h"
+ #include "base/memory/weak_ptr.h"
++#include "base/no_destructor.h"
+ #include "base/scoped_observation.h"
+ #include "base/task/single_thread_task_runner.h"
+ #include "third_party/abseil-cpp/absl/container/inlined_vector.h"
+@@ -256,14 +259,58 @@ TabCollectionAnimatingLayoutManager::TabCollectionAnimatingLayoutManager(
+ }
+ 
+ TabCollectionAnimatingLayoutManager::~TabCollectionAnimatingLayoutManager() {
++  DeferredManagers().erase(this);
+   animation_coordinator_->UnregisterManager(this);
+ }
+ 
++// static
++int TabCollectionAnimatingLayoutManager::defer_targets_ = 0;
++
++// static
++std::set<TabCollectionAnimatingLayoutManager*>&
++TabCollectionAnimatingLayoutManager::DeferredManagers() {
++  static base::NoDestructor<std::set<TabCollectionAnimatingLayoutManager*>>
++      managers;
++  return *managers;
++}
++
++TabCollectionAnimatingLayoutManager::ScopedDeferTargets::ScopedDeferTargets() {
++  ++defer_targets_;
++}
++
++TabCollectionAnimatingLayoutManager::ScopedDeferTargets::
++    ~ScopedDeferTargets() {
++  if (--defer_targets_ > 0) {
++    return;
++  }
++  // Each manager recalculates once and puts its rows on the new target: a
++  // row that came in has no place to animate from.
++  std::set<TabCollectionAnimatingLayoutManager*> managers;
++  managers.swap(DeferredManagers());
++  for (TabCollectionAnimatingLayoutManager* const manager : managers) {
++    manager->SnapToTarget();
++  }
++}
++
++void TabCollectionAnimatingLayoutManager::SnapToTarget() {
++  if (!host_view()) {
++    return;
++  }
++  // As a change across the axis does (RecalculateTarget): the layout is the
++  // target, from and to, and nothing animates. ResetViewsToTargetLayout puts
++  // only rows laid out before on it; a row added since grew in from nothing.
++  RecalculateTarget();
++  current_layout_ = target_layout_;
++  SetStartingLayout(target_layout_);
++  animation_coordinator_->StopAnimation(this);
++  InvalidateHost(/*mark_layouts_changed=*/true);
++}
++
+ bool TabCollectionAnimatingLayoutManager::OnViewAdded(views::View* host,
+                                                       views::View* view) {
+   // Do not attempt to animate opacity for views reparented from another
+   // collection.
+-  if (!view->GetProperty(kPreviousCollectionBounds) &&
++  if (defer_targets_ == 0 && !view->GetProperty(kPreviousCollectionBounds) &&
+       !delegate_->IsViewDragging(*view) &&
+       delegate_->ShouldAnimateOpacityForAddAndRemove(*view)) {
+     // Added views should animate opacity from invisible to fully opaque.
+@@ -345,6 +392,12 @@ int TabCollectionAnimatingLayoutManager::GetPreferredHeightForWidth(
+ }
+ 
+ void TabCollectionAnimatingLayoutManager::OnLayoutChanged() {
++  // Stedding (BACKLOG S-546): recalculated once, when the deferral ends.
++  if (defer_targets_ > 0) {
++    DeferredManagers().insert(this);
++    LayoutManagerBase::OnLayoutChanged();
++    return;
++  }
+   // If a new layout target was computed ensure we recalculate and update the
+   // current layout to ensure layout metadata is available for preferred size
+   // calculations. Running this once to compute metadata is more efficient than
+@@ -652,7 +705,8 @@ void TabCollectionAnimatingLayoutManager::AnimateAndReparentView(
+   // Ensure `kPreviousCollectionBounds` metadata is set before adding
+   // `view_to_reparent` to ensure view-added lifecycle hooks have the necessary
+   // information to determine whether the view was reparented or newly-added.
+-  const bool animate = !delegate_->IsViewDragging(*view_to_reparent) &&
++  const bool animate = defer_targets_ == 0 &&
++                       !delegate_->IsViewDragging(*view_to_reparent) &&
+                        !previous_bounds_in_screen.IsEmpty();
+   if (animate) {
+     view_to_reparent->SetProperty(kPreviousCollectionBounds,
+diff --git a/chrome/browser/ui/views/tabs/common/tab_collection_animating_layout_manager.h b/chrome/browser/ui/views/tabs/common/tab_collection_animating_layout_manager.h
+index 38c422f4ce9ef..d9d235676c2ee 100644
+--- a/chrome/browser/ui/views/tabs/common/tab_collection_animating_layout_manager.h
++++ b/chrome/browser/ui/views/tabs/common/tab_collection_animating_layout_manager.h
+@@ -6,6 +6,7 @@
+ #define CHROME_BROWSER_UI_VIEWS_TABS_COMMON_TAB_COLLECTION_ANIMATING_LAYOUT_MANAGER_H_
+ 
+ #include <memory>
++#include <set>
+ #include <vector>
+ 
+ #include "base/containers/flat_map.h"
+@@ -111,6 +112,19 @@ class TabCollectionAnimatingLayoutManager : public views::LayoutManagerBase {
+     virtual ~Delegate() = default;
+   };
+ 
++  // Stedding (windows G16, BACKLOG S-546): while one of these lives, a row
++  // added or moved does not animate, and a manager whose layout changed
++  // recalculates its target once, when the last one ends, its rows put
++  // straight on it. Each change recalculated every row of its list, and a
++  // new window's 443 pins took seconds to come in.
++  class ScopedDeferTargets {
++   public:
++    ScopedDeferTargets();
++    ~ScopedDeferTargets();
++    ScopedDeferTargets(const ScopedDeferTargets&) = delete;
++    ScopedDeferTargets& operator=(const ScopedDeferTargets&) = delete;
++  };
++
+   TabCollectionAnimatingLayoutManager(
+       std::unique_ptr<LayoutManagerBase> target_layout_manager,
+       Delegate& delegate,
+@@ -190,6 +204,13 @@ class TabCollectionAnimatingLayoutManager : public views::LayoutManagerBase {
+ 
+ 
+  private:
++  // ScopedDeferTargets's depth, and the managers whose layout changed meanwhile.
++  static int defer_targets_;
++  static std::set<TabCollectionAnimatingLayoutManager*>& DeferredManagers();
++  // Recalculates the target and puts every row on it at once, the rows it
++  // has never laid out too, with no animation running.
++  void SnapToTarget();
++
+   // Invoked by `AnimationCoordinator` as the shared animation progresses or
+   // ends.
+   void OnAnimationProgressed();
+diff --git a/chrome/browser/ui/views/tabs/common/tab_collection_animating_layout_manager_unittest.cc b/chrome/browser/ui/views/tabs/common/tab_collection_animating_layout_manager_unittest.cc
+index e7f591aa25883..aecb3c53b08f5 100644
+--- a/chrome/browser/ui/views/tabs/common/tab_collection_animating_layout_manager_unittest.cc
++++ b/chrome/browser/ui/views/tabs/common/tab_collection_animating_layout_manager_unittest.cc
+@@ -36,6 +36,10 @@ class MockAnimatingLayoutManagerDelegate
+  public:
+   MOCK_METHOD(bool, IsViewDragging, (const views::View&), (const, override));
+   MOCK_METHOD(void, OnAnimationEnded, (), (override));
++  MOCK_METHOD(bool,
++              ShouldAnimateOpacityForAddAndRemove,
++              (const views::View&),
++              (const, override));
+ };
+ 
+ class TestLayoutManager : public views::LayoutManagerBase {
+@@ -706,6 +710,43 @@ TEST_P(TabCollectionAnimatingLayoutManagerTest,
+   EXPECT_EQ(3u, host_view()->children().size());
+ }
+ 
++// Stedding (windows G16, BACKLOG S-546): rows added while a
++// ScopedDeferTargets lives get no layer to fade in and start no animation;
++// when it ends the list lays out once, every row on its target. A new
++// window's 443 pins recalculated the whole list for each row added.
++TEST_P(TabCollectionAnimatingLayoutManagerTest,
++       DeferredTargetsPutAddedRowsInPlace) {
++  // As the sidebar's lists do: a row added fades in.
++  ON_CALL(*layout_manager_delegate(), ShouldAnimateOpacityForAddAndRemove)
++      .WillByDefault(testing::Return(true));
++  widget()->SetBounds(gfx::Rect(0, 0, 100, 100));
++  widget()->LayoutRootViewIfNecessary();
++  task_environment()->FastForwardBy(base::Seconds(1));
++  std::vector<views::View*> rows;
++  {
++    TabCollectionAnimatingLayoutManager::ScopedDeferTargets defer;
++    for (int i = 0; i < 3; ++i) {
++      rows.push_back(
++          host_view()->AddChildView(std::make_unique<views::View>()));
++      EXPECT_FALSE(rows.back()->layer())
++          << "a row added while deferred fades in";
++    }
++    EXPECT_FALSE(layout_manager()->is_animating());
++  }
++  widget()->LayoutRootViewIfNecessary();
++  EXPECT_FALSE(layout_manager()->is_animating()) << "the rows animate in";
++  for (const views::View* const row : rows) {
++    const views::ChildLayout* const target =
++        layout_manager()->target_layout().GetLayoutFor(row);
++    ASSERT_TRUE(target);
++    EXPECT_EQ(target->bounds, row->bounds());
++  }
++  // Outside a deferral a row still fades in.
++  views::View* const later =
++      host_view()->AddChildView(std::make_unique<views::View>());
++  EXPECT_TRUE(later->layer());
++}
++
+ INSTANTIATE_TEST_SUITE_P(
+     All,
+     TabCollectionAnimatingLayoutManagerTest,
 diff --git a/chrome/test/stedding/BUILD.gn b/chrome/test/stedding/BUILD.gn
 index 459376aa6b644..490ad9f779c62 100644
 --- a/chrome/test/stedding/BUILD.gn
@@ -3736,10 +4511,10 @@ index 69bc76649719d..6eb323677a2b6 100644
  // on to its own site's page, the first load settles the home there, so the
 diff --git a/chrome/test/stedding/pins_every_window_browsertest.cc b/chrome/test/stedding/pins_every_window_browsertest.cc
 new file mode 100644
-index 0000000000000..eae39e1e66941
+index 0000000000000..66583e80623c4
 --- /dev/null
 +++ b/chrome/test/stedding/pins_every_window_browsertest.cc
-@@ -0,0 +1,1104 @@
+@@ -0,0 +1,1304 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -3747,6 +4522,8 @@ index 0000000000000..eae39e1e66941
 +// docs/features/windows.md G2, G13-G22 (ADR 0035): the profile's pins and
 +// essentials, a tab of each in every window.
 +
++#include <algorithm>
++#include <optional>
 +#include <set>
 +#include <string>
 +#include <vector>
@@ -3755,14 +4532,22 @@ index 0000000000000..eae39e1e66941
 +#include "base/files/scoped_temp_dir.h"
 +#include "base/run_loop.h"
 +#include "base/strings/string_util.h"
++#include "base/strings/stringprintf.h"
++#include "base/strings/utf_string_conversions.h"
++#include "base/task/cancelable_task_tracker.h"
 +#include "base/task/single_thread_task_runner.h"
++#include "base/test/bind.h"
 +#include "base/test/run_until.h"
 +#include "base/test/test_future.h"
 +#include "base/threading/thread_restrictions.h"
 +#include "base/time/time.h"
++#include "base/timer/elapsed_timer.h"
++#include "base/timer/timer.h"
 +#include "base/token.h"
 +#include "base/values.h"
 +#include "chrome/app/chrome_command_ids.h"
++#include "chrome/browser/favicon/favicon_service_factory.h"
++#include "chrome/browser/history/history_service_factory.h"
 +#include "chrome/browser/prefs/session_startup_pref.h"
 +#include "chrome/browser/profiles/profile.h"
 +#include "chrome/browser/ui/browser_commands.h"
@@ -3792,6 +4577,12 @@ index 0000000000000..eae39e1e66941
 +#include "chrome/browser/ui/views/test/vertical_tabs_browser_test_mixin.h"
 +#include "chrome/test/base/in_process_browser_test.h"
 +#include "chrome/test/base/ui_test_utils.h"
++#include "components/favicon/content/content_favicon_driver.h"
++#include "components/favicon/core/favicon_service.h"
++#include "components/favicon_base/favicon_types.h"
++#include "components/history/core/browser/history_service.h"
++#include "components/history/core/browser/history_types.h"
++#include "components/keyed_service/core/service_access_type.h"
 +#include "components/prefs/pref_service.h"
 +#include "components/split_tabs/split_tab_visual_data.h"
 +#include "components/tabs/public/folder_tab_collection.h"
@@ -3803,8 +4594,10 @@ index 0000000000000..eae39e1e66941
 +#include "content/public/test/browser_test.h"
 +#include "content/public/test/browser_test_utils.h"
 +#include "net/test/embedded_test_server/embedded_test_server.h"
++#include "third_party/skia/include/core/SkBitmap.h"
 +#include "third_party/skia/include/core/SkColor.h"
 +#include "ui/base/base_window.h"
++#include "ui/gfx/image/image.h"
 +#include "url/gurl.h"
 +
 +namespace {
@@ -4841,6 +5634,188 @@ index 0000000000000..eae39e1e66941
 +    return there.size() == 1u && FolderOf(there[0]) &&
 +           FolderOf(there[0])->title() == "Desk";
 +  })) << "the rename did not reach the other window";
++}
++
++// windows G16 (BACKLOG S-546): a new window of a profile with as many pins as
++// the owner's, 443 in nine Spaces with most in folders, has every one of
++// them soon after it opens. It took a minute and more there.
++IN_PROC_BROWSER_TEST_F(PinsEveryWindowTest, ANewWindowWithManyPinsOpensSoon) {
++  spaces::SpaceModel& model = Model(browser());
++  std::vector<spaces::SpaceId> ids = {model.active_id()};
++  for (int i = 1; i < 9; ++i) {
++    ids.push_back(
++        model.AddSpace(base::StringPrintf("Space %d", i), SK_ColorBLUE)->id());
++  }
++  std::vector<spaces::PinRecord> records;
++  const auto add = [&](const spaces::SpaceId* space, const std::string& host,
++                       const std::string& path) {
++    spaces::PinRecord record;
++    record.id = stedding::NewTabToken();
++    record.tier =
++        space ? spaces::PinTier::kSpacePin : spaces::PinTier::kEssential;
++    if (space) {
++      record.space = *space;
++      record.has_space = true;
++    }
++    record.home = GURL("https://" + host + ".test/");
++    record.title = base::UTF8ToUTF16(host);
++    record.folder_path = path;
++    records.push_back(std::move(record));
++  };
++  for (int e = 0; e < 4; ++e) {
++    add(nullptr, base::StringPrintf("essential%d", e), std::string());
++  }
++  for (size_t s = 0; s < ids.size(); ++s) {
++    for (int f = 0; f < 5; ++f) {
++      const std::string path = base::StringPrintf(
++          R"([{"i":"%s","t":"Folder %d","c":true}])",
++          base::Token::CreateRandom().ToString().c_str(), f);
++      for (int p = 0; p < 8; ++p) {
++        add(&ids[s], base::StringPrintf("pin%zu-%d-%d", s, f, p), path);
++      }
++    }
++    // 439 Space pins in all, as the owner has.
++    for (int p = 0; p < (s < 2 ? 8 : 9); ++p) {
++      add(&ids[s], base::StringPrintf("pin%zu-%d", s, p), std::string());
++    }
++  }
++  ASSERT_EQ(443u, records.size());
++  base::ElapsedTimer first;
++  Store().Publish({}, records, {});
++  ASSERT_TRUE(base::test::RunUntil([&] {
++    return Pins(browser()).size() == 439u && Essentials(browser()).size() == 4u;
++  })) << "the first window did not take every record";
++  LOG(ERROR) << "S-546 first window: " << first.Elapsed();
++
++  // The browser keeps answering while the pins come in: the longest wait
++  // between turns of a 10 ms timer is the longest task. The same timer sees
++  // when the window's own Space is in: RunUntil looks only once nothing is
++  // waiting to run, and each Space's pins are a task posted by the last.
++  base::TimeTicks last_tick = base::TimeTicks::Now();
++  base::TimeDelta longest_task;
++  base::ElapsedTimer timer;
++  BrowserWindowInterface* second = nullptr;
++  spaces::SpaceId on_screen = spaces::SpaceId::CreateEmpty();
++  size_t on_screen_pins = 0;
++  std::optional<base::TimeDelta> own_space;
++  const auto own_space_is_in = [&] {
++    size_t here = 0;
++    for (tabs::TabInterface* const pin : Pins(second)) {
++      here += Model(second).FindSpaceForTab(pin) == on_screen ? 1 : 0;
++    }
++    return here == on_screen_pins && Essentials(second).size() == 4u;
++  };
++  base::RepeatingTimer ticks;
++  ticks.Start(FROM_HERE, base::Milliseconds(10), base::BindLambdaForTesting([&] {
++                const base::TimeTicks now = base::TimeTicks::Now();
++                longest_task = std::max(longest_task, now - last_tick);
++                last_tick = now;
++                if (second && !own_space && own_space_is_in()) {
++                  own_space = timer.Elapsed();
++                }
++              }));
++  // Not OpenWindow(), which runs every task there is, the later Spaces' too.
++  ui_test_utils::BrowserCreatedObserver opened;
++  chrome::ExecuteCommand(browser(), IDC_NEW_WINDOW);
++  second = opened.Wait();
++  ASSERT_TRUE(second);
++  // The window's own Space first, with the essentials.
++  on_screen = Model(second).active_id();
++  on_screen_pins = static_cast<size_t>(std::ranges::count_if(
++      records, [&](const spaces::PinRecord& record) {
++        return record.has_space && record.space == on_screen;
++      }));
++  ASSERT_GT(on_screen_pins, 0u);
++  ASSERT_TRUE(base::test::RunUntil([&] {
++    return Pins(second).size() == 439u && Essentials(second).size() == 4u;
++  })) << "the new window lacks pins";
++  const base::TimeDelta took = timer.Elapsed();
++  ticks.Stop();
++  ASSERT_TRUE(own_space) << "the window's own Space never came in";
++  LOG(ERROR) << "S-546 new window: its Space in " << *own_space
++             << ", all in " << took << ", longest task " << longest_task;
++  EXPECT_LT(*own_space, base::Seconds(2));
++  EXPECT_LT(longest_task, base::Seconds(2));
++  EXPECT_LT(took, base::Seconds(20));
++  // Every pin in its Space, and in its folder.
++  for (tabs::TabInterface* const pin : Pins(second)) {
++    const spaces::PinRecord* const record = Store().Find(Token(pin));
++    ASSERT_TRUE(record);
++    EXPECT_EQ(record->space, Model(second).FindSpaceForTab(pin));
++    EXPECT_EQ(record->folder_path.empty(), !FolderOf(pin));
++  }
++}
++
++// windows G2, G16 (BACKLOG S-496): a new window's asleep pins show the icons
++// history keeps for their pages, or for their sites, before they load. They
++// showed the generic globe until chosen.
++IN_PROC_BROWSER_TEST_F(PinsEveryWindowTest, ANewWindowsAsleepPinsShowTheirIcons) {
++  const GURL page = Page("/favicon/page_with_favicon.html");
++  PinPage(browser(), page);
++  // The page's icon reaches history a little after the page loads.
++  favicon::FaviconService* const icons = FaviconServiceFactory::GetForProfile(
++      browser()->GetProfile(), ServiceAccessType::EXPLICIT_ACCESS);
++  ASSERT_TRUE(icons);
++  base::CancelableTaskTracker tracker;
++  bool stored = false;
++  for (int i = 0; i < 100 && !stored; ++i) {
++    base::test::TestFuture<const favicon_base::FaviconImageResult&> icon;
++    icons->GetFaviconImageForPageURL(page, icon.GetCallback(), &tracker);
++    stored = !icon.Get().image.IsEmpty();
++    if (!stored) {
++      RunFor(base::Milliseconds(100));
++    }
++  }
++  ASSERT_TRUE(stored) << "history never kept the page's icon";
++  // A pin on a site history has an icon for, at a page it has none for: the
++  // site's icon. History finds a site by host with no port, so the site is
++  // one with none (the test server always has one), its front page added to
++  // history with an icon.
++  const GURL site("https://pins.test/");
++  history::HistoryService* const history =
++      HistoryServiceFactory::GetForProfile(browser()->GetProfile(),
++                                           ServiceAccessType::EXPLICIT_ACCESS);
++  ASSERT_TRUE(history);
++  history->AddPage(site, base::Time::Now(), history::SOURCE_BROWSED);
++  SkBitmap red;
++  red.allocN32Pixels(16, 16);
++  red.eraseColor(SK_ColorRED);
++  icons->SetFavicons({site}, GURL("https://pins.test/favicon.ico"),
++                     favicon_base::IconType::kFavicon,
++                     gfx::Image::CreateFrom1xBitmap(red));
++  stored = false;
++  for (int i = 0; i < 100 && !stored; ++i) {
++    base::test::TestFuture<const favicon_base::FaviconImageResult&> icon;
++    icons->GetFaviconImageForPageURL(site, icon.GetCallback(), &tracker);
++    stored = !icon.Get().image.IsEmpty();
++    if (!stored) {
++      RunFor(base::Milliseconds(100));
++    }
++  }
++  ASSERT_TRUE(stored) << "history never kept the site's icon";
++  spaces::PinRecord unvisited;
++  unvisited.id = stedding::NewTabToken();
++  unvisited.space = Model(browser()).active_id();
++  unvisited.has_space = true;
++  unvisited.home = GURL("https://pins.test/never/opened");
++  unvisited.title = u"Never opened";
++  Store().Publish({}, {unvisited}, {});
++  ASSERT_TRUE(base::test::RunUntil([&] { return Pins(browser()).size() == 2u; }));
++
++  BrowserWindowInterface* const second = OpenWindow();
++  ASSERT_TRUE(base::test::RunUntil([&] { return Pins(second).size() == 2u; }));
++  for (tabs::TabInterface* const pin : Pins(second)) {
++    SCOPED_TRACE(Model(second).HomeUrl(pin).value_or(GURL()).spec());
++    const favicon::FaviconDriver* const driver =
++        favicon::ContentFaviconDriver::FromWebContents(pin->GetContents());
++    ASSERT_TRUE(driver);
++    EXPECT_TRUE(base::test::RunUntil([&] { return driver->FaviconIsValid(); }))
++        << "the asleep pin shows the generic globe";
++    EXPECT_FALSE(driver->GetFavicon().IsEmpty());
++    // Still asleep: the icon came from history, not from a load.
++    EXPECT_TRUE(pin->GetContents()->GetController().NeedsReload());
++    EXPECT_FALSE(pin->GetContents()->GetPrimaryMainFrame()->IsRenderFrameLive());
++  }
 +}
 +
 +}  // namespace

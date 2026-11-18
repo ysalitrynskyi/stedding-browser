@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# (macOS) The test copy of Stedding that runs beside the owner's own: one place and one identity,
+# so the owner's keychain and firewall are asked nothing (docs/HANDOFF.md, trap 85).
+#
+#   tooling/test-copy make [app]       clone the app (default out/release/Stedding.app) to
+#                                      $TMPDIR/stedding-test-copy/Stedding.app, give it the bundle
+#                                      id dev.stedding.Stedding.testcopy, and sign it ad hoc
+#   tooling/test-copy launch [args]    open the copy on its own profile with the flags every copy
+#                                      needs, and print its pid; args go to the browser
+#   tooling/test-copy quit             quit the copy by an Apple Event to its bundle id
+#   tooling/test-copy path             print the copy's path
+#
+# The flags: --use-mock-keychain, or the copy asks for "Stedding Safe Storage" in the login
+# keychain, a prompt only the owner may answer; --disable-features=NetworkTimeServiceQuerying,
+# --disable-background-networking and --disable-component-update, or each launch asks the
+# firewall about Chromium's time query (trap 85). One path, so one firewall rule the owner made
+# covers every later copy. The profile is $TMPDIR/stedding-test-copy/profile unless args name
+# --user-data-dir. Make the copy again after each build. Nothing here touches the owner's app.
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=./lib.sh
+source "$(dirname "$0")/lib.sh"
+
+[ "$(uname -s)" = Darwin ] || die "tooling/test-copy is macOS"
+DIR="${TMPDIR:-/tmp}"
+DIR="${DIR%/}/stedding-test-copy"
+COPY="$DIR/Stedding.app"
+ID="dev.stedding.Stedding.testcopy"
+
+case "${1:-}" in
+  make)
+    app="${2:-$CHROMIUM_SRC/out/release/Stedding.app}"
+    [ -d "$app" ] || die "no app at $app"
+    mkdir -p "$DIR"
+    if pgrep -f "$COPY/Contents/MacOS/" >/dev/null; then
+      die "the test copy is running: tooling/test-copy quit first"
+    fi
+    rm -rf "$COPY"
+    cp -c -R "$app" "$COPY"
+    /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $ID" "$COPY/Contents/Info.plist"
+    codesign --force --deep --sign - "$COPY" 2>&1 | tail -2
+    log "test copy: $COPY ($ID), from $app"
+    ;;
+  launch)
+    shift
+    [ -d "$COPY" ] || die "no test copy: tooling/test-copy make"
+    set -- --use-mock-keychain --disable-features=NetworkTimeServiceQuerying \
+      --disable-background-networking --disable-component-update "$@"
+    case " $* " in
+      *" --user-data-dir="*) ;;
+      *) mkdir -p "$DIR/profile"; set -- "--user-data-dir=$DIR/profile" "$@" ;;
+    esac
+    open -n -a "$COPY" --args "$@"
+    pid=""
+    for _ in $(seq 1 50); do
+      pid="$(pgrep -n -f "$COPY/Contents/MacOS/Stedding" || true)"
+      [ -n "$pid" ] && break
+      sleep 0.2
+    done
+    [ -n "$pid" ] || die "the test copy did not start"
+    echo "$pid"
+    ;;
+  quit)
+    # Only a running copy: told to quit, a copy that is not running would be launched first.
+    if pgrep -f "$COPY/Contents/MacOS/" >/dev/null; then
+      osascript -e "tell application id \"$ID\" to quit" >/dev/null 2>&1 || true
+    fi
+    ;;
+  path)
+    echo "$COPY"
+    ;;
+  *)
+    sed -n '4,11p' "$0" | sed 's/^# *//' >&2
+    exit 2
+    ;;
+esac

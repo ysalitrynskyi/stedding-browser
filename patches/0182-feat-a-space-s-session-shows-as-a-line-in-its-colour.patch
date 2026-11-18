@@ -45,10 +45,10 @@ Removable when: never; Stedding's own Spaces.
  .../browser/ui/spaces/isolation_mark_mac.mm   |  45 ++
  chrome/browser/ui/spaces/space_model.cc       |  43 +-
  chrome/browser/ui/spaces/space_model.h        |   4 +-
- .../ui/spaces/space_model_window_unittest.cc  |  30 ++
+ .../ui/spaces/space_model_window_unittest.cc  | 105 +++++
  chrome/browser/ui/spaces/space_registry.cc    |   9 +
  chrome/browser/ui/spaces/space_registry.h     |   3 +
- .../ui/spaces/space_storage_partition.cc      | 216 +++++++--
+ .../ui/spaces/space_storage_partition.cc      | 226 +++++++--
  .../ui/spaces/space_storage_partition.h       |  47 +-
  .../space_storage_partition_unittest.cc       | 152 +++++-
  chrome/browser/ui/stedding/find_words.cc      |   5 +-
@@ -90,7 +90,7 @@ Removable when: never; Stedding's own Spaces.
  .../stedding/shared_session_browsertest.cc    |   2 +-
  .../stedding/sidebar_click_browsertest.cc     |  82 +++-
  chrome/test/stedding/space_jar_browsertest.cc | 442 ++++++++++++++++--
- 62 files changed, 2478 insertions(+), 439 deletions(-)
+ 62 files changed, 2563 insertions(+), 439 deletions(-)
  create mode 100644 chrome/browser/ui/spaces/isolation_mark_mac.mm
  create mode 100644 chrome/test/stedding/session_menus_mac_browsertest.mm
 
@@ -914,7 +914,7 @@ index 1924692b2f228..91dc58fa338de 100644
        tabs::TabInterface* tab,
        std::unique_ptr<content::NavigationController::LoadURLParams> load,
 diff --git a/chrome/browser/ui/spaces/space_model_window_unittest.cc b/chrome/browser/ui/spaces/space_model_window_unittest.cc
-index 477e1cbc5ab31..916b689767a67 100644
+index 477e1cbc5ab31..df4d227dcc031 100644
 --- a/chrome/browser/ui/spaces/space_model_window_unittest.cc
 +++ b/chrome/browser/ui/spaces/space_model_window_unittest.cc
 @@ -2511,6 +2511,36 @@ TEST_F(SpaceWindowTest, UndoMovesTheTabBack) {
@@ -954,6 +954,88 @@ index 477e1cbc5ab31..916b689767a67 100644
  // routing D3: a link from another app lands in the chosen Space when no rule
  // names it.
  TEST_F(SpaceWindowTest, ExternalOpenLandsInTheDefaultSpace) {
+@@ -3097,6 +3127,81 @@ TEST_F(SpaceWindowTest, AJarWhoseCacheWasNotClearedStaysPending) {
+       << "the jar left the pending list with its cache";
+ }
+ 
++// A network context that drops the first HTTP cache clear, as a network
++// service that restarts does, and keeps the clear asked again unanswered, as
++// a service still at it when the profile shuts down.
++class DroppingThenHoldingNetworkContext : public network::TestNetworkContext {
++ public:
++  ~DroppingThenHoldingNetworkContext() override {
++    // The pipe goes first: an answer dropped while its pipe is still open
++    // breaks the interface's contract.
++    receiver_.reset();
++  }
++
++  void Attach(content::StoragePartition* partition) {
++    partition->SetNetworkContextForTesting(
++        receiver_.BindNewPipeAndPassRemote());
++    partition_ = partition;
++  }
++
++  bool holding() const { return !held_.is_null(); }
++
++  // network::TestNetworkContext:
++  void ClearHttpCache(base::Time start_time,
++                      base::Time end_time,
++                      network::mojom::ClearDataFilterPtr filter,
++                      ClearHttpCacheCallback callback) override {
++    if (content::StoragePartition* const partition = partition_.get()) {
++      partition_ = nullptr;
++      receiver_.reset();
++      partition->SetNetworkContextForTesting(
++          receiver_.BindNewPipeAndPassRemote());
++      return;
++    }
++    held_ = std::move(callback);
++  }
++
++ private:
++  // Kept only until the first clear: the partition goes with its profile,
++  // before this does.
++  raw_ptr<content::StoragePartition> partition_;
++  ClearHttpCacheCallback held_;
++  mojo::Receiver<network::mojom::NetworkContext> receiver_{this};
++};
++
++// BACKLOG S-534: a jar's wipe that its profile's shutdown cuts short leaves
++// the profile no partitions once they have been shut down. Their shutdown
++// answered the clear still out, and the wipe then looked its jar up, which
++// made the profile a new partition map that nothing shut down: the DCHECK
++// build stopped at "StoragePartitionMap is not shut down properly" as the
++// profile went, after a browser test had deleted a Space or a session.
++TEST_F(SpaceWindowTest, AWipeTheShutdownCutsShortLeavesNoPartitions) {
++  std::unique_ptr<TestingProfile> other = TestingProfile::Builder().Build();
++  const std::string jar = "cut-short-by-a-shutdown";
++  const std::optional<content::StoragePartitionConfig> config =
++      StoragePartitionConfigForProfileId(other.get(), jar);
++  ASSERT_TRUE(config);
++  content::StoragePartition* const partition =
++      other->GetStoragePartition(*config);
++  ASSERT_TRUE(partition);
++  DroppingThenHoldingNetworkContext network;
++  network.Attach(partition);
++
++  base::test::TestFuture<bool> wiped;
++  ASSERT_TRUE(
++      WipeIsolatedSpacePartition(other.get(), jar, wiped.GetCallback()));
++  ASSERT_TRUE(base::test::RunUntil([&]() { return network.holding(); }))
++      << "the dropped clear was not asked again";
++  // ClearData has answered: the wipe waits on the held clear alone.
++  partition->WaitForDeletionTasksForTesting();
++  ASSERT_FALSE(wiped.IsReady()) << "the wipe finished with a clear held";
++
++  // The DCHECK build stopped in here.
++  other.reset();
++  ASSERT_TRUE(wiped.IsReady()) << "the shutdown left the wipe waiting";
++  EXPECT_FALSE(wiped.Get()) << "a wipe the shutdown cut short counted as done";
++}
++
+ // A split still pins and renames as one pair. Session extra data does not
+ // carry a split token, and restoring two tabs does not reassemble the pair.
+ TEST_F(SpaceWindowTest, SplitDoesNotRestoreFromSessionExtraData) {
 diff --git a/chrome/browser/ui/spaces/space_registry.cc b/chrome/browser/ui/spaces/space_registry.cc
 index 32d240b39cedc..e9af8439e89df 100644
 --- a/chrome/browser/ui/spaces/space_registry.cc
@@ -989,7 +1071,7 @@ index 9d7673b8f4976..1437f6aa4ce7b 100644
    // list (S37), and returns its id. No Space is in it yet.
    std::string AddSession(std::string_view name);
 diff --git a/chrome/browser/ui/spaces/space_storage_partition.cc b/chrome/browser/ui/spaces/space_storage_partition.cc
-index a25472aed4785..d2a07bee21408 100644
+index a25472aed4785..9ef56acca972a 100644
 --- a/chrome/browser/ui/spaces/space_storage_partition.cc
 +++ b/chrome/browser/ui/spaces/space_storage_partition.cc
 @@ -5,11 +5,14 @@
@@ -1316,7 +1398,7 @@ index a25472aed4785..d2a07bee21408 100644
  }  // namespace
  
  int SpacePartitionWipesBegunForTesting() {
-@@ -549,16 +694,27 @@ bool WipeIsolatedSpacePartition(content::BrowserContext* browser_context,
+@@ -549,16 +694,37 @@ bool WipeIsolatedSpacePartition(content::BrowserContext* browser_context,
      done = base::DoNothing();
    }
    ++g_wipes_begun;
@@ -1332,6 +1414,16 @@ index a25472aed4785..d2a07bee21408 100644
 +             [](base::WeakPtr<Profile> profile,
 +                const content::StoragePartitionConfig& config,
 +                base::OnceCallback<void(bool)> done, std::vector<bool> each) {
++               // BACKLOG S-534: a profile shutting down ends the clears
++               // itself. Its partitions answer them as they are destroyed,
++               // so this can run inside that shutdown, where any lookup of a
++               // partition, even one that makes none, gives the profile a new
++               // partition map that nothing shuts down. The jar was not
++               // cleared: it stays on the pending list for the next start.
++               if (profile && profile->ShutdownStarted()) {
++                 std::move(done).Run(false);
++                 return;
++               }
 +               if (profile) {
 +                 DropPagesKeptForBack(
 +                     profile.get(),

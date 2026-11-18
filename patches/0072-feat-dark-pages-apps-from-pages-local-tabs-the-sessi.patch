@@ -119,7 +119,7 @@ patches of their own and folds each fix into the patch that owns its code
  .../browser/ui/stedding/address_row_rules.h   |    8 +-
  .../ui/stedding/address_row_rules_unittest.cc |    9 +-
  chrome/browser/ui/stedding/app_dock_mac.h     |   65 +
- chrome/browser/ui/stedding/app_dock_mac.mm    |  159 +++
+ chrome/browser/ui/stedding/app_dock_mac.mm    |  172 +++
  .../browser/ui/stedding/app_records_keeper.cc |   73 ++
  .../browser/ui/stedding/app_records_keeper.h  |   52 +
  chrome/browser/ui/stedding/dark_pages.cc      |  481 +++++++
@@ -263,7 +263,7 @@ patches of their own and folds each fix into the patch that owns its code
  .../stedding/isolation_mark_browsertest.cc    |  938 ++++++++++++++
  .../test/stedding/local_tabs_browsertest.cc   | 1121 +++++++++++++++++
  chrome/test/stedding/make_app_browsertest.cc  |  423 +++++++
- .../test/stedding/make_app_mac_browsertest.mm |  328 +++++
+ .../test/stedding/make_app_mac_browsertest.mm |  355 ++++++
  .../stedding/make_app_quiet_browsertest.cc    |  148 +++
  chrome/test/stedding/restore_browsertest.cc   |  724 ++++++++++-
  .../stedding/restored_title_browsertest.cc    |  311 +++++
@@ -288,7 +288,7 @@ patches of their own and folds each fix into the patch that owns its code
  .../sessions/core/tab_restore_service_impl.cc |  136 ++
  .../sessions/core/tab_restore_service_impl.h  |    7 +
  sandbox/policy/features.cc                    |   12 +
- 229 files changed, 18969 insertions(+), 382 deletions(-)
+ 229 files changed, 19009 insertions(+), 382 deletions(-)
  create mode 100644 chrome/browser/mac/dock_tile_unittest.mm
  create mode 100644 chrome/browser/ui/spaces/app_jar.cc
  create mode 100644 chrome/browser/ui/spaces/app_jar.h
@@ -5705,10 +5705,10 @@ index 0000000000000..fd142ccefa21d
 +#endif  // CHROME_BROWSER_UI_STEDDING_APP_DOCK_MAC_H_
 diff --git a/chrome/browser/ui/stedding/app_dock_mac.mm b/chrome/browser/ui/stedding/app_dock_mac.mm
 new file mode 100644
-index 0000000000000..85ed6fddce9c9
+index 0000000000000..c13441079b3d3
 --- /dev/null
 +++ b/chrome/browser/ui/stedding/app_dock_mac.mm
-@@ -0,0 +1,159 @@
+@@ -0,0 +1,172 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -5729,6 +5729,7 @@ index 0000000000000..85ed6fddce9c9
 +#include "base/task/sequenced_task_runner.h"
 +#import "chrome/browser/mac/dock.h"
 +#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/web_applications/os_integration/mac/app_shim_registry.h"
 +#include "chrome/browser/web_applications/os_integration/mac/web_app_shortcut_mac.h"
 +#include "chrome/browser/web_applications/os_integration/web_app_shortcut.h"
 +#include "chrome/common/stedding/web_apps.h"
@@ -5859,6 +5860,18 @@ index 0000000000000..85ed6fddce9c9
 +    update->Remove(app_id);
 +  }
 +  if (!DockReachable()) {
++    return;
++  }
++  // Wa18: a web app's launcher is one for every profile that has the app, and
++  // Chromium keeps it until the last of them removes the app
++  // (AppShimRegistry). While another profile still has the app, the tile
++  // stays: it is that profile's too, and the record there still names it,
++  // so the tile goes when that profile removes the app. Taken away here, it
++  // went from under the other profile, which never put it back.
++  std::set<base::FilePath> others =
++      AppShimRegistry::Get()->GetInstalledProfilesForApp(app_id);
++  others.erase(profile->GetPath());
++  if (!others.empty()) {
 +    return;
 +  }
 +  web_app::internals::GetShortcutIOTaskRunner()->PostTask(
@@ -21767,10 +21780,10 @@ index 0000000000000..d208081f3b852
 +}  // namespace
 diff --git a/chrome/test/stedding/make_app_mac_browsertest.mm b/chrome/test/stedding/make_app_mac_browsertest.mm
 new file mode 100644
-index 0000000000000..fb8d945e16768
+index 0000000000000..86044e5a44a76
 --- /dev/null
 +++ b/chrome/test/stedding/make_app_mac_browsertest.mm
-@@ -0,0 +1,328 @@
+@@ -0,0 +1,355 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -21811,6 +21824,7 @@ index 0000000000000..fb8d945e16768
 +#include "chrome/browser/ui/web_applications/app_browser_controller.h"
 +#include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
 +#include "chrome/browser/ui/web_applications/web_app_dialogs.h"
++#include "chrome/browser/web_applications/os_integration/mac/app_shim_registry.h"
 +#include "chrome/browser/web_applications/os_integration/web_app_shortcut.h"
 +#include "chrome/browser/web_applications/test/os_integration_test_override_impl.h"
 +#include "chrome/browser/web_applications/test/web_app_page_waiter.h"
@@ -22096,6 +22110,32 @@ index 0000000000000..fb8d945e16768
 +      << "the tile stayed";
 +  EXPECT_EQ(std::vector<base::FilePath>{launcher}, dock_.removed());
 +  EXPECT_FALSE(stedding::IsAppInDock(browser()->GetProfile(), app_id));
++}
++
++// web apps Wa18: an app's launcher, and so its tile, is one for every profile
++// that has the app, and Chromium keeps the launcher until the last of them
++// removes it (AppShimRegistry). Removing the app here while another profile
++// still has it leaves the tile, which that profile's record still names; it
++// went from under the other profile, which never put it back.
++IN_PROC_BROWSER_TEST_F(MakeAppMacTest, AnAppAnotherProfileHasKeepsItsTile) {
++  const webapps::AppId app_id = MakeApp();
++  ASSERT_FALSE(app_id.empty());
++  ASSERT_TRUE(base::test::RunUntil([&]() {
++    return stedding::IsAppInDock(browser()->GetProfile(), app_id);
++  }));
++  // Another profile has the same app, as the registry knows it without
++  // loading that profile.
++  const base::FilePath other =
++      browser()->GetProfile()->GetPath().DirName().AppendASCII("Profile 9");
++  AppShimRegistry::Get()->OnAppInstalledForProfile(app_id, other);
++
++  UninstallWebApp(app_id);
++  FlushShortcutSequence();
++  EXPECT_TRUE(dock_.removed().empty())
++      << "the tile went while another profile has the app";
++  EXPECT_FALSE(stedding::IsAppInDock(browser()->GetProfile(), app_id))
++      << "this profile, which no longer has the app, still records its tile";
++  AppShimRegistry::Get()->OnAppUninstalledForProfile(app_id, other);
 +}
 +
 +}  // namespace

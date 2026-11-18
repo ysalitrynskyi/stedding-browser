@@ -94,8 +94,8 @@ Removable when: never; this is the feature.
  .../stedding/isolation_mark_browsertest.cc    |  45 +-
  .../stedding/settings_spaces_browsertest.cc   | 177 ++++-
  .../stedding/shared_session_browsertest.cc    | 667 ++++++++++++++++++
- .../test/stedding/sidebar_sync_browsertest.cc | 354 ++++++++++
- 48 files changed, 2652 insertions(+), 129 deletions(-)
+ .../test/stedding/sidebar_sync_browsertest.cc | 435 ++++++++++++
+ 48 files changed, 2733 insertions(+), 129 deletions(-)
  create mode 100644 chrome/test/stedding/shared_session_browsertest.cc
 
 diff --git a/chrome/app/stedding_strings.grdp b/chrome/app/stedding_strings.grdp
@@ -3736,7 +3736,7 @@ index 0000000000000..b48e5a9da684d
 +
 +}  // namespace
 diff --git a/chrome/test/stedding/sidebar_sync_browsertest.cc b/chrome/test/stedding/sidebar_sync_browsertest.cc
-index 5fa7aa49c2cd7..0824c48cc3a53 100644
+index 5fa7aa49c2cd7..b492e2a1e9adb 100644
 --- a/chrome/test/stedding/sidebar_sync_browsertest.cc
 +++ b/chrome/test/stedding/sidebar_sync_browsertest.cc
 @@ -6,6 +6,7 @@
@@ -3755,7 +3755,7 @@ index 5fa7aa49c2cd7..0824c48cc3a53 100644
  #include "chrome/browser/ui/spaces/sidebar_ids.h"
  #include "chrome/browser/ui/spaces/sidebar_sync_file.h"
  #include "chrome/browser/ui/spaces/sidebar_sync_ledger.h"
-@@ -559,6 +561,358 @@ IN_PROC_BROWSER_TEST_F(SidebarSyncTest, OnlyTheUsersOwnRemovalTravels) {
+@@ -559,6 +561,439 @@ IN_PROC_BROWSER_TEST_F(SidebarSyncTest, OnlyTheUsersOwnRemovalTravels) {
  // Sf25: a loaded pin another computer moves out of a Space with its own
  // session onto the shared essentials row, which is in the profile's
  // session, waits for Move now like a move into another Space's session.
@@ -3911,6 +3911,87 @@ index 5fa7aa49c2cd7..0824c48cc3a53 100644
 +  ASSERT_TRUE(service()->ResolveDecision(row, "turn"));
 +  EXPECT_TRUE(model().SpaceIsIsolated(here_id));
 +  EXPECT_EQ(spaces_before, registry().entries().size());
++}
++
++// Sf10, Sf18 (BACKLOG S-494): from 0.3.0 beta 16 to 0.5.1, a Space paired
++// under the other computer's id was made a second time here, under the shared
++// id, and the other computer's pins went to it. Deleting that copy by hand,
++// with the person's own Space on screen, writes no removal: the shared id
++// still names this computer's own Space through the join's pair. The copy's
++// pins move into that Space under the ids they had, and the copy is not made
++// again.
++IN_PROC_BROWSER_TEST_F(SidebarSyncTest,
++                       DeletingASpaceMadeTwiceRemovesNothingElsewhere) {
++  const spaces::SpaceId here_id = model().active_id();
++  const std::string here = here_id.ToString();
++  model().SetSpaceName(here_id, "Work");
++  std::string there = base::Token::CreateRandom().ToString();
++  while (there >= here) {
++    there = base::Token::CreateRandom().ToString();
++  }
++  const std::string pin = NewTabId();
++  const int64_t start = NowMs();
++  sb::State peer = PeerState(there, {pin}, start, "Work");
++  WritePeer(peer, 1);
++  const size_t spaces_before = registry().entries().size();
++  {
++    const base::DictValue preview = Preview(shared_.GetPath());
++    ASSERT_FALSE(preview.FindString("refusal"));
++    const base::ListValue* const pairs = preview.FindList("pairs");
++    ASSERT_TRUE(pairs);
++    ASSERT_EQ(1u, pairs->size()) << preview.DebugString();
++  }
++  ASSERT_TRUE(service()->ConfirmJoin(/*combine=*/true, "Test computer", {0}));
++  ASSERT_TRUE(base::test::RunUntil([&] { return service()->enabled(); }));
++  ASSERT_TRUE(
++      base::test::RunUntil([&] { return TabWithToken(pin) != nullptr; }));
++
++  // The copy an earlier version made: a second Space under the shared id,
++  // after this one, holding the other computer's pin.
++  spaces::RegistryEntry copy = *registry().Find(here_id);
++  copy.id = SpaceOf(there);
++  registry().AddExisting(copy);
++  ASSERT_TRUE(model().GetSpace(SpaceOf(there)));
++  tabs::TabInterface* const arrived = TabWithToken(pin);
++  model().SetSpaceForTab(arrived, SpaceOf(there));
++  if (!model().IsSpacePinned(arrived)) {
++    model().SetSpacePinned(arrived, true);
++  }
++  service()->CommitForTesting();
++  ASSERT_EQ(spaces_before + 1, registry().entries().size());
++  ASSERT_EQ(SpaceOf(there), model().FindSpaceForTab(arrived));
++  ASSERT_TRUE(LedgerRecord(there));
++  ASSERT_TRUE(LedgerRecord(there)->Alive());
++
++  // Deleted by hand, with the person's own Space on screen.
++  ASSERT_EQ(here_id, model().active_id());
++  ASSERT_TRUE(model().RemoveSpace(SpaceOf(there)));
++  service()->CommitForTesting();
++  EXPECT_FALSE(registry().Find(SpaceOf(there)));
++  ASSERT_TRUE(registry().Find(here_id));
++  ASSERT_TRUE(LedgerRecord(there));
++  EXPECT_TRUE(LedgerRecord(there)->Alive())
++      << "deleting the copy removed the other computer's Space";
++  ASSERT_TRUE(LedgerRecord(pin));
++  EXPECT_TRUE(LedgerRecord(pin)->Alive())
++      << "deleting the copy removed the other computer's pin";
++  EXPECT_EQ(sb::PinsListOf(there), LedgerRecord(pin)->Get(sb::kFieldParent))
++      << "deleting the copy moved the other computer's pin";
++  tabs::TabInterface* const kept = TabWithToken(pin);
++  ASSERT_TRUE(kept);
++  EXPECT_EQ(here_id, model().FindSpaceForTab(kept));
++  EXPECT_TRUE(model().IsSpacePinned(kept));
++
++  // What the other computer changes lands on the Space kept, and the copy is
++  // not made again.
++  peer.records[there].f[sb::kFieldName] =
++      sb::Field{"Office", sb::Stamp{start + 60'000, kPeer}};
++  WritePeer(peer, 2);
++  Scan();
++  EXPECT_EQ(spaces_before, registry().entries().size())
++      << "the copy was made again";
++  ASSERT_TRUE(registry().Find(here_id));
++  EXPECT_EQ("Office", registry().Find(here_id)->name);
 +}
 +
 +// Sf10, Sf35: a backup taken after a join names the Space and the pin paired

@@ -2,6 +2,44 @@
 
 What was built, newest first. Nothing here is needed to do a task: `AGENTS.md` carries what is true now, `BACKLOG.md` the order of work, `PLAN.md` the owner's decisions. This file was the "State of the project" section of `AGENTS.md` until 2026-09-30. This log starts at 2026-10-15. Closed work from before that is the table in [docs/history/archive.md](history/archive.md).
 
+## 2026-11-17 -- 0.6.0: the row's buttons inside the row, the Mac's lights with the row, and the release
+
+The night of 2026-11-16 ran on both machines until a power cut stopped them, and the release
+round finished on the evening of 2026-11-17. 0.6.0 ships on Chromium 157.0.8103.79, the owner's
+choice: 157.0.8103.80 and M158 came out on 2026-11-12, and a rebase is due by 2026-11-26.
+
+- S-543 (patch 0113, its test in 0193): with the address row over the page, the toolbar's flex
+  layout laid the clusters out as for a row the field's margins wider than the toolbar, so the
+  menu ended 1 DIP past the row, under the window's buttons at the corner on Windows; maximized,
+  with Chromium's edge extension, a press on one pixel of the menu minimized the window. Found by
+  the corner test at 150% on the PC, and the same at scale 1 at that window's width. What sits
+  past the field now moves back inside the row.
+- The Mac's traffic lights with the row (patch 0193): with the sidebar hidden, the row brought
+  in over the page left the lights hidden until the pointer moved again; found in the captures.
+  The window now asks again when it lays the row out.
+- S-534 (patch 0182): a Space's jar wipe that finished after shutdown began asked for the
+  partition again, and two tests crashed at teardown on the DCHECK build.
+- The Mac's Dock keeps an app's tile while another profile still has the app (patch 0072).
+- Tests: the bookmarks bar going with the row; S-494's Space made twice; the S-542 tests'
+  pointer on the Mac; the pin mirror off in time-skipping unit fixtures; a title too narrow to
+  read. `SidebarSyncPlaceTest`'s reload case runs one at a time: on the Mac the parallel leg ran
+  it out of time on both builds, and alone it passed every time.
+
+Checked: on the Mac, the release and DCHECK builds' whole suites (1,615 unit, 1,129 browser and
+222 one-at-a-time tests on each); the captures of every 0.6.0 state, light and dark; the signed
+and notarized image; acceptance TST-6, TST-7 and TST-9 on a copy of it; 0.5.1's pins in two
+windows merged on the first launch of 0.6.0; a session with the real pointer and keyboard on a
+fresh profile. On the PC, at the 4K display's 150%: the release build's whole suites; the DCHECK
+and ASan builds' unit suites, and their browser suites with BACKLOG S-458's list failing at 150%,
+which pass at scale 1 on the DCHECK build, twice, and on the ASan build but for
+`MotionFramesTest`'s frame wait, which ASan slows (S-458); no DCHECK, dangling-pointer or ASan report; the update from 0.5.1 with
+pins in two windows; the installer's cycle; acceptance TST-7 and TST-9, and TST-6 but for steps 11 and 12 after
+its relaunch (S-544: the released 0.5.1 fails them the same way at the console, and the same code
+passed them that morning over Remote Desktop); the release build's installer built again from the
+final tree came out byte for byte the same;
+the real build driven at 150% for S-540's strip and S-542's buttons with the row.
+Not checked: a pass at 100% on Windows (the PC ran at its own 150% all evening).
+
 ## 2026-11-16 -- settings and extensions in sync, Live Folders, and three reviews
 
 The owner gave the day to finishing 0.6.0's items, with the Mac in use: every build and test ran

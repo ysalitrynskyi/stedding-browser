@@ -14,11 +14,10 @@ param(
   [string]$Name = '',
   [string]$Arguments = ''
 )
-$ErrorActionPreference = 'Stop'
-$full = (Resolve-Path $Script).Path
+$full = (Resolve-Path $Script -ErrorAction Stop).Path
 if (-not $Name) { $Name = 'stedding-' + [IO.Path]::GetFileNameWithoutExtension($full) }
 $bash = Join-Path $env:ProgramFiles 'Git\bin\bash.exe'
-if (-not (Test-Path $bash)) { throw "no Git for Windows bash at $bash" }
+if (-not (Test-Path $bash)) { Write-Error "no Git for Windows bash at $bash"; exit 1 }
 # C:\a\b.sh -> /c/a/b.sh, as Git's bash takes it.
 $posix = '/' + $full.Substring(0, 1).ToLower() + ($full.Substring(2) -replace '\\', '/')
 $go = Join-Path $env:TEMP "$Name-go.ps1"
@@ -28,10 +27,12 @@ $go = Join-Path $env:TEMP "$Name-go.ps1"
 schtasks /Delete /TN '$Name' /F 2>`$null | Out-Null
 Remove-Item -LiteralPath '$go' -ErrorAction SilentlyContinue
 "@ | Set-Content -LiteralPath $go -Encoding UTF8
-schtasks /Delete /TN $Name /F 2>$null | Out-Null
+# A task of that name from an earlier run, if any; "cannot find" is the usual answer.
+& schtasks /Delete /TN $Name /F 2>&1 | Out-Null
 schtasks /Create /TN $Name /TR "powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$go`"" `
   /SC ONCE /ST 23:59 /SD 2026/01/01 /IT /RU $env:USERNAME /F 2>$null | Out-Null
-$task = Get-ScheduledTask -TaskName $Name
+$task = Get-ScheduledTask -TaskName $Name -ErrorAction SilentlyContinue
+if (-not $task) { Write-Error "the task $Name was not made"; exit 1 }
 $task.Settings.Priority = 4
 $task.Settings.ExecutionTimeLimit = 'PT16H'
 Set-ScheduledTask -InputObject $task | Out-Null

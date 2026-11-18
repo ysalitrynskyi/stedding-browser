@@ -38,7 +38,7 @@ Homebrew: `brew install --cask ysalitrynskyi/stedding/stedding` · [Install guid
 | **[Apps from any page](docs/features/web-apps.md)** | A page gets a window and an icon of its own, and stays signed in as its Space is |
 | **[Your sidebar on every computer](docs/features/sidebar-file.md)** | Through a folder you already sync, or WebDAV or S3 storage you have. There is no Stedding server |
 | **[Site cleanup](docs/features/commandbar.md)** | ⌥⇧⌘R (Ctrl+Alt+Shift+R) signs you out of the site in front of you and nothing else. Close Duplicate Tabs is one command away |
-| **[Clean links](docs/features/clean-links.md) and [blocking](docs/features/blocker.md)** | `utm_` and similar come off the links you open. Ad and tracker blocking is built in, off until you turn it on |
+| **[Clean links](docs/features/clean-links.md) and [blocking](docs/features/blocker.md)** | Built in, and offered on the first launch's Privacy step: `utm_` and similar come off the links you open, and ads and trackers are blocked. Both stay off until you choose them, since either can cost you something on a site |
 
 <p>
   <img src="docs/images/readme/dark-pages.png" width="49%" alt="A white website shown dark, the moon button by the address row lit">
@@ -120,8 +120,8 @@ Opera and Dia (on a Mac, each browser's passwords need one keychain prompt; on W
 that Chrome seals with its own key cannot be read and are counted), and from the file Safari
 exports. Settings → Stedding → Sync and import → **Import from another browser** opens that step
 again any time. Passwords in that file are plain text, so they stay unticked until you ask for
-them. Chromium's own importer also lists the browsers it finds, including Firefox, and on the Mac
-Safari's bookmarks.
+them. Chromium's own importer also lists Firefox when it finds it. On the Mac, Stedding never reads
+Safari's own files: Safari's export file is the way in.
 
 </details>
 

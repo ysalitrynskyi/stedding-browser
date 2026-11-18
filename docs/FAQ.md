@@ -312,7 +312,7 @@ uBlock Origin Lite does; it installs from the Chrome Web Store. The full uBlock
 Origin is a Manifest V2 extension, and Chromium turns those off. Stedding leaves
 that as Chromium has it: turning them back on would be one more patch that any
 Chromium update could break. Stedding also has a blocker of its own, off until you
-turn it on in Settings › Stedding › Privacy. It blocks the requests EasyList and
+turn it on, on the first launch's Privacy step or in Settings › Stedding › Privacy. It blocks the requests EasyList and
 EasyPrivacy name.
 
 **Does Netflix play?**
@@ -389,6 +389,9 @@ only when you install or update an extension. Every connection is listed in
 Third-party cookies blocked, HTTPS-First, Global Privacy Control, quiet permission
 prompts, Chromium’s ad-measurement APIs off, search suggestions off, and DuckDuckGo
 until you choose an engine. Most are switches in Settings → Stedding → Privacy.
+Blocking ads and trackers and removing tracking from links are off until you choose
+them, on the first launch's Privacy step or in Settings: each can cost something on a
+site (a page that breaks, a referral that is not credited).
 
 **Where is my data?**
 On your own computer: `~/Library/Application Support/Stedding` on macOS, and

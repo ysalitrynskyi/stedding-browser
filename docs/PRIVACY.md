@@ -27,8 +27,11 @@ Using them is your choice.
    browser talks to on its own, and why. The aim is a short list: update
    checks, and the user's own browsing. Some rows are still Google's, and are
    marked as such.
-3. **Defaults are the product.** Protections ship on. Conveniences that cost
-   privacy ship off.
+3. **Defaults are the product.** Protections that cost you nothing ship on.
+   Two that can cost something are yours to choose, and the welcome flow's
+   Privacy step asks on the first launch: blocking ads and trackers can break a
+   site, and removing tracking from links can strip the code a site credits a
+   referral by (`PLAN.md` decision 20). Conveniences that cost privacy ship off.
 4. **Honesty over purity.** Where a real trade-off exists (Safe Browsing, the
    extension store, the update check), the trade-off is written here and the
    default is the one that can be defended.
@@ -235,8 +238,9 @@ and, on the Mac, the launcher its Dock tile points at
 
 Nothing looks at another app's data before you ask for an import. The welcome
 flow looks for other browsers only when you reach its Import step, and on the
-Mac Stedding never looks at Safari's data, which macOS keeps for Safari alone;
-Safari's export file is the way in (`features/import.md` I46).
+Mac Stedding never looks at Safari's data, which macOS keeps for Safari alone:
+Chromium's own Safari importer is taken out (patch 0057). Safari's export file
+is the way in (`features/import.md` I46, I34).
 
 Importing from Dia (welcome step 2) reads Dia's files on this computer: its
 bookmarks, and copies of its history and logins, made in a temporary folder
@@ -364,7 +368,7 @@ exempts a site (`features/clean-links.md`; `features/privacy.md` Q15).
 
 **Block ads and trackers** (Settings › Stedding › Privacy;
 `features/blocker.md`, [ADR 0030](decisions/0030-ad-and-tracker-blocking.md))
-is off until the user turns it on. Then Stedding fetches EasyList and
+is off until the user turns it on, there or in the welcome flow's Privacy step. Then Stedding fetches EasyList and
 EasyPrivacy (the row above, which says what the request carries) and converts
 them on this computer into rules Chromium's subresource filter blocks by. The
 lists, the rules made from them and a LICENSE file naming each list stay in the

@@ -150,8 +150,8 @@ Search, Import, Appearance, Behaviour, Privacy, Default browser and Keys.
    from (on Windows, passwords Chrome seals with its own key are counted and
    left out). From a file Safari exported, on either platform: bookmarks and
    history, and passwords only if you tick them, because the file holds them as
-   plain text. Through Chromium's importer: Safari's bookmarks, or Firefox's
-   bookmarks and history, on the Mac; Firefox, with passwords, Internet
+   plain text. Through Chromium's importer: Firefox's bookmarks and history, on
+   the Mac; Firefox, with passwords, Internet
    Explorer or the old Edge, on Windows, each with only what it can bring; and a
    bookmarks HTML file on either platform. Settings →
    Stedding → Sync and import → **Import from another browser** opens this step

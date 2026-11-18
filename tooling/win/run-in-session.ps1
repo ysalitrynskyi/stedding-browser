@@ -2,8 +2,10 @@
 Runs a bash script in the operator's interactive session, detached, as a one-off scheduled task.
 An SSH session lands in session 0, where browser tests have no desktop and an installer sees a
 virtualised profile (docs/HANDOFF.md, trap 40); the task runs where the operator is logged in, and
-survives the SSH session that started it. The task deletes itself when the script ends, so
-tooling\win\leftovers.ps1 has no one-off task to report.
+survives the SSH session that started it. A task cannot delete itself: it was made from the
+elevated SSH session, and the operator's session gets "Access is denied". So the script's
+launcher deletes itself when the script ends, and each run first deletes the one-off tasks of
+earlier runs whose launcher is gone; tooling\win\leftovers.ps1 -Clean deletes any left.
 
   tooling\win\run-in-session.ps1 -Script <path\to\job.sh> [-Name <task>] [-Arguments '<args>']
 
@@ -24,9 +26,15 @@ $go = Join-Path $env:TEMP "$Name-go.ps1"
 @"
 (Get-Process -Id `$PID).PriorityClass = 'Normal'
 & '$bash' '$posix' $Arguments
-schtasks /Delete /TN '$Name' /F 2>`$null | Out-Null
 Remove-Item -LiteralPath '$go' -ErrorAction SilentlyContinue
 "@ | Set-Content -LiteralPath $go -Encoding UTF8
+# Earlier runs' tasks whose script has ended (their launcher in %TEMP% is gone).
+Get-ScheduledTask | Where-Object { $_.State -ne 'Running' } | ForEach-Object {
+  $launcher = @($_.Actions | ForEach-Object { if ($_.Arguments -match '-File\s+"?(.+?-go\.ps1)') { $Matches[1] } })
+  if ($launcher.Count -eq 1 -and $launcher[0] -like "$env:TEMP\*" -and -not (Test-Path -LiteralPath $launcher[0])) {
+    & schtasks /Delete /TN $_.TaskName /F 2>&1 | Out-Null
+  }
+}
 # A task of that name from an earlier run, if any; "cannot find" is the usual answer.
 & schtasks /Delete /TN $Name /F 2>&1 | Out-Null
 schtasks /Create /TN $Name /TR "powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$go`"" `

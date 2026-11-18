@@ -27,8 +27,9 @@ built to the quality bar, and each visual choice is shown to the owner as render
 
 Decided for after 0.6.0:
 
-- **Chromium.** 0.6.0 is on 157.0.8103.79, and its notes say a release on newer Chromium is due
-  by 2026-11-26, 14 days after the security update 157.0.8103.80. The move to M158, or to M159 if it
+- **Chromium.** 0.6.0 is on 157.0.8103.79, and a release on newer Chromium is due by 2026-11-26,
+  14 days after M158 went stable (2026-11-12). 157.0.8103.80 is no reason to move: for Mac and
+  Windows its source is .79's, with only `chrome/VERSION` changed (checked 2026-11-18). The move to M158, or to M159 if it
   is stable by then (2026-12-08), is a release of its own, with Sparkle 2.10.1 (S-358). The port
   saved on the `chromium-158` branch (2026-11-05, 130 patches) has never built through.
 - **The player inside the window (S-95's Mp1, discussion 104):** the owner chose option A on

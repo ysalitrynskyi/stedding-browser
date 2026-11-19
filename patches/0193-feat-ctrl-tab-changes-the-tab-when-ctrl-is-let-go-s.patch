@@ -1,0 +1,296 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Thu, 19 Nov 2026 10:28:29 -0500
+Subject: feat: Ctrl-Tab changes the tab when Ctrl is let go (S-547)
+
+GitHub issue 123; the owner, 2026-11-18: planned. Holding Ctrl and pressing
+Tab used to show each tab of the run as the strip stepped to it, so every
+page stepped past flashed by. Now a step moves the strip's highlight, and
+the tab changes when the run ends: when Ctrl (the chord's held keys,
+shortcuts Z18) is let go, a click lands, a key without the chord's
+modifiers arrives, or the window stops being active (switcher X3). Escape
+leaves the tab the run began on, which never changed. A tap, Ctrl-Tab
+pressed and let go at once, still shows the tab used before (X2), at the
+release. The command bar's "Go to the Most Recent Tab" ends its run at
+once, as before. Previews of the pages in the strip are not part of this.
+
+SpaceModel::CycleRecent() moves the run's position only; EndCycle() shows
+the tab the run reached, if it is still open, and records it as used.
+
+Tests: SpaceWindowTest.CtrlTabWalksRecentTabsOfTheActiveSpace,
+CtrlTabTapGoesToPreviousTab and CtrlTabSettingOffUsesStripOrder;
+RecentTabsSwitcherViewTest.ReleaseCommitsEscapeCancels and
+SteppingBackToTheFirstTabIsLikeEscape; browser:
+NumberBadgeTest.CtrlTabEndsWithTheKeyOrTheWindow and
+AStripWhoseRunEndedComesDown, each checking the tab on screen stays while
+a step moves the run's position.
+
+Why: Arc's Ctrl-Tab works this way, as Cmd-Tab does for apps; GitHub issue
+123 asked for it.
+Removable when: never as behaviour.
+---
+ chrome/browser/ui/spaces/space_model.cc       | 29 +++++++++++-----
+ chrome/browser/ui/spaces/space_model.h        |  5 +--
+ .../ui/spaces/space_model_window_unittest.cc  | 21 ++++++++----
+ .../recent_tabs_switcher_view_unittest.cc     | 13 ++++----
+ .../test/stedding/space_switch_browsertest.cc | 33 ++++++++++++++-----
+ 5 files changed, 68 insertions(+), 33 deletions(-)
+
+diff --git a/chrome/browser/ui/spaces/space_model.cc b/chrome/browser/ui/spaces/space_model.cc
+index 815ec87bf0909..1c24fef0d4498 100644
+--- a/chrome/browser/ui/spaces/space_model.cc
++++ b/chrome/browser/ui/spaces/space_model.cc
+@@ -2183,13 +2183,9 @@ bool SpaceModel::CycleRecent(int delta) {
+     position += n;
+   }
+   cycle_->position = static_cast<size_t>(position);
+-  const int index =
+-      tab_strip_model_->GetIndexOfTab(cycle_->tabs[cycle_->position].Get());
+-  if (index != TabStripModel::kNoTab) {
+-    tab_strip_model_->ActivateTabAt(
+-        index, TabStripUserGestureDetails(
+-                   TabStripUserGestureDetails::GestureType::kKeyboard));
+-  }
++  // switcher X3 (GitHub issue 123, BACKLOG S-547): a step moves the strip's
++  // highlight, and the tab changes when the run ends (EndCycle), as in Arc,
++  // so the pages stepped past do not flash by. A tap is a step and an end.
+   return true;
+ }
+ 
+@@ -2197,10 +2193,25 @@ void SpaceModel::EndCycle() {
+   if (!cycle_) {
+     return;
+   }
++  tabs::TabInterface* const reached =
++      cycle_->position < cycle_->tabs.size()
++          ? cycle_->tabs[cycle_->position].Get()
++          : nullptr;
+   cycle_.reset();
+-  if (tab_strip_model_) {
+-    RecordActivation(tab_strip_model_->GetActiveTab());
++  if (!tab_strip_model_) {
++    return;
++  }
++  // The tab the run reached (switcher X3), if it is still there.
++  if (reached) {
++    const int index = tab_strip_model_->GetIndexOfTab(reached);
++    if (index != TabStripModel::kNoTab &&
++        index != tab_strip_model_->active_index()) {
++      tab_strip_model_->ActivateTabAt(
++          index, TabStripUserGestureDetails(
++                     TabStripUserGestureDetails::GestureType::kKeyboard));
++    }
+   }
++  RecordActivation(tab_strip_model_->GetActiveTab());
+ }
+ 
+ void SpaceModel::CancelCycle() {
+diff --git a/chrome/browser/ui/spaces/space_model.h b/chrome/browser/ui/spaces/space_model.h
+index 1ecc923d64dfe..95f256df5c902 100644
+--- a/chrome/browser/ui/spaces/space_model.h
++++ b/chrome/browser/ui/spaces/space_model.h
+@@ -355,8 +355,9 @@ class SpaceModel : public TabStripModelObserver,
+   // switcher X1, X2: Ctrl-Tab. The first call of a run starts it: the recent
+   // list of the active Space freezes so a held Ctrl walks it -- one step is
+   // the previous tab, the next the one before that, wrapping -- and `delta`
+-  // moves the position. EndCycle() commits the run: the tab the user is on
+-  // becomes the most recent. CancelCycle() goes back to the tab the run
++  // moves the position; the tab on screen stays until the run ends (switcher
++  // X3, BACKLOG S-547). EndCycle() commits the run: the tab it reached is
++  // shown and becomes the most recent. CancelCycle() leaves the tab the run
+   // started on. False without a window or with fewer than two tabs to walk.
+   bool CycleRecent(int delta);
+   void EndCycle();
+diff --git a/chrome/browser/ui/spaces/space_model_window_unittest.cc b/chrome/browser/ui/spaces/space_model_window_unittest.cc
+index 6dae04a2326c3..e9778ece5a3c3 100644
+--- a/chrome/browser/ui/spaces/space_model_window_unittest.cc
++++ b/chrome/browser/ui/spaces/space_model_window_unittest.cc
+@@ -1447,16 +1447,22 @@ TEST_F(SpaceWindowTest, CtrlTabWalksRecentTabsOfTheActiveSpace) {
+   model().SetActiveSpace(home);
+   ASSERT_EQ(c, tabs().GetActiveTab());
+ 
++  // X3 (GitHub issue 123, BACKLOG S-547): each step moves the run's
++  // position; the tab on screen stays c until the run ends.
++  const auto reached = [&]() {
++    return model().cycle_tabs()[model().cycle_position()];
++  };
+   chrome::ExecuteCommand(browser(), IDC_CYCLE_TO_NEXT_TAB);
+-  EXPECT_EQ(b, tabs().GetActiveTab());
++  EXPECT_EQ(b, reached());
+   EXPECT_TRUE(model().in_cycle());
+   EXPECT_EQ(1u, model().cycle_position());
+   chrome::ExecuteCommand(browser(), IDC_CYCLE_TO_NEXT_TAB);
+-  EXPECT_EQ(a, tabs().GetActiveTab());
++  EXPECT_EQ(a, reached());
+   chrome::ExecuteCommand(browser(), IDC_CYCLE_TO_NEXT_TAB);
+-  EXPECT_EQ(c, tabs().GetActiveTab()) << "wraps; never a tab of Work";
++  EXPECT_EQ(c, reached()) << "wraps; never a tab of Work";
+   chrome::ExecuteCommand(browser(), IDC_CYCLE_TO_PREV_TAB);
+-  EXPECT_EQ(a, tabs().GetActiveTab());
++  EXPECT_EQ(a, reached());
++  EXPECT_EQ(c, tabs().GetActiveTab()) << "a step changed the tab";
+   EXPECT_EQ((std::vector<tabs::TabInterface*>{c, b, a}), model().cycle_tabs());
+ 
+   model().EndCycle();
+@@ -1479,9 +1485,10 @@ TEST_F(SpaceWindowTest, CtrlTabTapGoesToPreviousTab) {
+   model().EndCycle();
+   EXPECT_EQ(c, tabs().GetActiveTab());
+ 
+-  // Escape mid-run: back where the run started.
++  // Escape mid-run: the tab the run started on, which never changed
++  // (BACKLOG S-547).
+   EXPECT_TRUE(model().CycleRecent(1));
+-  EXPECT_EQ(b, tabs().GetActiveTab());
++  EXPECT_EQ(c, tabs().GetActiveTab());
+   model().CancelCycle();
+   EXPECT_FALSE(model().in_cycle());
+   EXPECT_EQ(c, tabs().GetActiveTab());
+@@ -1509,8 +1516,8 @@ TEST_F(SpaceWindowTest, CtrlTabSettingOffUsesStripOrder) {
+                        TabStripUserGestureDetails(
+                            TabStripUserGestureDetails::GestureType::kOther));
+   chrome::ExecuteCommand(browser(), IDC_CYCLE_TO_NEXT_TAB);
+-  EXPECT_EQ(b, tabs().GetActiveTab());
+   model().EndCycle();
++  EXPECT_EQ(b, tabs().GetActiveTab());
+ }
+ 
+ // switcher X6 (GitHub issue 71; the owner, 2026-11-02): a tab a page opens
+diff --git a/chrome/browser/ui/views/switcher/recent_tabs_switcher_view_unittest.cc b/chrome/browser/ui/views/switcher/recent_tabs_switcher_view_unittest.cc
+index 8f094c6176dc9..7efa95a2f8ac1 100644
+--- a/chrome/browser/ui/views/switcher/recent_tabs_switcher_view_unittest.cc
++++ b/chrome/browser/ui/views/switcher/recent_tabs_switcher_view_unittest.cc
+@@ -51,7 +51,8 @@ TEST_F(RecentTabsSwitcherViewTest, ReleaseCommitsEscapeCancels) {
+   strip->Refresh();
+   EXPECT_EQ(3u, strip->cell_count_for_testing());
+   EXPECT_EQ(1u, strip->highlighted_for_testing());
+-  EXPECT_EQ(b, tabs().GetActiveTab());
++  // GitHub issue 123 (BACKLOG S-547): the tab changes when Ctrl is let go.
++  EXPECT_EQ(c, tabs().GetActiveTab()) << "a step changed the tab";
+   strip->FireHoldTimerForTesting();
+   EXPECT_TRUE(strip->GetVisible());
+ 
+@@ -59,7 +60,7 @@ TEST_F(RecentTabsSwitcherViewTest, ReleaseCommitsEscapeCancels) {
+   ASSERT_TRUE(model().CycleRecent(1));
+   strip->Refresh();
+   EXPECT_EQ(2u, strip->highlighted_for_testing());
+-  EXPECT_EQ(a, tabs().GetActiveTab());
++  EXPECT_EQ(c, tabs().GetActiveTab()) << "a step changed the tab";
+ 
+   strip->OnKeyEventForTesting(
+       ui::KeyEvent(ui::EventType::kKeyReleased, ui::VKEY_CONTROL, ui::EF_NONE));
+@@ -69,9 +70,9 @@ TEST_F(RecentTabsSwitcherViewTest, ReleaseCommitsEscapeCancels) {
+   EXPECT_EQ((std::vector<tabs::TabInterface*>{a, c, b}),
+             model().RecentTabs(model().active_id()));
+ 
+-  // Escape: back to the tab the run started on.
++  // Escape: the tab the run started on stays.
+   ASSERT_TRUE(model().CycleRecent(1));
+-  EXPECT_EQ(c, tabs().GetActiveTab());
++  EXPECT_EQ(a, tabs().GetActiveTab());
+   auto second = std::make_unique<RecentTabsSwitcherView>(browser());
+   second->Refresh();
+   second->OnKeyEventForTesting(
+@@ -112,7 +113,7 @@ TEST_F(RecentTabsSwitcherViewTest, SteppingBackToTheFirstTabIsLikeEscape) {
+   // Two steps on, then Shift held and two steps back.
+   ASSERT_TRUE(model().CycleRecent(1));
+   ASSERT_TRUE(model().CycleRecent(1));
+-  EXPECT_EQ(a, tabs().GetActiveTab());
++  EXPECT_EQ(c, tabs().GetActiveTab()) << "a step changed the tab";
+   auto strip = std::make_unique<RecentTabsSwitcherView>(browser());
+   strip->Refresh();
+   EXPECT_EQ(2u, strip->highlighted_for_testing());
+@@ -123,7 +124,7 @@ TEST_F(RecentTabsSwitcherViewTest, SteppingBackToTheFirstTabIsLikeEscape) {
+       << "Shift, pressed for Ctrl+Shift+Tab, ended the run";
+   ASSERT_TRUE(model().CycleRecent(-1));
+   strip->Refresh();
+-  EXPECT_EQ(b, tabs().GetActiveTab());
++  EXPECT_EQ(1u, strip->highlighted_for_testing());
+   ASSERT_TRUE(model().CycleRecent(-1));
+   strip->Refresh();
+   EXPECT_EQ(0u, strip->highlighted_for_testing());
+diff --git a/chrome/test/stedding/space_switch_browsertest.cc b/chrome/test/stedding/space_switch_browsertest.cc
+index df16812a28d2c..f1bac8fb08147 100644
+--- a/chrome/test/stedding/space_switch_browsertest.cc
++++ b/chrome/test/stedding/space_switch_browsertest.cc
+@@ -3258,6 +3258,15 @@ IN_PROC_BROWSER_TEST_F(NumberBadgeTest, CtrlTabEndsWithTheKeyOrTheWindow) {
+     return false;
+   };
+ 
++  // switcher X3 (GitHub issue 123, BACKLOG S-547): a step moves the strip's
++  // highlight; the tab on screen changes when Ctrl is let go.
++  const auto reached = [&]() -> tabs::TabInterface* {
++    const std::vector<tabs::TabInterface*> run = model()->cycle_tabs();
++    return model()->cycle_position() < run.size()
++               ? run[model()->cycle_position()]
++               : nullptr;
++  };
++
+   {
+     SCOPED_TRACE("a tap goes to the tab used before");
+     control(true);
+@@ -3273,10 +3282,12 @@ IN_PROC_BROWSER_TEST_F(NumberBadgeTest, CtrlTabEndsWithTheKeyOrTheWindow) {
+     SCOPED_TRACE("a hold shows the strip and the release commits");
+     control(true);
+     tab_key();
+-    EXPECT_EQ(one[2], active());
++    EXPECT_EQ(one[2], reached());
++    EXPECT_EQ(one[1], active()) << "a step changed the tab";
+     ASSERT_TRUE(base::test::RunUntil(strip_up)) << "holding Ctrl showed no strip";
+     tab_key();
+-    EXPECT_EQ(one[0], active());
++    EXPECT_EQ(one[0], reached());
++    EXPECT_EQ(one[1], active()) << "a step changed the tab";
+     control(false);
+     ASSERT_TRUE(base::test::RunUntil(
+         [&]() { return !model()->in_cycle() && !strip_up(); }))
+@@ -3289,7 +3300,8 @@ IN_PROC_BROWSER_TEST_F(NumberBadgeTest, CtrlTabEndsWithTheKeyOrTheWindow) {
+     SCOPED_TRACE("Escape goes back where the run began");
+     control(true);
+     tab_key();
+-    EXPECT_EQ(one[1], active());
++    EXPECT_EQ(one[1], reached());
++    EXPECT_EQ(one[0], active()) << "a step changed the tab";
+     escape();
+     ASSERT_TRUE(base::test::RunUntil([&]() { return !model()->in_cycle(); }))
+         << "Escape did not end the run";
+@@ -3301,7 +3313,7 @@ IN_PROC_BROWSER_TEST_F(NumberBadgeTest, CtrlTabEndsWithTheKeyOrTheWindow) {
+     SCOPED_TRACE("a window that stops being active ends the run");
+     control(true);
+     tab_key();
+-    EXPECT_EQ(one[1], active());
++    EXPECT_EQ(one[1], reached());
+     ASSERT_TRUE(base::test::RunUntil(strip_up)) << "holding Ctrl showed no strip";
+     ASSERT_NO_FATAL_FAILURE(Deactivate());
+     EXPECT_FALSE(model()->in_cycle()) << "the run outlived the window's turn";
+@@ -3324,12 +3336,13 @@ IN_PROC_BROWSER_TEST_F(NumberBadgeTest, CtrlTabEndsWithTheKeyOrTheWindow) {
+     control(true);
+     tab_key();
+     tab_key();
+-    EXPECT_EQ(one[2], active());
++    EXPECT_EQ(one[2], reached());
+     ASSERT_TRUE(base::test::RunUntil(strip_up)) << "holding Ctrl showed no strip";
+     shift_tab_key();
+-    EXPECT_EQ(one[1], active());
++    EXPECT_EQ(one[1], reached());
+     shift_tab_key();
+-    EXPECT_EQ(one[0], active());
++    EXPECT_EQ(one[0], reached());
++    EXPECT_EQ(one[0], active()) << "a step changed the tab";
+     EXPECT_TRUE(model()->in_cycle()) << "Shift ended the run";
+     control(false);
+     ASSERT_TRUE(base::test::RunUntil(
+@@ -3393,10 +3406,12 @@ IN_PROC_BROWSER_TEST_F(NumberBadgeTest, AStripWhoseRunEndedComesDown) {
+   generator()->PressKey(ui::VKEY_CONTROL, ui::EF_CONTROL_DOWN);
+   base::RunLoop().RunUntilIdle();
+   Run(IDC_CYCLE_TO_NEXT_TAB);
+-  EXPECT_EQ(two[0], tab_strip_model()->GetActiveTab());
++  // The run reached two[0]; the tab on screen stays two[1] until Ctrl is let
++  // go (switcher X3, BACKLOG S-547).
++  EXPECT_EQ(two[1], tab_strip_model()->GetActiveTab());
+   ASSERT_TRUE(base::test::RunUntil(strip_up)) << "holding Ctrl showed no strip";
+   tab_strip_model()->CloseWebContentsAt(
+-      tab_strip_model()->GetIndexOfTab(two[1]),
++      tab_strip_model()->GetIndexOfTab(two[0]),
+       TabCloseTypes::CLOSE_USER_GESTURE);
+   Run(IDC_CYCLE_TO_NEXT_TAB);
+   EXPECT_FALSE(model()->in_cycle());

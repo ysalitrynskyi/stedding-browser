@@ -509,7 +509,9 @@ function Tst9 {
     } finally { Release 'ctrl' }
   }
   Start-Sleep -Milliseconds 800; $v3 = Visible; $null = Drive-Shot 'tst9-05b-committed'
-  Result 'tst9-5' ($v1 -ne $start -and $v2 -ne $v1 -and $v3 -eq $v2) 'Ctrl+Tab held: the strip shows, Tab steps it, letting go of Ctrl keeps the tab reached' "$start -> $v1 -> $v2, after release $v3"
+  # switcher X3 (GitHub issue 123, BACKLOG S-547): Tab moves the strip's highlight and the page stays
+  # until Ctrl is let go; the captures show the highlight.
+  Result 'tst9-5' ($v1 -eq $start -and $v2 -eq $start -and $v3 -ne $start) 'Ctrl+Tab held: the strip shows, Tab steps it with the page unchanged, letting go of Ctrl shows the tab reached' "$start -> $v1 -> $v2, after release $v3"
 
   # switcher X3 on Windows (BACKLOG S-228): Ctrl+Esc is the shell's hot key for the Start menu, and
   # Windows takes it before the browser hears it. Stedding leaves it there (no system-wide keyboard
@@ -527,7 +529,7 @@ function Tst9 {
   ShellMenuAway
   $v = Visible
   $null = Drive-Keys 'ctrl+tab'; $back = Visible
-  Result 'tst9-6' ($v1 -ne $start -and -not $front -and $v -eq $v1 -and $back -eq $start) 'Ctrl+Tab held, then Ctrl+Esc: the Start menu takes it and the run keeps the tab it reached; with the menu closed, a Ctrl+Tab tap goes back where the run began (switcher X3, BACKLOG S-228)' "$start -> $v1, after Ctrl+Esc $v (browser in front just after: $front), after the tap $back"
+  Result 'tst9-6' ($v1 -eq $start -and -not $front -and $v -ne $start -and $back -eq $start) 'Ctrl+Tab held, then Ctrl+Esc: the Start menu takes it and the run ends on the tab it reached; with the menu closed, a Ctrl+Tab tap goes back where the run began (switcher X3, BACKLOG S-228, S-547)' "$start -> $v1, after Ctrl+Esc $v (browser in front just after: $front), after the tap $back"
 
   # switcher X3 on Windows (BACKLOG S-228): the way out of a run there. Ctrl still held, Shift+Tab
   # steps back to the first tab, and letting go of Ctrl ends the run on it. Shift goes down and up
@@ -547,7 +549,7 @@ function Tst9 {
     } finally { Release 'ctrl' }
   }
   Start-Sleep -Milliseconds 800; $front = [bool](Drive-ForegroundIsBrowser); $v = Visible
-  Result 'tst9-6b' ($v1 -ne $start -and $v2 -ne $v1 -and $v2 -ne $start -and $b1 -eq $v1 -and $b2 -eq $start -and $v -eq $start -and $front) 'Ctrl+Tab held, Tab twice, then Shift+Tab twice and Ctrl let go: back where the run began, the browser in front (the way out of a run on Windows: switcher X3, BACKLOG S-228)' "$start -> $v1 -> $v2, back $b1 -> $b2, after release $v; browser in front: $front"
+  Result 'tst9-6b' ($v1 -eq $start -and $v2 -eq $start -and $b1 -eq $start -and $b2 -eq $start -and $v -eq $start -and $front) 'Ctrl+Tab held, Tab twice, then Shift+Tab twice and Ctrl let go: the page never changed, the run ended where it began, the browser in front (the way out of a run on Windows: switcher X3, BACKLOG S-228, S-547)' "$start -> $v1 -> $v2, back $b1 -> $b2, after release $v; browser in front: $front"
   ShellMenuAway
 
   Step 'tst9-7' 'Ctrl+1, Ctrl+Shift+E twice'

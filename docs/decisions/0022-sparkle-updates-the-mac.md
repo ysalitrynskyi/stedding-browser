@@ -9,7 +9,7 @@ Date: 2026-10-16
 
 ## Decision
 
-Sparkle 2.10.0 applies updates on the Mac. `tooling/fetch-sparkle` takes that release's archive, checked against the digest GitHub publishes for it, and the build bundles `Sparkle.framework` without its XPC services. The browser drives Sparkle. No Sparkle window opens. The sidebar, the command bar, the About page and the app menu show what it is doing ([updates](../features/updates.md)).
+Sparkle 2.10.1 applies updates on the Mac. `tooling/fetch-sparkle` takes that release's archive, checked against the digest GitHub publishes for it, and the build bundles `Sparkle.framework` without its XPC services. The browser drives Sparkle. No Sparkle window opens. The sidebar, the command bar, the About page and the app menu show what it is doing ([updates](../features/updates.md)).
 
 The feed is `updates/appcast.xml`, read from `main` on `raw.githubusercontent.com`. `tooling/publish-appcast` writes it after a release. The image and the feed are both signed with the project's EdDSA key (`SURequireSignedFeed` and `SUVerifyUpdateBeforeExtraction` in `chrome/app/app-Info.plist`). The private key is in the publishing Mac's login keychain, account `stedding` (`tooling/publish-appcast`). It is not in this repository.
 

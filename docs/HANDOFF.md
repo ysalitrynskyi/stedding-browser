@@ -395,7 +395,7 @@ Everything open is `BACKLOG.md`, in priority order. `PLAN.md` holds the owner's 
 
 Sparkle 2 (ADR 0022, `docs/features/updates.md`).
 
-- `tooling/fetch-sparkle` puts Sparkle 2.10.0 in the checkout at `third_party/stedding_sparkle/` (gitignored), with a `README.chromium` so the credits page names it. `tooling/build-chromium` runs that on every Mac build and sets `stedding_sparkle = true`. A build that never sets the flag has no updater.
+- `tooling/fetch-sparkle` puts Sparkle 2.10.1 in the checkout at `third_party/stedding_sparkle/` (gitignored), with a `README.chromium` so the credits page names it. `tooling/build-chromium` runs that on every Mac build and sets `stedding_sparkle = true`. A build that never sets the flag has no updater.
 - The feed URL and the EdDSA public key are in `chrome/app/app-Info.plist`. The feed is `updates/appcast.xml` on `main`, served from GitHub. `build/apple/tweak_info_plist.py` writes `CFBundleVersion` from `VERSION` (Up11).
 - Only a bundle signed by a team starts the updater, so the ad hoc `out/release/Stedding.app` never replaces itself. Tests pass `--test-type` and use `stedding::FakeAppUpdater`.
 - The private key is in the release Mac's login keychain under the account `stedding` (`generate_keys --account stedding`), and in the owner's backup. The repository does not hold it. Without that key no installed copy can be offered an update, and a new key reaches people only in a release they install by hand (ADR 0022).

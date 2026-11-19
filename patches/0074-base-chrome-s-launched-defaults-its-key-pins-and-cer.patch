@@ -17,6 +17,23 @@ IgnoreQuicCryptoConfigMemoryPressure, CheckAutoCommitInCommitAndRollback,
 PaymentRequestRejectTooSmallWindows and TabSearchCjkWordBoundary.
 TcpPortRandomizationMac stays off: the fix it needs is not in this pin.
 
+At M158 (BACKLOG S-550) it also turns on VerifyQWACs,
+ServiceWorkerDatabaseDoomOnMissingNextId, AutofillFixIframeOwnership,
+AutofillOptimizeIsNormalizedNameVariantOf, PaymentHandlerCameraAccessUx and
+SPCLocaleValidation; on the Mac SkipPostTaskForCallbacks and
+OnlyUseWindowResizeHelperOnResize; on Windows ExcludePipFromScreenCapture and
+WasapiImproveGlitchDetection. It turns off what Chrome deprecated for every
+Stable user: the Topics API (BrowsingTopics), Attribution Reporting
+(ConversionMeasurement), fenced frames and their reporting features, and the
+Rust XML parser outside XSLT (XMLRustForNonXslt). Launches tuned by the
+trial's parameters (the DNS and IPv6 fallback study, QUIC hints, the delays
+for a broken alternative service, the startup delay) are not taken: without
+Chrome's values Stedding would run a configuration Chrome never did. Nor is
+anything that needs a Google service, an account, AI, metrics or enterprise
+reporting; CentralizedInfoBarFramework, which would take over the infobars
+Stedding draws itself; or the Mac's screen-sharing picker, which Chrome limits
+by OS version.
+
 Google's static key pins apply off iOS whatever the branding
 (net/http/transport_security_state.cc); a pin list over ten weeks old turns
 them off, and no violation is reported anywhere.
@@ -27,9 +44,9 @@ certificate component already brings, while a list over seventy days old
 enforces nothing. The certificate audit reports Chrome sends with it stay off
 in code: SCTReportingService always answers the disabled mode.
 
-Tests: DefaultsTest.AFreshProfileHoldsAndWorksAfterStay checks every default
-and that a web page's unload handler no longer runs while a chrome:// page's
-still may; CertificateChecksTest.UnloggedAndUnpinnedCertificatesAreRefused
+Tests: DefaultsTest.AFreshProfileHoldsAndWorksAfterStay checks every default,
+the deprecations included, and that a web page's unload handler no longer
+runs while a chrome:// page's still may; CertificateChecksTest.UnloggedAndUnpinnedCertificatesAreRefused
 and CertificateReportsTest.NoCertificateIsReported, each failing with
 Chromium's own code put back. SleepGateTest's unload page opts back in to
 unload with a header.
@@ -44,18 +61,24 @@ move with tooling/field-trials), and drop this patch's hunks as they land.
  .../ui/actions/chrome_actions_unittest.cc     |   6 +-
  chrome/browser/ui/ui_features.cc              |   6 +-
  chrome/common/chrome_features.cc              |   5 +-
- chrome/test/stedding/BUILD.gn                 |  25 +
- .../certificate_checks_browsertest.cc         | 450 ++++++++++++++++++
- chrome/test/stedding/defaults_browsertest.cc  |  87 +++-
+ chrome/test/stedding/BUILD.gn                 |  19 +
+ .../certificate_checks_browsertest.cc         | 459 ++++++++++++++++++
+ chrome/test/stedding/defaults_browsertest.cc  |  79 ++-
  .../test/stedding/sleep_gate_browsertest.cc   |  22 +-
- components/payments/core/features.cc          |   6 +-
- net/base/features.cc                          |   2 +
- net/http/structured_headers.cc                |   4 +-
- net/http/transport_security_state.cc          |   6 +-
- pdf/pdf_features.cc                           |   4 +-
- services/network/public/cpp/features.cc       |  12 +-
+ components/attribution_reporting/features.cc  |   4 +-
+ .../autofill/core/common/autofill_features.cc |   8 +-
+ components/payments/core/features.cc          |  14 +-
+ media/base/media_switches.cc                  |   4 +-
+ media/capture/capture_switches.cc             |  12 +-
+ net/base/features.cc                          |   6 +-
+ net/cert/key_pinning_state_chrome.cc          |  15 +-
+ services/network/public/cpp/features.cc       |   4 +-
  sql/database.cc                               |   2 +
- 16 files changed, 627 insertions(+), 30 deletions(-)
+ third_party/blink/common/features.cc          |  28 +-
+ .../platform/runtime_enabled_features.json5   |   4 +-
+ ui/base/ui_base_features.cc                   |   4 +-
+ ui/display/display_features.cc                |   4 +-
+ 22 files changed, 672 insertions(+), 53 deletions(-)
  create mode 100644 chrome/test/stedding/certificate_checks_browsertest.cc
 
 diff --git a/chrome/browser/browser_features.cc b/chrome/browser/browser_features.cc
@@ -123,7 +146,7 @@ index a4edcbeaae555..db435343cfb1d 100644
  
  TEST_F(ChromeActionsTest, ShouldUseActionsForBrowserCommands) {
 diff --git a/chrome/browser/ui/ui_features.cc b/chrome/browser/ui/ui_features.cc
-index b8e3e76165a53..08a9025e3a8ae 100644
+index 394045eabe25c..e7a1a9e8eb32d 100644
 --- a/chrome/browser/ui/ui_features.cc
 +++ b/chrome/browser/ui/ui_features.cc
 @@ -20,7 +20,11 @@
@@ -140,10 +163,10 @@ index b8e3e76165a53..08a9025e3a8ae 100644
  // Enables the use of WGC for the Eye Dropper screen capture.
  BASE_FEATURE(kAllowEyeDropperWGCScreenCapture,
 diff --git a/chrome/common/chrome_features.cc b/chrome/common/chrome_features.cc
-index a86fd81401706..7d5e03042e7b2 100644
+index 4e871ad71e721..d95fc683ae66b 100644
 --- a/chrome/common/chrome_features.cc
 +++ b/chrome/common/chrome_features.cc
-@@ -1938,7 +1938,10 @@ BASE_FEATURE(kWebAppPeriodicPreinstallUpdate, base::FEATURE_ENABLED_BY_DEFAULT);
+@@ -1960,7 +1960,10 @@ BASE_FEATURE(kWebAppPeriodicPreinstallUpdate, base::FEATURE_ENABLED_BY_DEFAULT);
  
  BASE_FEATURE(kWebAppMigratePreinstalledChat, base::FEATURE_ENABLED_BY_DEFAULT);
  
@@ -156,18 +179,10 @@ index a86fd81401706..7d5e03042e7b2 100644
  #endif  // !BUILDFLAG(IS_ANDROID)
  
 diff --git a/chrome/test/stedding/BUILD.gn b/chrome/test/stedding/BUILD.gn
-index e49355c5c4247..626e4bdd51f14 100644
+index e49355c5c4247..194595711096b 100644
 --- a/chrome/test/stedding/BUILD.gn
 +++ b/chrome/test/stedding/BUILD.gn
-@@ -2,6 +2,7 @@
- # Use of this source code is governed by a BSD-style license that can be
- # found in the LICENSE file.
- 
-+import("//pdf/features.gni")
- import("//testing/test.gni")
- 
- assert(!is_android)
-@@ -20,6 +21,7 @@ test("stedding_browser_tests") {
+@@ -20,6 +20,7 @@ test("stedding_browser_tests") {
      "app_jar_browsertest.cc",
      "archive_sweep_browsertest.cc",
      "branding_browsertest.cc",
@@ -175,7 +190,7 @@ index e49355c5c4247..626e4bdd51f14 100644
      "chromium_version_browsertest.cc",
      "clear_space_browsertest.cc",
      "command_bar_browsertest.cc",
-@@ -76,6 +78,25 @@ test("stedding_browser_tests") {
+@@ -76,6 +77,24 @@ test("stedding_browser_tests") {
      "//base/test:test_support",
      "//chrome/app:branded_strings",
      "//chrome/browser",
@@ -195,29 +210,17 @@ index e49355c5c4247..626e4bdd51f14 100644
 +    "//components/security_state/core",
 +    "//content/public/common",
 +    "//net",
-+    "//pdf:buildflags",
 +    "//services/cert_verifier/public/mojom",
 +    "//services/network/public/proto",
      "//chrome/browser/bookmarks",
      "//chrome/browser/extensions",
      "//chrome/browser/content_settings:content_settings_factory",
-@@ -229,6 +250,10 @@ test("stedding_browser_tests") {
-     "//ui/views:test_support",
-   ]
- 
-+  if (enable_pdf) {
-+    deps += [ "//pdf:features" ]
-+  }
-+
-   data_deps = [ "//chrome:browser_tests_pak" ]
-   if (!is_mac) {
-     # The browser under test reads its WebUI pages -- the welcome flow's
 diff --git a/chrome/test/stedding/certificate_checks_browsertest.cc b/chrome/test/stedding/certificate_checks_browsertest.cc
 new file mode 100644
-index 0000000000000..a5baaff70379e
+index 0000000000000..452866017c078
 --- /dev/null
 +++ b/chrome/test/stedding/certificate_checks_browsertest.cc
-@@ -0,0 +1,450 @@
+@@ -0,0 +1,459 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -295,6 +298,7 @@ index 0000000000000..a5baaff70379e
 +#include "net/cert/x509_certificate.h"
 +#include "net/dns/mock_host_resolver.h"
 +#include "net/http/http_status_code.h"
++#include "net/net_buildflags.h"
 +#include "net/test/cert_test_util.h"
 +#include "net/test/embedded_test_server/embedded_test_server.h"
 +#include "net/test/embedded_test_server/http_request.h"
@@ -381,7 +385,10 @@ index 0000000000000..a5baaff70379e
 +  }
 +
 +  // PKIMetadataComponentInstallerService::Observer:
-+  void OnCTLogListConfigured() override { ++log_lists_loaded_; }
++  void OnCTLogListProcessed() override { ++log_lists_loaded_; }
++#if BUILDFLAG(CHROME_KEY_PINNING_SUPPORTED)
++  void OnKeyPinsListProcessed() override { ++pin_lists_loaded_; }
++#endif
 +
 +  content::WebContents* page() {
 +    return browser()->GetTabStripModel()->GetActiveWebContents();
@@ -404,6 +411,7 @@ index 0000000000000..a5baaff70379e
 +  }
 +
 +  int log_lists_loaded_ = 0;
++  int pin_lists_loaded_ = 0;
 +
 + private:
 +  base::ScopedTempDir component_dir_;
@@ -415,11 +423,15 @@ index 0000000000000..a5baaff70379e
 +  ASSERT_TRUE(SystemNetworkContextManager::IsCertificateTransparencyEnabled())
 +      << "kCertificateTransparencyAskBeforeEnabling is off";
 +  {
-+    // The component's log list reached the certificate verifier; its pin
-+    // list went to the network service on the same pass.
++    // The component's log list reached the certificate verifier, and its
++    // pin list the network service.
 +    SCOPED_TRACE("the component's lists load");
 +    ASSERT_TRUE(base::test::RunUntil([&]() { return log_lists_loaded_ > 0; }))
 +        << "the component's log list was never loaded";
++#if BUILDFLAG(CHROME_KEY_PINNING_SUPPORTED)
++    ASSERT_TRUE(base::test::RunUntil([&]() { return pin_lists_loaded_ > 0; }))
++        << "the component's pin list was never loaded";
++#endif
 +    content::RunAllTasksUntilIdle();
 +    content::FlushNetworkServiceInstanceForTesting();
 +  }
@@ -669,7 +681,7 @@ index 0000000000000..a5baaff70379e
 +
 +}  // namespace
 diff --git a/chrome/test/stedding/defaults_browsertest.cc b/chrome/test/stedding/defaults_browsertest.cc
-index bd998ac4c3023..33fd489697678 100644
+index 06ec17fb7093a..8317ae82bdd61 100644
 --- a/chrome/test/stedding/defaults_browsertest.cc
 +++ b/chrome/test/stedding/defaults_browsertest.cc
 @@ -24,6 +24,11 @@
@@ -708,7 +720,7 @@ index bd998ac4c3023..33fd489697678 100644
  #include "components/prefs/pref_service.h"
  #include "components/tab_groups/features.h"
  #include "components/tabs/public/folder_tab_collection.h"
-@@ -59,13 +67,21 @@
+@@ -59,13 +67,20 @@
  #include "components/variations/service/buildflags.h"
  #include "components/variations/service/variations_field_trial_creator.h"
  #include "components/variations/service/variations_service.h"
@@ -724,24 +736,12 @@ index bd998ac4c3023..33fd489697678 100644
  #include "net/dns/mock_host_resolver.h"
 +#include "net/http/structured_headers.h"
  #include "net/test/embedded_test_server/embedded_test_server.h"
-+#include "pdf/buildflags.h"
 +#include "services/network/public/cpp/features.h"
 +#include "sql/database.h"
  #include "third_party/skia/include/core/SkColor.h"
  #include "ui/base/ui_base_features.h"
  #include "ui/base/window_open_disposition.h"
-@@ -76,6 +92,10 @@
- #include "ui/views/widget/widget.h"
- #include "url/gurl.h"
- 
-+#if BUILDFLAG(ENABLE_PDF)
-+#include "pdf/pdf_features.h"
-+#endif
-+
- #if BUILDFLAG(IS_WIN)
- #include "content/public/browser/browser_child_process_host_iterator.h"
- #include "content/public/browser/child_process_data.h"
-@@ -177,11 +197,12 @@ class DefaultsTest : public InProcessBrowserTest {
+@@ -177,11 +192,12 @@ class DefaultsTest : public InProcessBrowserTest {
  
  // A fresh profile holds its defaults, and after Stay the bookkeeping still
  // runs: no field-trial testing config ran and the 2026 refresh is on
@@ -759,7 +759,7 @@ index bd998ac4c3023..33fd489697678 100644
  IN_PROC_BROWSER_TEST_F(DefaultsTest, AFreshProfileHoldsAndWorksAfterStay) {
    {
      // privacy Q10: testing/variations/fieldtrial_testing_config.json switches
-@@ -208,6 +229,62 @@ IN_PROC_BROWSER_TEST_F(DefaultsTest, AFreshProfileHoldsAndWorksAfterStay) {
+@@ -208,6 +224,59 @@ IN_PROC_BROWSER_TEST_F(DefaultsTest, AFreshProfileHoldsAndWorksAfterStay) {
        EXPECT_TRUE(base::FeatureList::IsEnabled(*feature)) << feature->name;
      }
    }
@@ -778,9 +778,6 @@ index bd998ac4c3023..33fd489697678 100644
 +             &payments::features::kPaymentRequestRejectTooSmallWindows,
 +             &sql::kCheckAutoCommitInCommitAndRollback,
 +             &tabs::kTabSearchCjkWordBoundary,
-+#if BUILDFLAG(ENABLE_PDF)
-+             &chrome_pdf::features::kPdfBufferedPaintManager,
-+#endif
 +#if BUILDFLAG(IS_MAC)
 +             &features::kAperitifHelpers,
 +#endif
@@ -823,7 +820,7 @@ index bd998ac4c3023..33fd489697678 100644
      SCOPED_TRACE("pinned link navigates in place");
      EXPECT_FALSE(browser()->GetProfile()->GetPrefs()->GetBoolean(
 diff --git a/chrome/test/stedding/sleep_gate_browsertest.cc b/chrome/test/stedding/sleep_gate_browsertest.cc
-index 3d2448bec7444..37ed07732729b 100644
+index 5f550d6027001..999dce42d4d1a 100644
 --- a/chrome/test/stedding/sleep_gate_browsertest.cc
 +++ b/chrome/test/stedding/sleep_gate_browsertest.cc
 @@ -40,12 +40,14 @@ class SleepGateTest : public InProcessBrowserTest {
@@ -865,8 +862,49 @@ index 3d2448bec7444..37ed07732729b 100644
      stedding::SleepTabList({tab});
      EXPECT_TRUE(base::test::RunUntil([&]() { return Slept(tab); }));
    }
+diff --git a/components/attribution_reporting/features.cc b/components/attribution_reporting/features.cc
+index b199e7682ad33..8e2c30d7491b0 100644
+--- a/components/attribution_reporting/features.cc
++++ b/components/attribution_reporting/features.cc
+@@ -9,6 +9,8 @@
+ namespace attribution_reporting::features {
+ 
+ // Controls whether the Conversion Measurement API infrastructure is enabled.
+-BASE_FEATURE(kConversionMeasurement, base::FEATURE_ENABLED_BY_DEFAULT);
++// Stedding (BACKLOG S-550): Chrome turned this off for every Stable user by
++// field trial at M158 (tooling/field-trials), a deprecation.
++BASE_FEATURE(kConversionMeasurement, base::FEATURE_DISABLED_BY_DEFAULT);
+ 
+ }  // namespace attribution_reporting::features
+diff --git a/components/autofill/core/common/autofill_features.cc b/components/autofill/core/common/autofill_features.cc
+index 952087c75e4dc..d044f8e67da77 100644
+--- a/components/autofill/core/common/autofill_features.cc
++++ b/components/autofill/core/common/autofill_features.cc
+@@ -817,7 +817,9 @@ BASE_FEATURE(kAutofillExtractOnlyNonAdFrames,
+ // (analogous to form control ownership) rather than the closest ancestor form
+ // (analogous to form control association).
+ // TODO(crbug.com/536963555): Clean up when launched.
+-BASE_FEATURE(kAutofillFixIframeOwnership, base::FEATURE_DISABLED_BY_DEFAULT);
++// Stedding (BACKLOG S-550): Chrome launched this for every Stable user by
++// field trial at M158 (tooling/field-trials).
++BASE_FEATURE(kAutofillFixIframeOwnership, base::FEATURE_ENABLED_BY_DEFAULT);
+ 
+ // Prioritizes ADDRESS_HOME_STREET_ADDRESS over postal code in inferred labels.
+ // See crbug.com/540151895.
+@@ -935,8 +937,10 @@ BASE_FEATURE(kAutofillOnlyConsiderSingleFieldFormsAsSearchForms,
+ // When enabled, `IsNormalizedNameVariantOf()` uses a linear-time greedy
+ // algorithm instead of an exponential one that generates all name variants.
+ // TODO(crbug.com/479905438) Remove once launched.
++// Stedding (BACKLOG S-550): Chrome launched this for every Stable user by
++// field trial at M158 (tooling/field-trials).
+ BASE_FEATURE(kAutofillOptimizeIsNormalizedNameVariantOf,
+-             base::FEATURE_DISABLED_BY_DEFAULT);
++             base::FEATURE_ENABLED_BY_DEFAULT);
+ 
+ // Enables detection of language from Translate.
+ // TODO(crbug.com/40158074): Cleanup when launched.
 diff --git a/components/payments/core/features.cc b/components/payments/core/features.cc
-index ef4f5554813e5..d8d4523163bbc 100644
+index 372f9829a3ad3..dc1256efb7572 100644
 --- a/components/payments/core/features.cc
 +++ b/components/payments/core/features.cc
 @@ -72,8 +72,12 @@ BASE_FEATURE(kSecurePaymentConfirmationStoreCredentialsInOS,
@@ -883,11 +921,86 @@ index ef4f5554813e5..d8d4523163bbc 100644
  
  BASE_FEATURE(kPaymentHandlerDialogUseInitiatorInUrlLoad,
  #if BUILDFLAG(IS_ANDROID)
+@@ -89,12 +93,16 @@ BASE_FEATURE(kPaymentHandlerHtmlHeadThemeColor,
+ BASE_FEATURE(kPaymentRequestMandatoryPaymentAppUi,
+              base::FEATURE_ENABLED_BY_DEFAULT);
+ 
+-BASE_FEATURE(kPaymentHandlerCameraAccessUx, base::FEATURE_DISABLED_BY_DEFAULT);
++// Stedding (BACKLOG S-550): Chrome launched this for every Stable user by
++// field trial at M158 (tooling/field-trials).
++BASE_FEATURE(kPaymentHandlerCameraAccessUx, base::FEATURE_ENABLED_BY_DEFAULT);
+ 
+ BASE_FEATURE(kPaymentHandlerDynamicCustomSize,
+              base::FEATURE_DISABLED_BY_DEFAULT);
+ 
+-BASE_FEATURE(kSPCLocaleValidation, base::FEATURE_DISABLED_BY_DEFAULT);
++// Stedding (BACKLOG S-550): Chrome launched this for every Stable user by
++// field trial at M158 (tooling/field-trials).
++BASE_FEATURE(kSPCLocaleValidation, base::FEATURE_ENABLED_BY_DEFAULT);
+ 
+ BASE_FEATURE(kThreeDSecureTelemetry, base::FEATURE_ENABLED_BY_DEFAULT);
+ 
+diff --git a/media/base/media_switches.cc b/media/base/media_switches.cc
+index cba69f6e2c401..1c351ef1e6e36 100644
+--- a/media/base/media_switches.cc
++++ b/media/base/media_switches.cc
+@@ -1707,7 +1707,9 @@ BASE_FEATURE(kMediaFoundationVideoEncodeAccelerator,
+ BASE_FEATURE(kProtectedMediaIdentifierIndicator,
+              base::FEATURE_ENABLED_BY_DEFAULT);
+ 
+-BASE_FEATURE(kWasapiImproveGlitchDetection, base::FEATURE_DISABLED_BY_DEFAULT);
++// Stedding (BACKLOG S-550): Chrome launched this for every Stable user by
++// field trial at M158 (tooling/field-trials).
++BASE_FEATURE(kWasapiImproveGlitchDetection, base::FEATURE_ENABLED_BY_DEFAULT);
+ 
+ #endif  // BUILDFLAG(IS_WIN)
+ 
+diff --git a/media/capture/capture_switches.cc b/media/capture/capture_switches.cc
+index 0d8a8814c11c7..7752ebcc85ef2 100644
+--- a/media/capture/capture_switches.cc
++++ b/media/capture/capture_switches.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "media/capture/capture_switches.h"
+ 
++#include "build/build_config.h"
++
+ #include "base/command_line.h"
+ #include "base/feature_list.h"
+ 
+@@ -51,7 +53,15 @@ bool IsWinDeviceEnumerationWithoutActivationEnabled() {
+ 
+ namespace features {
+ 
+-BASE_FEATURE(kExcludePipFromScreenCapture, base::FEATURE_DISABLED_BY_DEFAULT);
++// Stedding (BACKLOG S-550): Chrome launched this for every Stable user on
++// Windows by field trial at M158 (tooling/field-trials); not on the Mac.
++BASE_FEATURE(kExcludePipFromScreenCapture,
++#if BUILDFLAG(IS_WIN)
++             base::FEATURE_ENABLED_BY_DEFAULT
++#else
++             base::FEATURE_DISABLED_BY_DEFAULT
++#endif
++);
+ 
+ #if defined(WEBRTC_USE_PIPEWIRE)
+ // Controls whether the PipeWire support for cameras is enabled on the
 diff --git a/net/base/features.cc b/net/base/features.cc
-index 59c6ac9e17906..c51f243802a79 100644
+index 7ea61dc9a5f3f..0bbe9ae29dac2 100644
 --- a/net/base/features.cc
 +++ b/net/base/features.cc
-@@ -976,6 +976,8 @@ BASE_FEATURE(kPermitTcpSocketPoolConnectBackupJobs,
+@@ -760,7 +760,9 @@ BASE_FEATURE(kSelfSignedLocalNetworkInterstitial,
+              base::FEATURE_DISABLED_BY_DEFAULT);
+ 
+ #if BUILDFLAG(CHROME_ROOT_STORE_SUPPORTED)
+-BASE_FEATURE(kVerifyQWACs, base::FEATURE_DISABLED_BY_DEFAULT);
++// Stedding (BACKLOG S-550): Chrome launched this for every Stable user by
++// field trial at M158 (tooling/field-trials).
++BASE_FEATURE(kVerifyQWACs, base::FEATURE_ENABLED_BY_DEFAULT);
+ #endif  // BUILDFLAG(CHROME_ROOT_STORE_SUPPORTED)
+ 
+ BASE_FEATURE(kRestrictAbusePorts, base::FEATURE_DISABLED_BY_DEFAULT);
+@@ -1016,6 +1018,8 @@ BASE_FEATURE(kPermitTcpSocketPoolConnectBackupJobs,
  
  BASE_FEATURE(kLocalNetworkPermissionCheck, base::FEATURE_ENABLED_BY_DEFAULT);
  
@@ -896,85 +1009,50 @@ index 59c6ac9e17906..c51f243802a79 100644
  BASE_FEATURE(kIgnoreQuicCryptoConfigMemoryPressure,
               base::FEATURE_ENABLED_BY_DEFAULT);
  
-diff --git a/net/http/structured_headers.cc b/net/http/structured_headers.cc
-index 7d42bf25b1f9a..b85b3da460cd5 100644
---- a/net/http/structured_headers.cc
-+++ b/net/http/structured_headers.cc
-@@ -126,7 +126,9 @@ auto ParseAndRecordMetrics(std::string_view time_metric,
+diff --git a/net/cert/key_pinning_state_chrome.cc b/net/cert/key_pinning_state_chrome.cc
+index a389467d4905d..07033876d45df 100644
+--- a/net/cert/key_pinning_state_chrome.cc
++++ b/net/cert/key_pinning_state_chrome.cc
+@@ -27,16 +27,13 @@ struct DefaultOverrides {
  
- }  // namespace
+ std::optional<DefaultOverrides> g_default_state_overrides;
  
--BASE_FEATURE(kStructuredHeadersInRust, base::FEATURE_DISABLED_BY_DEFAULT);
-+// Stedding (BACKLOG S-236): on, as Chrome launched it to all its Stable users
-+// by field trial, which Stedding never receives.
-+BASE_FEATURE(kStructuredHeadersInRust, base::FEATURE_ENABLED_BY_DEFAULT);
- 
- namespace {
- 
-diff --git a/net/http/transport_security_state.cc b/net/http/transport_security_state.cc
-index 9b72d333c3f96..ce2c815cf4156 100644
---- a/net/http/transport_security_state.cc
-+++ b/net/http/transport_security_state.cc
-@@ -239,7 +239,11 @@ TransportSecurityState::TransportSecurityState(
-     std::vector<std::string> hsts_host_bypass_list) {
+-constexpr bool kDefaultEnableStaticPins =
  // Static pinning is only enabled for official builds to make sure that
- // others don't end up with pins that cannot be easily updated.
--#if !BUILDFLAG(GOOGLE_CHROME_BRANDING) || BUILDFLAG(IS_IOS)
+-// others don't end up with pins that cannot be easily updated. The code is
+-// still compiled otherwise so that tests can be run without requiring to do an
+-// official build.
+-#if !BUILDFLAG(GOOGLE_CHROME_BRANDING)
+-    false;
+-#else
+-    true;
+-#endif
++// others don't end up with pins that cannot be easily updated.
 +// Stedding (BACKLOG S-236): on, as in Chrome. Stedding receives the pin list
 +// with the same certificate component updates Chrome does, and a list more
 +// than ten weeks old switches the pins off (IsStaticPKPListTimely()). A
 +// violation is refused; it is reported nowhere.
-+#if BUILDFLAG(IS_IOS)
-   enable_static_pins_ = false;
- #endif
-   // Check that there no invalid entries in the static HSTS bypass list.
-diff --git a/pdf/pdf_features.cc b/pdf/pdf_features.cc
-index 9261dfb98260c..efa38f8cf5a8d 100644
---- a/pdf/pdf_features.cc
-+++ b/pdf/pdf_features.cc
-@@ -22,7 +22,9 @@ bool g_is_oopif_pdf_policy_enabled = true;
- BASE_FEATURE(kPdfBrotliDecode, base::FEATURE_ENABLED_BY_DEFAULT);
++constexpr bool kDefaultEnableStaticPins = true;
  
- // Reuse buffers in PaintManager.
--BASE_FEATURE(kPdfBufferedPaintManager, base::FEATURE_DISABLED_BY_DEFAULT);
-+// Stedding (BACKLOG S-236): on, as Chrome launched it to all its Stable users
-+// by field trial, which Stedding never receives.
-+BASE_FEATURE(kPdfBufferedPaintManager, base::FEATURE_ENABLED_BY_DEFAULT);
- 
- // "Incremental loading" refers to loading the PDF as it arrives.
- // TODO(crbug.com/40123601): Remove this once incremental loading is fixed.
+ class KeyPinningStateChromeCompiledIn : public KeyPinningStateChrome {
+  public:
 diff --git a/services/network/public/cpp/features.cc b/services/network/public/cpp/features.cc
-index df3dc88555bad..122387f5887ee 100644
+index e71dc39e2dc3a..2f9816ce4ed3d 100644
 --- a/services/network/public/cpp/features.cc
 +++ b/services/network/public/cpp/features.cc
-@@ -356,7 +356,11 @@ BASE_FEATURE(kCloneDevToolsConnectionOnlyIfRequested,
+@@ -413,7 +413,9 @@ BASE_FEATURE(kAllowSameOriginCredentialsWithDisableWebSecurity,
  
- // Enables unload handler deprecation via Permissions-Policy.
- // https://crbug.com/1324111
--BASE_FEATURE(kDeprecateUnload, base::FEATURE_DISABLED_BY_DEFAULT);
-+// Stedding (BACKLOG S-236): on, with kDeprecateUnloadByBucket below, as Chrome
-+// launched both to all its Stable users by field trial, which Stedding never
-+// receives. Together they apply to http(s) pages only, so chrome:// pages keep
-+// their unload handlers (UnloadDeprecationAllowedForOrigin()).
-+BASE_FEATURE(kDeprecateUnload, base::FEATURE_ENABLED_BY_DEFAULT);
- // If < 100, each user experiences the deprecation on this % of origins. Which
- // origins varies by which bucket the user is in. This parameter only takes
- // effect if DeprecateUnloadByBucket is enabled. They are are separated so that
-@@ -386,7 +390,11 @@ BASE_FEATURE_PARAM(std::string,
- // another study to control what fraction of users experience a specific value
- // of `kDeprecateUnloadPercent`. Doing both in one study greatly complicates the
- // study because we must deal in 100 1% groups.
--BASE_FEATURE(kDeprecateUnloadByBucket, base::FEATURE_DISABLED_BY_DEFAULT);
-+// Stedding (BACKLOG S-236): on, with kDeprecateUnload above, as Chrome
-+// launched both to all its Stable users by field trial, which Stedding never
-+// receives. At kDeprecateUnloadPercent's 100 every http(s) host is included;
-+// without this feature every scheme would be, chrome:// pages too.
-+BASE_FEATURE(kDeprecateUnloadByBucket, base::FEATURE_ENABLED_BY_DEFAULT);
- // This buckets users, with users in each bucket having a consistent experience
- // of the unload deprecation rollout.
- BASE_FEATURE_PARAM(int,
+ // https://github.com/patcg-individual-drafts/topics
+ // Kill switch for the Topics API.
+-BASE_FEATURE(kBrowsingTopics, base::FEATURE_ENABLED_BY_DEFAULT);
++// Stedding (BACKLOG S-550): Chrome turned this off for every Stable user by
++// field trial at M158 (tooling/field-trials), a deprecation.
++BASE_FEATURE(kBrowsingTopics, base::FEATURE_DISABLED_BY_DEFAULT);
+ 
+ 
+ BASE_FEATURE(kIncreaseCookieAccessCacheSize, base::FEATURE_ENABLED_BY_DEFAULT);
 diff --git a/sql/database.cc b/sql/database.cc
-index 6a39a5b83ce5a..f8f9fa3a87b48 100644
+index fe0290f354acb..225f696d0a4c3 100644
 --- a/sql/database.cc
 +++ b/sql/database.cc
 @@ -83,6 +83,8 @@ namespace sql {
@@ -986,3 +1064,122 @@ index 6a39a5b83ce5a..f8f9fa3a87b48 100644
  BASE_FEATURE(kCheckAutoCommitInCommitAndRollback,
               base::FEATURE_ENABLED_BY_DEFAULT);
  
+diff --git a/third_party/blink/common/features.cc b/third_party/blink/common/features.cc
+index 54b44614e1d94..664b9aee58559 100644
+--- a/third_party/blink/common/features.cc
++++ b/third_party/blink/common/features.cc
+@@ -673,37 +673,49 @@ BASE_FEATURE_PARAM(bool,
+ // this feature does not automatically expose this element to the web, it only
+ // allows the element to be enabled by the runtime enabled feature, for origin
+ // trials.
+-BASE_FEATURE(kFencedFrames, base::FEATURE_ENABLED_BY_DEFAULT);
++// Stedding (BACKLOG S-550): Chrome turned this off for every Stable user by
++// field trial at M158 (tooling/field-trials), a deprecation.
++BASE_FEATURE(kFencedFrames, base::FEATURE_DISABLED_BY_DEFAULT);
+ 
+ // Enable sending event-level reports through reportEvent() in cross-origin
+ // subframes. This requires opt-in both from the cross-origin subframe that is
+ // sending the beacon as well as the document that contains information about
+ // the reportEvent() endpoints.
++// Stedding (BACKLOG S-550): Chrome turned this off for every Stable user by
++// field trial at M158 (tooling/field-trials), a deprecation.
+ BASE_FEATURE(kFencedFramesCrossOriginEventReporting,
+-             base::FEATURE_ENABLED_BY_DEFAULT);
++             base::FEATURE_DISABLED_BY_DEFAULT);
+ 
+ // Temporarily un-disable credentials on fenced frame automatic beacons until
+ // third party cookie deprecation.
+ // TODO(crbug.com/1496395): Remove this after 3PCD.
++// Stedding (BACKLOG S-550): Chrome turned this off for every Stable user by
++// field trial at M158 (tooling/field-trials), a deprecation.
+ BASE_FEATURE(kFencedFramesAutomaticBeaconCredentials,
+-             base::FEATURE_ENABLED_BY_DEFAULT);
++             base::FEATURE_DISABLED_BY_DEFAULT);
+ 
++// Stedding (BACKLOG S-550): Chrome turned this off for every Stable user by
++// field trial at M158 (tooling/field-trials), a deprecation.
+ BASE_FEATURE(kFencedFramesCrossOriginAutomaticBeaconData,
+-             base::FEATURE_ENABLED_BY_DEFAULT);
++             base::FEATURE_DISABLED_BY_DEFAULT);
+ 
+ // Controls functionality related to network revocation/local unpartitioned
+ // data access in fenced frames.
+ BASE_FEATURE(kFencedFramesLocalUnpartitionedDataAccess,
+              base::FEATURE_DISABLED_BY_DEFAULT);
+ 
++// Stedding (BACKLOG S-550): Chrome turned this off for every Stable user by
++// field trial at M158 (tooling/field-trials), a deprecation.
+ BASE_FEATURE(kFencedFramesReportEventHeaderChanges,
+-             base::FEATURE_ENABLED_BY_DEFAULT);
++             base::FEATURE_DISABLED_BY_DEFAULT);
+ 
+ // Enables a bug fix that allows a 'src' allowlist in the |allow| parameter of a
+ // <fencedframe> or <iframe> loaded with a FencedFrameConfig to behave as
+ // expected. See: https://crbug.com/349080952
++// Stedding (BACKLOG S-550): Chrome turned this off for every Stable user by
++// field trial at M158 (tooling/field-trials), a deprecation.
+ BASE_FEATURE(kFencedFramesSrcPermissionsPolicy,
+-             base::FEATURE_ENABLED_BY_DEFAULT);
++             base::FEATURE_DISABLED_BY_DEFAULT);
+ 
+ // Use "style" and "json" destinations for CSS and JSON modules.
+ // https://crbug.com/1491336
+@@ -2092,8 +2104,10 @@ BASE_FEATURE(kServiceWorkerSyntheticResponse,
+ // (crbug.com/539155958): When enabled, ServiceWorkerDatabase treats missing
+ // next available ID metadata as database corruption if registrations exist on
+ // disk, triggering database doom and clean recovery.
++// Stedding (BACKLOG S-550): Chrome launched this for every Stable user by
++// field trial at M158 (tooling/field-trials).
+ BASE_FEATURE(kServiceWorkerDatabaseDoomOnMissingNextId,
+-             base::FEATURE_DISABLED_BY_DEFAULT);
++             base::FEATURE_ENABLED_BY_DEFAULT);
+ 
+ // Define the allowed websites to enable SyntheticResponse. Allowed urls are
+ // expected to be passed as a comma separated string.
+diff --git a/third_party/blink/renderer/platform/runtime_enabled_features.json5 b/third_party/blink/renderer/platform/runtime_enabled_features.json5
+index 5730001e65b1f..4c2e4d7c8dcae 100644
+--- a/third_party/blink/renderer/platform/runtime_enabled_features.json5
++++ b/third_party/blink/renderer/platform/runtime_enabled_features.json5
+@@ -8065,8 +8065,10 @@
+       // JS DOMParser API to parse XML, and usage of XMLHttpRequest
+       // with its responseXML document.
+       // https://crbug.com/466303347
++      // Stedding (BACKLOG S-550): Chrome turned this off for every Stable
++      // user at M158 (the XMLParsingRustNonXsltKillSwitch study).
+       name: "XMLRustForNonXslt",
+-      status: "stable",
++      status: "experimental",
+     },
+     {
+       name: "XMLSerializerConsistentDefaultNsDeclMatching",
+diff --git a/ui/base/ui_base_features.cc b/ui/base/ui_base_features.cc
+index 62e7accb21cfa..c5fa391915d3b 100644
+--- a/ui/base/ui_base_features.cc
++++ b/ui/base/ui_base_features.cc
+@@ -89,8 +89,10 @@ BASE_FEATURE(kHideCursorWhileTyping, base::FEATURE_ENABLED_BY_DEFAULT);
+ #endif  // BUILDFLAG(IS_WIN)
+ 
+ #if BUILDFLAG(IS_MAC)
++// Stedding (BACKLOG S-550): Chrome launched this for every Stable user by
++// field trial at M158 (tooling/field-trials).
+ BASE_FEATURE(kOnlyUseWindowResizeHelperOnResize,
+-             base::FEATURE_DISABLED_BY_DEFAULT);
++             base::FEATURE_ENABLED_BY_DEFAULT);
+ 
+ // Re-create the CAContext on window resize to try to better synchronize the
+ // resize.
+diff --git a/ui/display/display_features.cc b/ui/display/display_features.cc
+index d53b40708da78..6f1f0ec3028ea 100644
+--- a/ui/display/display_features.cc
++++ b/ui/display/display_features.cc
+@@ -57,7 +57,9 @@ BASE_FEATURE_PARAM(int,
+                    &kCADisplayLinkInGpu,
+                    15);
+ 
+-BASE_FEATURE(kSkipPostTaskForCallbacks, base::FEATURE_DISABLED_BY_DEFAULT);
++// Stedding (BACKLOG S-550): Chrome launched this for every Stable user by
++// field trial at M158 (tooling/field-trials).
++BASE_FEATURE(kSkipPostTaskForCallbacks, base::FEATURE_ENABLED_BY_DEFAULT);
+ #endif
+ 
+ // TODO(gildekel): A temporary flag to control whether EDID-based (vs.

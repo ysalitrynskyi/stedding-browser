@@ -2,6 +2,35 @@
 
 What was built, newest first. Nothing here is needed to do a task: `AGENTS.md` carries what is true now, `BACKLOG.md` the order of work, `PLAN.md` the owner's decisions. This file was the "State of the project" section of `AGENTS.md` until 2026-09-30. The log starts at 2026-10-15; closed work from before that is the table in [docs/history/archive.md](history/archive.md). Entries before 2026-11-10 are short summaries; their full text is in the repository's history.
 
+## 2026-11-19 -- Chromium 158: the series ported, built and tested on Windows
+
+The pin moved to 158.0.8127.37 (`PLAN.md` decisions 22 and 25), the first step of 0.7.0. The
+Mac's checkout holds the series but is not synced to M158: a milestone sync needs 100 GB free
+and the Mac had 56 GB. Everything below was built and tested on the Windows PC.
+
+- The series: Chromium fixed S-472 itself (the passkey check pending at shutdown), so patch 0180
+  is dropped and the patches after it move down one. M158's API changes went into the patches
+  that own the code: the tab strip's command helpers and its close callback take tab handles,
+  window dispositions lost their old names, `TabHelpers` is gone (the Peek page's helpers come
+  from their factories), `ViewShadow` is `ViewDecoration`, the page-info and crashed-session
+  bubbles' test hooks changed, the certificate component reports a list as processed, Settings'
+  page template dropped `cache()`, and two Stedding toast ids clashed with Chromium's new ones.
+- Builds with every error in one pass: 466 failed steps, then 9, then none. A scan for names
+  M158 removed from its headers found the second round's errors before the build reached them.
+- Suites on `win-release`: 12 failures, all fixed. Chromium 158 snaps a tab-list change that
+  does not ask to animate, without ending an animation, so the hover stayed on a row that had
+  moved from under the pointer (tabs R1, R14); the hover now settles after a snap as well. M158's
+  layout set the sidebar's resize handle from the organizer panel alone, which gave a sidebar
+  hidden completely a handle (sidebar Y19). Ten of Chromium's new unit tests check its own menu
+  rows and its combo button, which Stedding replaces: they run with short menus off, or are
+  disabled, as the others are. Then 1,650 unit tests and 1,078 browser tests passed.
+- M158's launches that reach Chrome only by field trial: S-550 lists what was taken and why.
+- S-547 (GitHub issue 123, patch 0193): ⌃⇥ moves the strip's highlight, and the tab changes
+  when ⌃ is let go; Escape leaves the tab the run began on.
+- Sparkle 2.10.1 (S-358): the version and GitHub's digest of its archive are pinned; the Mac
+  build fetches it.
+- Not yet: the Mac build and its checks, the DCHECK and ASan builds, acceptance, S-548's look.
+
 ## 2026-11-18 -- 0.6.1: a quick new window, asleep pins' icons, centred chips, a download that stays
 
 Three faults the owner met on 0.6.0, fixed the day they were reported, and one seen in 0.6.0's

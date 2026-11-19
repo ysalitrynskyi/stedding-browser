@@ -2,6 +2,68 @@
 
 What was built, newest first. Nothing here is needed to do a task: `AGENTS.md` carries what is true now, `BACKLOG.md` the order of work, `PLAN.md` the owner's decisions. This file was the "State of the project" section of `AGENTS.md` until 2026-09-30. The log starts at 2026-10-15; closed work from before that is the table in [docs/history/archive.md](history/archive.md). Entries before 2026-11-10 are short summaries; their full text is in the repository's history.
 
+## 2026-11-18 -- 0.6.1: a quick new window, asleep pins' icons, centred chips, a download that stays
+
+Three faults the owner met on 0.6.0, fixed the day they were reported, and one seen in 0.6.0's
+own captures. The Mac was in use until the afternoon, so every build and test ran on the Windows
+PC until then; the Mac's checks ran that night, and the release went out on 2026-11-19.
+
+- S-546 (patch 0190; windows G16): with 443 pins in nine Spaces a new window made a tab of every
+  record in one task, and each insert had the sidebar redo its whole list, about 10 s on the PC.
+  A Space pin now comes in filed, as a restored tab does; a bulk filing defers the sidebar's
+  visibility pass, folder paths and layout to its end; past 40 records the window makes its own
+  Space and the essentials first and the other Spaces one at a time. The timing test asserts its
+  clock only on the release build: at 443 pins it ran the DCHECK build out of time and the ASan
+  build out of memory, so those builds make two Spaces of it.
+- S-496 (windows G2, G16; live-folders Lf3): a pin made asleep, and a live folder's row, showed
+  the generic globe; it now shows the icon history keeps for its page, or for its site.
+- S-545 (patch 0104; sidebar Y44): with many Spaces the chips stood 7 DIP right of the middle;
+  they now centre between the downloads button and the "+".
+- S-549 (patch 0123; sidebar-panels Pn18): a download clicked in a full-screen window just before
+  moving to another Space flew, and rang the button, on the Space the owner moved to. Chromium
+  orders a popup made for a window off the active Space onto the active one; its own check,
+  `platform_util::IsVisible`, is true for a window on another Space. The flight, the ring and
+  the toast now start only while the window is on the screen (shown, not minimised, on the active
+  Space), and a window that leaves mid-flight takes the chip with it.
+
+The process, from this round's costs:
+- `tooling/dev` runs every browser-leg failure again alone at the end of the sweep and says which
+  fail alone, some of the time, or only among the others; all stay failures.
+- `tooling/win/release-gate.sh` is the Windows gate as one detached job: the builds, the release
+  suites, the installer, the update from the last release with pins in two windows, the
+  installer's cycle, the acceptance scripts, then the DCHECK and ASan suites, in one log.
+  `run-in-session.ps1` starts it in the operator's session; `quiet-desktop.ps1` minimises what
+  would hold the foreground. `tooling/test-copy` makes and launches the Mac's test copy.
+- The working docs were cut by more than a quarter (this log, HANDOFF, BACKLOG, the archive, the
+  ADRs, the product docs), and PRIVACY now says what the browser keeps, as it keeps it.
+- A morning lost to a false regression: hover-card and row tests failed alone on the PC's 4K
+  console all morning and passed on both trees after a Remote Desktop connect; trees are now
+  compared only back to back, in one job.
+
+S-549 was found on the real system only the third way of trying: a Space change made by opening
+another app, or by Control-Left Arrow, left the copy without a window on the Space it moved to,
+and nothing showed there on 0.6.0 either. The owner's case has a second window of the browser on
+the desktop Space, so the browser stays the active app; raising that window during the flight put
+0.6.0's ring on the desktop Space, at the full-screen window's button. 0.6.1 showed nothing of the
+full-screen window there. A download that starts after the move shows its toast in the window in
+front, at that window's own button: Chromium shows a download's details in the last active
+window, and that is where the person is.
+
+Checked: on the Mac, the release and DCHECK builds' whole suites (1,622 unit, 1,133 browser and
+224 one-at-a-time tests, 56 components tests and the content test on each; the release build's
+parallel browser leg ran before `VERSION` moved to 0.6.1, which changed only the version); no
+DCHECK or dangling-pointer report; the signed and notarized image; acceptance TST-6, TST-7 and
+TST-9 on a copy of it; S-549 on the real system as above, 0.6.0 then 0.6.1; a new window of a
+profile with nine Spaces, light and dark, its asleep pins with their icons and the chips within
+1 DIP of the middle. On the PC, at the 4K display's 150%: the release build's whole suites
+(1,612 unit and 1,078 browser tests, 240 of them one at a time); the update from 0.6.0 with pins
+in two windows; the installer's cycle; acceptance TST-6, TST-7 and TST-9, TST-6's steps 11 and 12
+included; the DCHECK and ASan builds' unit suites, and their browser suites with S-458's twelve
+failing at 150%, which pass at scale 1, twice, on both, and `MotionFramesTest`'s frame wait on
+ASan (S-458); no DCHECK, dangling-pointer or ASan report; the same new window, light and dark.
+Not checked: a pass at 100% on Windows; a new window of the owner's own profile (the timing test
+makes 443 records, as theirs holds).
+
 ## 2026-11-17 -- 0.6.0: the row's buttons inside the row, the Mac's lights with the row, and the release
 
 The night of 2026-11-16 ran on both machines until a power cut stopped them, and the release

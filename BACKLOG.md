@@ -17,24 +17,48 @@ infrastructure, then features. A request in chat comes before this list.
 
 ### The next release
 
-0.6.1 was released on 2026-11-19, four fixes on 0.6.0; what it carried is in
-`docs/PROJECT-LOG.md`. The next round is the move to newer Chromium, below. A release goes out
-only when everything in it has passed and nothing published with it is in doubt (`PLAN.md`
-decision 21); an item that is not ready moves to the release after.
+0.6.1 was released on 2026-11-19; what it carried is in `docs/PROJECT-LOG.md`. The next is
+**0.7.0, due 2026-11-26** (`PLAN.md` decision 25): Chromium 158 with Sparkle 2.10.1 (S-358), and
+two GitHub asks, S-547 (⌃⇥ changes the tab when ⌃ is let go, issue 123) and S-548 (the other
+Spaces' chips stand back, issue 122). A release goes out only when everything in it has passed and
+nothing published with it is in doubt (`PLAN.md` decision 21): a feature not ready by the gate
+moves to the release after, and with neither feature the release is 0.6.2.
+
+The pin is M158's newest point release at more than 1% of users when the release is cut
+(decision 22): 158.0.8127.37 on 2026-11-19. M159 began its rollout the same day (0.5% of Mac and
+Windows users), so the move after this one is due about two weeks after it reaches everyone.
+The saved port on `chromium-158` (158.0.8127.18, 130 patches, never built through) is a
+reference for conflicts only: the series is 194 patches now.
+
+The order, with the Mac free only at night and in the background by day:
+
+1. 2026-11-19 to 11-20, the port. Room on the Mac first (55 GB free; a milestone sync grew the
+   Windows tree by 20 GB once, trap 53): only our own build output goes. Then
+   `tooling/update-pin --apply` to 158.0.8127.37, the conflicts (trap 50, trap 134),
+   `tooling/field-trials --save` (`docs/AGENT-LOOP.md`), and the series to the PC by bundle.
+   Builds with every error in one pass (`KEEP_GOING=1`, `-KeepGoing`), each fix folded into its
+   owning patch.
+2. 2026-11-20, S-548's options: rendered from the current release build on the PC, light and
+   dark, for the owner to pick before it is built.
+3. 2026-11-21 to 11-22, the features on the ported series: S-547 (switcher X2, X3 and their
+   tests), S-548 as picked (spaces B11); Sparkle 2.10.1 (`tooling/fetch-sparkle`, its checksum).
+4. 2026-11-22 to 11-24, the gate. Windows: `tooling/win/release-gate.sh 0.7.0 0.6.1`. The Mac,
+   at night: the release and DCHECK builds' suites, acceptance on the signed copy, and the update
+   from the installed 0.6.1 through Sparkle 2.10.1 (S-358's n-1 check). Both: every changed state
+   captured, light and dark (the strip of S-547, the chips of S-548, and what M158 changed in
+   Chromium's own UI).
+5. 2026-11-25, the release: notes with both checksums, the site's what's-new entry and captures,
+   then publish, both feeds, Homebrew and the site, each checked live. 2026-11-26 is the spare
+   day.
 
 The owner, 2026-11-13: more of what people leaving Arc expect, not only fixes. Each feature is
 built to the quality bar, and each visual choice is shown to the owner as rendered options first.
 
-Decided for after 0.6.0:
-
-- **Chromium.** 0.6.0 and 0.6.1 are on 157.0.8103.79, and a release on newer Chromium is due by 2026-11-26,
-  14 days after M158 went stable (2026-11-12). 157.0.8103.80 is no reason to move: for Mac and
-  Windows its source is .79's, with only `chrome/VERSION` changed (checked 2026-11-18). The owner,
-  2026-11-18: the move starts after 0.6.1 ships. The move to M158, or to M159 if it
-  is stable by then (2026-12-08), is a release of its own, with Sparkle 2.10.1 (S-358). The port
-  saved on the `chromium-158` branch (2026-11-05, 130 patches) has never built through.
-- **The player inside the window (S-95's Mp1, discussion 104):** the owner chose option A on
-  2026-11-16 (`PLAN.md` decision 24): the audio card grows a 16:9 video above its row.
+After 0.7.0, in this order unless the owner says otherwise: the M159 move; the player inside the
+window (S-95's Mp1, option A, `PLAN.md` decision 24); "Collapse All Folders" and "Expand All
+Folders" in a folder's own menu (discussion 128, which the owner called a good idea); GitHub issue
+111's open tabs in a new window, once its reporter says which behaviour they mean; issue 126 when
+its video arrives.
 
 What 0.6.0's own items still owe is in their rows: S-94, S-478 and S-479.
 

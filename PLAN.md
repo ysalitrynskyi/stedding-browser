@@ -103,6 +103,10 @@ still open is a BACKLOG row that names its id.
     never opened is woken (issue 121); (c) compact mode can hide the title bar too, shown on hover, in
     0.6.0 (issue 120); (d) the player inside the window is option A, the audio card grows a 16:9 video
     above its row (S-95's Mp1, discussion 104), built after 0.6.0.
+25. The owner, 2026-11-19: the next release moves to Chromium 158 now, due 2026-11-26 under the
+    14-day promise, rather than waiting for M159, whose rollout began that day; and it carries
+    S-547 and S-548 (GitHub issues 123 and 122) with the move, as 0.7.0 (`BACKLOG.md`, "The next
+    release").
 
 The operator's own request in chat comes before any of this and before BACKLOG's order.
 

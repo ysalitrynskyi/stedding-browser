@@ -140,7 +140,7 @@ Safari's own files: Safari's export file is the way in.
 
 From [stedding.dev](https://stedding.dev/#download) or the
 [Releases page](https://github.com/ysalitrynskyi/stedding-browser/releases). The newest release
-is **0.6.1**, for macOS and Windows, on Chromium 157.0.8103.79.
+is **0.7.0**, for macOS and Windows, on Chromium 158.0.8127.37.
 
 | Platform | File | |
 |---|---|---|

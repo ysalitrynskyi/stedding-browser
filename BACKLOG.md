@@ -17,40 +17,14 @@ infrastructure, then features. A request in chat comes before this list.
 
 ### The next release
 
-0.6.1 was released on 2026-11-19; what it carried is in `docs/PROJECT-LOG.md`. The next is
-**0.7.0, due 2026-11-26** (`PLAN.md` decision 25): Chromium 158 with Sparkle 2.10.1 (S-358), and
-two GitHub asks, S-547 (⌃⇥ changes the tab when ⌃ is let go, issue 123) and S-548 (the other
-Spaces' chips stand back, issue 122). A release goes out only when everything in it has passed and
-nothing published with it is in doubt (`PLAN.md` decision 21): a feature not ready by the gate
-moves to the release after, and with neither feature the release is 0.6.2.
+0.7.0 was released on 2026-11-20: Chromium 158.0.8127.37 with Sparkle 2.10.1, ⌃⇥ that changes
+the tab when ⌃ is let go (issue 123) and only the Space on screen in colour (issue 122); what it
+carried is in `docs/PROJECT-LOG.md`. A release goes out only when everything in it has passed and
+nothing published with it is in doubt (`PLAN.md` decision 21).
 
-The pin is M158's newest point release at more than 1% of users when the release is cut
-(decision 22): 158.0.8127.37 on 2026-11-19. M159 began its rollout the same day (0.5% of Mac and
-Windows users), so the move after this one is due about two weeks after it reaches everyone.
-The saved port on `chromium-158` (158.0.8127.18, 130 patches, never built through) was a
-reference for conflicts only.
-
-The order, with the Mac free only at night and in the background by day:
-
-1. 2026-11-19 to 11-20, the port. Room on the Mac first (55 GB free; a milestone sync grew the
-   Windows tree by 20 GB once, trap 53): only our own build output goes. Then
-   `tooling/update-pin --apply` to 158.0.8127.37, the conflicts (trap 50, trap 134),
-   `tooling/field-trials --save` (`docs/AGENT-LOOP.md`), and the series to the PC by bundle.
-   Builds with every error in one pass (`KEEP_GOING=1`, `-KeepGoing`), each fix folded into its
-   owning patch.
-2. 2026-11-20, S-548's options: rendered from the current release build on the PC, light and
-   dark, for the owner to pick before it is built. The owner picked the third, the other
-   Spaces' icons grey at 35%; built the same day (patch 0194, spaces B11 and B38).
-3. 2026-11-21 to 11-22, the features on the ported series: S-547 (switcher X2, X3 and their
-   tests), S-548 as picked (spaces B11); Sparkle 2.10.1 (`tooling/fetch-sparkle`, its checksum).
-4. 2026-11-22 to 11-24, the gate. Windows: `tooling/win/release-gate.sh 0.7.0 0.6.1`. The Mac,
-   at night: the release and DCHECK builds' suites, acceptance on the signed copy, and the update
-   from the installed 0.6.1 through Sparkle 2.10.1 (S-358's n-1 check). Both: every changed state
-   captured, light and dark (the strip of S-547, the chips of S-548, and what M158 changed in
-   Chromium's own UI).
-5. 2026-11-25, the release: notes with both checksums, the site's what's-new entry and captures,
-   then publish, both feeds, Homebrew and the site, each checked live. 2026-11-26 is the spare
-   day.
+The next pin is M159's newest point release at more than 1% of users when the release is cut
+(decision 22). M159 began its rollout on 2026-11-19 (0.5% of Mac and Windows users), so the move
+is due about two weeks after it reaches everyone.
 
 The owner, 2026-11-13: more of what people leaving Arc expect, not only fixes. Each feature is
 built to the quality bar, and each visual choice is shown to the owner as rendered options first.
@@ -169,6 +143,7 @@ Crashes and broken privacy promises first, then what a user sees.
 
 | Id | Item | Feature / spec | Notes |
 |---|---|---|---|
+| S-551 | On the Mac, the ⌃ shortcuts do nothing under a keyboard layout whose ⌃ keys type non-Latin letters | `docs/features/shortcuts.md`; tabs R29 | Seen 2026-11-20 in TST-9 step 18 on the Mac with a custom Cyrillic layout (made in Ukelele) selected: ⌃M did not mute, on 0.7.0 and on the released 0.6.1 alike, and muting from the command bar worked. The shortcuts outside the main menu are matched by the typed character (`cr_firesForKeyEquivalentEvent`), and that layout types "ь" for ⌃M; ⌘ chords still fire, because macOS maps them to a Latin layout. With the key carrying a Latin "m" (a driver change made for the check and not kept), 0.7.0 passes the step. Not yet known: Apple's own Cyrillic layouts, and the other ⌃ chords. A fix would match ⌃ chords by key code, as `DelayedWebContentsCommandForKeyEvent` does. |
 | S-544 | Windows, a driven run at the PC's console: after a quit and a relaunch from a background task, the window is in front and takes no shortcut until a click | `docs/features/acceptance.md` (TST-6 steps 11, 12) | At the PC's console at 150% (2026-11-17), after TST-6's relaunch, Alt+2, Alt+3 and Ctrl+T did nothing though the window had the foreground and the keyboard focus; a click in the page brought the keys back. The same code passed over Remote Desktop that morning, and the released 0.5.1 fails the same way at the console. No browser test reaches it: it is the system's activation of a window a background process starts. Next: relaunch from the person's own shell at the console, and over Remote Desktop again; if only a background-started process shows it, make the harness click the page after a relaunch. |
 | S-497 | Small things seen in the 0.6.0 captures | `docs/features/sidebar-file.md` Sf9, Sf62; `docs/features/live-folders.md` Lf6 | Seen 2026-11-16 in the Windows release build's captures: the join sheet counts without a singular ("1 folders"; the strings "$2 Spaces, $3 pins, $4 folders, $5 essentials" in `settings_ui.cc`, for a folder and for WebDAV or S3); one join left two backups made in the same second (`before-sync-…-184456.json` and `… (1).json`), so a backup may be taken twice; the live folder's failure tooltip is one line about 720 px wide; behind "Start from whose settings?" the Settings box shows ticked before the person answers. |
 | S-494 | A Space made twice by sync on 0.3.0 beta 16 to 0.5.1 stays | `docs/features/sidebar-file.md` Sf10 | S-493 is fixed: sync no longer makes a second Space when a pair's shared id is the other computer's. A second Space made at a join on an earlier version stays, under the same name, holding the other computer's pins; the fix neither merges nor removes it, and 0.6.0's notes tell people how to delete it. Next: decide whether a launch offers to merge it into the paired Space, and test whether deleting it by hand sends the shared Space's deletion to the other computer. |
@@ -239,7 +214,6 @@ Work that is built and waits on a real profile, the owner's machine, the Mac or 
 | Id | Item | Feature / spec | Notes |
 |---|---|---|---|
 | S-550 | M158's launches that reach Chrome only by field trial | patch 0074; `tooling/field-trials` | Read on 2026-11-19 from the live Stable seeds (`tooling/field-trials --min 100`, 74 features differing from Chromium's defaults). Taken in patch 0074, each marked with this id: VerifyQWACs, ServiceWorkerDatabaseDoomOnMissingNextId, AutofillFixIframeOwnership, AutofillOptimizeIsNormalizedNameVariantOf, PaymentHandlerCameraAccessUx and SPCLocaleValidation; on the Mac SkipPostTaskForCallbacks and OnlyUseWindowResizeHelperOnResize; on Windows ExcludePipFromScreenCapture and WasapiImproveGlitchDetection. Turned off as Chrome turned them off for every Stable user: the Topics API, Attribution Reporting, fenced frames and their reporting features, and the Rust XML parser outside XSLT. Not taken: launches tuned by the trial's parameters (the DNS and IPv6 fallback study, QUIC hints, the broken alternative service delays, the startup delay), since without Chrome's values Stedding would run a configuration Chrome never did; anything that needs a Google service, an account, AI, metrics or enterprise reporting; CentralizedInfoBarFramework, which would take over the bars Stedding draws itself; and the Mac's screen-sharing picker, which Chrome limits by OS version. `DefaultsTest` checks each. Closed when the M158 build passes its suites on both platforms. |
-| S-358 | Sparkle 2.10.1 | `tooling/fetch-sparkle`; `docs/features/updates.md`; ADR 0022 | Sparkle 2.10.1 (released 2026-10-25) fixes release-notes links with whitespace, an update installed early when the app's path is NFC-encoded, translations of Install on Quit, and appcast generation. MontaraGroup's closed pull request 53 has the bump and its checksum (its Chromium pin change is out of date). The owner, 2026-10-30: it ships with the next move of the pin, which needs the same n-1 updater check from the installed release. |
 | S-444 | The Developer ID certificate ends on 2027-02-01 | `tooling/sign-release`; S-239 | Read from the certificate on 2026-11-07. After that date no new Mac build can be signed with it, so a release needs a new one first. The owner makes it, as Account Holder, and then a new profile, since a profile names its certificate (S-239). |
 | S-306 | Shorter test runs, the Windows times | `tooling/dev`; patch 0108 | The Mac browser suite runs four at a time (397 s for that leg, where one at a time took 815 s), and patch 0108 folds 106 one-check browser tests into 37 (94 s for those groups, where they took 208 s). Done when the same coverage is timed on Windows too, before and after. Every spec row keeps a test that names it. |
 | S-178 | The two Mac-only browser files | `docs/HANDOFF.md` trap 88; patch 0064 | The suite already runs four at a time on the Mac (`tooling/dev`, `jobs=4`). Left: merge `space_keys_browsertest.mm` and `window_buttons_browsertest.mm` the way patch 0064 merged the others. |
@@ -266,8 +240,6 @@ Rows the specs still leave open. M10 is in ROADMAP's order (ADR 0021).
 
 | Id | Item | Feature / spec | Notes |
 |---|---|---|---|
-| S-547 | ⌃⇥ changes the tab only when ⌃ is let go (GitHub issue 123) | `docs/features/switcher.md` X2, X3 | The owner, 2026-11-18, on the issue: planned. Today every ⇥ while ⌃ is held shows that tab at once (`SpaceModel::CycleRecent` activates it), and letting go only fixes the recent order. Arc moves the strip's highlight and changes the tab when ⌃ is let go, which spares the page flashing by; X3 already reads "⇥ / ⇧⇥ move the highlight, releasing ⌃ commits". To build: a step moves the highlight; letting go of ⌃, or the window losing activation (X3), shows the highlighted tab; Escape leaves the tab the run began on; a tap (X2) still goes to the previous tab at once. X2's and X3's tests change with it. Previews of the pages in the strip are not part of this. Built on 2026-11-19 as patch 0193; its tests pass on Windows, and the Mac's wait for the M158 build there. |
-| S-548 | The Spaces you are not in stand back further in the switcher (GitHub issue 122) | `docs/features/spaces.md` B11 | The owner, 2026-11-18, on the issue: planned, to try. The other Spaces' chips are only drawn fainter and keep their colours, so the current Space takes a second look to find. To try: those chips in grey and fainter still, the current chip in full colour. Rendered options, light and dark, go to the owner before it is built. |
 | S-426 | Sync through WebDAV or S3 storage the user sets up (GitHub issue 77) | `docs/features/sidebar-file.md` Sf43–Sf57; ADR 0032 | ADR 0032 (the owner, 2026-11-06): a WebDAV or S3 place beside the folder, one per profile, with a test that must pass before a join (Sf47, Sf48); nothing ships with the browser, no provider, key or sign-in client. Built in 0164: a bridge mirrors the place into the profile, where the service reads it as its folder, so the merge, the file code and the ledger are unchanged. Tested against a server in memory on both platforms and through Settings against wsgidav and moto on Windows; a read of the patch found nine faults, all fixed with tests. Owed: a real commercial service; tests of their own for the 30 and 60 second timers, an `https` to `http` redirect, a WebDAV computer beside a sync app's directory, Guest and Blank Window. |
 | S-421 | A notice on sites that need DRM | `docs/features/drm-notice.md` | The owner, 2026-11-05: the page is not blocked; a bar under it says Stedding cannot play protected video yet, with a button that opens the page in Safari on the Mac and Edge on Windows. Built in patch 0131 (shortened in 0162) and seen on netflix.com and tv.apple.com on a Mac release build. Left: a real press that opens Safari, and the Windows side, Open in Edge, on a real build. Widevine itself is S-270. |
 | S-404 | A Windows build for ARM (GitHub issue 69) | `docs/ROADMAP.md` | Asked 2026-11-02 from a Snapdragon machine. The PC can cross-compile `target_cpu = "arm64"`, but no ARM machine can try it. The owner, 2026-11-03: if it takes little extra time, publish it as a release of its own that installed copies never update to. That means a second full Chromium build, an ARM installer and a feed of its own (on today's feed an ARM copy would replace itself with the x64 build), and a release that is not GitHub's latest, which the site reads (ADR 0014). |

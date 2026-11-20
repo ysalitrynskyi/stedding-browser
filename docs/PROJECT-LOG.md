@@ -2,6 +2,46 @@
 
 What was built, newest first. Nothing here is needed to do a task: `AGENTS.md` carries what is true now, `BACKLOG.md` the order of work, `PLAN.md` the owner's decisions. This file was the "State of the project" section of `AGENTS.md` until 2026-09-30. The log starts at 2026-10-15; closed work from before that is the table in [docs/history/archive.md](history/archive.md). Entries before 2026-11-10 are short summaries; their full text is in the repository's history.
 
+## 2026-11-20 -- 0.7.0: Chromium 158, ⌃⇥ on release, only the Space on screen in colour
+
+The Mac's half of the move to 158.0.8127.37, S-548 built to the owner's pick, and the gate on
+both platforms on one series tree (4f0e88d4). Released the same day.
+
+- The Mac: synced to M158 and rebuilt from empty. Xcode 27.2 left its Metal toolchain
+  uninstalled, which ANGLE needs for its shaders: `tooling/build-chromium` now stops at the start
+  without it (trap 149), and the release was built with the toolchain downloaded on the owner's
+  word (27B47). A Mac-only compile error from chromium-style's rule that a weak pointer factory
+  is the last member went into patch 0120.
+- Y26 (`SidebarFormsTest.AShortWindowCutsNoRowOff`) failed about half the time on the Mac: the
+  list grows by its Y30 room in the same step that scrolls it, and the compositor cuts a layer's
+  scroll to the size of its last commit. The test now waits for a commit before scrolling
+  (patch 0071, trap 150): 20 of 20 on both Mac builds, 10 of 10 on Windows.
+- S-548 (GitHub issue 122, patch 0194; spaces B11, B38): four looks were rendered on the real
+  build, light and dark, and the owner picked the third. The other Spaces' icons are grey and at
+  35%, in the open sidebar and the rail; the session badge has a layer of its own above the grey
+  and keeps its colour; a Space under a dragged tab is in colour. Two new browser tests.
+- Windows (`tooling/win/release-gate.sh 0.7.0 0.6.1`): 1,650 unit tests and 1,080 + 240 browser
+  tests pass; the installer; 0.6.1 updated itself to 0.7.0 with pins in two windows, then the
+  installer's cycle; TST-7 5/5, TST-9 20/20, TST-6 14/14. The DCHECK and ASan builds: unit tests
+  pass, the browser suites fail only S-458's twelve at the console's 150% (and the ASan frame
+  wait), the twelve pass at scale 1, and no DCHECK, dangling pointer or ASan report.
+- The Mac release build: 1,660 unit, 63 components, 1 content and 1,135 + 224 browser tests pass.
+  `MotionFramesTest.ASpaceSwitchAfterTheSidebarsMotionsSlides` waited 283 ms for one frame while
+  the Mac's load was about 100, then passed 10 of 10 alone (33 to 49 ms) and in the whole serial
+  leg again. The DCHECK build's sweep (before S-548) had no DCHECK or dangling pointer, and S-548's
+  tests and the chip suites pass on it.
+- Signed, notarized and stapled; the image passes `syspolicy_check distribution` and
+  `tooling/verify-build`. Acceptance on a copy of the signed app: every part exit 0, and the 87
+  captures differ from the night before's only in the chips (S-548) and a live memory figure,
+  but for TST-9 step 18: ⌃M did not mute under the Mac's Cyrillic layout, on the released 0.6.1
+  too. With the key carrying a Latin "m" the step passes (S-551).
+- Sparkle 2.10.1 (S-358), from a local signed feed: the installed 0.6.1 (Sparkle 2.10.0) updated
+  to 0.7.0, and 0.7.0's own Sparkle installed an update; both relaunched with their tabs.
+- XSLT is off, as in Chrome 158: on the signed copy an XML page that asks for a stylesheet shows
+  its XML and Chromium's note, and with the feature forced on, as a control, Chromium's warning.
+- The site's page after an update has the 0.7.0 entry, with captures of the strip and the chips
+  from a temporary test in the release build.
+
 ## 2026-11-19 -- Chromium 158: the series ported, built and tested on Windows
 
 The pin moved to 158.0.8127.37 (`PLAN.md` decisions 22 and 25), the first step of 0.7.0. The

@@ -29,10 +29,10 @@ Read the trap for the topic in front of you, not the list. Retired: 10, 18, 28, 
 | Building, disk, rebuild cost, what a run leaves behind | 1, 16, 19, 23, 44, 45, 53, 54, 57, 70, 73, 83, 89, 90, 144, 146, 147, 149 |
 | The working loop and the series | 5, 9, 13, 14, 17, 22, 50, 51, 89, 92, 134, 139 |
 | Driving and capturing the window | 3, 7, 12, 24, 27, 29, 30, 36, 37, 52, 56, 59, 61, 63, 64, 65, 76, 78, 82, 93, 94, 95, 96, 103, 105, 107, 116, 121, 133, 137, 142 |
-| What a test can and cannot prove | 2, 4, 31, 46, 48, 51, 52, 55, 56, 58, 59, 60, 66, 68, 69, 72, 75, 77, 78, 80, 81, 84, 86, 87, 88, 91, 98, 99, 101, 102, 104, 106, 107, 110, 111, 112, 113, 114, 119, 120, 126, 127, 138, 145 |
+| What a test can and cannot prove | 2, 4, 31, 46, 48, 51, 52, 55, 56, 58, 59, 60, 66, 68, 69, 72, 75, 77, 78, 80, 81, 84, 86, 87, 88, 91, 98, 99, 101, 102, 104, 106, 107, 110, 111, 112, 113, 114, 119, 120, 126, 127, 138, 145, 150 |
 | Windows | 32, 34, 36, 38, 40, 42, 53, 54, 55, 56, 57, 59, 62, 67, 68, 69, 70, 71, 91, 93, 98, 99, 101, 103, 106, 111, 113, 114, 116, 118, 121, 122, 128, 143, 145 |
 | Release and signing | 44, 47, 49, 62, 85, 117, 118, 124, 129, 131, 140 |
-| Chromium's and the platforms' own behaviour to know | 6, 8, 20, 21, 25, 26, 33, 35, 39, 41, 43, 60, 72, 73, 92, 95, 97, 98, 104, 105, 107, 108, 109, 110, 111, 113, 122, 135, 148 |
+| Chromium's and the platforms' own behaviour to know | 6, 8, 20, 21, 25, 26, 33, 35, 39, 41, 43, 60, 72, 73, 92, 95, 97, 98, 104, 105, 107, 108, 109, 110, 111, 113, 122, 135, 148, 150 |
 
 ## Where things live
 
@@ -371,6 +371,8 @@ Each trap is the symptom, the cause and the rule that avoids it. Code and docs c
 148. **A page in no tab strip has none of the tab's helpers.** A tab's `TabFeatures` makes `CoreTabHelper`, the favicon driver and `extensions::TabHelper`; `TabHelpers::AttachTabHelpers` does not. A page shown outside the strip, such as the peek, makes what it needs itself (patch 0176), and code that observes such a page assumes none of them. Each missing helper shows only as the next failure.
 
 149. **Xcode's Metal toolchain is a component of its own, and an Xcode update leaves it uninstalled.** ANGLE compiles its internal Metal shaders during the build (`third_party/angle`, `metal_backend.gni`) through `xcrun metal`. Since Xcode 26 that toolchain is downloaded apart from Xcode, and the update to 27.2 did not bring its new version. Incremental builds kept the shaders compiled before, so nothing showed until a build into an empty `out/` failed at that one step 43 minutes in (2026-11-19). `tooling/build-chromium` now stops at the start when `xcrun metal` cannot run. The fix is `xcodebuild -downloadComponent MetalToolchain`. Until then, `STEDDING_METAL_TOOLCHAIN_DIR` names another toolchain's `usr/bin`, such as the one an earlier Xcode left mounted under `/private/var/run/com.apple.security.cryptexd/mnt/`, and the build passes it to ANGLE as `angle_metal_toolchain_dir`.
+
+150. **A scroll view that scrolls with layers keeps its old size on the compositor's side until the next commit.** `ui::Layer::SetScrollOffset` scrolls through the compositor, which caps the offset at the size of its last commit (crbug.com/40772386). A scroll made in the same step that grew the contents is cut to the old size, and nothing reports it. On M158 on the Mac, Y26 failed 9 runs in 20 that way. That was the step where the tab list first overflows and gains its room past the last row, and the row stayed 4 DIP under the strip's edge. Before a test scrolls a view it has just resized, it calls `ScheduleFullRedraw()` on the widget's compositor and waits in `ui::DrawWaiterForTest::WaitForCommit`. No Stedding code scrolls a sidebar row into view; Chromium's strip scrolls the active tab itself.
 
 ## The Windows build
 

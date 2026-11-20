@@ -1,0 +1,283 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Fri, 20 Nov 2026 08:13:44 -0500
+Subject: feat: only the Space on screen shows its icon in colour (S-548)
+
+GitHub issue 122: at half strength in colour, the other Spaces' icons in
+the switcher stood out about as much as the active one. The owner picked
+the third of four rendered looks on 2026-11-20: every chip not on screen
+shows its icon grey, at 35% (kInactiveGlyphAlpha), in the open row and
+in the rail. The chip a drag would drop on stays in colour, and a chord
+keeps the colour ChordColor picks for its contrast.
+
+Only the glyph turns grey. The label draws into a layer of its own,
+which the compositor greys; the chip's own background (a dot's disc, the
+drop target's) keeps the Space's colour. The session badge (spaces B38)
+gets a layer too, so it is still drawn over the glyph, and it keeps its
+session's colour.
+
+Tests: SpaceSwitchTest.OnlyTheSpaceOnScreenIsInColour,
+IsolationMarkTest.TheBadgeKeepsItsColourOnAGreyChip.
+
+Why: GitHub issue 122 asked for the Space on screen to stand out from
+the others; the owner picked this look from four renders.
+Removable when: never as behaviour.
+---
+ chrome/browser/ui/views/spaces/BUILD.gn       |  2 +
+ .../ui/views/spaces/space_switcher_view.cc    | 40 ++++++++++--
+ .../stedding/isolation_mark_browsertest.cc    | 51 +++++++++++++++
+ .../test/stedding/space_switch_browsertest.cc | 63 +++++++++++++++++++
+ 4 files changed, 150 insertions(+), 6 deletions(-)
+
+diff --git a/chrome/browser/ui/views/spaces/BUILD.gn b/chrome/browser/ui/views/spaces/BUILD.gn
+index 99ed633bb4bef..47ebd949a5e91 100644
+--- a/chrome/browser/ui/views/spaces/BUILD.gn
++++ b/chrome/browser/ui/views/spaces/BUILD.gn
+@@ -63,6 +63,8 @@ source_set("spaces") {
+     "//ui/menus",
+     "//cc/paint",
+     "//ui/color",
++    # spaces B11: the glyph's own layer, greyed on a Space not on screen.
++    "//ui/compositor",
+     "//ui/gfx",
+   ]
+ }
+diff --git a/chrome/browser/ui/views/spaces/space_switcher_view.cc b/chrome/browser/ui/views/spaces/space_switcher_view.cc
+index 3fb3e8426c7ea..18e32430d11db 100644
+--- a/chrome/browser/ui/views/spaces/space_switcher_view.cc
++++ b/chrome/browser/ui/views/spaces/space_switcher_view.cc
+@@ -50,6 +50,7 @@
+ #include "ui/base/models/image_model.h"
+ #include "ui/color/color_id.h"
+ #include "ui/color/color_provider.h"
++#include "ui/compositor/layer.h"
+ #include "ui/gfx/canvas.h"
+ #include "ui/gfx/color_utils.h"
+ #include "ui/gfx/geometry/rect_conversions.h"
+@@ -90,9 +91,14 @@ constexpr int kRowHeight = kIconSize + 2 * 8;
+ // a narrower one, the rail's or one on its way there, asks in a dialog.
+ constexpr int kRoomToRename = 120;
+ 
+-// How much of a Space's colour an inactive icon shows. The active Space is the
+-// only one that should read as selected.
++// How far an inactive chip's chord fades toward the ground before the
++// contrast floor (ChordColor).
+ constexpr SkAlpha kInactiveAlpha = 0x80;
++// spaces B11 (GitHub issue 122, BACKLOG S-548; the owner's pick of four,
++// 2026-11-20): the icon of a Space not on screen is grey, at 35%, so the
++// Space on screen is the only one in colour. At half strength in colour the
++// other Spaces' icons stood out about as much as the active one.
++constexpr SkAlpha kInactiveGlyphAlpha = 0x59;
+ // sessions S32, spaces B38: an inactive chip's badge fades less than its
+ // glyph. The mark tells something about the Space whether or not it is on
+ // screen, and the badge, half the chip's size, would not read faded as far
+@@ -219,9 +225,20 @@ class SpaceChipButton : public views::LabelButton {
+     // must be painted onto an opaque region.
+     label()->SetSkipSubpixelRenderingOpacityCheck(true);
+     label()->SetSubpixelRenderingEnabled(false);
++    // spaces B11 (BACKLOG S-548): the glyph draws into a layer of its own,
++    // which the compositor turns grey on a Space not on screen
++    // (SetGlyphGrey). Only the glyph: the chip's own background, a dot's
++    // disc or the drop target's, keeps the Space's colour.
++    label()->SetPaintToLayer();
++    label()->layer()->SetFillsBoundsOpaquely(false);
+   }
+   ~SpaceChipButton() override = default;
+ 
++  // spaces B11: the glyph in grey, or in its own colours.
++  void SetGlyphGrey(bool grey) {
++    label()->layer()->SetLayerGrayscale(grey ? 1.0f : 0.0f);
++  }
++
+   // spaces B27: the row hears the drag and the drop; the button keeps its
+   // click, which a drop elsewhere does not fire. A drag starts only past the
+   // system's drag threshold (PLAN.md SPC-6): a click with a little jitter in
+@@ -308,6 +325,11 @@ class SpaceChipButton : public views::LabelButton {
+       // for that ground.
+       badge_ = AddChildView(std::make_unique<stedding::IsolationMarkView>(
+           stedding::IsolationMarkView::Form::kBadge, ui::kColorFrameActive));
++      // Over the glyph, which has a layer of its own (SetGlyphGrey): a view
++      // without one would be drawn under it. Its own layer is never grey:
++      // the badge keeps its session's colour on every chip.
++      badge_->SetPaintToLayer();
++      badge_->layer()->SetFillsBoundsOpaquely(false);
+     }
+     badge_->SetSessionSlot(slot);
+   }
+@@ -692,13 +714,15 @@ void SpaceSwitcherView::Rebuild() {
+         mark, SessionSlotForSpace(model_->registry(), space.id()).value_or(0));
+     button->set_context_menu_controller(this);
+     // The reference shows the bare emoji, no disc: the active Space at full
+-    // strength, the others faded through the glyph's alpha.
++    // strength and in colour, the others grey and faded through the glyph's
++    // alpha (spaces B11).
+     button->SetGlyphSize(kGlyphSize);
+     // LabelButton's default side insets are wider than the chip; without
+     // this the label has no width and the glyph never paints.
+     button->SetBorder(views::CreateEmptyBorder(gfx::Insets()));
+     button->SetEnabledTextColors(
+-        SkColorSetA(SK_ColorWHITE, active ? 0xFF : kInactiveAlpha));
++        SkColorSetA(SK_ColorWHITE, active ? 0xFF : kInactiveGlyphAlpha));
++    button->SetGlyphGrey(!active);
+     views::View* const chip = icon_row_->AddChildView(std::move(button));
+     for (const auto& [id, bounds] : old_bounds) {
+       if (id == space.id()) {
+@@ -908,9 +932,13 @@ void SpaceSwitcherView::ApplyOverflow() {
+                : ground,
+           active || drop));
+     } else {
+-      chip->SetEnabledTextColors(
+-          SkColorSetA(SK_ColorWHITE, active || drop ? 0xFF : kInactiveAlpha));
++      chip->SetEnabledTextColors(SkColorSetA(
++          SK_ColorWHITE, active || drop ? 0xFF : kInactiveGlyphAlpha));
+     }
++    // spaces B11 (BACKLOG S-548): the Space on screen, and the chip a drag
++    // would drop on (B12), in colour; every other glyph grey. A chord is
++    // text in the colour ChordColor picks for its contrast, never greyed.
++    chip->SetGlyphGrey(!chord && !active && !drop);
+     if (!collapsed_) {
+       // A chip widened for its chord takes the room from its own gap, while
+       // the gap has it: the chips stay where they were, give or take a
+diff --git a/chrome/test/stedding/isolation_mark_browsertest.cc b/chrome/test/stedding/isolation_mark_browsertest.cc
+index a08792f7050fd..f3a14937b64f5 100644
+--- a/chrome/test/stedding/isolation_mark_browsertest.cc
++++ b/chrome/test/stedding/isolation_mark_browsertest.cc
+@@ -93,6 +93,7 @@
+ #include "ui/base/window_open_disposition.h"
+ #include "ui/color/color_provider.h"
+ #include "ui/color/color_provider_key.h"
++#include "ui/compositor/layer.h"
+ #include "ui/events/base_event_utils.h"
+ #include "ui/events/event.h"
+ #include "ui/events/event_constants.h"
+@@ -1136,6 +1137,56 @@ IN_PROC_BROWSER_TEST_F(IsolationMarkTest,
+   }
+ }
+ 
++// spaces B11, B38 (BACKLOG S-548): on a chip not on screen the glyph is grey
++// and the badge keeps its session's colour, over the glyph and faded less
++// (kInactiveMarkAlpha). The badge draws in a layer of its own above the
++// glyph's, which alone the compositor greys; a badge without a layer would
++// be drawn under the glyph's.
++IN_PROC_BROWSER_TEST_F(IsolationMarkTest, TheBadgeKeepsItsColourOnAGreyChip) {
++  model()->SetSpaceIsolated(work_, true);
++  tabs::VerticalTabStripStateController* const controller =
++      tabs::VerticalTabStripStateController::From(browser());
++  controller->RequestCollapse(true);
++  ASSERT_TRUE(base::test::RunUntil([&]() { return !Animating(); }));
++  ASSERT_TRUE(controller->IsCollapsed());
++  for (const bool on_screen : {false, true}) {
++    SCOPED_TRACE(on_screen ? "Work on screen" : "Work not on screen");
++    ASSERT_TRUE(model()->SetActiveSpace(on_screen ? work_ : home_));
++    views::View* const chip = Chip(work_);
++    ASSERT_TRUE(chip);
++    stedding::IsolationMarkView* const badge =
++        stedding::FindShownIsolationMark(chip);
++    ASSERT_TRUE(badge) << "no badge on the rail's chip";
++    views::Label* glyph = nullptr;
++    for (views::View* const child : chip->children()) {
++      if (auto* const label = views::AsViewClass<views::Label>(child)) {
++        glyph = label;
++      }
++    }
++    ASSERT_TRUE(glyph);
++    ASSERT_TRUE(glyph->layer());
++    ASSERT_TRUE(badge->layer()) << "the badge would be drawn under the glyph";
++    EXPECT_EQ(on_screen ? 0.0f : 1.0f, glyph->layer()->layer_grayscale());
++    for (const ui::Layer* layer = badge->layer(); layer;
++         layer = layer->parent()) {
++      EXPECT_EQ(0.0f, layer->layer_grayscale())
++          << "the badge is greyed by " << layer->name();
++    }
++    EXPECT_EQ(on_screen ? SK_AlphaOPAQUE : 0xB3, badge->alpha());
++    EXPECT_EQ(SessionSlotOf(work_), badge->session_slot());
++    // Above the glyph: later among their parent layer's children.
++    ui::Layer* const parent = glyph->layer()->parent();
++    ASSERT_TRUE(parent);
++    ASSERT_EQ(parent, badge->layer()->parent());
++    const auto& stack = parent->children();
++    const auto glyph_at = std::ranges::find(stack, glyph->layer());
++    const auto badge_at = std::ranges::find(stack, badge->layer());
++    ASSERT_NE(stack.end(), glyph_at);
++    ASSERT_NE(stack.end(), badge_at);
++    EXPECT_LT(glyph_at, badge_at) << "the badge is under the glyph";
++  }
++}
++
+ // sessions S32, spaces B38 (GitHub issue 99, BACKLOG S-477): in the open
+ // sidebar no chip wears a badge: the line under the row ties a session's
+ // Spaces together. Work's chip still says what its mark means.
+diff --git a/chrome/test/stedding/space_switch_browsertest.cc b/chrome/test/stedding/space_switch_browsertest.cc
+index f1bac8fb08147..ce0288c5f575b 100644
+--- a/chrome/test/stedding/space_switch_browsertest.cc
++++ b/chrome/test/stedding/space_switch_browsertest.cc
+@@ -2334,6 +2334,69 @@ IN_PROC_BROWSER_TEST_F(SpaceSwitchTest, AChipShowsItsNameOnce) {
+   EXPECT_EQ(name, chip->GetViewAccessibility().GetCachedName());
+ }
+ 
++// spaces B11 (GitHub issue 122, BACKLOG S-548): only the Space on screen is
++// in colour. Every other chip's glyph is grey, at 35%, in the open row and in
++// the rail; the chip a drag would drop on (B12) is in colour at full strength
++// while the drag is over it; a switch takes the colour along.
++IN_PROC_BROWSER_TEST_F(SpaceSwitchTest, OnlyTheSpaceOnScreenIsInColour) {
++  MakeThreeSpaces();
++  views::Widget* const window = browser_view()->GetWidget();
++  // The glyph a chip draws: its label, in a layer of its own, which the
++  // compositor greys.
++  const auto glyph = [&](const spaces::SpaceId& id) -> views::Label* {
++    views::test::RunScheduledLayout(window);
++    spaces::SpaceSwitcherView* const switcher = Switcher();
++    views::View* const chip = switcher ? switcher->ChipForTesting(id) : nullptr;
++    if (!chip) {
++      return nullptr;
++    }
++    for (views::View* const child : chip->children()) {
++      if (auto* const label = views::AsViewClass<views::Label>(child)) {
++        return label;
++      }
++    }
++    return nullptr;
++  };
++  // In colour at full strength, or grey at 35%.
++  const auto expect_look = [&](const spaces::SpaceId& id, bool in_colour) {
++    SCOPED_TRACE(base::UTF16ToUTF8(model()->DisplayName(id)));
++    views::Label* const label = glyph(id);
++    ASSERT_TRUE(label) << "no glyph on the chip";
++    ASSERT_TRUE(label->layer()) << "the glyph has no layer of its own";
++    EXPECT_FALSE(label->layer()->fills_bounds_opaquely());
++    EXPECT_EQ(in_colour ? 0.0f : 1.0f, label->layer()->layer_grayscale());
++    EXPECT_EQ(in_colour ? 0xFFu : 0x59u, SkColorGetA(label->GetEnabledColor()));
++  };
++  const auto expect_on_screen = [&](const spaces::SpaceId& on_screen) {
++    for (const spaces::SpaceId& id : ids_) {
++      expect_look(id, id == on_screen);
++    }
++  };
++
++  {
++    SCOPED_TRACE("the open sidebar");
++    expect_on_screen(ids_[0]);
++    ASSERT_TRUE(model()->SetActiveSpace(ids_[1]));
++    expect_on_screen(ids_[1]);
++  }
++  {
++    SCOPED_TRACE("a drag over another Space's chip");
++    Switcher()->SetDropTarget(ids_[2]);
++    expect_look(ids_[2], true);
++    expect_look(ids_[0], false);
++    Switcher()->SetDropTarget(std::nullopt);
++    expect_look(ids_[2], false);
++  }
++  {
++    SCOPED_TRACE("the rail");
++    vertical_tab_strip_state_controller()->SetExpandOnHoverEnabled(false);
++    Collapse();
++    expect_on_screen(ids_[1]);
++    ASSERT_TRUE(model()->SetActiveSpace(ids_[2]));
++    expect_on_screen(ids_[2]);
++  }
++}
++
+ // BACKLOG S-440: removing a closed row synthesizes a mouse move inside the
+ // window's layout (TabCollectionAnimatingLayoutManager), and a chip that takes
+ // its first hover there floated its name by reordering the sidebar's children

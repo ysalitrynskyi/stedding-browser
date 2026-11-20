@@ -39,7 +39,8 @@ The order, with the Mac free only at night and in the background by day:
    Builds with every error in one pass (`KEEP_GOING=1`, `-KeepGoing`), each fix folded into its
    owning patch.
 2. 2026-11-20, S-548's options: rendered from the current release build on the PC, light and
-   dark, for the owner to pick before it is built.
+   dark, for the owner to pick before it is built. The owner picked the third, the other
+   Spaces' icons grey at 35%; built the same day (patch 0194, spaces B11 and B38).
 3. 2026-11-21 to 11-22, the features on the ported series: S-547 (switcher X2, X3 and their
    tests), S-548 as picked (spaces B11); Sparkle 2.10.1 (`tooling/fetch-sparkle`, its checksum).
 4. 2026-11-22 to 11-24, the gate. Windows: `tooling/win/release-gate.sh 0.7.0 0.6.1`. The Mac,

@@ -26,7 +26,7 @@ Read the trap for the topic in front of you, not the list. Retired: 10, 18, 28, 
 
 | Topic | Traps |
 |---|---|
-| Building, disk, rebuild cost, what a run leaves behind | 1, 16, 19, 23, 44, 45, 53, 54, 57, 70, 73, 83, 89, 90, 144, 146, 147 |
+| Building, disk, rebuild cost, what a run leaves behind | 1, 16, 19, 23, 44, 45, 53, 54, 57, 70, 73, 83, 89, 90, 144, 146, 147, 149 |
 | The working loop and the series | 5, 9, 13, 14, 17, 22, 50, 51, 89, 92, 134, 139 |
 | Driving and capturing the window | 3, 7, 12, 24, 27, 29, 30, 36, 37, 52, 56, 59, 61, 63, 64, 65, 76, 78, 82, 93, 94, 95, 96, 103, 105, 107, 116, 121, 133, 137, 142 |
 | What a test can and cannot prove | 2, 4, 31, 46, 48, 51, 52, 55, 56, 58, 59, 60, 66, 68, 69, 72, 75, 77, 78, 80, 81, 84, 86, 87, 88, 91, 98, 99, 101, 102, 104, 106, 107, 110, 111, 112, 113, 114, 119, 120, 126, 127, 138, 145 |
@@ -369,6 +369,8 @@ Each trap is the symptom, the cause and the rule that avoids it. Code and docs c
 147. **Mac browser tests leave windows in WindowServer, and at about 17,900 it ends the login session.** Test windows outlive their processes and only logging out lowers the count; past the limit WindowServer restarts, logging the person out and quitting every app. `tooling/window-count` reads the count, and `tooling/dev` starts a Mac browser leg only under `STEDDING_MAX_WINDOWS`. After a build, a sweep or a release, run `tooling/leftovers --clean` (`tooling\win\leftovers.ps1 -Clean` on the PC) to end leftover processes, servers and mounted images and delete build logs and temporary files.
 
 148. **A page in no tab strip has none of the tab's helpers.** A tab's `TabFeatures` makes `CoreTabHelper`, the favicon driver and `extensions::TabHelper`; `TabHelpers::AttachTabHelpers` does not. A page shown outside the strip, such as the peek, makes what it needs itself (patch 0176), and code that observes such a page assumes none of them. Each missing helper shows only as the next failure.
+
+149. **Xcode's Metal toolchain is a component of its own, and an Xcode update leaves it uninstalled.** ANGLE compiles its internal Metal shaders during the build (`third_party/angle`, `metal_backend.gni`) through `xcrun metal`. Since Xcode 26 that toolchain is downloaded apart from Xcode, and the update to 27.2 did not bring its new version. Incremental builds kept the shaders compiled before, so nothing showed until a build into an empty `out/` failed at that one step 43 minutes in (2026-11-19). `tooling/build-chromium` now stops at the start when `xcrun metal` cannot run. The fix is `xcodebuild -downloadComponent MetalToolchain`. Until then, `STEDDING_METAL_TOOLCHAIN_DIR` names another toolchain's `usr/bin`, such as the one an earlier Xcode left mounted under `/private/var/run/com.apple.security.cryptexd/mnt/`, and the build passes it to ANGLE as `angle_metal_toolchain_dir`.
 
 ## The Windows build
 

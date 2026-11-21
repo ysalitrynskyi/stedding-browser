@@ -22,18 +22,19 @@ the tab when ⌃ is let go (issue 123) and only the Space on screen in colour (i
 carried is in `docs/PROJECT-LOG.md`. A release goes out only when everything in it has passed and
 nothing published with it is in doubt (`PLAN.md` decision 21).
 
-The next pin is M159's newest point release at more than 1% of users when the release is cut
-(decision 22). M159 began its rollout on 2026-11-19 (0.5% of Mac and Windows users), so the move
-is due about two weeks after it reaches everyone.
+The pin stays on Chromium 158 until the owner says to move (`PLAN.md` decision 26, 2026-11-21).
+M159 began its rollout on 2026-11-19; once it passes 1% of users, `tooling/check-pin` reports the
+pin behind and the `upstream` workflow opens its issue, both expected while the hold lasts.
 
 The owner, 2026-11-13: more of what people leaving Arc expect, not only fixes. Each feature is
 built to the quality bar, and each visual choice is shown to the owner as rendered options first.
 
-After 0.7.0, in this order unless the owner says otherwise: the M159 move; the player inside the
-window (S-95's Mp1, option A, `PLAN.md` decision 24); "Collapse All Folders" and "Expand All
-Folders" in a folder's own menu (discussion 128, which the owner called a good idea); GitHub issue
-111's open tabs in a new window, once its reporter says which behaviour they mean; issue 126 when
-its video arrives.
+After 0.7.0, in this order unless the owner says otherwise: the defects S-552 (GitHub issue 126)
+and S-551; the player inside the window (S-95's Mp1, option A, `PLAN.md` decision 24); "Collapse
+All Folders" and "Expand All Folders" in a folder's own menu (discussion 128, which the owner
+called a good idea). GitHub issue 111's reporter said on 2026-11-19 that a new window should list
+the same unpinned tabs as the first, as Arc's does: a design for the owner to choose, extending
+ADR 0035 from pins to every tab.
 
 What 0.6.0's own items still owe is in their rows: S-94, S-478 and S-479.
 
@@ -143,6 +144,7 @@ Crashes and broken privacy promises first, then what a user sees.
 
 | Id | Item | Feature / spec | Notes |
 |---|---|---|---|
+| S-552 | ⌃⇥ lists essentials and pins that are asleep, and stopping on one wakes it (GitHub issue 126) | `docs/features/switcher.md` X1; `docs/features/tabs.md` R33 | The reporter, on 0.6.1 (2026-11-19): essentials that were closed or never opened show up in the ⌃⇥ list, and cycling onto one opens it; some hours later it stopped happening. Read in the code on 2026-11-21, not yet reproduced: `SpaceModel::RecentTabs` fills the five places after the history with the Space's tabs never used, in sidebar order, asleep ones included, so an essential put away by ⌘W, which R33 takes out of the history, comes back as filler, and the filler stops once five tabs have been used. Next: a test that fails on that, then fill only with rows that are awake, as R5 and pins H3 choose. |
 | S-551 | On the Mac, the ⌃ shortcuts do nothing under a keyboard layout whose ⌃ keys type non-Latin letters | `docs/features/shortcuts.md`; tabs R29 | Seen 2026-11-20 in TST-9 step 18 on the Mac with a custom Cyrillic layout (made in Ukelele) selected: ⌃M did not mute, on 0.7.0 and on the released 0.6.1 alike, and muting from the command bar worked. The shortcuts outside the main menu are matched by the typed character (`cr_firesForKeyEquivalentEvent`), and that layout types "ь" for ⌃M; ⌘ chords still fire, because macOS maps them to a Latin layout. With the key carrying a Latin "m" (a driver change made for the check and not kept), 0.7.0 passes the step. Not yet known: Apple's own Cyrillic layouts, and the other ⌃ chords. A fix would match ⌃ chords by key code, as `DelayedWebContentsCommandForKeyEvent` does. |
 | S-544 | Windows, a driven run at the PC's console: after a quit and a relaunch from a background task, the window is in front and takes no shortcut until a click | `docs/features/acceptance.md` (TST-6 steps 11, 12) | At the PC's console at 150% (2026-11-17), after TST-6's relaunch, Alt+2, Alt+3 and Ctrl+T did nothing though the window had the foreground and the keyboard focus; a click in the page brought the keys back. The same code passed over Remote Desktop that morning, and the released 0.5.1 fails the same way at the console. No browser test reaches it: it is the system's activation of a window a background process starts. Next: relaunch from the person's own shell at the console, and over Remote Desktop again; if only a background-started process shows it, make the harness click the page after a relaunch. |
 | S-497 | Small things seen in the 0.6.0 captures | `docs/features/sidebar-file.md` Sf9, Sf62; `docs/features/live-folders.md` Lf6 | Seen 2026-11-16 in the Windows release build's captures: the join sheet counts without a singular ("1 folders"; the strings "$2 Spaces, $3 pins, $4 folders, $5 essentials" in `settings_ui.cc`, for a folder and for WebDAV or S3); one join left two backups made in the same second (`before-sync-…-184456.json` and `… (1).json`), so a backup may be taken twice; the live folder's failure tooltip is one line about 720 px wide; behind "Start from whose settings?" the Settings box shows ticked before the person answers. |

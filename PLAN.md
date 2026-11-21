@@ -107,6 +107,10 @@ still open is a BACKLOG row that names its id.
     14-day promise, rather than waiting for M159, whose rollout began that day; and it carries
     S-547 and S-548 (GitHub issues 123 and 122) with the move, as 0.7.0 (`BACKLOG.md`, "The next
     release").
+26. The owner, 2026-11-21: Stedding stays on Chromium 158 until the owner says to move. This
+    holds over decision 22 and over the 7- and 14-day rebase in ADR 0007 for M159 and later; a
+    point release of M158 is still M158. While M159 is ahead, `tooling/check-pin` reports the
+    pin behind and the `upstream` workflow keeps its issue open: both are expected.
 
 The operator's own request in chat comes before any of this and before BACKLOG's order.
 

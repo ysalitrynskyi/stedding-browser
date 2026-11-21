@@ -93,9 +93,9 @@ still open is a BACKLOG row that names its id.
 22. The 0.4.0 betas ended at 0.5.0 (the owner, 2026-11-13). A release's pin is its milestone's
     newest point release at more than 1% of users when the release is cut (ADR 0007), unless
     the owner names another.
-23. A release that carries features is a new minor version (0.6.0, the owner, 2026-11-15:
-    pins in every window, ADR 0035; settings in sync, ADR 0037; Live Folders, ADR 0036). One
-    that only fixes bugs is a patch release of the current minor (0.6.1).
+23. Superseded by decision 28. It had made a release that carries features a new minor version
+    (0.6.0, the owner, 2026-11-15: pins in every window, ADR 0035; settings in sync, ADR 0037;
+    Live Folders, ADR 0036), which moved the version a minor every week or so.
 24. The owner, 2026-11-16, from pictured options: (a) on Windows with the address in the sidebar, the
     window's buttons show only from a thin strip along the window's top edge, never over the page,
     and stay while the pointer is on them (GitHub issues 118, 119); (b) closing the last tab of a
@@ -112,11 +112,18 @@ still open is a BACKLOG row that names its id.
     point release of M158 is still M158. While M159 is ahead, `tooling/check-pin` reports the
     pin behind and the `upstream` workflow keeps its issue open: both are expected.
 27. The owner, 2026-11-21: the next release carries every fix that can be made and some small
-    backlog items, and it is 0.7.1 ("it is 7.1.0 at most"), not 0.8.0: small features ride in a
-    patch release; decision 23's new minor version is for a release whose features are large. Three looks: the other Spaces' icons grey at 50%, not 35% (option
+    backlog items, and it is 0.7.1 ("it is 7.1.0 at most"), not 0.8.0 (decision 28). Three
+    looks: the other Spaces' icons grey at 50%, not 35% (option
     A of four rendered; S-555); a Space switch pushes the old list out as a page dragged across,
     the two joined, not one fading out and the other fading in (S-554); each Space keeps its
     list's scroll (S-553).
+28. Version numbers move slowly (the owner, 2026-11-21: "We were having like 20 betas into one
+    release, and then you start just bumping it one by one. It doesn't make any sense."). Every
+    release takes the next patch number after the latest release, whatever it carries: 0.7.1,
+    0.7.2, 0.7.3 and on, past 0.7.9 to 0.7.10. A new minor or major version comes only when the
+    owner names it in chat for that release; an agent never proposes one in notes, docs, the
+    backlog or a tag. `tooling/publish-release` refuses any other version unless
+    `STEDDING_OWNER_VERSION` names it.
 
 The operator's own request in chat comes before any of this and before BACKLOG's order.
 

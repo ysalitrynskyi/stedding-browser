@@ -31,7 +31,7 @@ built to the quality bar, and each visual choice is shown to the owner as render
 
 **0.7.1 is in progress** (the owner, 2026-11-21: "do all fixes you can for next minor release,
 maybe add some small things from the backlog"), on Chromium 158 (decision 26). It is 0.7.1, not
-0.8.0, though it carries small features (the owner, 2026-11-21; decision 27). None of it is in the patch series yet: each change is
+0.8.0, though it carries small features (the owner, 2026-11-21; decisions 27, 28). None of it is in the patch series yet: each change is
 written with its test in the Mac's checkout, and the tests are being run on the PC, first alone
 (each must fail) and then with the fix (each must pass). Where the work stopped, the exact files
 and the next steps are in the operator's handoff notes, outside this repository. What it holds:

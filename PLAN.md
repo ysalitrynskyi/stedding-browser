@@ -111,8 +111,9 @@ still open is a BACKLOG row that names its id.
     holds over decision 22 and over the 7- and 14-day rebase in ADR 0007 for M159 and later; a
     point release of M158 is still M158. While M159 is ahead, `tooling/check-pin` reports the
     pin behind and the `upstream` workflow keeps its issue open: both are expected.
-27. The owner, 2026-11-21: the next minor release (0.8.0) carries every fix that can be made and
-    some small backlog items. Three looks: the other Spaces' icons grey at 50%, not 35% (option
+27. The owner, 2026-11-21: the next release carries every fix that can be made and some small
+    backlog items, and it is 0.7.1 ("it is 7.1.0 at most"), not 0.8.0: small features ride in a
+    patch release; decision 23's new minor version is for a release whose features are large. Three looks: the other Spaces' icons grey at 50%, not 35% (option
     A of four rendered; S-555); a Space switch pushes the old list out as a page dragged across,
     the two joined, not one fading out and the other fading in (S-554); each Space keeps its
     list's scroll (S-553).

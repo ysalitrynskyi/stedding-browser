@@ -2,7 +2,7 @@
 
 What was built, newest first. Nothing here is needed to do a task: `AGENTS.md` carries what is true now, `BACKLOG.md` the order of work, `PLAN.md` the owner's decisions. This file was the "State of the project" section of `AGENTS.md` until 2026-09-30. The log starts at 2026-10-15; closed work from before that is the table in [docs/history/archive.md](history/archive.md). Entries before 2026-11-10 are short summaries; their full text is in the repository's history.
 
-## 2026-11-21 -- 0.8.0 begun: fixes and small features on Chromium 158 (in progress)
+## 2026-11-21 -- 0.7.1 begun: fixes and small features on Chromium 158 (in progress)
 
 Issues and discussions reviewed after 0.7.0 (no new issues; issue 111's reporter answered, issue
 126's reporter described the ⌃⇥ fault). The owner kept the pin on 158 (`PLAN.md` decision 26) and

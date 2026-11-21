@@ -111,6 +111,11 @@ still open is a BACKLOG row that names its id.
     holds over decision 22 and over the 7- and 14-day rebase in ADR 0007 for M159 and later; a
     point release of M158 is still M158. While M159 is ahead, `tooling/check-pin` reports the
     pin behind and the `upstream` workflow keeps its issue open: both are expected.
+27. The owner, 2026-11-21: the next minor release (0.8.0) carries every fix that can be made and
+    some small backlog items. Three looks: the other Spaces' icons grey at 50%, not 35% (option
+    A of four rendered; S-555); a Space switch pushes the old list out as a page dragged across,
+    the two joined, not one fading out and the other fading in (S-554); each Space keeps its
+    list's scroll (S-553).
 
 The operator's own request in chat comes before any of this and before BACKLOG's order.
 

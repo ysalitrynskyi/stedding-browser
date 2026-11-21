@@ -2,6 +2,32 @@
 
 What was built, newest first. Nothing here is needed to do a task: `AGENTS.md` carries what is true now, `BACKLOG.md` the order of work, `PLAN.md` the owner's decisions. This file was the "State of the project" section of `AGENTS.md` until 2026-09-30. The log starts at 2026-10-15; closed work from before that is the table in [docs/history/archive.md](history/archive.md). Entries before 2026-11-10 are short summaries; their full text is in the repository's history.
 
+## 2026-11-21 -- 0.8.0 begun: fixes and small features on Chromium 158 (in progress)
+
+Issues and discussions reviewed after 0.7.0 (no new issues; issue 111's reporter answered, issue
+126's reporter described the ⌃⇥ fault). The owner kept the pin on 158 (`PLAN.md` decision 26) and
+asked for "all fixes you can" and some small backlog items in the next minor release, and picked
+three looks (decision 27). Nothing below is in the patch series yet; `BACKLOG.md` ("The next
+release") has each item's state.
+
+- S-552 (issue 126): `SpaceModel::RecentTabs` filled ⌃⇥'s run with essentials and pins asleep,
+  including ones ⌘W had put away; the filler now takes rows that are awake. Unit test red without
+  the fix and green with it on Windows' release build.
+- S-497: the sync sheet's counts of one in the singular; the live folder's tooltip a sentence a
+  line. S-478: an export of a Space and the sidebar's backups leave the live folder and its rows
+  out. S-556: no request for Translate's language list without an API key. S-557 (discussion
+  128): Collapse All Folders and Expand All Folders in a folder's menu. Each test red without its
+  fix and green with it on Windows.
+- S-555: four softer looks for the other Spaces' icons rendered on the Mac from a temporary
+  capture test; the owner picked grey at 50%. S-553: each Space keeps its list's scroll. S-554: a
+  Space switch is a joined, full-width push instead of two fades. Written with their tests; the
+  PC's second round runs them.
+- S-551: the Mac's ⌃ chords under a non-Latin layout fall back to the key's place. Written with a
+  Mac unit test; waiting for the Mac, which the owner was using.
+- The Mac was the owner's from mid-morning ("You cannot use my Mac right now"): the capture job
+  was stopped at once and all building moved to the PC, shared that morning with another
+  project's session, which had it first.
+
 ## 2026-11-20 -- 0.7.0: Chromium 158, ⌃⇥ on release, only the Space on screen in colour
 
 The Mac's half of the move to 158.0.8127.37, S-548 built to the owner's pick, and the gate on

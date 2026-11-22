@@ -12,7 +12,7 @@ account, no telemetry, BSD-3-Clause.
 [![Latest release](https://img.shields.io/github/v/release/ysalitrynskyi/stedding-browser?label=download&color=2F4858)](https://github.com/ysalitrynskyi/stedding-browser/releases)
 [![License: BSD-3-Clause](https://img.shields.io/badge/license-BSD--3--Clause-E8B04B)](LICENSE)
 ![Platforms: macOS and Windows](https://img.shields.io/badge/platforms-macOS%20%7C%20Windows-1C2B33)
-![Chromium 157](https://img.shields.io/badge/Chromium-157%20stable-2F4858)
+![Chromium 158](https://img.shields.io/badge/Chromium-158%20stable-2F4858)
 
 [stedding.dev](https://stedding.dev) · [Download](#download) · [Shortcuts](docs/SHORTCUTS.md) ·
 [FAQ](docs/FAQ.md) · [Privacy](docs/PRIVACY.md) · [Build](#building-from-source)
@@ -202,7 +202,7 @@ behave as they do in Chrome.
 
 | Part | In Stedding | |
 |---|---|---|
-| Engine | Chromium 157, stable channel | ✓ |
+| Engine | Chromium 158, stable channel | ✓ |
 | Chrome extensions | From the Chrome Web Store, as in Chrome | ✓ |
 | H.264 and AAC | The video and audio codecs plain Chromium leaves out | ✓ |
 | DevTools | Chromium's own | ✓ |

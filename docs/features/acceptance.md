@@ -6,7 +6,7 @@ The core loop is BACKLOG `S-173`. It has passed on installed builds on the Mac a
 
 Owner docs: [PLAN.md](../../PLAN.md) ("When an item is done"), [the quality bar](../ROADMAP.md#the-quality-bar), [docs/history/plan-2026-09-26.md](../history/plan-2026-09-26.md) TST-6.
 
-The published release is 0.3.0 beta 22, on Chromium 156.0.8078.48. The series on main is Chromium 157.0.8103.31 and is not released. The next release would be 0.3.0 beta 23. `VERSION` still reads `0.3.0-beta.22`; the next release starts by bumping that file.
+Which release users have is `gh release list`; the pin on main is `tooling/dev status`. The two can differ (ADR 0007). `VERSION` names the latest release until the next one is cut. The newest run of each script, and the build it ran on, is in that script's Runs table.
 
 ## The core loop
 

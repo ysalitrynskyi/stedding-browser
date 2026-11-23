@@ -2,7 +2,60 @@
 
 What was built, newest first. Nothing here is needed to do a task: `AGENTS.md` carries what is true now, `BACKLOG.md` the order of work, `PLAN.md` the owner's decisions. This file was the "State of the project" section of `AGENTS.md` until 2026-09-30. The log starts at 2026-10-15; closed work from before that is the table in [docs/history/archive.md](history/archive.md). Entries before 2026-11-10 are short summaries; their full text is in the repository's history.
 
-## 2026-11-21 -- 0.7.1 begun: fixes and small features on Chromium 158 (in progress)
+## 2026-11-23 -- 0.7.1: the Space switch that pushes, and the fixes of a review of every patch
+
+0.7.1's items (2026-11-21 entry below) and the fixes of a review of Stedding's own code, folded
+into the series in one pass and released together, still on Chromium 158.0.8127.37 (`PLAN.md`
+decisions 26 to 28).
+
+- The review (2026-11-22) read the series in 58 chunks; 41 were read before the review
+  stopped, and the rest (`chrome/browser/ui/views/tabs`, the welcome handler,
+  `chrome/common`, `components/`, `content/`, the tooling) are still owed. Each of its 191
+  findings went to two independent checkers: 186 confirmed, 4 refuted, 1 a duplicate. They
+  were fixed in two rounds, high and medium first, then low, each fix with a test that failed on
+  the code before it and passed with it on Windows' release build (three runs), and the suites
+  around it run again. Security-sensitive ones are described only by what the browser does now.
+- The Space switch (S-554), after the owner saw the frames: the Space's name and icon move
+  with its rows on every switch ("Slide the name too", 2026-11-22), and a switch under a panel
+  shows the new Space at once.
+- Folded in one rewrite of the series that applies each file's change, three ways, from its
+  patch to the tip (fold-fix's rules; 58 fold-fix runs would each have read the whole tree for
+  every commit). Each fix went into the patch that owns its code; 16 files whose change would
+  conflict with a later patch went into the newest patch that touches them. Two new patches:
+  0195, S-556's Translate change, and 0196, the review's tests, one file per batch.
+- The Mac proved every Mac-only fix: each test failed on the old code and passed three times
+  with the fix. Its first full suite with motion on (the PC's remote session asks for reduced
+  motion, so no run there had slid) found more. The list's scroll offset (S-553, B48) is set on
+  the compositor's side, which clamps it to the list's size at its last commit, so a Space coming
+  back from a shorter one went to the top on the Mac; it is set again once the new size is
+  committed. Tests that pressed a row right after a switch pressed where the list was sliding a
+  whole width away (B32); the shared settle helper waits for the slide. The right-to-left row
+  test found that on the Mac such a window keeps a band above the page with the sidebar and the
+  row hidden (S-558, not in 0.7.1; the test skips there). The upstream
+  `GlobalKeyboardShortcuts.BasicFunctionality`, never in our filters, fails on the old code too.
+- Windows' DCHECK build found two of the review's tests letting a temporary folder go where
+  blocking is not allowed, and a page-count test that could not tell right from wrong on a slow
+  build; the Ctrl-wheel test expected a list at its top that S-553 now keeps where it was.
+- The Mac release build: 1,735 unit, 64 components, 1 content and 1,309 browser tests (235 of them
+  one at a time) pass. The DCHECK build: the unit, components and content suites pass; its browser
+  sweep, four at a time with a game running beside it, had 179 failures and time-outs in bursts
+  from its 581st test on, and every one passes alone (three on a second run), with no DCHECK from
+  Stedding's code and no dangling pointer. Acceptance on a test copy of the signed app: every part
+  passes, and the 87 captures differ from 0.7.0's only in the other Spaces' chips and in TST-9's
+  step 18, where ⌃M now mutes. Sparkle from a local signed feed: the installed 0.7.0 (bundle
+  10070.999) updated to 0.7.1 (100701.999, the new scheme of updates Up11) with its tabs, and
+  0.7.1's own Sparkle installed an update.
+- Windows (`tooling/win/release-gate.sh 0.7.1 0.7.0`, on the final tree): 1,725 unit tests and
+  1,252 browser tests (252 one at a time) pass but one that failed only among the others; the
+  installer; 0.7.0 updated itself to 0.7.1 with pins in two windows, then the installer's cycle;
+  TST-7 5/5, TST-9 20/20, TST-6 12/14 right after the install and 14/14 alone. The DCHECK and ASan
+  builds: no DCHECK, dangling pointer or ASan report; their browser suites' few failures pass
+  alone, and `ScreenshotCaptureTest.AFailedCaptureSaysSo` fails its first run after the PC sat
+  idle, on the release build too, and passes every run after.
+- The site's page after an update has the 0.7.1 entry, with a frame of the push and the chips at
+  half strength, from a temporary test in the release build.
+
+## 2026-11-21 -- 0.7.1 begun: fixes and small features on Chromium 158
 
 Issues and discussions reviewed after 0.7.0 (no new issues; issue 111's reporter answered, issue
 126's reporter described the ⌃⇥ fault). The owner kept the pin on 158 (`PLAN.md` decision 26) and

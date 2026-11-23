@@ -39,17 +39,17 @@ person their history (BACKLOG S-160, import I1, I4, I6, I9, I11, I21).
 Removable when: Arc's files are gone from people's computers.
 ---
  .../resources/stedding_welcome/from_arc.ts    |  10 +-
- chrome/browser/ui/spaces/arc_data_importer.cc |  37 +-
+ chrome/browser/ui/spaces/arc_data_importer.cc | 188 +++++++---
  .../browser/ui/spaces/arc_sidebar_importer.cc | 349 +++++++++++++-----
  .../browser/ui/spaces/arc_sidebar_importer.h  |  22 ++
  .../spaces/arc_sidebar_importer_unittest.cc   | 221 +++++++++++
  .../webui/settings/stedding_spaces_handler.cc |   2 +-
  .../stedding_welcome_handler.cc               |   1 +
- .../stedding_welcome_handler.h                |   6 +-
+ .../stedding_welcome_handler.h                |  11 +-
  chrome/test/stedding/from_arc_browsertest.cc  |  23 ++
  chrome/test/stedding/import_browsertest.cc    |  39 ++
  crypto/subtle_passkey.h                       |   9 +
- 11 files changed, 589 insertions(+), 130 deletions(-)
+ 11 files changed, 712 insertions(+), 163 deletions(-)
 
 diff --git a/chrome/browser/resources/stedding_welcome/from_arc.ts b/chrome/browser/resources/stedding_welcome/from_arc.ts
 index 39a5a7a463ba8..f57aa5f39df91 100644
@@ -89,10 +89,26 @@ index 39a5a7a463ba8..f57aa5f39df91 100644
      row.append(el('span', '', item.text));
      if (item.card) {
 diff --git a/chrome/browser/ui/spaces/arc_data_importer.cc b/chrome/browser/ui/spaces/arc_data_importer.cc
-index 6191a38cf29ff..d09eb78139320 100644
+index 6191a38cf29ff..909374f19faa9 100644
 --- a/chrome/browser/ui/spaces/arc_data_importer.cc
 +++ b/chrome/browser/ui/spaces/arc_data_importer.cc
-@@ -45,8 +45,8 @@
+@@ -27,6 +27,7 @@
+ #include "base/strings/utf_string_conversions.h"
+ #include "base/task/thread_pool.h"
+ #include "base/time/time.h"
++#include "base/types/expected.h"
+ #include "base/values.h"
+ #include "build/build_config.h"
+ #include "chrome/browser/history/history_service_factory.h"
+@@ -40,13 +41,16 @@
+ #include "components/keyed_service/core/service_access_type.h"
+ #include "components/password_manager/core/browser/import/csv_password.h"
+ #include "components/password_manager/core/browser/password_store/password_form_converters.h"
++#include "components/password_manager/core/browser/password_store/password_store_backend_error.h"
++#include "components/password_manager/core/browser/password_store/password_store_consumer.h"
+ #include "components/password_manager/core/browser/password_store/password_store_interface.h"
++#include "components/password_manager/core/browser/password_store/stored_credential.h"
+ #include "components/password_manager/core/browser/password_string.h"
  #include "components/prefs/pref_service.h"
  #include "crypto/aead.h"
  #include "crypto/aes_cbc.h"
@@ -103,7 +119,187 @@ index 6191a38cf29ff..d09eb78139320 100644
  #include "sql/database.h"
  #include "sql/statement.h"
  #include "url/gurl.h"
-@@ -325,33 +325,20 @@ bool ArcDataPresent(const ArcDataPaths& paths) {
+@@ -156,10 +160,12 @@ ReadOutcome ReadOnPool(std::optional<ArcDataPaths> given,
+   return out;
+ }
+ 
++// `result` holds what was known before the read: the parts a policy turned
++// off (I40).
+ void WriteOnUi(base::WeakPtr<Profile> profile,
++               ArcDataResult result,
+                ArcDataDoneCallback done,
+                ReadOutcome read) {
+-  ArcDataResult result;
+   result.keychain_denied = read.keychain_denied;
+   result.passwords_past_the_cap = read.logins_left_out.past_the_cap;
+   if (!profile) {
+@@ -179,9 +185,14 @@ void WriteOnUi(base::WeakPtr<Profile> profile,
+       PrefService* const prefs = profile->GetPrefs();
+       const base::Time through =
+           prefs->GetTime(stedding::prefs::kArcImportedHistoryThrough);
+-      std::erase_if(read.history, [through](const history::URLRow& row) {
+-        return row.last_visit() <= through;
+-      });
++      // Nor a visit the history service drops as expired: it was counted as
++      // brought over, and the history held none of it.
++      const base::Time oldest = stedding::OldestKeptVisit(base::Time::Now());
++      std::erase_if(read.history,
++                    [through, oldest](const history::URLRow& row) {
++                      return row.last_visit() <= through ||
++                             row.last_visit() < oldest;
++                    });
+       if (!read.history.empty()) {
+         service->AddPagesWithDetails(read.history, history::SOURCE_BROWSED);
+         result.history = read.history.size();
+@@ -207,14 +218,76 @@ void WriteOnUi(base::WeakPtr<Profile> profile,
+ 
+ // import I39: the Arc logins being written, held with the profile's other
+ // imports, so the write outlives the page that asked for it and goes with
+-// the profile.
+-class ArcLoginsJob : public stedding::ImportJob {
++// the profile. The blocked sites go in first, once the profile's own logins
++// are read.
++class ArcLoginsJob : public stedding::ImportJob,
++                     public password_manager::PasswordStoreConsumer {
+  public:
+-  explicit ArcLoginsJob(Profile& profile) : writer_(profile) {}
+-  stedding::ImportedPasswordsWriter& writer() { return writer_; }
++  ArcLoginsJob(Profile& profile,
++               std::vector<password_manager::PasswordForm> blocked,
++               std::vector<password_manager::CSVPassword> rows)
++      : writer_(profile),
++        store_(ProfilePasswordStoreFactory::GetForProfile(
++            &profile, ServiceAccessType::EXPLICIT_ACCESS)),
++        blocked_(std::move(blocked)),
++        rows_(std::move(rows)) {}
++  ArcLoginsJob(const ArcLoginsJob&) = delete;
++  ArcLoginsJob& operator=(const ArcLoginsJob&) = delete;
++  ~ArcLoginsJob() override = default;
++
++  // Adds the blocked sites, then writes the logins; `done` gets what the
++  // writer did.
++  void Write(stedding::ImportedPasswordsWriter::DoneCallback done) {
++    done_ = std::move(done);
++    if (blocked_.empty() || !store_) {
++      WriteLogins();
++      return;
++    }
++    store_->GetAllLogins(weak_factory_.GetWeakPtr());
++  }
+ 
+  private:
++  // password_manager::PasswordStoreConsumer:
++  void OnGetPasswordStoreResultsOrErrorFrom(
++      password_manager::PasswordStoreInterface* store,
++      base::expected<std::vector<password_manager::StoredCredential>,
++                     password_manager::PasswordStoreBackendError>
++          results_or_error) override {
++    // import I23: the store holds one row for an address, its element names,
++    // a username and a realm, and adding a row it holds already replaces
++    // that row. A blocked site has no username and no element names, and
++    // neither has a login added by hand or brought in from a file: added at
++    // the address of such a login, the blocked site took its place, and the
++    // password was gone. A site saved here under the same row is left as it
++    // is. With the saved logins unread, no blocked site is added.
++    if (results_or_error.has_value()) {
++      for (password_manager::PasswordForm& form : blocked_) {
++        const bool held = std::ranges::any_of(
++            results_or_error.value(),
++            [&form](const password_manager::StoredCredential& saved) {
++              return saved.url == form.url &&
++                     saved.signon_realm == form.signon_realm &&
++                     saved.username_value == form.username_value &&
++                     saved.username_element == form.username_element &&
++                     saved.password_element == form.password_element;
++            });
++        if (!held) {
++          store_->AddLogin(password_manager::FromPasswordForm(std::move(form)));
++        }
++      }
++    }
++    blocked_.clear();
++    WriteLogins();
++  }
++
++  void WriteLogins() { writer_.Write(std::move(rows_), std::move(done_)); }
++
+   stedding::ImportedPasswordsWriter writer_;
++  scoped_refptr<password_manager::PasswordStoreInterface> store_;
++  std::vector<password_manager::PasswordForm> blocked_;
++  std::vector<password_manager::CSVPassword> rows_;
++  stedding::ImportedPasswordsWriter::DoneCallback done_;
++  base::WeakPtrFactory<ArcLoginsJob> weak_factory_{this};
+ };
+ 
+ // Each write of Arc's logins is a job of its own: two imports at once each
+@@ -230,17 +303,15 @@ void WriteArcLogins(Profile& profile,
+   // AddLogin, which replaces a saved login for the same form, so an import
+   // put Arc's older password over one changed here since. They go through
+   // the writer the other browsers' logins go through, which keeps the saved
+-  // one. A blocked site holds no login: it is added as it was, and counted
+-  // as none.
++  // one. A blocked site holds no login: it is added as it was, unless a
++  // login is saved here under the same row (ArcLoginsJob), and counted as
++  // none.
+   std::vector<password_manager::CSVPassword> rows;
++  std::vector<password_manager::PasswordForm> blocked;
+   std::set<std::tuple<std::string, std::string, std::string>> seen;
+   for (password_manager::PasswordForm& form : logins) {
+     if (form.blocked_by_user) {
+-      if (scoped_refptr<password_manager::PasswordStoreInterface> store =
+-              ProfilePasswordStoreFactory::GetForProfile(
+-                  &profile, ServiceAccessType::EXPLICIT_ACCESS)) {
+-        store->AddLogin(password_manager::FromPasswordForm(std::move(form)));
+-      }
++      blocked.push_back(std::move(form));
+       continue;
+     }
+     std::string username = base::UTF16ToUTF8(form.username_value);
+@@ -251,30 +322,29 @@ void WriteArcLogins(Profile& profile,
+     rows.emplace_back(form.url, std::move(username), std::move(password),
+                       std::string(), password_manager::CSVPassword::Status::kOK);
+   }
+-  if (rows.empty()) {
++  if (rows.empty() && blocked.empty()) {
+     std::move(done).Run(0);
+     return;
+   }
+   const std::string key = base::StrCat(
+       {"arc-logins-", base::NumberToString(++g_arc_login_writes)});
+-  auto job = std::make_unique<ArcLoginsJob>(profile);
++  auto job = std::make_unique<ArcLoginsJob>(profile, std::move(blocked),
++                                            std::move(rows));
+   ArcLoginsJob* const writing = job.get();
+   if (!stedding::ImportJobs::For(profile).Start(key, std::move(job))) {
+     std::move(done).Run(0);
+     return;
+   }
+-  writing->writer().Write(
+-      std::move(rows),
+-      base::BindOnce(
+-          [](base::WeakPtr<Profile> profile, std::string key,
+-             base::OnceCallback<void(size_t)> done,
+-             stedding::PasswordWriteResult written) {
+-            if (profile) {
+-              stedding::ImportJobs::For(*profile).Finish(key);
+-            }
+-            std::move(done).Run(written.added);
+-          },
+-          profile.GetWeakPtr(), key, std::move(done)));
++  writing->Write(base::BindOnce(
++      [](base::WeakPtr<Profile> profile, std::string key,
++         base::OnceCallback<void(size_t)> done,
++         stedding::PasswordWriteResult written) {
++        if (profile) {
++          stedding::ImportJobs::For(*profile).Finish(key);
++        }
++        std::move(done).Run(written.added);
++      },
++      profile.GetWeakPtr(), key, std::move(done)));
+ }
+ 
+ base::FilePath CopyChromiumFileForReading(const base::FilePath& source,
+@@ -325,33 +395,20 @@ bool ArcDataPresent(const ArcDataPaths& paths) {
           (!paths.logins.empty() && base::PathExists(paths.logins));
  }
  
@@ -147,6 +343,43 @@ index 6191a38cf29ff..d09eb78139320 100644
  }
  
  std::vector<uint8_t> DeriveArcKey(std::string_view keychain_password) {
+@@ -638,17 +695,32 @@ void ImportArcDataAsync(Profile* profile,
+                         bool passwords,
+                         ArcDataDoneCallback done,
+                         std::optional<ArcDataPaths> paths) {
++  ArcDataResult result;
++  if (profile) {
++    // I40: a part a policy turns off is not read at all, as from Dia and
++    // Safari: no history is written, and Arc's key is not asked for.
++    const stedding::ImportsAllowed allowed =
++        stedding::AllowedImports(*profile->GetPrefs());
++    result.history_blocked = history && !allowed.history;
++    result.passwords_blocked = passwords && !allowed.passwords;
++    history = history && allowed.history;
++    passwords = passwords && allowed.passwords;
++  }
+   if (!profile || (!history && !passwords)) {
+-    std::move(done).Run(ArcDataResult());
++    std::move(done).Run(result);
+     return;
+   }
+-  const base::Time history_after =
+-      profile->GetPrefs()->GetTime(stedding::prefs::kArcImportedHistoryThrough);
++  // I22: nor a visit older than the history keeps, which a first import, with
++  // no mark yet, read from the start of Arc's history.
++  const base::Time history_after = std::max(
++      profile->GetPrefs()->GetTime(stedding::prefs::kArcImportedHistoryThrough),
++      stedding::OldestKeptVisit(base::Time::Now()));
+   base::ThreadPool::PostTaskAndReplyWithResult(
+       FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
+       base::BindOnce(&ReadOnPool, std::move(paths), history, passwords,
+                      history_after),
+-      base::BindOnce(&WriteOnUi, profile->GetWeakPtr(), std::move(done)));
++      base::BindOnce(&WriteOnUi, profile->GetWeakPtr(), result,
++                     std::move(done)));
+ }
+ 
+ }  // namespace spaces
 diff --git a/chrome/browser/ui/spaces/arc_sidebar_importer.cc b/chrome/browser/ui/spaces/arc_sidebar_importer.cc
 index 40b68894e1681..b7db7034d720a 100644
 --- a/chrome/browser/ui/spaces/arc_sidebar_importer.cc
@@ -1049,10 +1282,22 @@ index 3ffb209bbeb44..0c8c23ee667fa 100644
  }
  
 diff --git a/chrome/browser/ui/webui/stedding_welcome/stedding_welcome_handler.h b/chrome/browser/ui/webui/stedding_welcome/stedding_welcome_handler.h
-index 8349131300695..3ac6dcbeb4b31 100644
+index 8349131300695..ffe3c378e3a58 100644
 --- a/chrome/browser/ui/webui/stedding_welcome/stedding_welcome_handler.h
 +++ b/chrome/browser/ui/webui/stedding_welcome/stedding_welcome_handler.h
-@@ -85,9 +85,9 @@ class WelcomeHandler : public content::WebUIMessageHandler,
+@@ -59,6 +59,11 @@ class WelcomeHandler : public content::WebUIMessageHandler,
+   void HandleSetSearchEngine(const base::ListValue& args);
+   // setAppearance(scheme: "system"|"light"|"dark")
+   void HandleSetAppearance(const base::ListValue& args);
++  // getAppearance(callback) -> {scheme: "system"|"light"|"dark", spaceColor}:
++  // the profile's colour scheme, and the index in spaces::kSpaceColors of the
++  // window's first Space's colour, -1 when the table does not hold it; step 3
++  // shows both as chosen (welcome W4, W7).
++  void HandleGetAppearance(const base::ListValue& args);
+   // getBehaviour(callback) -> {archiveHours, closedForm, sleepMinutes}: the
+   // profile's current values, which the behaviour step shows (welcome W12).
+   void HandleGetBehaviour(const base::ListValue& args);
+@@ -85,9 +90,9 @@ class WelcomeHandler : public content::WebUIMessageHandler,
    // importFromArc(callback, spaces, pinned, unpinned, history, passwords)
    // -> the result line (import I21).
    void HandleImportFromArc(const base::ListValue& args);

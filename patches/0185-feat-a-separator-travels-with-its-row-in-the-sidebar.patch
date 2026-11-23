@@ -14,14 +14,14 @@ Why: GitHub issue 19 asked for separators; a backup should bring back
 the sidebar as it was.
 Removable when: never; Stedding's own file format.
 ---
- .../browser/ui/spaces/arc_sidebar_importer.cc | 15 +++++++++-
- .../browser/ui/spaces/arc_sidebar_importer.h  |  4 +++
- chrome/browser/ui/spaces/sidebar_backup.cc    |  7 +++++
- .../ui/spaces/sidebar_backup_unittest.cc      | 30 +++++++++++++++++++
- 4 files changed, 55 insertions(+), 1 deletion(-)
+ .../browser/ui/spaces/arc_sidebar_importer.cc | 142 ++++++++++++++----
+ .../browser/ui/spaces/arc_sidebar_importer.h  |  14 +-
+ chrome/browser/ui/spaces/sidebar_backup.cc    |  33 +++-
+ .../ui/spaces/sidebar_backup_unittest.cc      |  30 ++++
+ 4 files changed, 190 insertions(+), 29 deletions(-)
 
 diff --git a/chrome/browser/ui/spaces/arc_sidebar_importer.cc b/chrome/browser/ui/spaces/arc_sidebar_importer.cc
-index 83aa044a67044..8ac2727cfcfaf 100644
+index 83aa044a67044..813309b9ce6f8 100644
 --- a/chrome/browser/ui/spaces/arc_sidebar_importer.cc
 +++ b/chrome/browser/ui/spaces/arc_sidebar_importer.cc
 @@ -54,6 +54,7 @@
@@ -75,8 +75,238 @@ index 83aa044a67044..8ac2727cfcfaf 100644
    return tab;
  }
  
+@@ -778,7 +791,8 @@ void AdoptToken(const ApplyContext& ctx,
+ 
+ // The folder the item `id` names in this window: one an earlier import made
+ // for Arc's list (I12), or one whose own id a file Stedding wrote (Sf2), or
+-// one this import made for it. Null for a folder that is not here.
++// one a sidebar sync join paired, here under its own id (Sf10), or one this
++// import made for it. Null for a folder that is not here.
+ tabs::FolderTabCollection* KnownFolder(ApplyContext& ctx,
+                                        const std::string& id) {
+   if (!ctx.durable) {
+@@ -791,6 +805,11 @@ tabs::FolderTabCollection* KnownFolder(ApplyContext& ctx,
+   if (const auto made = ctx.made_folders.find(id);
+       made != ctx.made_folders.end()) {
+     folder = made->second;
++  } else if (const auto paired = ctx.shared_to_here.find(id);
++             paired != ctx.shared_to_here.end()) {
++    // Present() finds such a folder here by the same alias: without it, the
++    // folder was here but not found, and all it holds was skipped.
++    folder = FolderIdOf(paired->second);
+   }
+   return folder ? FindFolderById(*ctx.tabs->Root(), *folder) : nullptr;
+ }
+@@ -1522,6 +1541,12 @@ void ParseArcRoutes(std::string_view json, ArcImportPlan& plan) {
+   }
+ }
+ 
++// I7: the archived items a plan holds at most, each page once a Space:
++// twenty times what the list of closed tabs holds (A11), so the pages past
++// what one import brings are there for a later import that finds room.
++constexpr size_t kMaxArchivedItemsRead =
++    20 * static_cast<size_t>(sessions::TabRestoreServiceHelper::kMaxEntries);
++
+ void ParseArcArchive(std::string_view json, ArcImportPlan& plan) {
+   const std::optional<base::Value> parsed =
+       base::JSONReader::Read(json, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
+@@ -1576,7 +1601,10 @@ void ParseArcArchive(std::string_view json, ArcImportPlan& plan) {
+     read.push_back(std::move(archived));
+   }
+   // The newest first: the list of closed tabs holds so many (A11), and Arc
+-  // archives one page again and again.
++  // archives one page again and again. The list's 500 are not taken here:
++  // the newest 500 were all a plan ever held, so once an import had brought
++  // them, every later one found nothing to add and the older pages never
++  // came. ApplyArcArchive takes them, past the ones brought over already.
+   std::ranges::stable_sort(read, std::greater<>(),
+                            &ArcImportPlan::ArchivedItem::archived_at);
+   std::set<std::pair<std::string, GURL>> seen;
+@@ -1584,8 +1612,7 @@ void ParseArcArchive(std::string_view json, ArcImportPlan& plan) {
+     if (!seen.emplace(item.arc_space, item.url).second) {
+       continue;
+     }
+-    if (plan.archived.size() >=
+-        sessions::TabRestoreServiceHelper::kMaxEntries) {
++    if (plan.archived.size() >= kMaxArchivedItemsRead) {
+       ++plan.archived_left_out;
+       continue;
+     }
+@@ -1636,10 +1663,14 @@ std::u16string SummariseArcImport(const ArcImportPlan& plan) {
+   if (const size_t splits = plan.split_count()) {
+     text += base::StrCat({u" \u00B7 ", count(splits, u"split", u"splits")});
+   }
++  // As many as one import brings: the list of closed tabs holds 500 (A11).
+   if (!plan.archived.empty()) {
+     text += base::StrCat(
+         {u" \u00B7 ",
+-         count(plan.archived.size(), u"archived tab", u"archived tabs")});
++         count(std::min(plan.archived.size(),
++                        static_cast<size_t>(
++                            sessions::TabRestoreServiceHelper::kMaxEntries)),
++               u"archived tab", u"archived tabs")});
+   }
+   // I49: the routes that can come across.
+   if (!plan.routes.empty()) {
+@@ -1876,11 +1907,19 @@ void ApplyArcArchive(const ArcImportPlan& plan,
+   const base::Time now = base::Time::Now();
+   std::vector<std::unique_ptr<sessions::tab_restore::Tab>> rows;
+   std::map<SessionID, std::string> arc_ids;
++  // A11: no more than the list holds, the newest of those not brought over
++  // yet; the rest are counted and wait for an import that finds room.
++  const size_t most =
++      static_cast<size_t>(sessions::TabRestoreServiceHelper::kMaxEntries);
+   for (const ArcImportPlan::ArchivedItem& item : plan.archived) {
+     const std::string id = "archive:" + item.arc_id;
+     if (ids.Contains(id)) {
+       continue;
+     }
++    if (rows.size() >= most) {
++      ++result.archived_left_out;
++      continue;
++    }
+     std::optional<SpaceId> space = ids.SpaceFor(item.arc_space);
+     if (space && !model.GetSpace(*space)) {
+       space.reset();
+@@ -1920,6 +1959,21 @@ ArcImportResult ApplyArcImport(BrowserWindowInterface* browser,
+   if (!model || !tabs || !profile) {
+     return result;
+   }
++  // windows G4: a Blank Window keeps Spaces of its own, but what an import of
++  // Arc's brings is remembered in the profile (I12): Arc's ids, and the Space
++  // each Arc Space became. Made in such a window, every later import, in any
++  // window, took each Space for one the person had deleted and each tab for
++  // one already here, and the profile's Spaces never received them. Nothing
++  // of Arc's comes into it, and the result says why. A file Stedding wrote is
++  // merged by its own ids, which are not remembered (Sf2), and still comes.
++  if (!model->follows_registry() && !plan.written_by_stedding) {
++    result.sidebar_unreadable = plan.sidebar_unreadable;
++    // Said only when the sidebar was asked for: an import of history or
++    // passwords alone has nothing it leaves out here.
++    result.blank_window = !plan.sidebar_unreadable &&
++                          (options.spaces || options.pinned || options.unpinned);
++    return result;
++  }
+   result.entries_left_out = plan.entries_left_out;
+   result.sidebar_unreadable = plan.sidebar_unreadable;
+   ImportedIds ids(profile->GetPrefs());
+@@ -1936,28 +1990,43 @@ ArcImportResult ApplyArcImport(BrowserWindowInterface* browser,
+   }
+ 
+   if (options.spaces) {
+-    bool default_taken = false;
++    // The Space here that `arc_space` already is: the one an earlier import
++    // made of it, else the Space by its own id, which a snapshot of this
++    // profile names Spaces by (I18); a Space a sidebar sync join paired is
++    // here under its own id (Sf10). Null for none.
++    const auto space_here =
++        [&](const ArcImportPlan::Space& arc_space) -> Space* {
++      if (const std::optional<SpaceId> known = ids.SpaceFor(arc_space.arc_id)) {
++        if (Space* const space = model->GetSpace(*known)) {
++          return space;
++        }
++      }
++      const auto paired = ctx.shared_to_here.find(arc_space.arc_id);
++      const std::string own_id = paired == ctx.shared_to_here.end()
++                                     ? arc_space.arc_id
++                                     : paired->second;
++      const std::optional<SpaceId> own =
++          SpaceId::FromOptionalToken(base::Token::FromString(own_id));
++      return own ? model->GetSpace(*own) : nullptr;
++    };
++    // A lone unnamed default Space is the first Space's to take that is not
++    // here, unless a Space of the plan is that default Space already, by
++    // either rule above: then every Space of the plan not here is made. A
++    // file of this window's Spaces imported after one was deleted had
++    // renamed the default Space after the deleted one and put its rows
++    // there, wherever the default Space came in the file (I18, I20).
++    bool default_taken =
++        model->size() == 1 && model->spaces().front()->name().empty() &&
++        std::ranges::any_of(plan.spaces,
++                            [&](const ArcImportPlan::Space& arc_space) {
++                              return space_here(arc_space) ==
++                                     model->spaces().front().get();
++                            });
+     // import I8: Arc's profile name, and the session this import made for it.
+     std::map<std::string, std::string> arc_sessions;
+     for (size_t i = 0; i < plan.spaces.size(); ++i) {
+       const ArcImportPlan::Space& arc_space = plan.spaces[i];
+-      Space* space = nullptr;
+-      if (const std::optional<SpaceId> known = ids.SpaceFor(arc_space.arc_id)) {
+-        space = model->GetSpace(*known);
+-      }
+-      // A snapshot of this profile names Spaces by their own ids (I18); a
+-      // Space a sidebar sync join paired is here under its own id (Sf10).
+-      if (!space) {
+-        const auto paired = ctx.shared_to_here.find(arc_space.arc_id);
+-        const std::string own_id = paired == ctx.shared_to_here.end()
+-                                       ? arc_space.arc_id
+-                                       : paired->second;
+-        if (const std::optional<SpaceId> own = SpaceId::FromOptionalToken(
+-                base::Token::FromString(own_id));
+-            own && model->GetSpace(*own)) {
+-          space = model->GetSpace(*own);
+-        }
+-      }
++      Space* space = space_here(arc_space);
+       // An Arc Space an earlier import made and the user has deleted since
+       // stays deleted, and so do its tabs: its Arc id is still remembered
+       // (I12). It came back, empty, at every import. A sidebar file names
+@@ -2071,7 +2140,10 @@ ArcImportResult ImportNodesAsPins(
+   SpaceModel* const model = browser ? SpaceModel::From(browser) : nullptr;
+   TabStripModel* const tabs = browser ? browser->GetTabStripModel() : nullptr;
+   Profile* const profile = browser ? browser->GetProfile() : nullptr;
+-  if (!model || !tabs || !profile) {
++  // windows G4: a Blank Window's pins are its own, and what turned into them
++  // would be remembered in the profile (I12), out of reach of every other
++  // window. Nothing turns in it (CountNodesToPin counts nothing there).
++  if (!model || !tabs || !profile || !model->follows_registry()) {
+     return result;
+   }
+   ImportedIds ids(profile->GetPrefs());
+@@ -2106,7 +2178,8 @@ size_t CountNodesToPin(BrowserWindowInterface* browser,
+   SpaceModel* const model = browser ? SpaceModel::From(browser) : nullptr;
+   TabStripModel* const tabs = browser ? browser->GetTabStripModel() : nullptr;
+   Profile* const profile = browser ? browser->GetProfile() : nullptr;
+-  if (!model || !tabs || !profile) {
++  // windows G4: ImportNodesAsPins turns nothing in a Blank Window.
++  if (!model || !tabs || !profile || !model->follows_registry()) {
+     return 0;
+   }
+   ImportedIds ids(profile->GetPrefs());
+@@ -2239,6 +2312,9 @@ void ApplyWhenTheListIsRead(base::WeakPtr<BrowserWindowInterface> browser,
+                            result.passwords_past_the_cap =
+                                data.passwords_past_the_cap;
+                            result.keychain_denied = data.keychain_denied;
++                           // I40: the parts a policy turned off.
++                           result.history_blocked = data.history_blocked;
++                           result.passwords_blocked = data.passwords_blocked;
+                            std::move(done).Run(result);
+                          },
+                          result, std::move(done)));
+@@ -2431,6 +2507,20 @@ std::u16string DescribeArcImportResult(const ArcImportResult& result) {
+     text += u" \u00B7 passwords skipped: the keychain said no";
+ #endif
+   }
++  // I40: a part a policy turned off, as the imports from Dia and Safari name
++  // it.
++  if (result.history_blocked) {
++    text += u" \u00B7 history skipped: your administrator has turned it off";
++  }
++  if (result.passwords_blocked) {
++    text += u" \u00B7 passwords skipped: your administrator has turned it off";
++  }
++  // windows G4: a Blank Window's Spaces are its own.
++  if (result.blank_window) {
++    text +=
++        u" \u00B7 Spaces and tabs come only into a window of your Spaces, not "
++        u"a Blank Window";
++  }
+   return text;
+ }
+ 
 diff --git a/chrome/browser/ui/spaces/arc_sidebar_importer.h b/chrome/browser/ui/spaces/arc_sidebar_importer.h
-index a18d12ee6749b..9bd326005062e 100644
+index a18d12ee6749b..1e5f3d234a140 100644
 --- a/chrome/browser/ui/spaces/arc_sidebar_importer.h
 +++ b/chrome/browser/ui/spaces/arc_sidebar_importer.h
 @@ -51,6 +51,10 @@ struct ArcImportPlan {
@@ -90,11 +320,51 @@ index a18d12ee6749b..9bd326005062e 100644
      // import I7: how that split is laid out: stacked, or side by side, and
      // what share of its first two panes the first takes.
      bool split_stacked = false;
+@@ -134,7 +138,9 @@ struct ArcImportPlan {
+   std::vector<ArcRoute> routes;
+   size_t routes_left_out = 0;
+   // I7: Arc's archived items, the newest first and each page once a Space, and
+-  // how many of them no row can hold.
++  // how many of them no row can hold. The plan holds more than the 500 the
++  // list of closed tabs does: an import takes as many as it has room for of
++  // those not brought over yet (A11), so a later one brings the rest.
+   std::vector<ArchivedItem> archived;
+   size_t archived_left_out = 0;
+   // I1 (BACKLOG S-160): the sidebar's entries that were named and cannot come
+@@ -231,6 +237,12 @@ struct ArcImportResult {
+   // I23: logins past the 10,000 read (BACKLOG S-346).
+   size_t passwords_past_the_cap = 0;
+   bool keychain_denied = false;
++  // I40: Arc's history or passwords, which a policy turns off, not read.
++  bool history_blocked = false;
++  bool passwords_blocked = false;
++  // windows G4: the window is a Blank Window, whose Spaces are its own.
++  // Nothing of Arc's sidebar came into it, and nothing was remembered.
++  bool blank_window = false;
+   // I48, I49: Arc's routes that became routes, and those that could not.
+   size_t routes = 0;
+   size_t routes_left_out = 0;
 diff --git a/chrome/browser/ui/spaces/sidebar_backup.cc b/chrome/browser/ui/spaces/sidebar_backup.cc
-index 63db46bd39eeb..2809e64536fc6 100644
+index 63db46bd39eeb..489451e217080 100644
 --- a/chrome/browser/ui/spaces/sidebar_backup.cc
 +++ b/chrome/browser/ui/spaces/sidebar_backup.cc
-@@ -29,6 +29,7 @@
+@@ -4,6 +4,7 @@
+ 
+ #include "chrome/browser/ui/spaces/sidebar_backup.h"
+ 
++#include <algorithm>
+ #include <memory>
+ #include <optional>
+ #include <set>
+@@ -23,12 +24,15 @@
+ #include "base/task/lazy_thread_pool_task_runner.h"
+ #include "base/task/thread_pool.h"
+ #include "base/values.h"
++#include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/live_folders/live_folder_note.h"
+ #include "chrome/browser/ui/spaces/space.h"
+ #include "chrome/browser/ui/spaces/space_model.h"
  #include "chrome/browser/ui/stedding/pin_home.h"
  #include "chrome/browser/ui/stedding/tab_names.h"
  #include "chrome/browser/ui/stedding/tab_parents.h"
@@ -102,7 +372,15 @@ index 63db46bd39eeb..2809e64536fc6 100644
  #include "chrome/browser/ui/tabs/tab_strip_model.h"
  #include "components/tabs/public/folder_tab_collection.h"
  #include "components/tabs/public/tab_collection.h"
-@@ -85,6 +86,8 @@ Node TabNode(Snapshot& snapshot, tabs::TabInterface* tab) {
+@@ -47,6 +51,7 @@ struct Snapshot {
+   raw_ptr<SpaceModel> model;
+   raw_ptr<TabStripModel> tabs;
+   std::set<std::string> tokens;
++  raw_ptr<Profile> profile;
+ };
+ 
+ // sidebar-file Sf2: "tab:<tab token>", which the session keeps across a
+@@ -85,6 +90,8 @@ Node TabNode(Snapshot& snapshot, tabs::TabInterface* tab) {
    // its name, and the page's title is its title. The name was written as the
    // page's title, so an import showed it only until the page loaded.
    node.name = stedding::TabName(contents);
@@ -111,7 +389,50 @@ index 63db46bd39eeb..2809e64536fc6 100644
    node.title = contents->GetTitle();
    if (node.title.empty()) {
      node.title = node.name.empty() ? tab->GetTitle() : node.name;
-@@ -270,6 +273,10 @@ std::string AppendItem(const Node& node,
+@@ -154,6 +161,24 @@ Node* FolderNodeFor(std::vector<Node>* run,
+ // the Clear line. It had put every folder in the pinned run, and an import
+ // then made each an unpinned folder there. The essentials that are this
+ // Space's own (spaces B6) are written with it.
++// live-folders Lf9 (BACKLOG S-478): a live folder's row, or any tab in the
++// live folder, stays out of an export and a backup, as it stays out of sync.
++// Read back, it would be an ordinary pin of a list that never changes; the
++// live folder itself keeps its rows on this computer.
++bool IsLive(const Snapshot& snapshot, tabs::TabInterface* tab) {
++  if (live_folders::IsLiveRowToken(stedding::TabToken(tab->GetContents()))) {
++    return true;
++  }
++  return std::ranges::any_of(
++      FolderChain(tab), [&](const tabs::TabCollection* folder) {
++        return live_folders::IsLiveFolder(
++            snapshot.profile,
++            static_cast<const tabs::FolderTabCollection*>(folder)
++                ->id()
++                .ToString());
++      });
++}
++
+ void FillSpace(Snapshot& snapshot,
+                ArcImportPlan::Space* space,
+                const SpaceId& id) {
+@@ -170,7 +195,7 @@ void FillSpace(Snapshot& snapshot,
+       }
+       continue;
+     }
+-    if (model->SpaceForTab(tab) != id) {
++    if (model->SpaceForTab(tab) != id || IsLive(snapshot, tab)) {
+       continue;
+     }
+     const std::vector<const tabs::TabCollection*> chain = FolderChain(tab);
+@@ -222,7 +247,7 @@ std::optional<Snapshot> SnapshotOf(BrowserWindowInterface* browser) {
+   if (!model || !tabs) {
+     return std::nullopt;
+   }
+-  return Snapshot{model, tabs, {}};
++  return Snapshot{model, tabs, {}, browser->GetProfile()};
+ }
+ 
+ std::string ColorText(SkColor color) {
+@@ -270,6 +295,10 @@ std::string AppendItem(const Node& node,
      tab.Set("savedURL", node.url.spec());
      tab.Set("savedTitle", node.title);
      data.Set("tab", std::move(tab));

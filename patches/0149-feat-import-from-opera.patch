@@ -23,23 +23,43 @@ Why: import I43 (BACKLOG S-375). Opera could not be imported at all, and the fil
 shapes were confirmed in public migrators and importers first.
 Removable when: the family's import leaves the series.
 ---
- .../browser/resources/stedding_welcome/app.ts |   3 +-
- .../browser/ui/spaces/arc_sidebar_importer.cc |  15 +++
- .../ui/spaces/chromium_family_importer.cc     |  73 ++++++++++--
- .../ui/spaces/chromium_family_importer.h      |  43 +++++--
- .../chromium_family_importer_unittest.cc      | 112 ++++++++++++++++++
+ .../browser/resources/stedding_welcome/app.ts | 114 ++++++++++++--
+ .../browser/ui/spaces/arc_sidebar_importer.cc |  15 ++
+ .../ui/spaces/chromium_family_importer.cc     | 140 ++++++++++++++++--
+ .../ui/spaces/chromium_family_importer.h      |  43 ++++--
+ .../chromium_family_importer_unittest.cc      | 112 ++++++++++++++
  .../ui/views/commandbar/command_bar_view.cc   |   3 +-
  .../browser/ui/webui/settings/settings_ui.cc  |   4 +-
- .../stedding_welcome_handler.cc               |   2 +-
- chrome/test/stedding/import_browsertest.cc    |   8 ++
- .../stedding/safari_dia_import_browsertest.cc |  45 ++++++-
- 10 files changed, 285 insertions(+), 23 deletions(-)
+ .../stedding_welcome_handler.cc               |  47 +++++-
+ chrome/test/stedding/import_browsertest.cc    |   8 +
+ .../stedding/safari_dia_import_browsertest.cc |  45 +++++-
+ 10 files changed, 491 insertions(+), 40 deletions(-)
 
 diff --git a/chrome/browser/resources/stedding_welcome/app.ts b/chrome/browser/resources/stedding_welcome/app.ts
-index bfb4c2a473ea8..e1f6612a02711 100644
+index bfb4c2a473ea8..15d8d2aadeeb3 100644
 --- a/chrome/browser/resources/stedding_welcome/app.ts
 +++ b/chrome/browser/resources/stedding_welcome/app.ts
-@@ -198,7 +198,8 @@ const state = {
+@@ -183,13 +183,19 @@ const state = {
+   sources: [] as ImportSource[],
+   chosenSource: -1,
+   importStatus: '',
++  // The source the last Import was for: importStatus is that import's, and
++  // the button says Importing… or Imported on its row alone.
++  importedSource: -1,
+   importFavorites: true,
+   importHistory: true,
+   importPasswords: true,
+   // import I44: what Firefox and Internet Explorer can bring besides.
+   importSearch: true,
+   importAutofill: true,
++  // Until getAppearance answers: a fresh profile's (W4).
+   scheme: 'system',
++  // A scheme clicked in this flow, which the profile's answer leaves as it is.
++  schemeChosen: false,
+   arc: null as ArcImport|null,
+   arcSpaces: true,
+   arcPinned: true,
+@@ -198,7 +204,8 @@ const state = {
    arcPasswords: true,
    arcStatus: '',
    // import I32, I43: a block for each browser of the Chromium family found
@@ -49,6 +69,245 @@ index bfb4c2a473ea8..e1f6612a02711 100644
    // All three parts start ticked.
    chromium: [] as ChromiumImport[],
    chromiumChoices: {} as Record<string, ChromiumChoice>,
+@@ -210,8 +217,11 @@ const state = {
+   safariPasswords: false,
+   safariStatus: '',
+   spaceColors: [] as SpaceColor[],
++  // The swatch of the first Space's colour: Slate until getAppearance
++  // answers, -1 for a colour no swatch has (W7).
+   spaceColor: 0,
+-  // A swatch clicked in this flow: the drawings take its tint (W4).
++  // A swatch clicked in this flow: the drawings take its tint (W4), and the
++  // profile's answer leaves it as it is.
+   spaceColorChosen: false,
+   // Until getBehaviour answers: a fresh profile's values (W12).
+   behaviour: {
+@@ -232,6 +242,14 @@ interface SpaceColor {
+   color: string;
+ }
+ 
++// welcome W4, W7: the profile's look, which step 3 shows as chosen.
++interface Appearance {
++  // 'system', 'light' or 'dark'.
++  scheme: string;
++  // The first Space's colour's index in spaceColors, or -1.
++  spaceColor: number;
++}
++
+ // import I2, I4: what Arc's sidebar holds, before anything is applied.
+ interface ArcImport {
+   found: boolean;
+@@ -477,7 +495,10 @@ function tile(opts: {
+   const button = el('button', 'tile');
+   button.dataset['focus'] = opts.focusKey;
+   button.setAttribute('role', 'radio');
+-  button.setAttribute('aria-pressed', String(opts.pressed));
++  // A radio button's choice is aria-checked, as the looks', swatches' and
++  // pills' are: a screen reader reads no aria-pressed on a radio, and heard
++  // every engine and source as not chosen (welcome W21).
++  button.setAttribute('aria-checked', String(opts.pressed));
+   button.append(opts.mark || el('span', 'glyph', opts.glyph || ''));
+   const text = el('span');
+   text.append(el('div', 'name', opts.name));
+@@ -545,7 +566,16 @@ function chromiumBlock(source: ChromiumImport): HTMLDivElement {
+       option.selected = index === choice.profile;
+       select.append(option);
+     });
++    // While the import runs the menu keeps the profile being moved: a change
++    // armed the button again, and the import's result line then came under
++    // the other profile, which had not been moved (import I32). A change
++    // made all the same is put back.
++    select.disabled = choice.status === 'inProgress';
+     select.addEventListener('change', () => {
++      if (choice.status === 'inProgress') {
++        select.value = String(choice.profile);
++        return;
++      }
+       choice.profile = Number(select.value);
+       choice.status = '';
+       render();
+@@ -670,7 +700,10 @@ function safariBlock(): HTMLDivElement {
+       state.safariStatus === 'inProgress' ? 'Importing\u2026' :
+       state.safariStatus ? 'Imported' : 'Import');
+   button.dataset['focus'] = 'safari-import';
+-  button.disabled = state.safariStatus !== '';
++  // While another export is chosen and read the browser already holds that
++  // one, not yet read, in place of this: an Import then brought nothing in,
++  // and the read's answer never came, leaving Choose disabled (import I36).
++  button.disabled = state.safariStatus !== '' || state.safariChoosing;
+   button.addEventListener('click', () => {
+     state.safariStatus = 'inProgress';
+     render();
+@@ -885,15 +918,24 @@ function renderStep(main: HTMLElement) {
+                               v => state.importAutofill = v));
+         }
+       }
++      // The label is the chosen source's: an import that ran for another
++      // source left every row reading Imported. While one runs, no other
++      // starts.
++      const forThisSource = state.importedSource === state.chosenSource;
+       const button = el('button', 'secondary',
+-          state.importStatus === 'succeeded' ? 'Imported' :
+-          state.importStatus === 'inProgress' ? 'Importing…' : 'Import');
++          forThisSource && state.importStatus === 'succeeded' ? 'Imported' :
++          forThisSource && state.importStatus === 'inProgress' ? 'Importing…' :
++                                                                 'Import');
+       button.dataset['focus'] = 'import';
+       button.disabled = state.importStatus === 'inProgress';
+       button.addEventListener('click', () => {
+         if (state.chosenSource < 0) {
+           return;
+         }
++        // The status that comes next is this source's. Until it comes the
++        // label stays: a bookmarks file's dialog, cancelled, sends none.
++        state.importedSource = state.chosenSource;
++        state.importStatus = '';
+         // The list's last row is Chromium's "Bookmarks HTML File", which asks
+         // for the file first, as Settings does; sent as a browser's import it
+         // read no file and reported success (BACKLOG S-186).
+@@ -939,6 +981,7 @@ function renderStep(main: HTMLElement) {
+         card.append(miniWindow(look, chosenTint()), el('span', 'name', name));
+         card.addEventListener('click', () => {
+           state.scheme = scheme;
++          state.schemeChosen = true;
+           chrome.send('setAppearance', [scheme]);
+           render();
+         });
+@@ -1189,13 +1232,19 @@ function updateMore(main: HTMLElement) {
+ // above it (the Arc check); one the redraw left disabled hands the focus to
+ // the next control. Found by its place and its text alone, the control was
+ // lost in both cases (BACKLOG S-204).
++// W21: a focus that was not drawn is given again without being drawn; a
++// plain focus() is drawn whenever the last focus was not a click, so the
++// late answers drew the ring on "Get started" before any key was pressed.
+ interface FocusPlace {
+   key: string|null;
+   path: number[];
+   tag: string;
+   text: string;
++  visible: boolean;
+ }
+ 
++type QuietFocusOptions = FocusOptions&{focusVisible?: boolean};
++
+ const FOCUSABLE = 'button, input, select, textarea, a[href], [tabindex]';
+ 
+ function canFocus(node: HTMLElement): boolean {
+@@ -1205,18 +1254,33 @@ function canFocus(node: HTMLElement): boolean {
+ 
+ // Focuses `node`, or, when it cannot take the focus, the next control after
+ // it, else the one before it.
+-function focusOrNext(app: HTMLElement, node: HTMLElement) {
++function focusOrNext(
++    app: HTMLElement, node: HTMLElement, options?: QuietFocusOptions) {
+   if (canFocus(node)) {
+-    node.focus();
++    node.focus(options);
+     return;
+   }
+   const all = Array.from(app.querySelectorAll<HTMLElement>(FOCUSABLE));
+   const at = all.indexOf(node);
+   const near = all.slice(at + 1).find(canFocus) ??
+       all.slice(0, Math.max(at, 0)).reverse().find(canFocus);
+-  near?.focus();
++  near?.focus(options);
+ }
+ 
++// Whether the focused control was drawn as focused the last time the window
++// had the focus. :focus-visible reads false in a window without the focus,
++// so a redraw while the person is in another window goes by this instead, and
++// a ring drawn before they left is drawn again when they come back (W21).
++let focusDrawn = false;
++function noteFocusDrawn() {
++  const focused = document.activeElement;
++  if (document.hasFocus() && focused instanceof HTMLElement) {
++    focusDrawn = focused.matches(':focus-visible');
++  }
++}
++document.addEventListener('focusin', noteFocusDrawn, /*capture=*/ true);
++document.addEventListener('keyup', noteFocusDrawn, /*capture=*/ true);
++
+ function focusPlace(app: HTMLElement): FocusPlace|null {
+   const focused = document.activeElement;
+   if (!(focused instanceof HTMLElement) || !app.contains(focused)) {
+@@ -1231,6 +1295,8 @@ function focusPlace(app: HTMLElement): FocusPlace|null {
+     path,
+     tag: focused.tagName,
+     text: focused.textContent ?? '',
++    visible: document.hasFocus() ? focused.matches(':focus-visible') :
++                                   focusDrawn,
+   };
+ }
+ 
+@@ -1238,11 +1304,13 @@ function refocus(app: HTMLElement, place: FocusPlace|null) {
+   if (!place) {
+     return;
+   }
++  const options: QuietFocusOptions|undefined =
++      place.visible ? undefined : {focusVisible: false};
+   if (place.key) {
+     const keyed = app.querySelector<HTMLElement>(
+         `[data-focus="${CSS.escape(place.key)}"]`);
+     if (keyed) {
+-      focusOrNext(app, keyed);
++      focusOrNext(app, keyed, options);
+       return;
+     }
+   }
+@@ -1252,7 +1320,7 @@ function refocus(app: HTMLElement, place: FocusPlace|null) {
+   }
+   if (node instanceof HTMLElement && node.tagName === place.tag &&
+       node.textContent === place.text) {
+-    node.focus();
++    node.focus(options);
+   }
+ }
+ 
+@@ -1262,6 +1330,10 @@ let shownStep: Screen|null = null;
+ function render() {
+   const app = document.getElementById('app')!;
+   const place = focusPlace(app);
++  // W11: where the step was scrolled to. The new <main> starts at its top,
++  // and a late answer's redraw put an import's progress at the bottom of a
++  // long step out of sight.
++  const scrolled = app.querySelector('main')?.scrollTop ?? 0;
+   app.replaceChildren();
+   const frame = el('div', 'frame');
+   // -1 on the welcome screen, which is no step.
+@@ -1335,6 +1407,12 @@ function render() {
+ 
+   frame.append(header, main, footer);
+   app.append(frame);
++  // The same screen drawn again keeps its scroll; the focus given back below
++  // then scrolls only to bring its control into view. A new screen starts
++  // at its top.
++  if (!newScreen) {
++    main.scrollTop = scrolled;
++  }
+   main.addEventListener('scroll', () => updateMore(main));
+   updateMore(main);
+   refocus(app, place);
+@@ -1452,6 +1530,20 @@ sendWithPromise('getSpaceColors').then((colors: unknown) => {
+   state.spaceColors = colors as SpaceColor[];
+   render();
+ });
++// W4, W7: step 3 shows the profile's scheme and its first Space's colour as
++// chosen: the flow opens again over a profile that has both (import I45),
++// where it marked Follow the system and Slate. A choice clicked before the
++// answer is kept, as the behaviour step keeps one.
++sendWithPromise('getAppearance').then((answer: unknown) => {
++  const appearance = answer as Appearance;
++  if (!state.schemeChosen) {
++    state.scheme = appearance.scheme;
++  }
++  if (!state.spaceColorChosen) {
++    state.spaceColor = appearance.spaceColor;
++  }
++  render();
++});
+ // W12: the behaviour step shows what the profile has set.
+ // A choice clicked before the profile's values arrive is kept: the answer
+ // redrew the old value over it, though the preference had the click (BACKLOG
 diff --git a/chrome/browser/ui/spaces/arc_sidebar_importer.cc b/chrome/browser/ui/spaces/arc_sidebar_importer.cc
 index b7db7034d720a..f07e175756233 100644
 --- a/chrome/browser/ui/spaces/arc_sidebar_importer.cc
@@ -90,7 +349,7 @@ index b7db7034d720a..f07e175756233 100644
    // I27: Arc for Windows is a Store package; its own files are in the
    // package's LocalCache, under a publisher id after the package's name.
 diff --git a/chrome/browser/ui/spaces/chromium_family_importer.cc b/chrome/browser/ui/spaces/chromium_family_importer.cc
-index 3a8cf2a863b93..5397061f9c9a2 100644
+index 3a8cf2a863b93..4810d1bf27a01 100644
 --- a/chrome/browser/ui/spaces/chromium_family_importer.cc
 +++ b/chrome/browser/ui/spaces/chromium_family_importer.cc
 @@ -12,6 +12,7 @@
@@ -109,7 +368,105 @@ index 3a8cf2a863b93..5397061f9c9a2 100644
  #include "sql/database.h"
  #include "sql/statement.h"
  #include "url/gurl.h"
-@@ -238,7 +240,8 @@ ChromiumFamilyInfo LoadInfoOnPool(const ChromiumFamilySource& source) {
+@@ -110,6 +112,22 @@ base::Time FromChromiumMicroseconds(std::string_view text) {
+   return base::Time::FromDeltaSinceWindowsEpoch(base::Microseconds(value));
+ }
+ 
++// import I29: charges one more copy of `path`, which an entry carries, to the
++// file's budget of folder name characters (kMaxChromiumBookmarkPathChars).
++// False, and nothing charged, when the copy would go past it.
++bool ChargePathCopy(const std::vector<std::u16string>& path,
++                    size_t& path_chars) {
++  size_t cost = 0;
++  for (const std::u16string& name : path) {
++    cost += name.size() + 1;
++  }
++  if (cost > kMaxChromiumBookmarkPathChars - path_chars) {
++    return false;
++  }
++  path_chars += cost;
++  return true;
++}
++
+ // Walks one level of a Bookmarks file's tree.
+ void WalkBookmarks(const base::ListValue& children,
+                    std::vector<std::u16string>& path,
+@@ -118,6 +136,7 @@ void WalkBookmarks(const base::ListValue& children,
+                    size_t cap,
+                    size_t max_depth,
+                    size_t& nodes,
++                   size_t& path_chars,
+                    ChromiumBookmarks& out) {
+   for (const base::Value& child : children) {
+     const base::DictValue* const node = child.GetIfDict();
+@@ -143,6 +162,10 @@ void WalkBookmarks(const base::ListValue& children,
+       }
+       const base::ListValue* const kids = node->FindList("children");
+       if (!kids || kids->empty()) {
++        if (!ChargePathCopy(path, path_chars)) {
++          ++out.left_out;
++          continue;
++        }
+         ImportedBookmarkEntry entry;
+         entry.is_folder = true;
+         entry.in_toolbar = toolbar;
+@@ -154,13 +177,14 @@ void WalkBookmarks(const base::ListValue& children,
+       }
+       path.push_back(title);
+       WalkBookmarks(*kids, path, toolbar, depth + 1, cap, max_depth, nodes,
+-                    out);
++                    path_chars, out);
+       path.pop_back();
+       continue;
+     }
+     const std::string* const spec = node->FindString("url");
+     const GURL url(spec ? *spec : std::string());
+-    if (!url.is_valid() || !url.SchemeIsHTTPOrHTTPS()) {
++    if (!url.is_valid() || !url.SchemeIsHTTPOrHTTPS() ||
++        !ChargePathCopy(path, path_chars)) {
+       ++out.left_out;
+       continue;
+     }
+@@ -230,6 +254,38 @@ bool IsRunning(const ChromiumFamilySource& source,
+   return base::GetProcessCount(process.value(), nullptr) > 0;
+ }
+ 
++// import I29: a profile's bookmarks: those kept on the device ("Bookmarks")
++// and, for a user signed in to the browser who keeps bookmarks in the
++// account, the account's ("AccountBookmarks"), a file of the same form. A
++// page both files hold in the same place is read once, and the account's
++// file is read up to what the device's left of the cap. Blocking.
++ChromiumBookmarks ReadProfileBookmarks(const base::FilePath& profile_dir) {
++  ChromiumBookmarks out =
++      ReadChromiumBookmarks(profile_dir.Append(FILE_PATH_LITERAL("Bookmarks")));
++  ChromiumBookmarks account = ReadChromiumBookmarks(
++      profile_dir.Append(FILE_PATH_LITERAL("AccountBookmarks")),
++      kMaxChromiumBookmarks -
++          std::min(out.entries.size(), kMaxChromiumBookmarks));
++  std::set<std::tuple<bool, std::vector<std::u16string>, std::string>> pages;
++  for (const ImportedBookmarkEntry& entry : out.entries) {
++    if (!entry.is_folder) {
++      pages.insert(
++          std::make_tuple(entry.in_toolbar, entry.path, entry.url.spec()));
++    }
++  }
++  for (ImportedBookmarkEntry& entry : account.entries) {
++    if (!entry.is_folder &&
++        pages.contains(std::make_tuple(entry.in_toolbar, entry.path,
++                                       entry.url.spec()))) {
++      continue;
++    }
++    out.entries.push_back(std::move(entry));
++  }
++  out.left_out += account.left_out;
++  out.unreadable = out.unreadable || account.unreadable;
++  return out;
++}
++
+ ChromiumFamilyInfo LoadInfoOnPool(const ChromiumFamilySource& source) {
+   ChromiumFamilyInfo info;
+   const base::FilePath user_data = FindUserDataDir(source);
+@@ -238,11 +294,11 @@ ChromiumFamilyInfo LoadInfoOnPool(const ChromiumFamilySource& source) {
    }
    info.found = true;
    info.running = IsRunning(source, user_data);
@@ -118,8 +475,23 @@ index 3a8cf2a863b93..5397061f9c9a2 100644
 +       ListChromiumProfiles(user_data, source.profile_may_be_at_top)) {
      ChromiumProfileSummary summary;
      const base::FilePath dir = user_data.Append(profile.dir);
-     const ChromiumBookmarks bookmarks =
-@@ -356,7 +359,8 @@ std::u16string FolderTitle(const ChromiumFamilySource& source,
+-    const ChromiumBookmarks bookmarks =
+-        ReadChromiumBookmarks(dir.Append(FILE_PATH_LITERAL("Bookmarks")));
++    const ChromiumBookmarks bookmarks = ReadProfileBookmarks(dir);
+     summary.bookmarks = static_cast<size_t>(std::ranges::count_if(
+         bookmarks.entries,
+         [](const ImportedBookmarkEntry& entry) { return !entry.is_folder; }));
+@@ -288,8 +344,7 @@ FamilyRead ReadOnPool(const ChromiumFamilySource& source,
+     return read;
+   }
+   if (parts.bookmarks) {
+-    read.bookmarks =
+-        ReadChromiumBookmarks(dir.Append(FILE_PATH_LITERAL("Bookmarks")));
++    read.bookmarks = ReadProfileBookmarks(dir);
+   }
+   if (parts.history) {
+     // I30: as I22 reads Arc's, from a copy; older visits than the history
+@@ -356,7 +411,8 @@ std::u16string FolderTitle(const ChromiumFamilySource& source,
                             const ChromiumProfile& profile) {
    std::u16string title = u"Imported from ";
    title.append(source.name);
@@ -129,7 +501,7 @@ index 3a8cf2a863b93..5397061f9c9a2 100644
        !profile.name.empty()) {
      title.append(u" (");
      title.append(profile.name);
-@@ -470,7 +474,9 @@ class ChromiumFamilyImport : public stedding::ImportJob {
+@@ -470,7 +526,9 @@ class ChromiumFamilyImport : public stedding::ImportJob {
      if (model) {
        const std::string key =
            std::string(source_.key) + ":" +
@@ -140,7 +512,7 @@ index 3a8cf2a863b93..5397061f9c9a2 100644
        const stedding::BookmarkMergeResult merged =
            stedding::MergeImportedBookmarks(
                *model, *profile_->GetPrefs(), key,
-@@ -532,6 +538,21 @@ const ChromiumFamilySource* FindChromiumFamilySource(std::string_view key) {
+@@ -532,6 +590,21 @@ const ChromiumFamilySource* FindChromiumFamilySource(std::string_view key) {
  }
  
  base::FilePath FindUserDataDir(const ChromiumFamilySource& source) {
@@ -162,7 +534,7 @@ index 3a8cf2a863b93..5397061f9c9a2 100644
  #if BUILDFLAG(IS_MAC)
    base::FilePath home;
    if (source.mac_folder.empty() ||
-@@ -543,6 +564,16 @@ base::FilePath FindUserDataDir(const ChromiumFamilySource& source) {
+@@ -543,6 +616,16 @@ base::FilePath FindUserDataDir(const ChromiumFamilySource& source) {
                                   .AppendASCII(source.mac_folder);
    return base::DirectoryExists(dir) ? dir : base::FilePath();
  #elif BUILDFLAG(IS_WIN)
@@ -179,7 +551,7 @@ index 3a8cf2a863b93..5397061f9c9a2 100644
    base::FilePath local;
    if (source.windows_folder.empty() ||
        !base::PathService::Get(base::DIR_LOCAL_APP_DATA, &local)) {
-@@ -581,7 +612,8 @@ base::FilePath FindUserDataDir(const ChromiumFamilySource& source) {
+@@ -581,7 +664,8 @@ base::FilePath FindUserDataDir(const ChromiumFamilySource& source) {
  }
  
  std::vector<ChromiumProfile> ListChromiumProfiles(
@@ -189,7 +561,7 @@ index 3a8cf2a863b93..5397061f9c9a2 100644
    std::vector<ChromiumProfile> profiles;
    std::string json;
    const base::FilePath local_state =
-@@ -624,6 +656,18 @@ std::vector<ChromiumProfile> ListChromiumProfiles(
+@@ -624,6 +708,18 @@ std::vector<ChromiumProfile> ListChromiumProfiles(
      profile.last_used = true;
      profiles.push_back(std::move(profile));
    }
@@ -208,7 +580,7 @@ index 3a8cf2a863b93..5397061f9c9a2 100644
    std::ranges::stable_sort(profiles, [](const ChromiumProfile& a,
                                          const ChromiumProfile& b) {
      return a.last_used && !b.last_used;
-@@ -669,13 +713,20 @@ ChromiumBookmarks ReadChromiumBookmarks(const base::FilePath& bookmarks_file,
+@@ -669,20 +765,36 @@ ChromiumBookmarks ReadChromiumBookmarks(const base::FilePath& bookmarks_file,
        {"other", false, nullptr},
        {"synced", false, u"Mobile bookmarks"},
    };
@@ -222,6 +594,7 @@ index 3a8cf2a863b93..5397061f9c9a2 100644
    size_t nodes = 0;
 -  for (const Root& entry : kRoots) {
 -    const base::DictValue* const node = roots->FindDict(entry.key);
++  size_t path_chars = 0;
 +  const auto read_root = [&](const base::DictValue& holder, const Root& entry) {
 +    const base::DictValue* const node = holder.FindDict(entry.key);
      const base::ListValue* const children =
@@ -232,10 +605,11 @@ index 3a8cf2a863b93..5397061f9c9a2 100644
      }
      std::vector<std::u16string> path;
      if (entry.folder) {
-@@ -683,6 +734,14 @@ ChromiumBookmarks ReadChromiumBookmarks(const base::FilePath& bookmarks_file,
+       path.emplace_back(entry.folder);
      }
      WalkBookmarks(*children, path, entry.toolbar, path.size(), cap, max_depth,
-                   nodes, out);
+-                  nodes, out);
++                  nodes, path_chars, out);
 +  };
 +  for (const Root& entry : kRoots) {
 +    read_root(*roots, entry);
@@ -248,7 +622,7 @@ index 3a8cf2a863b93..5397061f9c9a2 100644
    return out;
  }
 diff --git a/chrome/browser/ui/spaces/chromium_family_importer.h b/chrome/browser/ui/spaces/chromium_family_importer.h
-index 9b54fb8da8de8..93e40f3d9cd55 100644
+index 4a3c46e5cf2c8..190c17d1f1f27 100644
 --- a/chrome/browser/ui/spaces/chromium_family_importer.h
 +++ b/chrome/browser/ui/spaces/chromium_family_importer.h
 @@ -42,6 +42,12 @@ struct ChromiumFamilySource {
@@ -327,7 +701,7 @@ index 9b54fb8da8de8..93e40f3d9cd55 100644
  
  // import I29: at most this many bookmarks and folders are read, at most this
  // many folders deep, from a file of at most this size.
-@@ -146,8 +169,8 @@ struct ChromiumBookmarks {
+@@ -152,8 +175,8 @@ struct ChromiumBookmarks {
  };
  
  // import I29: a Chromium "Bookmarks" file (roots bookmark_bar, other and
@@ -491,10 +865,20 @@ index 9c2662fc4c1c7..40ebdef85ac50 100644
    html_source->AddString("steddingLittleLabel",
                           "Open links from other apps in a small window");
 diff --git a/chrome/browser/ui/webui/stedding_welcome/stedding_welcome_handler.cc b/chrome/browser/ui/webui/stedding_welcome/stedding_welcome_handler.cc
-index 0c8c23ee667fa..e56e1842aea24 100644
+index 0c8c23ee667fa..3b2a1c4758d56 100644
 --- a/chrome/browser/ui/webui/stedding_welcome/stedding_welcome_handler.cc
 +++ b/chrome/browser/ui/webui/stedding_welcome/stedding_welcome_handler.cc
-@@ -189,7 +189,7 @@ void WelcomeHandler::RegisterMessages() {
+@@ -153,6 +153,9 @@ void WelcomeHandler::RegisterMessages() {
+   web_ui()->RegisterMessageCallback(
+       "setAppearance", base::BindRepeating(&WelcomeHandler::HandleSetAppearance,
+                                            base::Unretained(this)));
++  web_ui()->RegisterMessageCallback(
++      "getAppearance", base::BindRepeating(&WelcomeHandler::HandleGetAppearance,
++                                           base::Unretained(this)));
+   // welcome W12, on every platform: an unregistered message kills the
+   // browser rather than the page.
+   web_ui()->RegisterMessageCallback(
+@@ -189,7 +192,7 @@ void WelcomeHandler::RegisterMessages() {
        "openShortcuts", base::BindRepeating(&WelcomeHandler::HandleOpenShortcuts,
                                             base::Unretained(this)));
    // import I32, I41, I43: the Chromium family -- Chrome, Edge, Brave,
@@ -503,6 +887,55 @@ index 0c8c23ee667fa..e56e1842aea24 100644
    web_ui()->RegisterMessageCallback(
        "getFromArc", base::BindRepeating(&WelcomeHandler::HandleGetFromArc,
                                          base::Unretained(this)));
+@@ -717,6 +720,48 @@ void WelcomeHandler::HandleSetAppearance(const base::ListValue& args) {
+   }
+ }
+ 
++void WelcomeHandler::HandleGetAppearance(const base::ListValue& args) {
++  if (args.size() != 1U) {
++    return;
++  }
++  AllowJavascript();
++  // welcome W4: the scheme setAppearance writes, read back.
++  std::string_view scheme = "system";
++  if (const ThemeService* const theme =
++          ThemeServiceFactory::GetForProfile(Profile::FromWebUI(web_ui()))) {
++    switch (theme->GetBrowserColorScheme()) {
++      case ThemeService::BrowserColorScheme::kLight:
++        scheme = "light";
++        break;
++      case ThemeService::BrowserColorScheme::kDark:
++        scheme = "dark";
++        break;
++      case ThemeService::BrowserColorScheme::kSystem:
++        break;
++    }
++  }
++  // W7: the swatch of the first Space's colour, the Space setSpaceColor
++  // tints; -1 for a colour no swatch has (one brought from Arc).
++  int swatch = -1;
++  const WelcomeHost* const host =
++      WelcomeHost::FromWebContents(web_ui()->GetWebContents());
++  const spaces::SpaceModel* const model =
++      host ? spaces::SpaceModel::From(host->browser()) : nullptr;
++  if (model && !model->spaces().empty()) {
++    const SkColor color = model->spaces().front()->color();
++    for (size_t i = 0; i < spaces::kSpaceColors.size(); ++i) {
++      if (spaces::kSpaceColors[i].color == color) {
++        swatch = static_cast<int>(i);
++        break;
++      }
++    }
++  }
++  base::DictValue appearance;
++  appearance.Set("scheme", scheme);
++  appearance.Set("spaceColor", swatch);
++  ResolveJavascriptCallback(args[0], appearance);
++}
++
+ void WelcomeHandler::HandleGetBehaviour(const base::ListValue& args) {
+   if (args.size() != 1U) {
+     return;
 diff --git a/chrome/test/stedding/import_browsertest.cc b/chrome/test/stedding/import_browsertest.cc
 index 4ceff79a4d2d5..198ba5f9e485e 100644
 --- a/chrome/test/stedding/import_browsertest.cc

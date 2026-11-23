@@ -30,24 +30,24 @@ and shows a strip, and its relative tab move understands folders.
  .../browser/ui/browser_command_controller.cc  |  11 +
  chrome/browser/ui/spaces/space_commands.cc    |  16 +
  chrome/browser/ui/spaces/space_commands.h     |   5 +
- chrome/browser/ui/spaces/space_model.cc       | 180 +++++++++
+ chrome/browser/ui/spaces/space_model.cc       | 180 ++++++++
  chrome/browser/ui/spaces/space_model.h        |  39 ++
- .../ui/spaces/space_model_window_unittest.cc  | 168 +++++++++
+ .../ui/spaces/space_model_window_unittest.cc  | 168 ++++++++
  chrome/browser/ui/stedding/stedding_prefs.cc  |   1 +
  chrome/browser/ui/stedding/stedding_prefs.h   |   3 +
  chrome/browser/ui/tabs/tab_strip_model.cc     |  19 +
  .../ui/tabs/tab_strip_model_unittest.cc       |  57 ++-
  .../ui/views/commandbar/command_bar_view.cc   |  16 +
- chrome/browser/ui/views/switcher/BUILD.gn     |  42 +++
- .../switcher/recent_tabs_switcher_view.cc     | 357 ++++++++++++++++++
- .../switcher/recent_tabs_switcher_view.h      |  86 +++++
- .../recent_tabs_switcher_view_unittest.cc     |  93 +++++
+ chrome/browser/ui/views/switcher/BUILD.gn     |  42 ++
+ .../switcher/recent_tabs_switcher_view.cc     | 399 ++++++++++++++++++
+ .../switcher/recent_tabs_switcher_view.h      |  91 ++++
+ .../recent_tabs_switcher_view_unittest.cc     |  93 ++++
  .../browser/ui/webui/settings/settings_ui.cc  |   6 +
  .../settings/stedding_shortcuts_handler.cc    |  11 +
  chrome/test/BUILD.gn                          |   1 +
  components/tabs/impl/tab_strip_collection.cc  | 119 +++++-
  components/tabs/public/tab_strip_collection.h |  28 ++
- 24 files changed, 1265 insertions(+), 7 deletions(-)
+ 24 files changed, 1312 insertions(+), 7 deletions(-)
  create mode 100644 chrome/browser/ui/views/switcher/BUILD.gn
  create mode 100644 chrome/browser/ui/views/switcher/recent_tabs_switcher_view.cc
  create mode 100644 chrome/browser/ui/views/switcher/recent_tabs_switcher_view.h
@@ -909,10 +909,10 @@ index 0000000000000..9e855fb33ef21
 +}
 diff --git a/chrome/browser/ui/views/switcher/recent_tabs_switcher_view.cc b/chrome/browser/ui/views/switcher/recent_tabs_switcher_view.cc
 new file mode 100644
-index 0000000000000..89523153ebda9
+index 0000000000000..21a2a8aa49880
 --- /dev/null
 +++ b/chrome/browser/ui/views/switcher/recent_tabs_switcher_view.cc
-@@ -0,0 +1,357 @@
+@@ -0,0 +1,399 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -926,10 +926,12 @@ index 0000000000000..89523153ebda9
 +#include <vector>
 +
 +#include "base/functional/bind.h"
++#include "base/scoped_observation.h"
 +#include "base/task/single_thread_task_runner.h"
 +#include "chrome/browser/profiles/profile.h"
 +#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 +#include "chrome/browser/ui/spaces/space.h"
++#include "chrome/browser/ui/spaces/space_id.h"
 +#include "chrome/browser/ui/spaces/space_model.h"
 +#include "chrome/browser/ui/stedding/motion.h"
 +#include "chrome/browser/ui/tab_ui_helper.h"
@@ -1005,6 +1007,36 @@ index 0000000000000..89523153ebda9
 +  const raw_ptr<RecentTabsSwitcherView> strip_;
 +};
 +
++// switcher X1, X3: a Space switch, here or by a Space deleted in another
++// window, ends the run where it is without a key the strip hears (on the
++// Mac, Ctrl-2 comes with the run's own Ctrl held). The strip had stayed over
++// the new Space's page with the old Space's tabs until Ctrl was let go, or
++// appeared there when the hold delay passed; it closes now (Refresh).
++class RecentTabsSwitcherView::SpaceWatcher
++    : public spaces::SpaceModel::Observer {
++ public:
++  SpaceWatcher(RecentTabsSwitcherView* strip, spaces::SpaceModel* model)
++      : strip_(strip) {
++    observation_.Observe(model);
++  }
++  ~SpaceWatcher() override = default;
++
++  // spaces::SpaceModel::Observer:
++  void OnActiveSpaceChanged(const spaces::SpaceId& from,
++                            const spaces::SpaceId& to) override {
++    strip_->Refresh();
++  }
++  void OnSpaceRemoved(const spaces::SpaceId& id) override {
++    strip_->Refresh();
++  }
++  void OnSpaceModelDestroying() override { observation_.Reset(); }
++
++ private:
++  const raw_ptr<RecentTabsSwitcherView> strip_;
++  base::ScopedObservation<spaces::SpaceModel, spaces::SpaceModel::Observer>
++      observation_{this};
++};
++
 +// static
 +void RecentTabsSwitcherView::Show(BrowserWindowInterface* browser) {
 +  BrowserView* const browser_view =
@@ -1056,6 +1088,9 @@ index 0000000000000..89523153ebda9
 +  // switcher X7: a strip narrowed to its card narrows every cell alike, and
 +  // their titles shorten to fit. It is never wider than its cells want.
 +  layout->SetDefaultFlex(1);
++  if (spaces::SpaceModel* const model = spaces::SpaceModel::From(browser)) {
++    space_watcher_ = std::make_unique<SpaceWatcher>(this, model);
++  }
 +}
 +
 +RecentTabsSwitcherView::~RecentTabsSwitcherView() = default;
@@ -1194,6 +1229,13 @@ index 0000000000000..89523153ebda9
 +  if (closing_ || revealed_) {
 +    return;
 +  }
++  // switcher X3: a run that ended before the hold delay passed shows no
++  // strip; the strip goes instead.
++  const spaces::SpaceModel* const model = spaces::SpaceModel::From(browser_);
++  if (!model || !model->in_cycle()) {
++    Close();
++    return;
++  }
 +  revealed_ = true;
 +  UpdateBounds();
 +  SetVisible(true);
@@ -1272,10 +1314,10 @@ index 0000000000000..89523153ebda9
 +}  // namespace stedding
 diff --git a/chrome/browser/ui/views/switcher/recent_tabs_switcher_view.h b/chrome/browser/ui/views/switcher/recent_tabs_switcher_view.h
 new file mode 100644
-index 0000000000000..796c2f75100c6
+index 0000000000000..3ecabe54ed5fb
 --- /dev/null
 +++ b/chrome/browser/ui/views/switcher/recent_tabs_switcher_view.h
-@@ -0,0 +1,86 @@
+@@ -0,0 +1,91 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -1347,9 +1389,14 @@ index 0000000000000..796c2f75100c6
 +  // ui::EventObserver clashes with views::View::OnEvent, so a small object
 +  // listens and forwards.
 +  class Watcher;
++  // switcher X1, X3: the model ends a run on its own when the user leaves
++  // the Space or the Space goes, and this object tells the strip, which
++  // closes (Refresh).
++  class SpaceWatcher;
 +
 +  const raw_ptr<BrowserWindowInterface> browser_;
 +  std::unique_ptr<Watcher> watcher_;
++  std::unique_ptr<SpaceWatcher> space_watcher_;
 +  std::unique_ptr<views::EventMonitor> monitor_;
 +  base::OneShotTimer hold_timer_;
 +  bool closing_ = false;

@@ -41,8 +41,8 @@ Removable when: never; these are Stedding's own behaviours.
  chrome/browser/ui/archive/BUILD.gn            |  39 ++
  chrome/browser/ui/archive/archived_tabs.cc    |  13 +-
  chrome/browser/ui/archive/archived_tabs.h     |   9 +
- chrome/browser/ui/archive/closed_tabs_undo.cc | 439 +++++++++++++
- chrome/browser/ui/archive/closed_tabs_undo.h  | 171 ++++++
+ chrome/browser/ui/archive/closed_tabs_undo.cc | 494 +++++++++++++++
+ chrome/browser/ui/archive/closed_tabs_undo.h  | 197 ++++++
  .../ui/archive/closed_tabs_undo_unittest.cc   | 229 +++++++
  .../ui/archive/tab_archiver_unittest.cc       |  32 +-
  .../browser/ui/browser_command_controller.cc  |  39 ++
@@ -144,7 +144,7 @@ Removable when: never; these are Stedding's own behaviours.
  components/tabs/impl/tab_strip_collection.cc  |  22 +
  .../tabs/public/tab_context_menu_command.h    |   4 +-
  components/tabs/public/tab_strip_collection.h |   7 +
- 114 files changed, 8643 insertions(+), 150 deletions(-)
+ 114 files changed, 8724 insertions(+), 150 deletions(-)
  create mode 100644 chrome/browser/ui/archive/closed_tabs_undo.cc
  create mode 100644 chrome/browser/ui/archive/closed_tabs_undo.h
  create mode 100644 chrome/browser/ui/archive/closed_tabs_undo_unittest.cc
@@ -906,10 +906,10 @@ index 4b6ae19797506..fe329e293636f 100644
  #endif  // CHROME_BROWSER_UI_ARCHIVE_ARCHIVED_TABS_H_
 diff --git a/chrome/browser/ui/archive/closed_tabs_undo.cc b/chrome/browser/ui/archive/closed_tabs_undo.cc
 new file mode 100644
-index 0000000000000..dd01a345fb12e
+index 0000000000000..3a57eea64a75e
 --- /dev/null
 +++ b/chrome/browser/ui/archive/closed_tabs_undo.cc
-@@ -0,0 +1,439 @@
+@@ -0,0 +1,494 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -1229,22 +1229,76 @@ index 0000000000000..dd01a345fb12e
 +  if (!toasts) {
 +    return;
 +  }
-+  size_t count = 0;
-+  for (const Closed& closed : gathered) {
-+    count += closed.tabs;
-+  }
-+  // One tab is named; a split closed whole counts both panes.
-+  std::u16string title;
-+  if (gathered.size() == 1 && gathered.front().tabs == 1) {
-+    title = gathered.front().title;
++  // R25: a split pane whose page has answered "Leave site?" with Stay since
++  // the close is not part of it, and its entry no longer holds it. Watched
++  // from now on: a page still asking may yet answer.
++  if (sessions::TabRestoreService* const service =
++          TabRestoreServiceFactory::GetForProfileIfExisting(
++              browser_->GetProfile())) {
++    Reread(service->entries(), gathered);
++    if (!service_observation_.IsObservingSource(service)) {
++      service_observation_.Reset();
++      service_observation_.Observe(service);
++    }
 +  }
 +  // A later close replaces the toast and its Undo; the earlier close stays
 +  // in ⇧⌘T's list.
 +  offered_ = std::move(gathered);
 +  offered_space_ = space;
++  ShowOffered(*toasts);
++}
++
++// static
++bool ClosedTabsUndo::Reread(
++    const sessions::TabRestoreService::Entries& entries,
++    std::vector<Closed>& closes) {
++  bool changed = false;
++  for (Closed& closed : closes) {
++    const std::optional<ClosedEntry> entry =
++        DescribeClosedEntry(entries, closed.id);
++    if (!entry ||
++        (entry->tabs == closed.tabs && entry->title == closed.title)) {
++      continue;
++    }
++    closed.tabs = entry->tabs;
++    closed.title = entry->title;
++    changed = true;
++  }
++  return changed;
++}
++
++void ClosedTabsUndo::ShowOffered(ToastController& toasts) {
++  size_t count = 0;
++  for (const Closed& closed : offered_) {
++    count += closed.tabs;
++  }
++  // One tab is named; a split closed whole counts both panes.
++  std::u16string title;
++  if (offered_.size() == 1 && offered_.front().tabs == 1) {
++    title = offered_.front().title;
++  }
 +  ToastParams params(ToastId::kSteddingTabsClosed);
 +  params.body_string_override = ClosedTabsToastText(count, title);
-+  toasts->MaybeShowToast(std::move(params));
++  toasts.MaybeShowToast(std::move(params));
++}
++
++void ClosedTabsUndo::TabRestoreServiceChanged(
++    sessions::TabRestoreService* service) {
++  if (offered_.empty() || !Reread(service->entries(), offered_) ||
++      WindowClosing()) {
++    return;
++  }
++  // R25: the toast on screen says what the close closed now. One that has
++  // gone stays gone.
++  ToastController* const toasts = ToastController::From(&*browser_);
++  if (toasts && toasts->GetCurrentToastId() == ToastId::kSteddingTabsClosed) {
++    ShowOffered(*toasts);
++  }
++}
++
++void ClosedTabsUndo::TabRestoreServiceDestroyed(
++    sessions::TabRestoreService* service) {
++  service_observation_.Reset();
 +}
 +
 +size_t ClosedTabsUndo::Undo() {
@@ -1253,6 +1307,7 @@ index 0000000000000..dd01a345fb12e
 +  const std::vector<Closed> offered = std::exchange(offered_, {});
 +  const std::optional<spaces::SpaceId> space =
 +      std::exchange(offered_space_, std::nullopt);
++  service_observation_.Reset();
 +  if (offered.empty()) {
 +    return 0;
 +  }
@@ -1351,10 +1406,10 @@ index 0000000000000..dd01a345fb12e
 +}  // namespace stedding
 diff --git a/chrome/browser/ui/archive/closed_tabs_undo.h b/chrome/browser/ui/archive/closed_tabs_undo.h
 new file mode 100644
-index 0000000000000..43a33b09427e3
+index 0000000000000..b29889fa14213
 --- /dev/null
 +++ b/chrome/browser/ui/archive/closed_tabs_undo.h
-@@ -0,0 +1,171 @@
+@@ -0,0 +1,197 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -1369,10 +1424,12 @@ index 0000000000000..43a33b09427e3
 +
 +#include "base/memory/raw_ref.h"
 +#include "base/memory/weak_ptr.h"
++#include "base/scoped_observation.h"
 +#include "chrome/browser/ui/spaces/space_id.h"
 +#include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
 +#include "components/sessions/core/session_id.h"
 +#include "components/sessions/core/tab_restore_service.h"
++#include "components/sessions/core/tab_restore_service_observer.h"
 +#include "components/split_tabs/split_tab_id.h"
 +#include "components/tabs/public/tab_interface.h"
 +#include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
@@ -1380,6 +1437,7 @@ index 0000000000000..43a33b09427e3
 +class BrowserWindowInterface;
 +class PrefService;
 +class TabStripModel;
++class ToastController;
 +
 +namespace stedding {
 +
@@ -1462,8 +1520,12 @@ index 0000000000000..43a33b09427e3
 +
 +// One per normal window, owned by BrowserWindowFeatures after the archiver.
 +// Gathers the closes the user makes in one turn into one close, shows the
-+// toast for it, and undoes it when the toast's button asks.
-+class ClosedTabsUndo : public TabStripModelObserver {
++// toast for it, and undoes it when the toast's button asks. While the toast
++// offers a close, it watches the recently-closed list: a split pane whose
++// page answers "Leave site?" with Stay leaves the close's entry, and the
++// toast then counts what did close (R25).
++class ClosedTabsUndo : public TabStripModelObserver,
++                       public sessions::TabRestoreServiceObserver {
 + public:
 +  DECLARE_USER_DATA(ClosedTabsUndo);
 +
@@ -1489,6 +1551,11 @@ index 0000000000000..43a33b09427e3
 +      const TabStripSelectionChange& selection) override;
 +  void OnTabWillBeRemoved(tabs::TabInterface* tab, int index) override;
 +
++  // sessions::TabRestoreServiceObserver:
++  void TabRestoreServiceChanged(sessions::TabRestoreService* service) override;
++  void TabRestoreServiceDestroyed(
++      sessions::TabRestoreService* service) override;
++
 + private:
 +  struct Closed {
 +    SessionID id = SessionID::InvalidValue();
@@ -1504,6 +1571,15 @@ index 0000000000000..43a33b09427e3
 +  // Shows the toast for what this turn's closes gathered.
 +  void Flush();
 +
++  // Reads each of `closes` again from `entries`: how many tabs its entry
++  // brings back now, and its title. An entry gone from the list is left as
++  // it was; Undo passes over it. True when any changed.
++  static bool Reread(const sessions::TabRestoreService::Entries& entries,
++                     std::vector<Closed>& closes);
++
++  // Shows the toast for `offered_`, in place of any toast on screen.
++  void ShowOffered(ToastController& toasts);
++
 +  const raw_ref<BrowserWindowInterface> browser_;
 +
 +  // This turn's closes, and the Space on screen when the first was made.
@@ -1518,6 +1594,11 @@ index 0000000000000..43a33b09427e3
 +  // The split each leaving tab was in, read before it leaves: a removed tab
 +  // no longer knows its split.
 +  std::map<tabs::TabHandle, split_tabs::SplitTabId> leaving_splits_;
++
++  // The recently-closed list, watched from the toast until its Undo.
++  base::ScopedObservation<sessions::TabRestoreService,
++                          sessions::TabRestoreServiceObserver>
++      service_observation_{this};
 +
 +  std::optional<ui::ScopedUnownedUserData<ClosedTabsUndo>> scoped_user_data_;
 +  base::WeakPtrFactory<ClosedTabsUndo> weak_factory_{this};
@@ -1933,10 +2014,10 @@ index 6f8924a357cea..480118d36e56e 100644
        "//chrome/browser/ui/views/frame:browser_view_header",
        "//chrome/browser/ui/views/frame:contents_web_view",
 diff --git a/chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.cc b/chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.cc
-index f959df39a062b..4a596c5551e88 100644
+index 0e4d6a1f10cb1..a7a841835d054 100644
 --- a/chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.cc
 +++ b/chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.cc
-@@ -48,6 +48,7 @@
+@@ -49,6 +49,7 @@
  #include "chrome/browser/ui/spaces/new_tab_space.h"
  #include "chrome/browser/ui/stedding/little_window.h"
  #include "chrome/browser/ui/stedding/stedding_command_ids.h"
@@ -1944,7 +2025,7 @@ index f959df39a062b..4a596c5551e88 100644
  #include "chrome/browser/ui/tab_dialogs.h"
  #include "chrome/browser/ui/tab_modal_confirm_dialog.h"
  #include "chrome/browser/ui/tabs/tab_enums.h"
-@@ -75,6 +76,7 @@
+@@ -76,6 +77,7 @@
  #include "components/page_load_metrics/browser/metrics_web_contents_observer.h"
  #include "components/paint_preview/browser/paint_preview_client.h"
  #include "components/permissions/permission_request_manager.h"
@@ -1952,7 +2033,7 @@ index f959df39a062b..4a596c5551e88 100644
  #include "components/printing/browser/print_composite_client.h"
  #include "components/split_tabs/split_tab_id.h"
  #include "components/tabs/public/split_tab_data.h"
-@@ -868,6 +870,14 @@ void BrowserWebContentsDelegate::SetContentsBounds(content::WebContents* source,
+@@ -880,6 +882,14 @@ void BrowserWebContentsDelegate::SetContentsBounds(content::WebContents* source,
  
  void BrowserWebContentsDelegate::UpdateTargetURL(content::WebContents* source,
                                                   const GURL& url) {
@@ -1967,7 +2048,7 @@ index f959df39a062b..4a596c5551e88 100644
    std::vector<StatusBubble*> status_bubbles =
        browser_ui_controller_->GetStatusBubbles();
    for (StatusBubble* status_bubble : status_bubbles) {
-@@ -876,7 +886,7 @@ void BrowserWebContentsDelegate::UpdateTargetURL(content::WebContents* source,
+@@ -888,7 +898,7 @@ void BrowserWebContentsDelegate::UpdateTargetURL(content::WebContents* source,
      ContentsWebView* anchor =
          static_cast<ContentsWebView*>(status_bubble_views->base_view());
      if (source == anchor->GetWebContents()) {
@@ -4922,7 +5003,7 @@ index 7387bb29efc7a..e73565f3654dd 100644
    // chooses to hide it completely.
    ASSERT_TRUE(service.FindPreference(kSidebarClosedForm));
 diff --git a/chrome/browser/ui/stedding/tab_menu_verbs.cc b/chrome/browser/ui/stedding/tab_menu_verbs.cc
-index ff8efdc2253e8..3f7b934cac5ca 100644
+index 233959a27a0ae..0e86db909982c 100644
 --- a/chrome/browser/ui/stedding/tab_menu_verbs.cc
 +++ b/chrome/browser/ui/stedding/tab_menu_verbs.cc
 @@ -18,6 +18,7 @@
@@ -4953,7 +5034,7 @@ index ff8efdc2253e8..3f7b934cac5ca 100644
      case TabStripModel::CommandCopyURL:
      case TabStripModel::CommandSteddingCopyMarkdownLink:
        return tab->GetContents() != nullptr;
-@@ -238,6 +245,11 @@ void ExecuteTabMenuVerb(TabStripModel& tabs, int index, int command_id) {
+@@ -241,6 +248,11 @@ void ExecuteTabMenuVerb(TabStripModel& tabs, int index, int command_id) {
      case TabStripModel::CommandSteddingSetHome:
        space_model->SetHomeUrl(tab, tab->GetContents()->GetLastCommittedURL());
        return;

@@ -35,17 +35,17 @@ I32, I41) and Dia's sidebar (I33) build on this.
  .../browser/resources/stedding_welcome/app.ts |  231 ++++
  chrome/browser/ui/DEPS                        |    5 +
  chrome/browser/ui/spaces/BUILD.gn             |    8 +
- chrome/browser/ui/spaces/arc_data_importer.cc |  263 ++++-
- chrome/browser/ui/spaces/arc_data_importer.h  |   50 +-
+ chrome/browser/ui/spaces/arc_data_importer.cc |  263 +++-
+ chrome/browser/ui/spaces/arc_data_importer.h  |   59 +-
  .../ui/spaces/chromium_family_importer.cc     |  829 +++++++++++++
- .../ui/spaces/chromium_family_importer.h      |  199 ++++
+ .../ui/spaces/chromium_family_importer.h      |  205 ++++
  .../chromium_family_importer_unittest.cc      |  444 +++++++
  chrome/browser/ui/stedding/BUILD.gn           |   83 ++
- .../browser/ui/stedding/imported_bookmarks.cc |  611 ++++++++++
- .../browser/ui/stedding/imported_bookmarks.h  |  244 ++++
+ .../browser/ui/stedding/imported_bookmarks.cc |  663 ++++++++++
+ .../browser/ui/stedding/imported_bookmarks.h  |  248 ++++
  .../stedding/imported_bookmarks_unittest.cc   |  355 ++++++
- .../ui/stedding/safari_export_importer.cc     | 1042 +++++++++++++++++
- .../ui/stedding/safari_export_importer.h      |  267 +++++
+ .../ui/stedding/safari_export_importer.cc     | 1066 +++++++++++++++++
+ .../ui/stedding/safari_export_importer.h      |  276 +++++
  .../safari_export_importer_unittest.cc        |  550 +++++++++
  chrome/browser/ui/stedding/stedding_prefs.cc  |    1 +
  chrome/browser/ui/stedding/stedding_prefs.h   |    5 +
@@ -56,7 +56,9 @@ I32, I41) and Dia's sidebar (I33) build on this.
  chrome/test/stedding/BUILD.gn                 |   11 +
  .../stedding/safari_dia_import_browsertest.cc |  716 +++++++++++
  .../user_data_importer/utility/BUILD.gn       |    3 +
- 24 files changed, 6132 insertions(+), 63 deletions(-)
+ .../utility/parsing_ffi/lib.rs                |   14 +
+ .../utility/parsing_ffi/zip_archive.rs        |   45 +
+ 26 files changed, 6294 insertions(+), 64 deletions(-)
  create mode 100644 chrome/browser/ui/spaces/chromium_family_importer.cc
  create mode 100644 chrome/browser/ui/spaces/chromium_family_importer.h
  create mode 100644 chrome/browser/ui/spaces/chromium_family_importer_unittest.cc
@@ -809,7 +811,7 @@ index 51a51dfc0293a..6191a38cf29ff 100644
        }
        // M155 keeps the plaintext in a PasswordString, built from an rvalue.
 diff --git a/chrome/browser/ui/spaces/arc_data_importer.h b/chrome/browser/ui/spaces/arc_data_importer.h
-index 8bccf7a9889ee..4846c32ed9295 100644
+index 8bccf7a9889ee..1d0b06914f51f 100644
 --- a/chrome/browser/ui/spaces/arc_data_importer.h
 +++ b/chrome/browser/ui/spaces/arc_data_importer.h
 @@ -65,6 +65,23 @@ std::optional<std::u16string> DecryptArcValue(base::span<const uint8_t> sealed,
@@ -836,7 +838,7 @@ index 8bccf7a9889ee..4846c32ed9295 100644
  // import I27: how Arc sealed its passwords. On the Mac, "v10" and AES-128-CBC
  // under a key derived from its keychain item (I23); on Windows, as Chromium
  // seals them there: "v10", a 12-byte nonce, then AES-256-GCM's ciphertext and
-@@ -88,27 +105,52 @@ std::optional<std::u16string> DecryptArcWindowsValue(
+@@ -88,33 +105,65 @@ std::optional<std::u16string> DecryptArcWindowsValue(
  inline constexpr size_t kMaxArcHistoryRows = 100000;
  
  // The urls table of a History copy: http(s) rows that are not hidden, last
@@ -877,6 +879,10 @@ index 8bccf7a9889ee..4846c32ed9295 100644
 +  size_t passwords_past_the_cap = 0;
    // The keychain item could not be read: refused, or no item.
    bool keychain_denied = false;
++  // import I40: the history, or the passwords, asked for and not read
++  // because a policy turns that part off (stedding::AllowedImports).
++  bool history_blocked = false;
++  bool passwords_blocked = false;
  };
  using ArcDataDoneCallback = base::OnceCallback<void(ArcDataResult)>;
  
@@ -884,7 +890,8 @@ index 8bccf7a9889ee..4846c32ed9295 100644
 +// ReadArcLogins reads them, into `profile`'s own password store as the other
 +// browsers' logins are written (stedding::ImportedPasswordsWriter): a login
 +// saved here for the same site and username keeps its password. A blocked
-+// site stays blocked. `done` gets how many logins came in, blocked sites not
++// site stays blocked, but replaces no login saved here at its address with
++// no username. `done` gets how many logins came in, blocked sites not
 +// counted.
 +void WriteArcLogins(Profile& profile,
 +                    std::vector<password_manager::PasswordForm> logins,
@@ -893,6 +900,15 @@ index 8bccf7a9889ee..4846c32ed9295 100644
  // Copies the files to a temporary directory on the thread pool, reads them
  // there, asks the keychain for Arc's password when `passwords` is set, and
  // writes into `profile` back on the caller's sequence. `paths` defaults to
+ // Arc's own. History comes across from where the last import of it ended
+ // (stedding.import.arc_history_through), so a second import adds no visit
+-// a first one brought over.
++// a first one brought over, and no visit older than the history keeps
++// (stedding::OldestKeptVisit). A part a policy turns off is not read
++// (import I40, stedding::AllowedImports), and the result says so.
+ void ImportArcDataAsync(Profile* profile,
+                         bool history,
+                         bool passwords,
 diff --git a/chrome/browser/ui/spaces/chromium_family_importer.cc b/chrome/browser/ui/spaces/chromium_family_importer.cc
 new file mode 100644
 index 0000000000000..e9f43045d7353
@@ -1730,10 +1746,10 @@ index 0000000000000..e9f43045d7353
 +}  // namespace spaces
 diff --git a/chrome/browser/ui/spaces/chromium_family_importer.h b/chrome/browser/ui/spaces/chromium_family_importer.h
 new file mode 100644
-index 0000000000000..4187fc58c83cb
+index 0000000000000..1bef259685644
 --- /dev/null
 +++ b/chrome/browser/ui/spaces/chromium_family_importer.h
-@@ -0,0 +1,199 @@
+@@ -0,0 +1,205 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -1820,6 +1836,12 @@ index 0000000000000..4187fc58c83cb
 +inline constexpr size_t kMaxChromiumBookmarks = 100000;
 +inline constexpr size_t kMaxChromiumBookmarkDepth = 64;
 +inline constexpr int64_t kMaxChromiumBookmarksBytes = 32 * 1024 * 1024;
++// import I29: each bookmark and empty folder carries its whole folder path,
++// so a long folder name over many pages is copied once per page. At most
++// this many UTF-16 characters of folder names are copied into the paths of
++// one file's entries, each name counting one more for itself; the entries
++// past that are left out and counted.
++inline constexpr size_t kMaxChromiumBookmarkPathChars = 16 * 1024 * 1024;
 +
 +struct ChromiumBookmarks {
 +  ChromiumBookmarks();
@@ -2486,10 +2508,10 @@ index 0954be4c57b7a..7e27559c8e106 100644
      # Sparkle.
 diff --git a/chrome/browser/ui/stedding/imported_bookmarks.cc b/chrome/browser/ui/stedding/imported_bookmarks.cc
 new file mode 100644
-index 0000000000000..53793d9000c7a
+index 0000000000000..84ab525b28027
 --- /dev/null
 +++ b/chrome/browser/ui/stedding/imported_bookmarks.cc
-@@ -0,0 +1,611 @@
+@@ -0,0 +1,663 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -2658,11 +2680,26 @@ index 0000000000000..53793d9000c7a
 + public:
 +  AddNewVisitsTask(history::URLRows rows,
 +                   history::VisitSource source,
++                   base::CancelableTaskTracker::IsCanceledCallback is_canceled,
 +                   base::OnceCallback<void(size_t)> done)
-+      : rows_(std::move(rows)), source_(source), done_(std::move(done)) {}
++      : rows_(std::move(rows)),
++        source_(source),
++        origin_(base::SequencedTaskRunner::GetCurrentDefault()),
++        is_canceled_(std::move(is_canceled)),
++        done_(std::move(done)) {}
 +  AddNewVisitsTask(const AddNewVisitsTask&) = delete;
 +  AddNewVisitsTask& operator=(const AddNewVisitsTask&) = delete;
-+  ~AddNewVisitsTask() override = default;
++  ~AddNewVisitsTask() override {
++    // import I30, I42: a history whose database did not open this run (a
++    // file from a newer version, one that could not be repaired) drops its
++    // tasks without running them. The caller still hears, with nothing
++    // added, on its own sequence, so an import does not wait for ever;
++    // unless the caller has gone, which its tracker says.
++    if (done_ && !is_canceled_.Run()) {
++      origin_->PostTask(FROM_HERE,
++                        base::BindOnce(std::move(done_), size_t{0}));
++    }
++  }
 +
 +  bool RunOnDBThread(history::HistoryBackend* backend,
 +                     history::HistoryDatabase* db) override {
@@ -2707,6 +2744,9 @@ index 0000000000000..53793d9000c7a
 + private:
 +  history::URLRows rows_;
 +  const history::VisitSource source_;
++  // The caller's sequence, and whether its tracker has cancelled the answer.
++  const scoped_refptr<base::SequencedTaskRunner> origin_;
++  const base::CancelableTaskTracker::IsCanceledCallback is_canceled_;
 +  base::OnceCallback<void(size_t)> done_;
 +  size_t added_ = 0;
 +};
@@ -2830,9 +2870,14 @@ index 0000000000000..53793d9000c7a
 +    std::move(done).Run(0);
 +    return;
 +  }
++  // The task's own view of the tracker: the history service keeps the one
++  // it makes, and the task answers by itself when it is dropped unrun.
++  base::CancelableTaskTracker::IsCanceledCallback is_canceled;
++  tracker.NewTrackedTaskId(&is_canceled);
 +  history.ScheduleDBTask(
 +      FROM_HERE,
 +      std::make_unique<AddNewVisitsTask>(std::move(rows), source,
++                                         std::move(is_canceled),
 +                                         std::move(done)),
 +      &tracker);
 +}
@@ -2859,8 +2904,11 @@ index 0000000000000..53793d9000c7a
 +  return by_username;
 +}
 +
++// `another`, when given, says whether a saved login of the row's site and
++// username has another password, whatever the row is sorted as.
 +IncomingLogin SortIncomingLogin(const SavedByUsername& by_username,
-+                                const password_manager::CSVPassword& row) {
++                                const password_manager::CSVPassword& row,
++                                bool* another = nullptr) {
 +  using password_manager::CredentialUIEntry;
 +  using password_manager::CSVPassword;
 +  using password_manager::PasswordForm;
@@ -2889,10 +2937,33 @@ index 0000000000000..53793d9000c7a
 +      other = true;
 +    }
 +  }
++  if (another) {
++    *another = other;
++  }
 +  if (same) {
 +    return IncomingLogin::kAlreadySaved;
 +  }
 +  return other ? IncomingLogin::kKept : IncomingLogin::kAdded;
++}
++
++// import I39, I42: the rows of `incoming` saved already that Chromium's
++// importer counts as imported. It counts a row saved already with its
++// password, unless a saved login of the same site and username has another
++// password: that row is a conflict to it, which it does not count.
++size_t SavedRowsCountedAsImported(
++    const std::vector<password_manager::CredentialUIEntry>& saved,
++    const std::vector<password_manager::CSVPassword>& incoming) {
++  const SavedByUsername by_username = SavedLoginsByUsername(saved);
++  size_t counted = 0;
++  for (const password_manager::CSVPassword& row : incoming) {
++    bool another = false;
++    if (SortIncomingLogin(by_username, row, &another) ==
++            IncomingLogin::kAlreadySaved &&
++        !another) {
++      ++counted;
++    }
++  }
++  return counted;
 +}
 +
 +}  // namespace
@@ -2980,6 +3051,7 @@ index 0000000000000..53793d9000c7a
 +  const std::vector<password_manager::CredentialUIEntry> saved =
 +      presenter_->GetSavedPasswords();
 +  result_ = ClassifyIncomingPasswords(saved, passwords_);
++  saved_counted_as_imported_ = SavedRowsCountedAsImported(saved, passwords_);
 +  DropNotesOfSavedLogins(saved, passwords_);
 +  importer_ = std::make_unique<password_manager::PasswordImporter>(
 +      *presenter_, /*user_confirmation_required=*/true);
@@ -3016,9 +3088,11 @@ index 0000000000000..53793d9000c7a
 +void ImportedPasswordsWriter::OnWritten(
 +    const password_manager::ImportResults& results) {
 +  // The importer counts a login it found already saved as imported; those
-+  // are counted apart.
-+  result_.added = results.number_imported > result_.already_saved
-+                      ? results.number_imported - result_.already_saved
++  // are counted apart. Not one that also meets a saved login with another
++  // password: the importer counts that one as a conflict, and taking it off
++  // too left the added logins one short.
++  result_.added = results.number_imported > saved_counted_as_imported_
++                      ? results.number_imported - saved_counted_as_imported_
 +                      : 0;
 +  result_.refused = results.displayed_entries.size();
 +  Finish();
@@ -3103,10 +3177,10 @@ index 0000000000000..53793d9000c7a
 +}  // namespace stedding
 diff --git a/chrome/browser/ui/stedding/imported_bookmarks.h b/chrome/browser/ui/stedding/imported_bookmarks.h
 new file mode 100644
-index 0000000000000..59f2157b5d8c2
+index 0000000000000..25c0fa29f4f64
 --- /dev/null
 +++ b/chrome/browser/ui/stedding/imported_bookmarks.h
-@@ -0,0 +1,244 @@
+@@ -0,0 +1,248 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -3227,7 +3301,8 @@ index 0000000000000..59f2157b5d8c2
 +
 +// import I30, I38, I40: adds those of `rows` the profile's history does not
 +// already hold a visit for, at that row's time, to that row's URL, as
-+// `source`; `done` gets how many were added. Run on the history database's
++// `source`; `done` gets how many were added, and 0 when the history drops
++// the task unrun (its database did not open). Run on the history database's
 +// own thread, so two imports of the same visits add them once. `tracker`
 +// cancels the reply only: the rows are added even when it goes away first.
 +void AddNewVisits(history::HistoryService& history,
@@ -3297,6 +3372,9 @@ index 0000000000000..59f2157b5d8c2
 +  std::unique_ptr<password_manager::PasswordImporter> importer_;
 +  std::vector<password_manager::CSVPassword> passwords_;
 +  PasswordWriteResult result_;
++  // Of result_.already_saved, the rows Chromium's importer counts as
++  // imported too.
++  size_t saved_counted_as_imported_ = 0;
 +  DoneCallback done_;
 +  base::WeakPtrFactory<ImportedPasswordsWriter> weak_factory_{this};
 +};
@@ -3714,10 +3792,10 @@ index 0000000000000..1661938ac51b4
 +}  // namespace stedding
 diff --git a/chrome/browser/ui/stedding/safari_export_importer.cc b/chrome/browser/ui/stedding/safari_export_importer.cc
 new file mode 100644
-index 0000000000000..af685a8afc7cf
+index 0000000000000..eea3ddee00fd3
 --- /dev/null
 +++ b/chrome/browser/ui/stedding/safari_export_importer.cc
-@@ -0,0 +1,1042 @@
+@@ -0,0 +1,1066 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -3953,8 +4031,9 @@ index 0000000000000..af685a8afc7cf
 +      continue;
 +    }
 +#elif BUILDFLAG(IS_WIN)
-+    if (list.GetInfo().find_data().dwFileAttributes &
-+        FILE_ATTRIBUTE_REPARSE_POINT) {
++    const base::FileEnumerator::FileInfo info = list.GetInfo();
++    if (IsSafariExportFolderLink(info.find_data().dwFileAttributes,
++                                 info.find_data().dwReserved0)) {
 +      continue;
 +    }
 +#endif
@@ -4198,10 +4277,14 @@ index 0000000000000..af685a8afc7cf
 +    return bookmarks;
 +  }
 +
-+  // import I35: the archive, each part's size checked before it is unzipped.
-+  // Returns the bookmarks page, written to a file of its own for the parser.
++  // import I35: the archive, each part's size checked before it is unzipped,
++  // and each read no further than its limit: the size an archive declares
++  // for a part is not what its data must inflate to, and a part that said
++  // 1 KB had been inflated whole, however far it went. Returns the bookmarks
++  // page, written to a file of its own for the parser.
 +  base::FilePath ReadArchive(SafariExportRead& read) {
 +    using user_data_importer::FileType;
++    using user_data_importer::UnzipOutcome;
 +    base::FilePath bookmarks;
 +    const uint64_t bookmarks_size =
 +        (*zip_)->get_file_size_bytes(FileType::Bookmarks);
@@ -4209,7 +4292,11 @@ index 0000000000000..af685a8afc7cf
 +      read.summary.bookmarks_too_big = true;
 +    } else if (bookmarks_size > 0) {
 +      std::string html;
-+      if ((*zip_)->unzip(FileType::Bookmarks, html)) {
++      const UnzipOutcome unzipped = (*zip_)->unzip_with_limit(
++          FileType::Bookmarks, kMaxSafariBookmarksBytes, html);
++      if (unzipped == UnzipOutcome::TooBig) {
++        read.summary.bookmarks_too_big = true;
++      } else if (unzipped == UnzipOutcome::Read) {
 +        bookmarks = WriteForParser(html);
 +      }
 +    }
@@ -4217,10 +4304,14 @@ index 0000000000000..af685a8afc7cf
 +        (*zip_)->get_file_size_bytes(FileType::Passwords);
 +    if (passwords_size > kMaxSafariPasswordsBytes) {
 +      read.summary.passwords_too_big = true;
-+    } else if (passwords_size > 0 &&
-+               !(*zip_)->unzip(FileType::Passwords, read.passwords_csv)) {
-+      read.summary.passwords_unreadable = true;
-+      read.passwords_csv.clear();
++    } else if (passwords_size > 0) {
++      const UnzipOutcome unzipped = (*zip_)->unzip_with_limit(
++          FileType::Passwords, kMaxSafariPasswordsBytes, read.passwords_csv);
++      if (unzipped != UnzipOutcome::Read) {
++        read.summary.passwords_too_big = unzipped == UnzipOutcome::TooBig;
++        read.summary.passwords_unreadable = unzipped != UnzipOutcome::TooBig;
++        read.passwords_csv.clear();
++      }
 +    }
 +    read.summary.history =
 +        (*zip_)->get_file_size_bytes(FileType::SafariHistory) > 0;
@@ -4558,6 +4649,17 @@ index 0000000000000..af685a8afc7cf
 +  return SafariExportFile::kOther;
 +}
 +
++#if BUILDFLAG(IS_WIN)
++bool IsSafariExportFolderLink(uint32_t attributes, uint32_t reparse_tag) {
++  // As base::IsLink: a reparse point is a link when its tag names another
++  // file (a symbolic link, a junction). A cloud file -- OneDrive's, iCloud
++  // Drive's, downloaded or not -- is a reparse point too, and an ordinary
++  // file to read: every file of an export kept there had been skipped.
++  return (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0 &&
++         IsReparseTagNameSurrogate(reparse_tag);
++}
++#endif
++
 +SafariExportRead::SafariExportRead() = default;
 +SafariExportRead::SafariExportRead(SafariExportRead&&) = default;
 +SafariExportRead& SafariExportRead::operator=(SafariExportRead&&) = default;
@@ -4762,10 +4864,10 @@ index 0000000000000..af685a8afc7cf
 +}  // namespace stedding
 diff --git a/chrome/browser/ui/stedding/safari_export_importer.h b/chrome/browser/ui/stedding/safari_export_importer.h
 new file mode 100644
-index 0000000000000..76c47b2355a8c
+index 0000000000000..4bfd896529820
 --- /dev/null
 +++ b/chrome/browser/ui/stedding/safari_export_importer.h
-@@ -0,0 +1,267 @@
+@@ -0,0 +1,276 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -4786,6 +4888,7 @@ index 0000000000000..76c47b2355a8c
 +#include "base/task/cancelable_task_tracker.h"
 +#include "base/threading/sequence_bound.h"
 +#include "base/time/time.h"
++#include "build/build_config.h"
 +#include "chrome/browser/ui/stedding/imported_bookmarks.h"
 +#include "components/history/core/browser/url_row.h"
 +#include "components/password_manager/core/browser/import/csv_password.h"
@@ -4935,6 +5038,14 @@ index 0000000000000..76c47b2355a8c
 +  kPaymentCards,
 +};
 +SafariExportFile KindOfSafariExportFile(const base::FilePath& file);
++
++#if BUILDFLAG(IS_WIN)
++// import I34: whether a file of an unzipped export, listed with the file
++// `attributes` and, for a reparse point, the `reparse_tag`, is a link, which
++// is not read. A cloud file (OneDrive, iCloud Drive) is a reparse point that
++// is no link, and is read.
++bool IsSafariExportFolderLink(uint32_t attributes, uint32_t reparse_tag);
++#endif
 +
 +// What the blocking side read for a summary.
 +struct SafariExportRead {
@@ -6774,3 +6885,91 @@ index cc2667cb7973f..969d19dd069e0 100644
    ]
    deps = [
      "//third_party/rust/anyhow/v1:lib",
+diff --git a/components/user_data_importer/utility/parsing_ffi/lib.rs b/components/user_data_importer/utility/parsing_ffi/lib.rs
+index 5e483809e9838..6003bf1d3f552 100644
+--- a/components/user_data_importer/utility/parsing_ffi/lib.rs
++++ b/components/user_data_importer/utility/parsing_ffi/lib.rs
+@@ -25,6 +25,14 @@ mod ffi {
+         StablePortabilityHistory,
+     }
+ 
++    // What `unzip_with_limit` did: read the whole file, found it holds more
++    // than the limit, or could not read it.
++    enum UnzipOutcome {
++        Read,
++        TooBig,
++        Unreadable,
++    }
++
+     // C++ interop version of the SafariHistoryJSONEntry structure.
+     // See SafariHistoryJSONEntry for field documentation.
+     struct SafariHistoryEntry {
+@@ -91,6 +99,12 @@ mod ffi {
+             file_type: FileType,
+             mut output_bytes: Pin<&mut CxxString>,
+         ) -> bool;
++        fn unzip_with_limit(
++            self: &mut ZipFileArchive,
++            file_type: FileType,
++            max_bytes: u64,
++            mut output_bytes: Pin<&mut CxxString>,
++        ) -> UnzipOutcome;
+         fn parse_safari_history(
+             self: &mut ZipFileArchive,
+             history_callback: UniquePtr<SafariHistoryCallbackFromRust>,
+diff --git a/components/user_data_importer/utility/parsing_ffi/zip_archive.rs b/components/user_data_importer/utility/parsing_ffi/zip_archive.rs
+index 040224b171afa..dd34d93937078 100644
+--- a/components/user_data_importer/utility/parsing_ffi/zip_archive.rs
++++ b/components/user_data_importer/utility/parsing_ffi/zip_archive.rs
+@@ -179,6 +179,51 @@ impl ZipFileArchive {
+         result.unwrap_or(false)
+     }
+ 
++    // Like `unzip`, but reads no more than `max_bytes` of the file. The size an
++    // archive declares for a file is not checked against what its data
++    // inflates to: a file that declares a few bytes may inflate without end.
++    // `TooBig` when the file holds more than `max_bytes`; nothing is written to
++    // `output_bytes` then.
++    pub fn unzip_with_limit(
++        self: &mut ZipFileArchive,
++        file_type: ffi::FileType,
++        max_bytes: u64,
++        mut output_bytes: Pin<&mut CxxString>,
++    ) -> ffi::UnzipOutcome {
++        // Only Bookmarks and Passwords unzip the file as raw data.
++        if file_type != ffi::FileType::Bookmarks && file_type != ffi::FileType::Passwords {
++            return ffi::UnzipOutcome::Unreadable;
++        }
++
++        let result = self.find_and_map_file(|mut file, outpath| {
++            if !should_process_file(outpath, file_type) {
++                return None;
++            }
++            // Read the first file matching the requested type, one byte past
++            // the limit at most: that byte tells a file over the limit from
++            // one that just fits.
++            let mut file_contents = Vec::new();
++            let mut limited = Read::take(&mut file, max_bytes.saturating_add(1));
++            if limited.read_to_end(&mut file_contents).is_err() {
++                return Some(ffi::UnzipOutcome::Unreadable);
++            }
++            if (file_contents.len() as u64) > max_bytes {
++                return Some(ffi::UnzipOutcome::TooBig);
++            }
++            let Ok(text) = str::from_utf8(&file_contents) else {
++                return Some(ffi::UnzipOutcome::Unreadable);
++            };
++
++            // Copy the contents of the file to the output.
++            if !text.is_empty() {
++                output_bytes.as_mut().reserve(text.len());
++                output_bytes.as_mut().push_str(text);
++            }
++            Some(ffi::UnzipOutcome::Read)
++        });
++        result.unwrap_or(ffi::UnzipOutcome::Unreadable)
++    }
++
+     pub fn parse_safari_history(
+         self: &mut ZipFileArchive,
+         history_callback: cxx::UniquePtr<ffi::SafariHistoryCallbackFromRust>,

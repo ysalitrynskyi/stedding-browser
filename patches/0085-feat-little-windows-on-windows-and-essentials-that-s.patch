@@ -31,16 +31,16 @@ essentials grid ran down the sidebar in rows of two (GitHub issue 15).
 Removable when: never; both are product behaviour.
 ---
  .../stedding_page/stedding_page.html.ts       |   3 +-
- .../browser/ui/browser_command_controller.cc  |  13 +++
+ .../browser/ui/browser_command_controller.cc  |  13 ++
  chrome/browser/ui/startup/BUILD.gn            |   2 +
- .../startup/startup_browser_creator_impl.cc   |  63 +++++++++++
+ .../startup/startup_browser_creator_impl.cc   | 174 ++++++++++++++++++
  .../ui/startup/startup_browser_creator_impl.h |   4 +
  .../ui/views/frame/browser_frame_view_win.cc  |   4 +
- ...nned_tab_container_view_vertical_layout.cc |  17 ++-
- .../stedding/little_window_browsertest.cc     |  81 +++++++++++++
- .../stedding/sidebar_forms_browsertest.cc     |  57 +++++++++-
- .../test/stedding/sidebar_rail_browsertest.cc | 107 +++++++++++++++---
- 10 files changed, 325 insertions(+), 26 deletions(-)
+ ...nned_tab_container_view_vertical_layout.cc |  17 +-
+ .../stedding/little_window_browsertest.cc     |  81 ++++++++
+ .../stedding/sidebar_forms_browsertest.cc     |  57 +++++-
+ .../test/stedding/sidebar_rail_browsertest.cc | 107 +++++++++--
+ 10 files changed, 436 insertions(+), 26 deletions(-)
 
 diff --git a/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts b/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
 index 660036ebb8725..39e05d4572407 100644
@@ -108,10 +108,25 @@ index d554afbea2e93..5ed4c3867fead 100644
        "//chrome/browser/ui/tabs:tab_group",
        "//chrome/browser/ui/tabs:tab_strip",
 diff --git a/chrome/browser/ui/startup/startup_browser_creator_impl.cc b/chrome/browser/ui/startup/startup_browser_creator_impl.cc
-index 6b030c1f66d7a..8edb263e05698 100644
+index 6b030c1f66d7a..ab686d5b8f0b8 100644
 --- a/chrome/browser/ui/startup/startup_browser_creator_impl.cc
 +++ b/chrome/browser/ui/startup/startup_browser_creator_impl.cc
-@@ -43,12 +43,14 @@
+@@ -13,9 +13,14 @@
+ #include <vector>
+ 
+ #include "base/auto_reset.h"
++#include "base/callback_list.h"
+ #include "base/command_line.h"
+ #include "base/functional/bind.h"
++#include "base/location.h"
++#include "base/memory/raw_ptr.h"
++#include "base/memory/weak_ptr.h"
+ #include "base/supports_user_data.h"
++#include "base/task/single_thread_task_runner.h"
+ #include "base/version.h"
+ #include "build/build_config.h"
+ #include "chrome/browser/apps/platform_apps/install_chrome_app.h"
+@@ -43,12 +48,14 @@
  #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
  #include "chrome/browser/ui/navigator/browser_navigator.h"
  #include "chrome/browser/ui/navigator/browser_navigator_params.h"
@@ -126,7 +141,105 @@ index 6b030c1f66d7a..8edb263e05698 100644
  #include "chrome/browser/ui/tabs/shared_tab_group_version_upgrade_modal.h"
  #include "chrome/browser/ui/tabs/tab_enums.h"
  #include "chrome/browser/ui/tabs/tab_strip_model.h"
-@@ -264,6 +266,47 @@ void StartupBrowserCreatorImpl::Launch(
+@@ -213,6 +220,97 @@ BrowserWindowInterface* GetExistingBrowserForOpenBehavior(
+   return workspace_browser;
+ }
+ 
++#if BUILDFLAG(IS_WIN)
++// Stedding little E1, E10: opens each of `tabs`, links another app handed
++// over, in a little window over the last-active window of `profile`, or on
++// its own with none. One the profile may not open that way becomes a tab of
++// that window, the ordinary way (E6).
++void OpenLittleTabs(Profile* profile, const StartupTabs& tabs) {
++  for (const StartupTab& tab : tabs) {
++    if (stedding::OpenLittleWindow(profile, tab.url, /*anchor=*/nullptr,
++                                   tab.is_untrusted_launch)) {
++      continue;
++    }
++    spaces::MarkExternalOpen(tab.url);
++    BrowserWindowInterface* const window =
++        stedding::LastActiveNormalWindow(profile);
++    if (!window) {
++      continue;
++    }
++    NavigateParams params(window, tab.url, ui::PAGE_TRANSITION_AUTO_TOPLEVEL);
++    if (tab.is_untrusted_launch) {
++      // As OpenTabsInBrowser does: nothing vouches for the address.
++      params.initiator_origin = url::Origin();
++    }
++    params.disposition = WindowOpenDisposition::kNewForegroundTab;
++    Navigate(&params);
++  }
++}
++
++// Stedding little E10: links another app handed over while Stedding ran with
++// no window open, kept on their profile while the session restore that
++// launch began brings its windows back. A little window opens over the
++// last-active window, and there was none yet: the links were dropped. They
++// open once the restore is over, over the window it brought back, as they do
++// at startup.
++class LittleTabsAwaitingRestore : public base::SupportsUserData::Data {
++ public:
++  explicit LittleTabsAwaitingRestore(Profile* profile)
++      : profile_(profile),
++        restored_(SessionRestore::RegisterOnSessionRestoredCallback(
++            base::BindRepeating(&LittleTabsAwaitingRestore::OnRestored,
++                                base::Unretained(this)))) {}
++  LittleTabsAwaitingRestore(const LittleTabsAwaitingRestore&) = delete;
++  LittleTabsAwaitingRestore& operator=(const LittleTabsAwaitingRestore&) =
++      delete;
++  ~LittleTabsAwaitingRestore() override = default;
++
++  // Keeps `tabs` on `profile` until its restore is over.
++  static void Keep(Profile* profile, const StartupTabs& tabs) {
++    auto* awaiting = static_cast<LittleTabsAwaitingRestore*>(
++        profile->GetUserData(kUserDataKey));
++    if (!awaiting) {
++      auto made = std::make_unique<LittleTabsAwaitingRestore>(profile);
++      awaiting = made.get();
++      profile->SetUserData(kUserDataKey, std::move(made));
++    }
++    AppendTabs(tabs, &awaiting->tabs_);
++  }
++
++ private:
++  static constexpr char kUserDataKey[] = "stedding.little.awaiting_restore";
++
++  void OnRestored(Profile* restored, int /*tab_count*/) {
++    if (restored != profile_) {
++      return;
++    }
++    // A turn later, once the restore is over and the window it brought back
++    // is on screen.
++    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
++        FROM_HERE, base::BindOnce(&LittleTabsAwaitingRestore::Open,
++                                  profile_->GetWeakPtr()));
++  }
++
++  static void Open(base::WeakPtr<Profile> profile) {
++    if (!profile) {
++      return;
++    }
++    auto* const awaiting = static_cast<LittleTabsAwaitingRestore*>(
++        profile->GetUserData(kUserDataKey));
++    if (!awaiting) {
++      return;
++    }
++    const StartupTabs tabs = std::move(awaiting->tabs_);
++    profile->RemoveUserData(kUserDataKey);
++    OpenLittleTabs(profile.get(), tabs);
++  }
++
++  const raw_ptr<Profile> profile_;
++  StartupTabs tabs_;
++  base::CallbackListSubscription restored_;
++};
++#endif  // BUILDFLAG(IS_WIN)
++
+ }  // namespace
+ 
+ StartupBrowserCreatorImpl::StartupBrowserCreatorImpl(
+@@ -264,6 +362,47 @@ void StartupBrowserCreatorImpl::Launch(
    }
  #endif
  
@@ -174,7 +287,26 @@ index 6b030c1f66d7a..8edb263e05698 100644
    DetermineURLsAndLaunch(process_startup, restore_tabbed_browser);
  
    // It's possible for there to be no browser window, e.g. if someone
-@@ -276,6 +319,20 @@ void StartupBrowserCreatorImpl::Launch(
+@@ -272,10 +411,39 @@ void StartupBrowserCreatorImpl::Launch(
+   BrowserWindowInterface* const browser =
+       GetLastActiveBrowserWindowInterfaceWithAnyProfile();
+   if (!browser) {
++#if BUILDFLAG(IS_WIN)
++    // Stedding little E10: Stedding ran with no window open, and this launch
++    // began bringing the session back; there was no window yet for the link's
++    // little window to open over, and the link was dropped. It opens once the
++    // restore is over, over the window it brought back; with no restore under
++    // way, at once, on its own.
++    if (!little_tabs_.empty()) {
++      if (SessionRestore::IsRestoring(profile_)) {
++        LittleTabsAwaitingRestore::Keep(profile_, little_tabs_);
++      } else {
++        OpenLittleTabs(profile_, little_tabs_);
++      }
++      little_tabs_.clear();
++    }
++#endif  // BUILDFLAG(IS_WIN)
+     LOG(ERROR) << "No browser window found for startup.";
      return;
    }
  
@@ -195,7 +327,7 @@ index 6b030c1f66d7a..8edb263e05698 100644
    if (command_line_->HasSwitch(switches::kInstallChromeApp)) {
      install_chrome_app::InstallChromeApp(
          command_line_->GetSwitchValueASCII(switches::kInstallChromeApp),
-@@ -631,6 +688,12 @@ StartupBrowserCreatorImpl::DetermineStartupTabs(
+@@ -631,6 +799,12 @@ StartupBrowserCreatorImpl::DetermineStartupTabs(
      bool whats_new_enabled) {
    StartupTabs tabs =
        provider.GetCommandLineTabs(*command_line_, cur_dir_, profile_);

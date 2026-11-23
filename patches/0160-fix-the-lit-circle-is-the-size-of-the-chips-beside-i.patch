@@ -23,17 +23,17 @@ Removable when: fold it into the patch that made the circle, once the Mac's
 series matches this one; T62 and T63 belong in the patch that reads the
 page's top edge (toolbar T31).
 ---
- .../theme/page_theme_color_controller.cc      |  82 ++++-
+ .../theme/page_theme_color_controller.cc      | 177 ++++++++--
  .../ui/stedding/theme/page_top_color.cc       |  68 +++-
  .../ui/stedding/theme/page_top_color.h        |  36 +-
  .../stedding/theme/page_top_color_unittest.cc |  63 ++++
  .../toolbar/stedding_lit_toolbar_button.cc    |  16 +-
  .../toolbar/stedding_lit_toolbar_button.h     |   4 +-
  .../test/stedding/address_band_browsertest.cc | 320 +++++++++++++++++-
- 7 files changed, 550 insertions(+), 39 deletions(-)
+ 7 files changed, 619 insertions(+), 65 deletions(-)
 
 diff --git a/chrome/browser/ui/stedding/theme/page_theme_color_controller.cc b/chrome/browser/ui/stedding/theme/page_theme_color_controller.cc
-index 342f8b191a577..190b759e0814e 100644
+index 342f8b191a577..ed88954ec74e8 100644
 --- a/chrome/browser/ui/stedding/theme/page_theme_color_controller.cc
 +++ b/chrome/browser/ui/stedding/theme/page_theme_color_controller.cc
 @@ -7,6 +7,7 @@
@@ -70,7 +70,18 @@ index 342f8b191a577..190b759e0814e 100644
   private:
    explicit PageTopSample(content::Page& page) : PageUserData(page) {}
  
-@@ -74,8 +87,13 @@ constexpr base::TimeDelta kSampleTimeout = base::Seconds(1);
+@@ -57,6 +70,10 @@ PAGE_USER_DATA_KEY_IMPL(PageTopSample);
+ // and through a scroll and its momentum (a header that scrolls away leaves
+ // the page's body at the top).
+ constexpr base::TimeDelta kSampleAfterShown = base::Milliseconds(60);
++// A page back on screen, its window shown or uncovered again, is read as a
++// tab just shown is and once more this much later: what it drew while off the
++// screen reaches the screen only once it is shown.
++constexpr base::TimeDelta kSampleBackOnScreen = base::Milliseconds(300);
+ constexpr base::TimeDelta kSampleAfterPaint = base::Milliseconds(150);
+ constexpr base::TimeDelta kSampleAfterStyle = base::Milliseconds(100);
+ constexpr base::TimeDelta kSampleAfterLoad = base::Milliseconds(300);
+@@ -74,8 +91,13 @@ constexpr base::TimeDelta kSampleTimeout = base::Seconds(1);
  // T31, T3, Dk8: the colour of the row over `contents` -- its top edge's
  // when the edge was read as one colour, else its declared theme colour, else
  // its background -- and in `edge_read` whether the edge has been read at all.
@@ -85,7 +96,7 @@ index 342f8b191a577..190b759e0814e 100644
    const PageTopSample* const sample =
        PageTopSample::GetForPage(contents.GetPrimaryPage());
    edge_read = sample;
-@@ -95,7 +113,13 @@ std::optional<SkColor> PageColourOf(content::WebContents& contents,
+@@ -95,7 +117,13 @@ std::optional<SkColor> PageColourOf(content::WebContents& contents,
      return std::nullopt;
    }
    // The bar is an opaque surface.
@@ -100,7 +111,101 @@ index 342f8b191a577..190b759e0814e 100644
  }
  
  // toolbar T20: one of 16 levels per channel, the nearest -- 0x00, 0x11 ...
-@@ -442,6 +466,12 @@ void PageThemeColorController::OnDarkPagesChanged() {
+@@ -141,6 +169,14 @@ class PageThemeColorController::PartnerObserver
+     owner_->ScheduleTopSamples(
+         {kSampleScroll, kSampleScrollMid, kSampleScrollEnd});
+   }
++  void OnVisibilityChanged(content::Visibility visibility) override {
++    // T31: read again back on screen, as the active page is
++    // (PageThemeColorController::OnVisibilityChanged).
++    if (visibility == content::Visibility::VISIBLE &&
++        web_contents()->CompletedFirstVisuallyNonEmptyPaint()) {
++      owner_->ScheduleTopSamples({kSampleAfterShown, kSampleBackOnScreen});
++    }
++  }
+   void WebContentsDestroyed() override {
+     Observe(nullptr);
+     owner_->RefreshPartner();
+@@ -195,12 +231,14 @@ PageThemeColorController::bar_supplier() const {
+   // window's ground, and the icons and text read on it too: white icons over
+   // a dark page sat on the pale ground beside it, and with the active page
+   // the one without a colour the row kept the theme's icons over the other's
+-  // dark part.
++  // dark part. Stacked, the row is the upper pane's colour alone, which may
++  // be the pane that is not active, so the icons read on both panes there
++  // too, a pane with no colour counting as the ground.
+   if (bar_suppressed_) {
+     return nullptr;
+   }
+-  const bool two_parts = RowHasTwoParts();
+-  if (!color_ && !(two_parts && partner_color_)) {
++  const bool split = ActiveTabIsSplit();
++  if (!color_ && !(split && partner_color_)) {
+     return nullptr;
+   }
+   // Quantised to 16 levels per channel, which bounds how many providers one
+@@ -218,7 +256,7 @@ PageThemeColorController::bar_supplier() const {
+   // ground, one keyed by the coloured part, the ground being the provider's.
+   std::optional<SkColor> foreground;
+   std::optional<SkColor> beside_ground;
+-  if (two_parts && (!color_ || !partner_color_)) {
++  if (split && (!color_ || !partner_color_)) {
+     beside_ground = bar ? *bar : BarKey(*partner_color_);
+   } else if (partner_color_) {
+     const SkColor shared = SplitRowForeground(*bar, BarKey(*partner_color_));
+@@ -259,17 +297,13 @@ PageThemeColorController::bar_supplier() const {
+   return supplier.get();
+ }
+ 
+-bool PageThemeColorController::RowHasTwoParts() const {
++bool PageThemeColorController::ActiveTabIsSplit() const {
+   TabStripModel* const model = browser_->GetTabStripModel();
+   tabs::TabInterface* const active = model ? model->GetActiveTab() : nullptr;
+-  if (!active || !active->IsSplit() ||
+-      !model->ContainsSplit(*active->GetSplit())) {
+-    return false;
+-  }
+-  const split_tabs::SplitTabData* const split =
+-      model->GetSplitData(*active->GetSplit());
+-  return split && split->visual_data()->split_layout() ==
+-                      split_tabs::SplitTabLayout::kSideBySide;
++  // A tab can still name a split the model has let go of while the model
++  // tells its observers.
++  return active && active->IsSplit() &&
++         model->ContainsSplit(*active->GetSplit());
+ }
+ 
+ content::WebContents* PageThemeColorController::partner() const {
+@@ -360,7 +394,7 @@ void PageThemeColorController::OnSplitTabChanged(
+   // A split made or ended around the active tab, or a pane given another
+   // tab. A new ratio needs nothing here: the window repaints the row when
+   // the panes move (SteddingWindowBackground). A new layout makes the row
+-  // one part or two, and with it the foreground (bar_supplier).
++  // one part or two, which the window paints and lays out again.
+   UpdatePartner();
+   if (change.type == SplitTabChange::Type::kVisualsChanged &&
+       change.GetVisualsChange()->reason() ==
+@@ -404,6 +438,19 @@ void PageThemeColorController::DidGetUserInteraction(
+   ScheduleTopSamples({kSampleScroll, kSampleScrollMid, kSampleScrollEnd});
+ }
+ 
++void PageThemeColorController::OnVisibilityChanged(
++    content::Visibility visibility) {
++  // T31: a read that falls due while the page is off the screen, its window
++  // minimised, hidden or covered, is dropped (SampleTopOf), the reads after
++  // its load among them, and the page may have drawn its header meanwhile.
++  // Back on screen it is read as a tab just shown is. A page that has not
++  // painted yet is read after its first paint.
++  if (visibility == content::Visibility::VISIBLE &&
++      web_contents()->CompletedFirstVisuallyNonEmptyPaint()) {
++    ScheduleTopSamples({kSampleAfterShown, kSampleBackOnScreen});
++  }
++}
++
+ // static
+ SkColor PageThemeColorController::RowColorForThemeColor(SkColor theme_color,
+                                                         bool page_darkened) {
+@@ -442,6 +489,12 @@ void PageThemeColorController::OnDarkPagesChanged() {
      if (sample && sample->color) {
        sample->color =
            ThemeColorUnderDarkPages(*sample->color, DarkPagesApplyTo(contents));
@@ -113,7 +218,7 @@ index 342f8b191a577..190b759e0814e 100644
      } else {
        forget_sample(contents->GetPrimaryPage());
      }
-@@ -511,7 +541,8 @@ void PageThemeColorController::Refresh() {
+@@ -511,7 +564,8 @@ void PageThemeColorController::Refresh() {
      // so a white page gets a white bar and a dark page a dark one even
      // without a <meta name="theme-color"> (T3).
      bool sample = false;
@@ -123,7 +228,7 @@ index 342f8b191a577..190b759e0814e 100644
      // A reload: the new Page starts with no colour of its own, and it reports
      // one only when it differs from the last colour the WebContents sent
      // (WebContentsImpl::OnBackgroundColorChanged keeps that on the
-@@ -527,8 +558,9 @@ void PageThemeColorController::Refresh() {
+@@ -527,8 +581,9 @@ void PageThemeColorController::Refresh() {
      // Page with no colour of its own keeps the row's even once the load has
      // stopped: the end of a reload re-read a Page that had not been told its
      // unchanged white, and the row went to the window's ground (toolbar
@@ -135,7 +240,7 @@ index 342f8b191a577..190b759e0814e 100644
          (!color || (contents->IsLoading() && !sample))) {
        return;
      }
-@@ -582,9 +614,11 @@ void PageThemeColorController::RefreshPartner() {
+@@ -582,9 +637,11 @@ void PageThemeColorController::RefreshPartner() {
    std::optional<SkColor> color;
    if (contents) {
      bool sample = false;
@@ -150,7 +255,83 @@ index 342f8b191a577..190b759e0814e 100644
          (!color || (contents->IsLoading() && !sample))) {
        return;
      }
-@@ -744,7 +778,37 @@ void PageThemeColorController::TakeTopRead(
+@@ -601,6 +658,25 @@ void PageThemeColorController::RefreshPartner() {
+ 
+ void PageThemeColorController::ScheduleTopSamples(
+     std::initializer_list<base::TimeDelta> delays) {
++  // T31: a read asked for afresh has tries of its own at the page's surface.
++  surface_retries_ = 0;
++  QueueTopSamples(delays);
++}
++
++void PageThemeColorController::RetryTopSample() {
++  // T31: at most kSurfaceRetries tries in a row since a read was last asked
++  // for, whether the surface was missing or its copy came back failed. The
++  // count had started over each time a copy went out, so a copy that kept
++  // failing was tried again for as long as the page stayed on screen.
++  if (surface_retries_ >= kSurfaceRetries) {
++    return;
++  }
++  ++surface_retries_;
++  QueueTopSamples({kSampleRetry});
++}
++
++void PageThemeColorController::QueueTopSamples(
++    std::initializer_list<base::TimeDelta> delays) {
+   if (!web_contents()) {
+     return;
+   }
+@@ -639,11 +715,8 @@ void PageThemeColorController::SampleTop() {
+   // again shortly. The read was dropped, and with no other read due the row
+   // kept the page's declared colour over a header of another (the PC's
+   // AddressSanitizer build, 2026-10-22: both panes of a split, 2 runs in 5).
+-  if (!retry) {
+-    surface_retries_ = 0;
+-  } else if (surface_retries_ < kSurfaceRetries) {
+-    ++surface_retries_;
+-    ScheduleTopSamples({kSampleRetry});
++  if (retry) {
++    RetryTopSample();
+   }
+ }
+ 
+@@ -677,6 +750,7 @@ bool PageThemeColorController::SampleTopOf(content::WebContents* contents,
+     return false;
+   }
+   in_flight = true;
++  ++top_copies_for_testing_;
+   // The result may come back on another sequence; the controller and the
+   // page live on this one.
+   view->CopyFromSurface(
+@@ -726,25 +800,58 @@ void PageThemeColorController::TakeTopRead(
+     content::WebContents* const shown =
+         in_flight == &sample_in_flight_ ? web_contents() : partner();
+     if (SampleTopOf(shown, *in_flight)) {
+-      ScheduleTopSamples({kSampleRetry});
++      RetryTopSample();
+     }
+   }
++  bool failed = !result.has_value();
++  if (copy_failures_for_testing_ > 0) {
++    --copy_failures_for_testing_;
++    failed = true;
++  }
+   // T31: a copy that failed, its surface not ready, is tried again shortly,
+-  // as a read that found no surface is (SampleTop).
+-  if (generation == top_read_generation_ && page && !result.has_value() &&
+-      surface_retries_ < kSurfaceRetries) {
+-    ++surface_retries_;
+-    ScheduleTopSamples({kSampleRetry});
++  // as a read that found no surface is (SampleTop), and as many times.
++  if (generation == top_read_generation_ && page && failed) {
++    RetryTopSample();
+   }
+   // Dk8: begun before a dark-pages change, the read is the page as it was.
+-  if (generation != top_read_generation_ || !page || !result.has_value()) {
++  if (generation != top_read_generation_ || !page || failed) {
+     return;
+   }
+   PageTopSample* const sample = PageTopSample::GetOrCreateForPage(*page);
    if (!sample) {
      return;
    }

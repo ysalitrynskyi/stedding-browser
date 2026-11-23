@@ -20,10 +20,10 @@ back whatever On startup says.
 Removable when: never as a feature; the startup and restore hunks go if
 Chromium restores pinned tabs with their place and folders on its own.
 ---
- chrome/browser/app_controller_mac.mm          |   8 +-
+ chrome/browser/app_controller_mac.mm          |  68 ++++----
  chrome/browser/prefs/session_startup_pref.cc  |   4 +
  chrome/browser/prefs/session_startup_pref.h   |   6 +
- chrome/browser/sessions/session_restore.cc    |  67 ++++++++
+ chrome/browser/sessions/session_restore.cc    |  82 ++++++++++
  chrome/browser/sessions/session_restore.h     |   6 +
  chrome/browser/sessions/session_service.cc    |  10 +-
  chrome/browser/ui/archive/archive_mark.h      |   6 +
@@ -33,13 +33,108 @@ Chromium restores pinned tabs with their place and folders on its own.
  .../ui/startup/startup_tab_provider.cc        |   6 +-
  .../test/stedding/dock_reopen_browsertest.mm  |  26 ++-
  chrome/test/stedding/restore_browsertest.cc   | 151 +++++++++++++++++-
- 13 files changed, 404 insertions(+), 30 deletions(-)
+ 13 files changed, 448 insertions(+), 61 deletions(-)
 
 diff --git a/chrome/browser/app_controller_mac.mm b/chrome/browser/app_controller_mac.mm
-index 9855df22b10a6..09025dae836ef 100644
+index 9855df22b10a6..8a9e599535cc1 100644
 --- a/chrome/browser/app_controller_mac.mm
 +++ b/chrome/browser/app_controller_mac.mm
-@@ -2014,8 +2014,12 @@ class AppControllerProfileObserver : public ProfileAttributesStorage::Observer,
+@@ -470,11 +470,22 @@ StartupTabs TakeLittleWindowsAndMark(Profile* profile, StartupTabs tabs) {
+   return as_tabs;
+ }
+ 
+-// A shortcut file's targets get what any address from another app gets, once
+-// they are known: the file's own address was checked and marked, and its
+-// target became a tab in the active Space (BACKLOG S-202).
+-void OpenShortcutTargetsWithProfile(const StartupTabs& tabs,
+-                                    Profile* profile) {
++// Addresses from another app, once the profile they open in is loaded: the
++// little windows are decided in the profile the tabs would open in (little
++// E6). That may be a profile that was not loaded when the link came, and a
++// private window last in front gives way to its original profile, as
++// OpenStartupTabsInBrowserWithProfile does for the tabs. A shortcut file's
++// targets come here too once they are known: the file's own address was
++// checked and marked, and its target became a tab in the active Space
++// (BACKLOG S-202).
++void OpenExternalTabsWithProfile(const StartupTabs& tabs, Profile* profile) {
++  if (!profile) {
++    return;  // No suitable profile to open the URLs, do nothing.
++  }
++  if (profile->IsIncognitoProfile()) {
++    profile = ProfileManager::MaybeForceOffTheRecordMode(
++        profile->GetOriginalProfile());
++  }
+   const StartupTabs as_tabs = TakeLittleWindowsAndMark(profile, tabs);
+   if (!as_tabs.empty()) {
+     OpenStartupTabsInBrowserWithProfile(as_tabs, profile);
+@@ -542,14 +553,14 @@ void OpenStartupTabsInBrowser(StartupTabs tabs) {
+                     profile_path)) {
+               app_controller_mac::RunInProfileSafely(
+                   profile_path,
+-                  base::BindOnce(&OpenShortcutTargetsWithProfile,
++                  base::BindOnce(&OpenExternalTabsWithProfile,
+                                  tabs_for_profile),
+                   app_controller_mac::kShowProfilePickerOnFailure);
+             } else {
+               // If the target profile doesn't exist, fall back to the
+               // last profile.
+               app_controller_mac::RunInLastProfileSafely(
+-                  base::BindOnce(&OpenShortcutTargetsWithProfile,
++                  base::BindOnce(&OpenExternalTabsWithProfile,
+                                  tabs_for_profile),
+                   app_controller_mac::kShowProfilePickerOnFailure);
+             }
+@@ -558,8 +569,9 @@ void OpenStartupTabsInBrowser(StartupTabs tabs) {
+   }
+ 
+   if (!regular_tabs.empty()) {
++    // Stedding: these come from another app (routing D3, little E1).
+     app_controller_mac::RunInLastProfileSafely(
+-        base::BindOnce(&OpenStartupTabsInBrowserWithProfile, regular_tabs),
++        base::BindOnce(&OpenExternalTabsWithProfile, regular_tabs),
+         app_controller_mac::kShowProfilePickerOnFailure);
+   }
+ }
+@@ -1310,29 +1322,15 @@ class AppControllerProfileObserver : public ProfileAttributesStorage::Observer,
+ 
+   // Stedding routing D3: these addresses come from another app, so the tabs
+   // they open may land in the Space chosen for that; and little E1: with the
+-  // setting on and no route, each opens small instead. The profile is the
+-  // one upstream's tab path uses (PLAN.md CMD-7): a policy that forces
+-  // private windows makes it a private one, which has no little windows, and
+-  // a window that cannot open falls back to that path.
+-  // A shortcut file goes as it is: its target gets the same once it is read
+-  // (OpenShortcutTargetsWithProfile).
+-  Profile* const little_profile =
+-      [self safeProfileForNewWindows:[self lastProfileIfLoaded]];
+-  StartupTabs shortcut_files;
+-  StartupTabs addresses;
+-  for (StartupTab& tab : tabs) {
+-    (IsShortcutFileUrl(tab.url) ? shortcut_files : addresses)
+-        .push_back(std::move(tab));
+-  }
+-  StartupTabs as_tabs =
+-      TakeLittleWindowsAndMark(little_profile, std::move(addresses));
+-  for (StartupTab& tab : shortcut_files) {
+-    as_tabs.push_back(std::move(tab));
+-  }
+-  if (as_tabs.empty()) {
+-    return;
+-  }
+-  OpenStartupTabsInBrowser(std::move(as_tabs));
++  // setting on and no route, each opens small instead. Both are decided once
++  // the profile upstream's tab path uses is loaded, in that profile (PLAN.md
++  // CMD-7, little E6; OpenExternalTabsWithProfile), so a link that comes
++  // while no profile is loaded, or while a private window was last in front,
++  // still opens small. A policy that forces private windows makes it a
++  // private one, which has no little windows, and a window that cannot open
++  // falls back to the tab path. A shortcut file's target gets the same once
++  // it is read.
++  OpenStartupTabsInBrowser(std::move(tabs));
+ }
+ 
+ - (void)resetKeepAliveWhileHidden {
+@@ -2014,8 +2012,12 @@ class AppControllerProfileObserver : public ProfileAttributesStorage::Observer,
            // last window held: the window its close button closed while the
            // browser ran on. A window holds its Spaces' tabs and folders, and
            // a new tab page in their place left them in Recently Closed alone.
@@ -87,7 +182,7 @@ index 666bd803fa9e9..293626aa19993 100644
    // opened.
    bool ShouldOpenUrls() const;
 diff --git a/chrome/browser/sessions/session_restore.cc b/chrome/browser/sessions/session_restore.cc
-index 103e17964f251..84160895adef9 100644
+index 103e17964f251..22524903a1cae 100644
 --- a/chrome/browser/sessions/session_restore.cc
 +++ b/chrome/browser/sessions/session_restore.cc
 @@ -9,6 +9,7 @@
@@ -98,7 +193,7 @@ index 103e17964f251..84160895adef9 100644
  
  #include <stddef.h>
  
-@@ -324,6 +325,63 @@ void ReportRestoredWindowCreated(aura::Window* window) {
+@@ -324,6 +325,78 @@ void ReportRestoredWindowCreated(aura::Window* window) {
  }
  #endif
  
@@ -152,6 +247,21 @@ index 103e17964f251..84160895adef9 100644
 +    if (window->tabs.empty()) {
 +      return true;
 +    }
++    // A tab group whose tabs all stayed closed -- a group of loose tabs, as
++    // an extension's chrome.tabs.group or Add Tab to New Group makes -- stays
++    // closed with them: restoring a group's look needs one of its tabs in the
++    // window (RestoreTabGroupMetadata), as the session's own list of groups
++    // always has.
++    std::set<tab_groups::TabGroupId> kept_groups;
++    for (const std::unique_ptr<sessions::SessionTab>& tab : window->tabs) {
++      if (tab->group) {
++        kept_groups.insert(*tab->group);
++      }
++    }
++    std::erase_if(window->tab_groups,
++                  [&](const std::unique_ptr<sessions::SessionTabGroup>& group) {
++                    return !kept_groups.contains(group->id);
++                  });
 +    window->selected_tab_index =
 +        std::min(kept_before_selected,
 +                 static_cast<int>(window->tabs.size()) - 1);
@@ -162,7 +272,7 @@ index 103e17964f251..84160895adef9 100644
  }  // namespace
  
  // SessionRestoreImpl ---------------------------------------------------------
-@@ -375,6 +433,8 @@ class SessionRestoreImpl : public BrowserCollectionObserver {
+@@ -375,6 +448,8 @@ class SessionRestoreImpl : public BrowserCollectionObserver {
  
    bool synchronous() const { return synchronous_; }
  
@@ -171,7 +281,7 @@ index 103e17964f251..84160895adef9 100644
    BrowserWindowInterface* Restore() {
      DCHECK(!is_foreign_session_restore_);
      if (restore_browser_) {
-@@ -811,6 +871,9 @@ class SessionRestoreImpl : public BrowserCollectionObserver {
+@@ -811,6 +886,9 @@ class SessionRestoreImpl : public BrowserCollectionObserver {
      DVLOG(1) << "ProcessSessionWindows " << windows->size();
  
      PruneWindows(windows);
@@ -181,7 +291,7 @@ index 103e17964f251..84160895adef9 100644
  
      if (windows->empty()) {
        // Restore was unsuccessful. The cookie/storage systems can also delete
-@@ -1645,6 +1708,9 @@ class SessionRestoreImpl : public BrowserCollectionObserver {
+@@ -1645,6 +1723,9 @@ class SessionRestoreImpl : public BrowserCollectionObserver {
    // If true, restores the normal browser.
    bool restore_browser_ = true;
  
@@ -191,7 +301,7 @@ index 103e17964f251..84160895adef9 100644
    // True if this instance is restoring a session from another device, rather
    // than this profile's own last session. Foreign restores are not reported to
    // SessionRestoreObservers.
-@@ -1735,6 +1801,7 @@ BrowserWindowInterface* SessionRestore::RestoreSession(
+@@ -1735,6 +1816,7 @@ BrowserWindowInterface* SessionRestore::RestoreSession(
        (behavior & RESTORE_APPS) != 0, (behavior & RESTORE_BROWSER) != 0,
        /* log_event */ true, /* is_foreign_session_restore */ false,
        startup_tabs);
@@ -462,10 +572,10 @@ index bd63963a3c6a3..693c9d970208e 100644
    ASSERT_TRUE(local_state);
    local_state->SetBoolean(::prefs::kRestartLastSessionOnShutdown, true);
 diff --git a/chrome/browser/ui/startup/startup_browser_creator_impl.cc b/chrome/browser/ui/startup/startup_browser_creator_impl.cc
-index 8edb263e05698..7caa2fb2d8a3d 100644
+index ab686d5b8f0b8..859429185e966 100644
 --- a/chrome/browser/ui/startup/startup_browser_creator_impl.cc
 +++ b/chrome/browser/ui/startup/startup_browser_creator_impl.cc
-@@ -624,9 +624,20 @@ void StartupBrowserCreatorImpl::DetermineURLsAndLaunch(
+@@ -735,9 +735,20 @@ void StartupBrowserCreatorImpl::DetermineURLsAndLaunch(
      behavior_options |= HAS_CMD_LINE_TABS;
    }
  
@@ -489,7 +599,7 @@ index 8edb263e05698..7caa2fb2d8a3d 100644
  
    SessionRestore::BehaviorBitmask restore_options =
        restore_tabbed_browser ? SessionRestore::RESTORE_BROWSER : 0;
-@@ -647,6 +658,9 @@ void StartupBrowserCreatorImpl::DetermineURLsAndLaunch(
+@@ -758,6 +769,9 @@ void StartupBrowserCreatorImpl::DetermineURLsAndLaunch(
          browser_defaults::kAlwaysCreateTabbedBrowserOnSessionRestore,
          has_create_browser_switch, was_mac_login_or_resume,
          restore_tabbed_browser);
@@ -499,7 +609,7 @@ index 8edb263e05698..7caa2fb2d8a3d 100644
    }
  
    BrowserWindowInterface* browser = RestoreOrCreateBrowser(
-@@ -888,7 +902,9 @@ StartupBrowserCreatorImpl::DetermineBrowserOpenBehavior(
+@@ -999,7 +1013,9 @@ StartupBrowserCreatorImpl::DetermineBrowserOpenBehavior(
      return BrowserOpenBehavior::NEW;
    }
  

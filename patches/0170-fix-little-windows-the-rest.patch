@@ -20,6 +20,7 @@ Why: the rest of S-157 (little E13, shortcuts Z24, PLAN.md CMD-18).
 Removable when: little windows or private windows stop being separate kinds of
 window.
 ---
+ chrome/browser/ui/BUILD.gn                    |  1 +
  chrome/browser/ui/browser_commands.cc         |  9 ++++
  chrome/browser/ui/browser_live_tab_context.cc | 13 ++++++
  chrome/browser/ui/spaces/space_commands.cc    | 33 ++++++++++++--
@@ -27,13 +28,25 @@ window.
  chrome/browser/ui/stedding/little_window.cc   | 32 ++++++++++++-
  chrome/browser/ui/stedding/little_window.h    | 12 +++++
  .../ui/stedding/little_window_unittest.cc     | 23 ++++++++++
- chrome/browser/ui/unload_controller.cc        |  5 +++
+ chrome/browser/ui/unload_controller.cc        | 29 ++++++++++++
  .../views/frame/browser_native_widget_mac.mm  |  9 +++-
  .../stedding/little_window_browsertest.cc     | 45 +++++++++++++++++++
  .../test/stedding/private_coat_browsertest.cc | 35 +++++++++++++++
  .../test/stedding/space_keys_browsertest.mm   | 43 ++++++++++++++++++
- 12 files changed, 262 insertions(+), 7 deletions(-)
+ 13 files changed, 287 insertions(+), 7 deletions(-)
 
+diff --git a/chrome/browser/ui/BUILD.gn b/chrome/browser/ui/BUILD.gn
+index 05fd490850637..c4f0a39a3267b 100644
+--- a/chrome/browser/ui/BUILD.gn
++++ b/chrome/browser/ui/BUILD.gn
+@@ -645,6 +645,7 @@ if (!is_android) {
+     public_deps = [ ":unload_controller" ]
+     deps = [
+       ":browser_commands",
++      "//chrome/browser/ui/stedding:pin_lifecycle",
+       "//chrome/browser/ui/stedding:pin_unload_request",
+       ":browser_live_tab_context",
+       ":browser_manager_service",
 diff --git a/chrome/browser/ui/browser_commands.cc b/chrome/browser/ui/browser_commands.cc
 index 55109feab9f56..999bbdbdff0e6 100644
 --- a/chrome/browser/ui/browser_commands.cc
@@ -311,18 +324,21 @@ index 5be3fc63a1aaa..9948871cf6c0e 100644
    PrefService* const prefs = profile()->GetPrefs();
    prefs->SetBoolean(prefs::kLittleEnabled, false);
 diff --git a/chrome/browser/ui/unload_controller.cc b/chrome/browser/ui/unload_controller.cc
-index 4d84b66666eef..0ab90060ca0da 100644
+index 4d84b66666eef..fb0e493d578e4 100644
 --- a/chrome/browser/ui/unload_controller.cc
 +++ b/chrome/browser/ui/unload_controller.cc
-@@ -30,6 +30,7 @@
+@@ -30,7 +30,10 @@
  #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
  #include "chrome/browser/ui/browser_window/public/desktop_browser_window_capabilities.h"
  #include "chrome/browser/ui/chrome_pages.h"
 +#include "chrome/browser/ui/stedding/little_window.h"
++#include "chrome/browser/ui/stedding/pin_lifecycle.h"
  #include "chrome/browser/ui/stedding/pin_unload_request.h"
++#include "chrome/browser/ui/tabs/tab_close_types_data.h"
  #include "chrome/browser/ui/tabs/tab_enums.h"
  #include "chrome/browser/ui/tabs/tab_group_model.h"
-@@ -207,6 +208,10 @@ void UnloadController::OnWindowClosing() {
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+@@ -207,6 +210,10 @@ void UnloadController::OnWindowClosing() {
        (browser_type == BrowserWindowInterface::Type::TYPE_APP) ||
        (browser_type == BrowserWindowInterface::Type::TYPE_APP_POPUP);
  #endif
@@ -333,6 +349,42 @@ index 4d84b66666eef..0ab90060ca0da 100644
  
    if (tab_restore_service && notify_restore_service) {
      // Stedding (docs/features/archive.md A13): the tabs of a window the next
+@@ -273,6 +280,13 @@ void UnloadController::BeforeUnloadFired(content::WebContents* web_contents,
+     *proceed_to_fire_unload = false;
+     return;
+   }
++  // Stedding (pins H3): Stay ends the close the tab strip began, and the close
++  // types it left on the contents with it. CloseContents takes them for a
++  // close in progress, so a pin's page that closed itself later would be
++  // closed, not sent home.
++  if (!proceed) {
++    web_contents->RemoveUserData(TabCloseTypesData::UserDataKey());
++  }
+   if ((browser_->GetType() == BrowserWindowInterface::Type::TYPE_DEVTOOLS) &&
+       DevToolsWindow::HandleBeforeUnload(web_contents, proceed,
+                                          proceed_to_fire_unload)) {
+@@ -288,6 +302,21 @@ void UnloadController::CloseContents(content::WebContents* contents) {
+   if (is_attempting_to_close_browser()) {
+     ClearUnloadState(contents, true);
+   }
++  // Stedding (pins H3, windows G15): a pin whose own page closed itself
++  // (window.close()) is unloaded and sent home, as Cmd-W does, and stays a
++  // pin in every window: closed, it was taken for the person removing it. A
++  // close the tab strip began and held for the page's unload handlers (a
++  // close button, H29's Remove, Cmd-W with H9 off) left its close types on
++  // the contents, and closes as it did.
++  if (!is_attempting_to_close_browser() &&
++      !TabCloseTypesData::FromWebContents(contents)) {
++    tabs::TabInterface* const tab =
++        tabs::TabInterface::MaybeGetFromContents(contents);
++    if (tab && tab->GetBrowserWindowInterface() == browser_ &&
++        stedding::SleepPinClosedByItsPage(browser_, tab)) {
++      return;
++    }
++  }
+   if (CanCloseContents(contents)) {
+     chrome::CloseWebContents(browser_, contents, true);
+   }
 diff --git a/chrome/browser/ui/views/frame/browser_native_widget_mac.mm b/chrome/browser/ui/views/frame/browser_native_widget_mac.mm
 index 08aac3a9d9419..71d2802252c24 100644
 --- a/chrome/browser/ui/views/frame/browser_native_widget_mac.mm

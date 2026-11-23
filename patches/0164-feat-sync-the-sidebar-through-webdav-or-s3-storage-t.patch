@@ -33,13 +33,13 @@ Removable when: never as a feature.
  .../stedding_sync_section.html.ts             |   80 +-
  .../stedding_page/stedding_sync_section.ts    |  359 +++-
  chrome/browser/ui/spaces/BUILD.gn             |   53 +
- .../browser/ui/spaces/sidebar_sync_bridge.cc  |  464 +++++
+ .../browser/ui/spaces/sidebar_sync_bridge.cc  |  465 +++++
  .../browser/ui/spaces/sidebar_sync_bridge.h   |  128 ++
  .../ui/spaces/sidebar_sync_fake_place.cc      |  421 +++++
  .../ui/spaces/sidebar_sync_fake_place.h       |  138 ++
- .../browser/ui/spaces/sidebar_sync_place.cc   |  805 ++++++++
- chrome/browser/ui/spaces/sidebar_sync_place.h |  234 +++
- .../ui/spaces/sidebar_sync_place_client.cc    |  676 +++++++
+ .../browser/ui/spaces/sidebar_sync_place.cc   |  818 ++++++++
+ chrome/browser/ui/spaces/sidebar_sync_place.h |  240 +++
+ .../ui/spaces/sidebar_sync_place_client.cc    |  694 +++++++
  .../ui/spaces/sidebar_sync_place_client.h     |  205 ++
  .../ui/spaces/sidebar_sync_place_unittest.cc  |  844 +++++++++
  .../browser/ui/spaces/sidebar_sync_service.cc |  609 +++++-
@@ -52,7 +52,7 @@ Removable when: never as a feature.
  .../webui/settings/stedding_spaces_handler.h  |   12 +
  chrome/test/stedding/BUILD.gn                 |    4 +
  .../sidebar_sync_place_browsertest.cc         | 1652 +++++++++++++++++
- 23 files changed, 7087 insertions(+), 37 deletions(-)
+ 23 files changed, 7125 insertions(+), 37 deletions(-)
  create mode 100644 chrome/browser/ui/spaces/sidebar_sync_bridge.cc
  create mode 100644 chrome/browser/ui/spaces/sidebar_sync_bridge.h
  create mode 100644 chrome/browser/ui/spaces/sidebar_sync_fake_place.cc
@@ -766,10 +766,10 @@ index 4854828487aad..3f51731eda9c2 100644
      "//chrome/common/stedding:web_apps",
 diff --git a/chrome/browser/ui/spaces/sidebar_sync_bridge.cc b/chrome/browser/ui/spaces/sidebar_sync_bridge.cc
 new file mode 100644
-index 0000000000000..b92ae2290a2ba
+index 0000000000000..39836cd678d17
 --- /dev/null
 +++ b/chrome/browser/ui/spaces/sidebar_sync_bridge.cc
-@@ -0,0 +1,464 @@
+@@ -0,0 +1,465 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -1126,6 +1126,7 @@ index 0000000000000..b92ae2290a2ba
 +    case PlaceFailure::kWebPage:
 +    case PlaceFailure::kMismatch:
 +    case PlaceFailure::kServerError:
++    case PlaceFailure::kClientError:
 +      // One computer's file that will not come holds the others back from
 +      // nothing. The mirror keeps what it had, and the next list asks again.
 +      break;
@@ -1941,10 +1942,10 @@ index 0000000000000..7a55fc162d9b0
 +#endif  // CHROME_BROWSER_UI_SPACES_SIDEBAR_SYNC_FAKE_PLACE_H_
 diff --git a/chrome/browser/ui/spaces/sidebar_sync_place.cc b/chrome/browser/ui/spaces/sidebar_sync_place.cc
 new file mode 100644
-index 0000000000000..aacc5f94edb6c
+index 0000000000000..3edcc9efdc4b7
 --- /dev/null
 +++ b/chrome/browser/ui/spaces/sidebar_sync_place.cc
-@@ -0,0 +1,805 @@
+@@ -0,0 +1,818 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -2657,7 +2658,18 @@ index 0000000000000..aacc5f94edb6c
 +          return PlaceFailure::kNoDelete;
 +      }
 +      break;
++    // A request that took too long, or one of too many: asked again later,
++    // it may be answered, so it is no refusal.
++    case 408:
++    case 429:
++      break;
 +    default:
++      // Any other 4xx refuses the request, which is not the same as no
++      // answer: some S3 services answer 400 to a request with no sign-in
++      // (Sf48).
++      if (http_status >= 400 && http_status < 500) {
++        return PlaceFailure::kClientError;
++      }
 +      break;
 +  }
 +  return PlaceFailure::kServerError;
@@ -2742,7 +2754,9 @@ index 0000000000000..aacc5f94edb6c
 +      return "public";
 +    case PlaceFailure::kMismatch:
 +      return "mismatch";
++    // Settings has one sentence for both.
 +    case PlaceFailure::kServerError:
++    case PlaceFailure::kClientError:
 +      return "serverError";
 +    case PlaceFailure::kTooLarge:
 +      return "tooLarge";
@@ -2752,10 +2766,10 @@ index 0000000000000..aacc5f94edb6c
 +}  // namespace spaces::sidebar_sync
 diff --git a/chrome/browser/ui/spaces/sidebar_sync_place.h b/chrome/browser/ui/spaces/sidebar_sync_place.h
 new file mode 100644
-index 0000000000000..dddd7053090cc
+index 0000000000000..d5deb849fd636
 --- /dev/null
 +++ b/chrome/browser/ui/spaces/sidebar_sync_place.h
-@@ -0,0 +1,234 @@
+@@ -0,0 +1,240 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -2972,7 +2986,13 @@ index 0000000000000..dddd7053090cc
 +  kPublic,
 +  // The probe came back different.
 +  kMismatch,
++  // An error that is no refusal: a 5xx, a 408 or a 429 that asks to be tried
++  // later, any other status that is not a 4xx, or a mirror not written.
 +  kServerError,
++  // Any other 4xx: the server refused the request for a reason none of the
++  // above names. Settings says it as kServerError; to a request with no
++  // sign-in it is a refusal all the same (Sf48).
++  kClientError,
 +  kTooLarge,
 +};
 +
@@ -2992,10 +3012,10 @@ index 0000000000000..dddd7053090cc
 +#endif  // CHROME_BROWSER_UI_SPACES_SIDEBAR_SYNC_PLACE_H_
 diff --git a/chrome/browser/ui/spaces/sidebar_sync_place_client.cc b/chrome/browser/ui/spaces/sidebar_sync_place_client.cc
 new file mode 100644
-index 0000000000000..53479bc4c825b
+index 0000000000000..51ae6bb871c06
 --- /dev/null
 +++ b/chrome/browser/ui/spaces/sidebar_sync_place_client.cc
-@@ -0,0 +1,676 @@
+@@ -0,0 +1,694 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -3015,6 +3035,7 @@ index 0000000000000..53479bc4c825b
 +#include "net/base/load_flags.h"
 +#include "net/base/net_errors.h"
 +#include "net/http/http_response_headers.h"
++#include "net/http/http_util.h"
 +#include "net/traffic_annotation/network_traffic_annotation.h"
 +#include "net/url_request/redirect_info.h"
 +#include "services/data_decoder/public/mojom/xml_parser.mojom.h"
@@ -3210,8 +3231,19 @@ index 0000000000000..53479bc4c825b
 +    bool basic = false;
 +    while (headers.EnumerateHeader(&iter, "www-authenticate", &challenge)) {
 +      any = true;
-+      basic |= base::StartsWith(challenge, "basic",
-+                                base::CompareCase::INSENSITIVE_ASCII);
++      // Sf47: one field may list several challenges, comma-separated among
++      // their parameters (RFC 9110 11.6.1), and Basic may be any of them. A
++      // piece names it when it is the word itself or begins with it and a
++      // space; `basic="x"` is a parameter, and a quoted value is not split.
++      net::HttpUtil::ValuesIterator pieces(challenge, ',');
++      while (pieces.GetNext()) {
++        const std::string_view piece = pieces.value();
++        constexpr std::string_view kBasic = "basic";
++        basic |= base::StartsWith(piece, kBasic,
++                                  base::CompareCase::INSENSITIVE_ASCII) &&
++                 (piece.size() == kBasic.size() ||
++                  net::HttpUtil::IsLWS(piece[kBasic.size()]));
++      }
 +    }
 +    reply.basic_offered = !any || basic;
 +  }
@@ -3574,8 +3606,12 @@ index 0000000000000..53479bc4c825b
 +}
 +
 +void PlaceCheck::OnProbeWritten(PlaceFailure failure, std::string version) {
++  // Sf47: a write that failed may still have been stored, its answer lost on
++  // the way back (no answer in time, a proxy's 5xx), so the probe is deleted
++  // all the same. The delete of a probe never stored changes nothing: a 404
++  // counts as gone, and the failure said is still this one.
 +  if (failure != PlaceFailure::kNone) {
-+    Stop(failure);
++    RemoveProbe(failure);
 +    return;
 +  }
 +  client_->Read(PlaceClient::Sign::kYes, probe_name_,
@@ -3636,6 +3672,8 @@ index 0000000000000..53479bc4c825b
 +    case PlaceFailure::kServerError:
 +      RemoveProbe(failure);
 +      return;
++    // Any refusal, a 4xx with no sentence of its own (kClientError) among
++    // them, is what a place open to nobody answers.
 +    default:
 +      RemoveProbe(PlaceFailure::kNone);
 +      return;

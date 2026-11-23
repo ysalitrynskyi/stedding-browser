@@ -19,29 +19,32 @@ folders F49), and a rename seen on beta 11 (BACKLOG S-438, tabs R14).
 Removable when: the sidebar's list and its rename fields are no longer these
 views.
 ---
- chrome/browser/ui/stedding/pin_lifecycle.cc   | 23 ++++++-
- chrome/browser/ui/stedding/pin_lifecycle.h    |  5 ++
- .../ui/views/spaces/space_switcher_view.cc    |  5 ++
- .../ui/views/tabs/common/folder_view.cc       |  6 ++
- .../ui/views/tabs/common/tab_strip_view.cc    | 14 ++++
- .../browser/ui/views/tabs/common/tab_view.cc  |  9 ++-
- .../test/stedding/folder_tabs_browsertest.cc  | 64 +++++++++++++++++++
- .../stedding/sidebar_click_browsertest.cc     | 28 ++++++++
- 8 files changed, 150 insertions(+), 4 deletions(-)
+ chrome/browser/ui/stedding/pin_lifecycle.cc   |  51 ++++++++-
+ chrome/browser/ui/stedding/pin_lifecycle.h    |  14 +++
+ .../ui/views/spaces/space_switcher_view.cc    |   5 +
+ .../ui/views/tabs/common/folder_view.cc       |   6 +
+ .../ui/views/tabs/common/tab_strip_view.cc    |  14 +++
+ .../browser/ui/views/tabs/common/tab_view.cc  |   9 +-
+ .../test/stedding/folder_tabs_browsertest.cc  | 103 ++++++++++++++++++
+ .../stedding/sidebar_click_browsertest.cc     |  28 +++++
+ 8 files changed, 226 insertions(+), 4 deletions(-)
 
 diff --git a/chrome/browser/ui/stedding/pin_lifecycle.cc b/chrome/browser/ui/stedding/pin_lifecycle.cc
-index 16066b0f0dfb9..0f5cecac7be08 100644
+index 16066b0f0dfb9..47ea9ef23e14b 100644
 --- a/chrome/browser/ui/stedding/pin_lifecycle.cc
 +++ b/chrome/browser/ui/stedding/pin_lifecycle.cc
-@@ -13,6 +13,7 @@
+@@ -13,7 +13,10 @@
  #include <utility>
  #include <vector>
  
 +#include "base/auto_reset.h"
  #include "base/functional/bind.h"
++#include "base/location.h"
++#include "base/task/single_thread_task_runner.h"
  #include "chrome/browser/profiles/profile.h"
  #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
-@@ -243,10 +244,14 @@ void UnloadAtHome(BrowserWindowInterface* browser, tabs::TabInterface* tab) {
+ #include "chrome/browser/ui/spaces/space_model.h"
+@@ -243,10 +246,14 @@ void UnloadAtHome(BrowserWindowInterface* browser, tabs::TabInterface* tab) {
    ReplaceWithHomeAsleep(browser->GetTabStripModel(), tab, *home);
  }
  
@@ -57,7 +60,7 @@ index 16066b0f0dfb9..0f5cecac7be08 100644
    if (doomed.empty()) {
      return;
    }
-@@ -259,6 +264,11 @@ void UnloadPinsAtHome(BrowserWindowInterface* browser,
+@@ -259,6 +266,11 @@ void UnloadPinsAtHome(BrowserWindowInterface* browser,
    // (GitHub issue 72).
    // TabStripModel::SelectNextTab chose it before 2026-10-18: it wrapped
    // round the strip, and from a Space's last row landed on an essential.
@@ -69,7 +72,7 @@ index 16066b0f0dfb9..0f5cecac7be08 100644
    tabs::TabInterface* const active = tabs->GetActiveTab();
    if (active && std::ranges::contains(doomed, active)) {
      if (tabs::TabInterface* const next =
-@@ -344,7 +354,8 @@ void OnPinPageAnswered(std::shared_ptr<PendingClose> pending,
+@@ -344,7 +356,8 @@ void OnPinPageAnswered(std::shared_ptr<PendingClose> pending,
        same_window.push_back(tab);
      }
    }
@@ -79,7 +82,7 @@ index 16066b0f0dfb9..0f5cecac7be08 100644
    // folders F45: a Stay keeps what the close was for from happening.
    if (pending->stayed.empty() && pending->after) {
      std::move(pending->after).Run(browser);
-@@ -371,7 +382,7 @@ bool SleepOrLeaveToClose(BrowserWindowInterface* browser,
+@@ -371,7 +384,7 @@ bool SleepOrLeaveToClose(BrowserWindowInterface* browser,
      }
    }
    if (asking.empty()) {
@@ -88,7 +91,40 @@ index 16066b0f0dfb9..0f5cecac7be08 100644
      if (after) {
        std::move(after).Run(browser);
      }
-@@ -521,6 +532,10 @@ std::vector<tabs::TabInterface*> OpenPinsInFolder(
+@@ -499,6 +512,32 @@ bool SleepInsteadOfClosingRow(BrowserWindowInterface* browser,
+   return SleepOrLeaveToClose(browser, model->SplitPeers(tab));
+ }
+ 
++bool SleepPinClosedByItsPage(BrowserWindowInterface* browser,
++                             tabs::TabInterface* tab) {
++  if (!browser || !tab ||
++      browser->GetTabStripModel()->GetIndexOfTab(tab) ==
++          TabStripModel::kNoTab ||
++      CloseActionForTabs(browser, browser->GetProfile()->GetPrefs(), {tab}) ==
++          CloseAction::kClose) {
++    return false;
++  }
++  // The page alone asked: the other pane of a split stays as it is. A turn
++  // later, once content is done telling the window its page closed.
++  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
++      FROM_HERE, base::BindOnce(
++                     [](tabs::TabHandle handle) {
++                       const std::vector<tabs::TabInterface*> doomed =
++                           StillPins({handle});
++                       if (!doomed.empty()) {
++                         UnloadPinsAtHome(
++                             doomed.front()->GetBrowserWindowInterface(),
++                             doomed);
++                       }
++                     },
++                     tab->GetHandle()));
++  return true;
++}
++
+ bool SleepInsteadOfClosingTabs(BrowserWindowInterface* browser,
+                                const std::vector<tabs::TabInterface*>& tabs) {
+   return SleepOrLeaveToClose(browser, tabs);
+@@ -521,6 +560,10 @@ std::vector<tabs::TabInterface*> OpenPinsInFolder(
    return open;
  }
  
@@ -99,7 +135,7 @@ index 16066b0f0dfb9..0f5cecac7be08 100644
  void CloseOpenPinsAndCollapse(BrowserWindowInterface* browser,
                                tabs::FolderTabCollection* folder) {
    const std::vector<tabs::TabInterface*> open =
-@@ -537,6 +552,8 @@ void CloseOpenPinsAndCollapse(BrowserWindowInterface* browser,
+@@ -537,6 +580,8 @@ void CloseOpenPinsAndCollapse(BrowserWindowInterface* browser,
    // H9: Cmd-W closes a pin here, so the press closes the open ones, as Close
    // Folder's Tabs closes a folder's (F19), and what is left collapses. A page
    // that asks answers Chromium's close, and the folder does not wait for it.
@@ -109,10 +145,26 @@ index 16066b0f0dfb9..0f5cecac7be08 100644
    CollapseFolderAfterClose(handle, browser);
  }
 diff --git a/chrome/browser/ui/stedding/pin_lifecycle.h b/chrome/browser/ui/stedding/pin_lifecycle.h
-index cd01f1892d29f..779f6a2897559 100644
+index cd01f1892d29f..cd8915cc8291f 100644
 --- a/chrome/browser/ui/stedding/pin_lifecycle.h
 +++ b/chrome/browser/ui/stedding/pin_lifecycle.h
-@@ -102,6 +102,11 @@ std::vector<tabs::TabInterface*> OpenPinsInFolder(
+@@ -67,6 +67,15 @@ bool SleepInsteadOfClose(BrowserWindowInterface* browser);
+ bool SleepInsteadOfClosingRow(BrowserWindowInterface* browser,
+                               tabs::TabInterface* tab);
+ 
++// H3 for a pin whose own page asked to close (window.close()), its
++// beforeunload handlers already run: by the rule for `tab` alone, the pin is
++// unloaded and sent home a turn later, as Cmd-W sends it, and nothing more is
++// asked. A page closing itself is no person removing the pin, which stays a
++// record in every window (windows G15). Returns true when the rule took care
++// of it, false when the tab should close as any tab does.
++bool SleepPinClosedByItsPage(BrowserWindowInterface* browser,
++                             tabs::TabInterface* tab);
++
+ // H29 (GitHub issue 50): what the close button on `tab`'s row does. A Space
+ // pin that is awake, on screen or not, shows a minus and goes to sleep by H3's
+ // rule; one asleep at its home shows an x that asks first, and then removes
+@@ -102,6 +111,11 @@ std::vector<tabs::TabInterface*> OpenPinsInFolder(
  // page that could ask "Leave site?" has kept its pin, collapses `folder` with
  // nothing left out of it. With H9 off, where Cmd-W closes a pin, they close as
  // F19 closes a folder's tabs.
@@ -246,7 +298,7 @@ index faf1483236407..8285e97639b07 100644
    if (!commit || !contents) {
      return;
 diff --git a/chrome/test/stedding/folder_tabs_browsertest.cc b/chrome/test/stedding/folder_tabs_browsertest.cc
-index b8f7792950a04..32adff9f7d659 100644
+index b8f7792950a04..190234b83cf57 100644
 --- a/chrome/test/stedding/folder_tabs_browsertest.cc
 +++ b/chrome/test/stedding/folder_tabs_browsertest.cc
 @@ -33,6 +33,7 @@
@@ -327,6 +379,50 @@ index b8f7792950a04..32adff9f7d659 100644
  // folders F45 (GitHub issue 78): a press does to each open pin what Cmd-W
  // does: it sleeps at home, a pin in its place, nested folders' too. Pins
  // already asleep stay. The folder collapses and its rows go; the tab on
+@@ -3848,4 +3912,43 @@ IN_PROC_BROWSER_TEST_F(FolderTabsTest,
+   }
+ }
+ 
++// folders F30, menus M7 (discussion 128): a folder's header menu holds the
++// chord's row, Collapse All Folders while a folder of the Space is open on
++// screen and Expand All Folders otherwise, and it acts on every folder of the
++// Space, as the chord does, switching no tab.
++IN_PROC_BROWSER_TEST_F(FolderTabsTest, TheHeaderMenuFoldsEveryFolder) {
++  ASSERT_TRUE(embedded_test_server()->Start());
++  tabs::TabInterface* const a = OpenLoaded("a.test");
++  tabs::FolderTabCollection* const first =
++      tab_strip_model()->AddToNewFolder({IndexOf(a)});
++  tabs::TabInterface* const b = OpenLoaded("b.test");
++  tabs::FolderTabCollection* const second =
++      tab_strip_model()->AddToNewFolder({IndexOf(b)});
++  ASSERT_TRUE(first && second);
++  ASSERT_FALSE(first->collapsed() || second->collapsed());
++  ASSERT_EQ(b, tab_strip_model()->GetActiveTab());
++
++  const auto all_row = [&]() -> std::u16string {
++    FolderView* const view = DrawnFolder(first);
++    EXPECT_TRUE(view) << "the folder is not drawn";
++    if (!view) {
++      return std::u16string();
++    }
++    ui::SimpleMenuModel* const menu = view->menu_model_for_testing();
++    const std::optional<size_t> index =
++        menu->GetIndexOfCommandId(FolderView::kAllFoldersCommand);
++    return index ? menu->GetLabelAt(*index) : u"(none)";
++  };
++  EXPECT_EQ(u"Collapse All Folders", all_row());
++  DrawnFolder(first)->ExecuteCommand(FolderView::kAllFoldersCommand, 0);
++  EXPECT_TRUE(first->collapsed());
++  EXPECT_TRUE(second->collapsed());
++  EXPECT_EQ(b, tab_strip_model()->GetActiveTab()) << "a tab was switched";
++
++  EXPECT_EQ(u"Expand All Folders", all_row());
++  DrawnFolder(first)->ExecuteCommand(FolderView::kAllFoldersCommand, 0);
++  EXPECT_FALSE(first->collapsed());
++  EXPECT_FALSE(second->collapsed());
++}
++
+ }  // namespace
 diff --git a/chrome/test/stedding/sidebar_click_browsertest.cc b/chrome/test/stedding/sidebar_click_browsertest.cc
 index 548ec4a6531cb..b9dc321ada660 100644
 --- a/chrome/test/stedding/sidebar_click_browsertest.cc

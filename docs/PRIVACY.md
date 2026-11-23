@@ -50,7 +50,6 @@ Using them is your choice.
 | Safe Browsing list updates | `safebrowsing.googleapis.com`. The request is made and refused: these builds carry no API key, so no page is checked. See "Safe Browsing". | The list-update request. Google does not receive your browsing history from it. The request does carry your IP. | The setting is on. The lists stay empty. |
 | Download check | `sb-ssl.google.com`, while Safe Browsing is on, for a file Chromium's download check covers. | The check, with the placeholder API key. | Not the page check above. Turning it off is open (`BACKLOG.md` S-238). |
 | Password leak check | `passwordsleakcheck-pa.googleapis.com`, when a password is saved. The preference defaults on. | A short hash of the username and an encrypted copy of the username and password, with the placeholder API key. No account. | Chromium's leak check. Turning it off is open (`BACKLOG.md` S-238). |
-| Translate's language list | `translate.googleapis.com`, when Settings' Languages section, or the menu that translates live captions, lists the languages; once per launch after a request succeeds. Turning Translate off in Settings does not stop it. No page is ever offered for translation: these builds carry no API key, and without one Chromium never offers it (GitHub issue 133). | A request for the languages Google translates, with the browser's language and the placeholder API key. | Chromium keeps its list current. Stopping it is still to do (below). |
 | Network time | `clients2.google.com` | A request for the current time. | Chromium judges certificate dates with it. Turning it off is still to do (below). |
 | The user's own browsing | Sites the user visits, including the DNS, TLS (OCSP and certificate transparency) and favicon traffic that browsing implies. | Whatever the user does. | This is a web browser. |
 | Extension install and update | Chrome Web Store (Google). | Ordinary store traffic. | Only when the user installs or updates an extension. See "Extensions". |
@@ -438,10 +437,13 @@ below). No patch has changed these yet:
 | Still to do | Today |
 |---|---|
 | Network time queries off | On by default on desktop, and not gated on branding |
-| No request for Translate's language list | Settings' Languages section requests it unless a policy forbids Translate, and the live-caption translation menu always does, whatever `translate.enabled` says |
 | No navigation prediction or preconnect | `net.network_prediction_options` defaults to standard preloading |
 | Component updates from our infrastructure | The component updater talks to Google. It needs an endpoint swap and a component allowlist |
 | No placeholder API keys in request URLs | The placeholder key is still appended to some Google requests |
+
+Translate's language list is never requested: with no API key no page is offered for
+translation, so the browser keeps the list it was built with, whatever Translate's setting
+says (GitHub issue 133).
 
 ## The update check
 

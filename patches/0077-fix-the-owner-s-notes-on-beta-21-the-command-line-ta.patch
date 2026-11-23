@@ -142,7 +142,7 @@ its own (patches/README.md).
  chrome/browser/ui/views/stedding/glyph_ink.h  |   13 +
  .../ui/views/stedding/glyph_ink_unittest.cc   |   46 +
  chrome/browser/ui/views/tabs/BUILD.gn         |    1 +
- .../tabs/browser_tab_strip_controller.cc      |   14 +
+ .../tabs/browser_tab_strip_controller.cc      |   88 +-
  chrome/browser/ui/views/tabs/common/BUILD.gn  |    1 +
  .../tabs/common/dragged_tabs_container.cc     |    2 +-
  .../ui/views/tabs/common/folder_view.cc       |  368 +++-
@@ -205,7 +205,7 @@ its own (patches/README.md).
  .../cert_verifier/cert_verifier_service.h     |    4 +
  .../cert_verifier_service_factory_unittest.cc |    7 +
  .../cert_verifier_service_unittest.cc         |   10 +-
- 134 files changed, 11693 insertions(+), 447 deletions(-)
+ 134 files changed, 11758 insertions(+), 456 deletions(-)
  create mode 100644 chrome/browser/ui/stedding/little_mark.cc
  create mode 100644 chrome/browser/ui/stedding/little_mark.h
  create mode 100644 chrome/browser/ui/stedding/pin_unload_request.cc
@@ -5070,7 +5070,7 @@ index 2f7c4e115ad65..be9d1f99b21c6 100644
    // Used to avoid overwriting a user resize task with the lower priority task
    // of updating popup bounds to match location bar bounds change.
 diff --git a/chrome/browser/ui/views/spaces/page_split_drag_target.cc b/chrome/browser/ui/views/spaces/page_split_drag_target.cc
-index 7bee9611f9c66..3280bd7272018 100644
+index 7d8d0b056ecfd..00df82e3e1d2d 100644
 --- a/chrome/browser/ui/views/spaces/page_split_drag_target.cc
 +++ b/chrome/browser/ui/views/spaces/page_split_drag_target.cc
 @@ -21,6 +21,7 @@
@@ -5098,7 +5098,7 @@ index 7bee9611f9c66..3280bd7272018 100644
  
    TabStripModel* const strip = browser_view_->browser()->tab_strip_model();
    const DragSessionData& session = controller.GetSessionData();
-@@ -229,11 +240,13 @@ TabDragContext* PageSplitDragTarget::OnTabDragUpdated(
+@@ -234,11 +245,13 @@ TabDragContext* PageSplitDragTarget::OnTabDragUpdated(
  void PageSplitDragTarget::OnTabDragExited(const gfx::Point& point_in_screen) {
    ShowDraggedTab();
    Light(std::nullopt);
@@ -5112,7 +5112,7 @@ index 7bee9611f9c66..3280bd7272018 100644
    // A drop elsewhere left this first; Escape puts back the selection the
    // drag began with, the page on screen.
    Light(std::nullopt);
-@@ -251,6 +264,7 @@ void PageSplitDragTarget::HandleTabDrop(DragController& controller) {
+@@ -256,6 +269,7 @@ void PageSplitDragTarget::HandleTabDrop(DragController& controller) {
    const tabs::TabHandle dragged = dragged_;
    const tabs::TabHandle page = page_;
    Light(std::nullopt);
@@ -5120,7 +5120,7 @@ index 7bee9611f9c66..3280bd7272018 100644
    showed_page_ = false;
    dragged_ = tabs::TabHandle();
    page_ = tabs::TabHandle();
-@@ -369,7 +383,10 @@ void PageSplitDragTarget::Light(std::optional<stedding::SplitDropSide> side) {
+@@ -377,7 +391,10 @@ void PageSplitDragTarget::Light(std::optional<stedding::SplitDropSide> side) {
          std::make_unique<SplitDropHighlight>(model_->active_space()->color()));
      highlight_.SetView(view);
    }
@@ -5369,18 +5369,175 @@ index 5189e5cfe5023..1a068df87fce9 100644
      "//chrome/browser/ui/tabs",
      "//chrome/browser/ui/tabs:features",
 diff --git a/chrome/browser/ui/views/tabs/browser_tab_strip_controller.cc b/chrome/browser/ui/views/tabs/browser_tab_strip_controller.cc
-index 5a797000f608d..9ad56746fc2a5 100644
+index 5a797000f608d..ce340b1618a7d 100644
 --- a/chrome/browser/ui/views/tabs/browser_tab_strip_controller.cc
 +++ b/chrome/browser/ui/views/tabs/browser_tab_strip_controller.cc
-@@ -33,6 +33,7 @@
+@@ -8,6 +8,7 @@
+ #include <optional>
+ #include <utility>
+ 
++#include "base/callback_list.h"
+ #include "base/feature_list.h"
+ #include "base/functional/bind.h"
+ #include "base/functional/callback.h"
+@@ -21,6 +22,7 @@
+ #include "base/task/sequenced_task_runner.h"
+ #include "build/build_config.h"
+ #include "chrome/browser/favicon/favicon_utils.h"
++#include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/resource_coordinator/tab_lifecycle_unit_external.h"
+ #include "chrome/browser/resource_coordinator/tab_lifecycle_unit_source.h"
+ #include "chrome/browser/search/search.h"
+@@ -33,7 +35,10 @@
  #include "chrome/browser/ui/navigator/browser_navigator_params.h"
  #include "chrome/browser/ui/spaces/space_id.h"
  #include "chrome/browser/ui/spaces/space_model.h"
 +#include "chrome/browser/ui/stedding/pin_lifecycle.h"
++#include "chrome/browser/ui/stedding/stedding_prefs.h"
  #include "chrome/browser/ui/stedding/tab_menu_verbs.h"
++#include "chrome/browser/ui/stedding/tab_parents.h"
  #include "chrome/browser/ui/tab_ui_helper.h"
  #include "chrome/browser/ui/tabs/features.h"
-@@ -1058,6 +1059,14 @@ void BrowserTabStripController::ExecuteContextMenuCommand(
+ #include "chrome/browser/ui/tabs/public/tab_features.h"
+@@ -70,6 +75,8 @@
+ #include "components/contextual_tasks/public/features.h"
+ #include "components/feature_engagement/public/feature_constants.h"
+ #include "components/omnibox/browser/autocomplete_classifier.h"
++#include "components/prefs/pref_change_registrar.h"
++#include "components/prefs/pref_service.h"
+ #include "components/saved_tab_groups/public/saved_tab_group.h"
+ #include "components/saved_tab_groups/public/tab_group_sync_service.h"
+ #include "components/split_tabs/split_tab_id.h"
+@@ -140,14 +147,37 @@ bool InCollapsedFolder(const tabs::TabInterface* tab) {
+   return false;
+ }
+ 
++// tabs R60: whether `tab`, or the pane beside it in a split, is a child tab
++// that a folded parent could take off the strip, with "Show tabs under the
++// tab that opened them" on. The tab on screen and the pane beside it keep
++// their place under a folded parent, as under a collapsed folder (folders
++// F3), so what a fold filters out follows the active tab.
++bool MayFoldAway(const TabStripModel& model, const tabs::TabInterface* tab) {
++  if (!tab) {
++    return false;
++  }
++  bool child = !stedding::TabParentToken(tab->GetContents()).empty();
++  if (const std::optional<split_tabs::SplitTabId> split = tab->GetSplit();
++      !child && split && model.ContainsSplit(*split)) {
++    for (const tabs::TabInterface* const pane :
++         model.GetSplitData(*split)->ListTabs()) {
++      child = child || !stedding::TabParentToken(pane->GetContents()).empty();
++    }
++  }
++  Profile* const profile = model.profile();
++  return child && profile &&
++         profile->GetPrefs()->GetBoolean(stedding::prefs::kNestChildTabs);
++}
++
+ }  // namespace
+ 
+ ////////////////////////////////////////////////////////////////////////////////
+ // BrowserTabStripController::TabFilterObserver
+ //
+ // The changes that can change which tabs IsTabFilteredOut() names: the active
+-// Space, a tab's Space, a folder collapsing, and a tab moving into or out of
+-// one. The window's SpaceModel outlives this strip (it belongs to the
++// Space, a tab's Space, a folder collapsing, a tab moving into or out of
++// one, a tab's children folding or unfolding, and the setting that nests
++// them. The window's SpaceModel outlives this strip (it belongs to the
+ // window's features, torn down after the window's views), and the model's
+ // root collection lives as long as the model.
+ class BrowserTabStripController::TabFilterObserver
+@@ -156,12 +186,28 @@ class BrowserTabStripController::TabFilterObserver
+  public:
+   TabFilterObserver(BrowserTabStripController& controller,
+                     spaces::SpaceModel* space_model,
+-                    const tabs::TabCollection& root)
++                    const tabs::TabCollection& root,
++                    PrefService* prefs)
+       : controller_(controller), root_(root) {
+     if (space_model) {
+       space_observation_.Observe(space_model);
+     }
+     root_->AddObserver(this);
++    // tabs R60, spaces B34: Fold Child Tabs, Unfold, and the setting take
++    // children off this strip or bring them back, as in the sidebar. The
++    // strip heard none of them: the children stayed drawn, or hidden, until
++    // something else laid the strip out. Unretained: both subscriptions go
++    // with this.
++    parents_changed_ = stedding::AddTabParentsChangedCallback(
++        base::BindRepeating(&TabFilterObserver::OnChildTabsChanged,
++                            base::Unretained(this)));
++    if (prefs) {
++      pref_registrar_.Init(prefs);
++      pref_registrar_.Add(
++          stedding::prefs::kNestChildTabs,
++          base::BindRepeating(&TabFilterObserver::OnChildTabsChanged,
++                              base::Unretained(this)));
++    }
+   }
+   TabFilterObserver(const TabFilterObserver&) = delete;
+   TabFilterObserver& operator=(const TabFilterObserver&) = delete;
+@@ -206,10 +252,14 @@ class BrowserTabStripController::TabFilterObserver
+   }
+ 
+  private:
++  void OnChildTabsChanged() { controller_->ScheduleTabFilterUpdate(); }
++
+   const raw_ref<BrowserTabStripController> controller_;
+   const raw_ref<const tabs::TabCollection> root_;
+   base::ScopedObservation<spaces::SpaceModel, spaces::SpaceModel::Observer>
+       space_observation_{this};
++  base::CallbackListSubscription parents_changed_;
++  PrefChangeRegistrar pref_registrar_;
+ };
+ 
+ ////////////////////////////////////////////////////////////////////////////////
+@@ -293,13 +343,15 @@ void BrowserTabStripController::InitFromModel(TabStrip* tabstrip) {
+     UpdateAllTabsFocusFreezing();
+   }
+ 
+-  // Stedding: from now on the strip follows the tabs another Space or a
+-  // collapsed folder holds (docs/features/spaces.md B34). The layout above
+-  // already asked IsTabFilteredOut().
++  // Stedding: from now on the strip follows the tabs another Space, a
++  // collapsed folder or a folded parent holds (docs/features/spaces.md B34).
++  // The layout above already asked IsTabFilteredOut().
+   tab_filter_observer_ = std::make_unique<TabFilterObserver>(
+       *this, spaces::SpaceModel::From(browser_view_->browser()),
+-      *model_->Root());
++      *model_->Root(),
++      model_->profile() ? model_->profile()->GetPrefs() : nullptr);
+   active_tab_in_collapsed_folder_ = InCollapsedFolder(model_->GetActiveTab());
++  active_tab_may_fold_away_ = MayFoldAway(*model_, model_->GetActiveTab());
+ }
+ 
+ void BrowserTabStripController::Reset() {
+@@ -774,18 +826,21 @@ void BrowserTabStripController::OnTabStripModelChanged(
+   // Stedding: a collapsed folder keeps the active tab, and its split's other
+   // pane, on screen (folders F3), so what the folder filters out follows the
+   // active tab. A collapsed pinned run keeps its selected pin the same way
+-  // (pins H17).
++  // (pins H17), and a folded parent the child on screen (tabs R60): a folded
++  // child made active had no tab in the strip, and kept it once it was left.
+   if (selection.active_tab_changed()) {
+     const bool in_collapsed_folder = InCollapsedFolder(selection.new_tab);
+     const spaces::SpaceModel* const space_model =
+         spaces::SpaceModel::From(browser_view_->browser());
+     const bool pins_collapsed =
+         space_model && space_model->ArePinsCollapsed(space_model->active_id());
++    const bool may_fold_away = MayFoldAway(*model_, selection.new_tab);
+     if (in_collapsed_folder || active_tab_in_collapsed_folder_ ||
+-        pins_collapsed) {
++        pins_collapsed || may_fold_away || active_tab_may_fold_away_) {
+       ScheduleTabFilterUpdate();
+     }
+     active_tab_in_collapsed_folder_ = in_collapsed_folder;
++    active_tab_may_fold_away_ = may_fold_away;
+   }
+ }
+ 
+@@ -1058,6 +1113,14 @@ void BrowserTabStripController::ExecuteContextMenuCommand(
      tabs::TabInterface* tab,
      TabStripModel::ContextMenuCommand command_id,
      int event_flags) {
@@ -5395,15 +5552,17 @@ index 5a797000f608d..9ad56746fc2a5 100644
    model_->ExecuteContextMenuCommand(model_->GetIndexOfTab(tab), command_id);
  }
  
-@@ -1111,6 +1120,11 @@ void BrowserTabStripController::RunScheduledTabFilterUpdate() {
+@@ -1111,6 +1174,13 @@ void BrowserTabStripController::RunScheduledTabFilterUpdate() {
    // brings the two back together lays the strip out anyway.
    if (tabstrip_ && !model_->closing_all() &&
        tabstrip_->GetTabCount() == model_->count()) {
 +    // folders F3 (BACKLOG S-350): what kept the active tab on screen is read
 +    // again with the filter. A folder collapsed over the active tab, or the
 +    // tab moved into a collapsed one, left the flag as it was, and the next
-+    // tab activated did not take that tab's row back.
++    // tab activated did not take that tab's row back. The same for a child
++    // the setting has just started or stopped nesting (tabs R60).
 +    active_tab_in_collapsed_folder_ = InCollapsedFolder(model_->GetActiveTab());
++    active_tab_may_fold_away_ = MayFoldAway(*model_, model_->GetActiveTab());
      tabstrip_->OnTabFilterChanged(/*animate=*/true);
    }
  }

@@ -1,0 +1,129 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Mon, 23 Nov 2026 02:57:01 -0500
+Subject: fix(translate): no request for the language list without an API key
+ (S-556)
+
+Without an API key no page is ever offered for translation
+(TranslateManager::IsAvailable), yet TranslateLanguageList asked
+translate.googleapis.com for its list whenever Settings' Languages section
+or the live-caption translation menu listed languages, whatever Translate's
+setting said (GitHub issue 133). The request is not made without a key; the
+built-in list answers. Upstream's GetSupportedLanguagesFetch already skips
+without one, and NoFetchWithoutAnApiKey skips with one.
+
+Test: TranslateLanguageListTest.NoFetchWithoutAnApiKey (components_unittests).
+
+Why: Stedding promises no request it has no use for (docs/PRIVACY.md), and
+with no API key Translate's list is never used.
+Removable when: Stedding ships an API key and offers translation, or
+upstream stops asking for the list without one.
+---
+ components/translate/core/browser/BUILD.gn    |  1 +
+ .../core/browser/translate_language_list.cc   | 11 ++++++
+ .../translate_language_list_unittest.cc       | 39 +++++++++++++++++++
+ 3 files changed, 51 insertions(+)
+
+diff --git a/components/translate/core/browser/BUILD.gn b/components/translate/core/browser/BUILD.gn
+index 77e130e4088fb..fd9f3c6c4c57a 100644
+--- a/components/translate/core/browser/BUILD.gn
++++ b/components/translate/core/browser/BUILD.gn
+@@ -145,6 +145,7 @@ source_set("unit_tests") {
+     "//components/ukm:test_support",
+     "//components/variations",
+     "//components/variations:test_support",
++    "//google_apis",
+     "//net:test_support",
+     "//services/metrics/public/cpp:metrics_cpp",
+     "//services/metrics/public/cpp:ukm_builders",
+diff --git a/components/translate/core/browser/translate_language_list.cc b/components/translate/core/browser/translate_language_list.cc
+index a99374b961e85..e025c4ebe6052 100644
+--- a/components/translate/core/browser/translate_language_list.cc
++++ b/components/translate/core/browser/translate_language_list.cc
+@@ -33,6 +33,7 @@
+ #include "components/translate/core/browser/translate_url_util.h"
+ #include "components/translate/core/common/translate_language_matcher.h"
+ #include "components/translate/core/common/translate_util.h"
++#include "google_apis/google_api_keys.h"
+ #include "net/base/url_util.h"
+ #include "ui/base/l10n/l10n_util.h"
+ #include "url/gurl.h"
+@@ -274,6 +275,16 @@ GURL TranslateLanguageList::TranslateLanguageUrl() {
+ }
+ 
+ void TranslateLanguageList::RequestLanguageList() {
++  // Stedding (docs/PRIVACY.md, GitHub issue 133): without an API key no page
++  // is ever offered for translation (TranslateManager::IsAvailable), so the
++  // list Google keeps is of no use and is not asked for; the built-in list
++  // stays. Settings' Languages section and the live-caption menu had asked
++  // for it whatever Translate's setting said.
++  if (!google_apis::HasAPIKeyConfigured()) {
++    request_pending_ = false;
++    return;
++  }
++
+   // If resource requests are not allowed, we'll get a callback when they are.
+   if (!resource_requests_allowed_) {
+     request_pending_ = true;
+diff --git a/components/translate/core/browser/translate_language_list_unittest.cc b/components/translate/core/browser/translate_language_list_unittest.cc
+index 0a5f9c2946b59..ebaea47a802c2 100644
+--- a/components/translate/core/browser/translate_language_list_unittest.cc
++++ b/components/translate/core/browser/translate_language_list_unittest.cc
+@@ -18,6 +18,7 @@
+ #include "components/translate/core/browser/translate_url_fetcher.h"
+ #include "components/translate/core/browser/translate_url_util.h"
+ #include "components/variations/scoped_variations_ids_provider.h"
++#include "google_apis/google_api_keys.h"
+ #include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
+ #include "services/network/test/test_url_loader_factory.h"
+ #include "testing/gmock/include/gmock/gmock.h"
+@@ -338,6 +339,11 @@ TEST_F(TranslateLanguageListTest, GetSupportedPartialTranslateLanguages) {
+ // Check that we contact the translate server to update the supported language
+ // list when translate is enabled by policy.
+ TEST_F(TranslateLanguageListTest, GetSupportedLanguagesFetch) {
++  // Stedding: a build without an API key asks for no list
++  // (NoFetchWithoutAnApiKey).
++  if (!google_apis::HasAPIKeyConfigured()) {
++    GTEST_SKIP() << "no API key: no list is asked for";
++  }
+   // Set up fake network environment.
+   base::test::TaskEnvironment task_environment;
+   network::TestURLLoaderFactory test_url_loader_factory;
+@@ -416,4 +422,37 @@ TEST_F(TranslateLanguageListTest, GetSupportedLanguagesNoFetch) {
+   TranslateDownloadManager::GetInstance()->ResetForTesting();
+ }
+ 
++// Stedding (docs/PRIVACY.md, GitHub issue 133): without an API key nothing is
++// ever offered for translation, so the list Google keeps is not asked for,
++// even where Translate is allowed, as Settings' Languages section and the
++// live-caption menu ask; the built-in list answers.
++TEST_F(TranslateLanguageListTest, NoFetchWithoutAnApiKey) {
++  // Stedding's builds carry no Google API key; a build that has one asks for
++  // the list (GetSupportedLanguagesFetch).
++  if (google_apis::HasAPIKeyConfigured()) {
++    GTEST_SKIP() << "an API key: the list is asked for";
++  }
++  base::test::TaskEnvironment task_environment;
++  network::TestURLLoaderFactory test_url_loader_factory;
++  scoped_refptr<network::SharedURLLoaderFactory> test_shared_loader_factory =
++      base::MakeRefCounted<network::WeakWrapperSharedURLLoaderFactory>(
++          &test_url_loader_factory);
++  TranslateDownloadManager::GetInstance()->set_application_locale("en");
++  TranslateDownloadManager::GetInstance()->set_url_loader_factory(
++      test_shared_loader_factory);
++  int requests = 0;
++  test_url_loader_factory.SetInterceptor(base::BindLambdaForTesting(
++      [&](const network::ResourceRequest& request) { ++requests; }));
++
++  std::vector<std::string> languages;
++  TranslateLanguageList language_list;
++  language_list.SetResourceRequestsAllowed(true);
++  language_list.GetSupportedLanguages(true /* translate_allowed */, &languages);
++  base::RunLoop().RunUntilIdle();
++
++  EXPECT_EQ(0, requests) << "the language list was asked for";
++  EXPECT_TRUE(std::ranges::contains(languages, "it")) << "the built-in list";
++  TranslateDownloadManager::GetInstance()->ResetForTesting();
++}
++
+ }  // namespace translate

@@ -19,7 +19,7 @@ Only a bundle signed by a team starts the updater. A copy built locally, signed 
 
 The thank-you pages are on stedding.dev and are not on the update path. When the welcome flow ends, the browser opens `https://stedding.dev/thanks/` once per installation. On the first launch of a later version it opens `https://stedding.dev/thanks/updated/#v` plus the version. The version is in the fragment. If the site is down, the update still installs.
 
-`CFBundleVersion` carries Stedding's version as `<10000 + 1000 × major + 10 × minor + patch>.<n>`, with 999 for a release (0.2.0-beta.16 is 10020.16). Sparkle and LaunchServices compare that key (updates Up11).
+`CFBundleVersion` carries Stedding's version as `<100000 + 10000 × major + 100 × minor + patch>.<n>`, with 999 for a release (0.7.1 is 100701.999). Sparkle and LaunchServices compare that key (updates Up11). Up to 0.7.0 it was `<10000 + 1000 × major + 10 × minor + patch>.<n>` (0.2.0-beta.16 is 10020.16), which gave a patch above 9 no number of its own. Every number of the new form is above every number of the old, so an installed copy sees the next release as newer.
 
 ## Consequences
 

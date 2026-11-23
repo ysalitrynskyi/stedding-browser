@@ -39,6 +39,7 @@ embedder hook for page activation; the feature itself stays.
  chrome/browser/chrome_browser_main.cc         |  13 +
  .../browser/component_updater/registration.cc |   4 +-
  .../api/settings_private/prefs_util.cc        |  10 +
+ .../browser/repost_form_warning_controller.cc |   5 +
  .../stedding_page/stedding_page.html.ts       |  62 ++
  .../settings/stedding_page/stedding_page.ts   | 114 +++
  chrome/browser/ui/stedding/blocker/BUILD.gn   |  90 +++
@@ -47,14 +48,14 @@ embedder hook for page activation; the feature itself stays.
  chrome/browser/ui/stedding/blocker/blocker.h  |  36 +
  .../blocker/blocker_activation_throttle.cc    |  71 ++
  .../blocker/blocker_activation_throttle.h     |  52 ++
- .../ui/stedding/blocker/blocker_convert.cc    | 222 ++++++
- .../ui/stedding/blocker/blocker_convert.h     |  79 +++
+ .../ui/stedding/blocker/blocker_convert.cc    | 239 +++++++
+ .../ui/stedding/blocker/blocker_convert.h     |  84 +++
  .../blocker/blocker_convert_unittest.cc       | 168 +++++
- .../ui/stedding/blocker/blocker_lists.cc      | 618 +++++++++++++++++
+ .../ui/stedding/blocker/blocker_lists.cc      | 625 +++++++++++++++++
  .../ui/stedding/blocker/blocker_lists.h       | 226 ++++++
  .../blocker/blocker_lists_unittest.cc         | 291 ++++++++
- .../ui/stedding/blocker/blocker_rules.cc      | 284 ++++++++
- .../ui/stedding/blocker/blocker_rules.h       | 109 +++
+ .../ui/stedding/blocker/blocker_rules.cc      | 305 ++++++++
+ .../ui/stedding/blocker/blocker_rules.h       | 116 ++++
  .../blocker/blocker_rules_unittest.cc         | 160 +++++
  chrome/browser/ui/stedding/stedding_prefs.cc  |   7 +
  chrome/browser/ui/stedding/stedding_prefs.h   |  12 +
@@ -85,9 +86,9 @@ embedder hook for page activation; the feature itself stays.
  chrome/test/data/stedding/blocker/page.html   |  48 ++
  chrome/test/stedding/BUILD.gn                 |  10 +
  chrome/test/stedding/blocker_browsertest.cc   | 656 ++++++++++++++++++
- ...ent_subresource_filter_throttle_manager.cc |  46 +-
- ...tent_subresource_filter_throttle_manager.h |  15 +
- 52 files changed, 4167 insertions(+), 5 deletions(-)
+ ...ent_subresource_filter_throttle_manager.cc |  57 +-
+ ...tent_subresource_filter_throttle_manager.h |  28 +
+ 53 files changed, 4253 insertions(+), 5 deletions(-)
  create mode 100644 chrome/browser/ui/stedding/blocker/BUILD.gn
  create mode 100644 chrome/browser/ui/stedding/blocker/DEPS
  create mode 100644 chrome/browser/ui/stedding/blocker/blocker.cc
@@ -201,6 +202,33 @@ index 60836cd0bc8de..85e69efa49072 100644
    (*s_allowlist)[stedding::prefs::kDarkPagesButton] =
        settings_api::PrefType::kBoolean;
    (*s_allowlist)[stedding::prefs::kPinsCloseSleeps] =
+diff --git a/chrome/browser/repost_form_warning_controller.cc b/chrome/browser/repost_form_warning_controller.cc
+index 7a23967786e2c..bf2eb3bb936c1 100644
+--- a/chrome/browser/repost_form_warning_controller.cc
++++ b/chrome/browser/repost_form_warning_controller.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "chrome/browser/repost_form_warning_controller.h"
+ 
++#include "chrome/browser/ui/stedding/blocker/blocker_rules.h"
+ #include "components/strings/grit/components_strings.h"
+ #include "content/public/browser/navigation_controller.h"
+ #include "content/public/browser/web_contents.h"
+@@ -32,10 +33,14 @@ void RepostFormWarningController::OnAccepted() {
+ }
+ 
+ void RepostFormWarningController::OnCanceled() {
++  // Stedding blocker Bk5: the form is not sent again, so the site's blocking
++  // choice that waited for this reload is dropped, not kept for the next.
++  stedding::DropBlockerChoiceWaiting(web_contents());
+   web_contents()->GetController().CancelPendingReload();
+ }
+ 
+ void RepostFormWarningController::OnClosed() {
++  stedding::DropBlockerChoiceWaiting(web_contents());
+   web_contents()->GetController().CancelPendingReload();
+ }
+ 
 diff --git a/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts b/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
 index d3ae2fd481981..8caa76d3a0852 100644
 --- a/chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
@@ -837,10 +865,10 @@ index 0000000000000..e7bfb48d395f9
 +#endif  // CHROME_BROWSER_UI_STEDDING_BLOCKER_BLOCKER_ACTIVATION_THROTTLE_H_
 diff --git a/chrome/browser/ui/stedding/blocker/blocker_convert.cc b/chrome/browser/ui/stedding/blocker/blocker_convert.cc
 new file mode 100644
-index 0000000000000..52fb61157c35f
+index 0000000000000..a5cb32cab11b2
 --- /dev/null
 +++ b/chrome/browser/ui/stedding/blocker/blocker_convert.cc
-@@ -0,0 +1,222 @@
+@@ -0,0 +1,239 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -954,6 +982,23 @@ index 0000000000000..52fb61157c35f
 +  return text.starts_with("[Adblock");
 +}
 +
++size_t CountUrlRules(std::string_view text) {
++  subresource_filter::RuleParser parser;
++  size_t url_rules = 0;
++  for (std::string_view line :
++       base::SplitStringPiece(WithoutBom(text), "\n", base::TRIM_WHITESPACE,
++                              base::SPLIT_WANT_NONEMPTY)) {
++    // As in ConvertLists: the header line and comments carry no rule.
++    if (line.starts_with("[") || line.starts_with("!")) {
++      continue;
++    }
++    if (parser.Parse(line) == url_pattern_index::proto::RULE_TYPE_URL) {
++      ++url_rules;
++    }
++  }
++  return url_rules;
++}
++
 +ConvertResult ConvertLists(const std::vector<ListSource>& lists,
 +                           const base::FilePath& out_dir,
 +                           std::string_view salt,
@@ -1065,10 +1110,10 @@ index 0000000000000..52fb61157c35f
 +}  // namespace stedding
 diff --git a/chrome/browser/ui/stedding/blocker/blocker_convert.h b/chrome/browser/ui/stedding/blocker/blocker_convert.h
 new file mode 100644
-index 0000000000000..5d05d4fec53ae
+index 0000000000000..bdad1d36892de
 --- /dev/null
 +++ b/chrome/browser/ui/stedding/blocker/blocker_convert.h
-@@ -0,0 +1,79 @@
+@@ -0,0 +1,84 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -1099,6 +1144,11 @@ index 0000000000000..5d05d4fec53ae
 +// empty starts with "[Adblock". A captive portal's page, an error page or an
 +// empty answer is not.
 +bool LooksLikeFilterList(std::string_view text);
++
++// Bk3: the URL rules Chromium's parser reads in `text`, counted as
++// ConvertLists counts a list's rules against its minimum, so a download that
++// would give too few is refused before it replaces the stored list.
++size_t CountUrlRules(std::string_view text);
 +
 +// One downloaded list, as the converter reads it and the licence file names
 +// it.
@@ -1324,10 +1374,10 @@ index 0000000000000..f4a9e28f03579
 +}  // namespace stedding
 diff --git a/chrome/browser/ui/stedding/blocker/blocker_lists.cc b/chrome/browser/ui/stedding/blocker/blocker_lists.cc
 new file mode 100644
-index 0000000000000..45de56e79097d
+index 0000000000000..b53861c719e65
 --- /dev/null
 +++ b/chrome/browser/ui/stedding/blocker/blocker_lists.cc
-@@ -0,0 +1,618 @@
+@@ -0,0 +1,625 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -1433,14 +1483,19 @@ index 0000000000000..45de56e79097d
 +}
 +
 +// Off the UI thread: the download checked and put in its place. Nothing,
-+// and the stored list kept, when it is not a filter list (Bk3).
++// and the stored list kept, when it is not a filter list or gives fewer than
++// `minimum_rules` URL rules (Bk3): such a list counts as a failed fetch and
++// is tried again, where storing it lost the good list and every conversion
++// until its expiry failed on it.
 +std::optional<base::TimeDelta> StoreList(const base::FilePath& download,
-+                                         const base::FilePath& path) {
++                                         const base::FilePath& path,
++                                         size_t minimum_rules) {
 +  std::string text;
 +  const bool read =
 +      base::ReadFileToStringWithMaxSize(download, &text, kMaxListBytes);
 +  base::DeleteFile(download);
 +  if (!read || !LooksLikeFilterList(text) ||
++      CountUrlRules(text) < minimum_rules ||
 +      !base::CreateDirectory(path.DirName()) ||
 +      !base::ImportantFileWriter::WriteFileAtomically(path, text)) {
 +    return std::nullopt;
@@ -1810,7 +1865,8 @@ index 0000000000000..45de56e79097d
 +          ->EnumerateHeader(&iter, net::HttpResponseHeaders::kLastModified)
 +          .value_or(std::string_view()));
 +  file_task_runner_->PostTaskAndReplyWithResult(
-+      FROM_HERE, base::BindOnce(&StoreList, download, ListPath(*spec)),
++      FROM_HERE, base::BindOnce(&StoreList, download, ListPath(*spec),
++                                env_.minimum_rules),
 +      base::BindOnce(&BlockerLists::OnStored, weak_factory_.GetWeakPtr(), id,
 +                     std::move(etag), std::move(last_modified)));
 +}
@@ -1837,7 +1893,8 @@ index 0000000000000..45de56e79097d
 +                            std::optional<base::TimeDelta> expiry) {
 +  loaders_.erase(id);
 +  if (!expiry) {
-+    // Bk3: not a filter list; the stored one stays.
++    // Bk3: not a filter list, or one with too few rules; the stored one
++    // stays.
 +    FetchFailed(id);
 +    return;
 +  }
@@ -2477,10 +2534,10 @@ index 0000000000000..1691dfc8dff54
 +}  // namespace stedding
 diff --git a/chrome/browser/ui/stedding/blocker/blocker_rules.cc b/chrome/browser/ui/stedding/blocker/blocker_rules.cc
 new file mode 100644
-index 0000000000000..8e26fec4bebb2
+index 0000000000000..700fdc3a300ca
 --- /dev/null
 +++ b/chrome/browser/ui/stedding/blocker/blocker_rules.cc
-@@ -0,0 +1,284 @@
+@@ -0,0 +1,305 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -2533,7 +2590,9 @@ index 0000000000000..8e26fec4bebb2
 +// to send the form again, and the choice is written only once that reload
 +// starts: cancelled, the page keeps the blocking it loaded with and the
 +// shield still says so. Written first, the shield showed the new choice
-+// over a page filtered by the old one. Any other navigation drops it.
++// over a page filtered by the old one. Any other navigation drops it, and so
++// does the question's Cancel (DropBlockerChoiceWaiting): kept, the choice
++// was written by whatever reload came next.
 +class BlockerChoiceOnReload
 +    : public content::WebContentsObserver,
 +      public content::WebContentsUserData<BlockerChoiceOnReload> {
@@ -2542,7 +2601,14 @@ index 0000000000000..8e26fec4bebb2
 +  BlockerChoiceOnReload& operator=(const BlockerChoiceOnReload&) = delete;
 +  ~BlockerChoiceOnReload() override = default;
 +
++  // Whether this choice's own question has been asked. The choice is made
++  // before its reload asks, and that reload first cancels a question still
++  // up from an earlier press, which must not take this choice with it.
++  bool asked() const { return asked_; }
++
 +  // content::WebContentsObserver:
++  void BeforeFormRepostWarningShow() override { asked_ = true; }
++
 +  void DidStartNavigation(content::NavigationHandle* navigation) override {
 +    if (!navigation->IsInPrimaryMainFrame()) {
 +      return;
@@ -2569,6 +2635,7 @@ index 0000000000000..8e26fec4bebb2
 +
 +  const GURL url_;
 +  const bool on_;
++  bool asked_ = false;
 +
 +  WEB_CONTENTS_USER_DATA_KEY_DECL();
 +};
@@ -2707,6 +2774,17 @@ index 0000000000000..8e26fec4bebb2
 +                                   /*check_for_repost=*/true);
 +}
 +
++void DropBlockerChoiceWaiting(content::WebContents* contents) {
++  if (!contents) {
++    return;
++  }
++  const BlockerChoiceOnReload* const choice =
++      BlockerChoiceOnReload::FromWebContents(contents);
++  if (choice && choice->asked()) {
++    contents->RemoveUserData(BlockerChoiceOnReload::UserDataKey());
++  }
++}
++
 +std::u16string BlockerSiteName(content::WebContents* contents) {
 +  if (!contents) {
 +    return std::u16string();
@@ -2767,10 +2845,10 @@ index 0000000000000..8e26fec4bebb2
 +}  // namespace stedding
 diff --git a/chrome/browser/ui/stedding/blocker/blocker_rules.h b/chrome/browser/ui/stedding/blocker/blocker_rules.h
 new file mode 100644
-index 0000000000000..e38f26dfeb35f
+index 0000000000000..fff78995547d6
 --- /dev/null
 +++ b/chrome/browser/ui/stedding/blocker/blocker_rules.h
-@@ -0,0 +1,109 @@
+@@ -0,0 +1,116 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -2859,6 +2937,13 @@ index 0000000000000..e38f26dfeb35f
 +// profile (a private window's stays in memory) and reloads the tab so the
 +// page shows the change.
 +void ToggleBlockingOnSite(content::WebContents* contents);
++
++// Bk5: the question about sending the form again closed without sending it
++// (Cancel, or closed some other way). A choice ToggleBlockingOnSite left
++// waiting for that question's reload is dropped, so no later reload writes
++// it. A choice whose own question has not been asked yet stays: its reload
++// closes the question still up from an earlier press first.
++void DropBlockerChoiceWaiting(content::WebContents* contents);
 +
 +// How the site of the page `contents` shows is named on the button and in
 +// the command bar: its registrable domain ("example.com"). Empty when the
@@ -4721,7 +4806,7 @@ index 0000000000000..5fa9162fb9e70
 +      [&] { return ListRequests().size() >= before + 2; }));
 +}
 diff --git a/components/subresource_filter/content/browser/content_subresource_filter_throttle_manager.cc b/components/subresource_filter/content/browser/content_subresource_filter_throttle_manager.cc
-index 839575284340d..1a71ea15c864c 100644
+index 839575284340d..cfcb14eb7a189 100644
 --- a/components/subresource_filter/content/browser/content_subresource_filter_throttle_manager.cc
 +++ b/components/subresource_filter/content/browser/content_subresource_filter_throttle_manager.cc
 @@ -11,6 +11,7 @@
@@ -4764,18 +4849,20 @@ index 839575284340d..1a71ea15c864c 100644
  // static
  void ContentSubresourceFilterThrottleManager::BindReceiver(
      mojo::PendingAssociatedReceiver<mojom::SubresourceFilterHost>
-@@ -501,7 +527,9 @@ void ContentSubresourceFilterThrottleManager::DidBecomePrimaryPage() {
+@@ -501,7 +527,11 @@ void ContentSubresourceFilterThrottleManager::DidBecomePrimaryPage() {
    // If we tried to notify while non-primary, we didn't show UI so do that now
    // that the page became primary. This also leads to reattempting notification
    // if a page transitioned from primary to non-primary and back (BFCache).
 -  if (current_committed_load_has_notified_disallowed_load_) {
-+  // Stedding (ADR 0030): no notification while the embedder decides.
++  // Stedding (ADR 0030): no notification for a page the embedder decided,
++  // also when it comes back from the back-forward cache after the embedder
++  // cleared its factory.
 +  if (current_committed_load_has_notified_disallowed_load_ &&
-+      !HasPageActivationThrottleFactory()) {
++      !EmbedderOwnsPageUI()) {
      profile_interaction_manager_->MaybeShowNotification();
    }
  }
-@@ -582,7 +610,13 @@ void ContentSubresourceFilterThrottleManager::
+@@ -582,7 +612,16 @@ void ContentSubresourceFilterThrottleManager::
    CHECK(!navigation_handle.IsSameDocument());
    CHECK(!ShouldInheritActivation(navigation_handle.GetURL()));
  
@@ -4784,36 +4871,49 @@ index 839575284340d..1a71ea15c864c 100644
 +      HasPageActivationThrottleFactory()) {
 +    // Stedding (ADR 0030): the embedder's throttle decides the page's
 +    // activation, ahead of the activation state computing throttle below.
++    // This manager belongs to the page this navigation creates, so the page
++    // stays the embedder's after its factory is cleared.
++    page_activation_decided_by_embedder_ = true;
 +    PageActivationThrottleFactoryStorage().Run(registry);
 +  } else if (IsInSubresourceFilterRoot(&navigation_handle) &&
 +             database_manager_) {
      registry.AddThrottle(std::make_unique<SafeBrowsingPageActivationThrottle>(
          registry, profile_interaction_manager_.get(), database_manager_));
    }
-@@ -636,6 +670,11 @@ void ContentSubresourceFilterThrottleManager::OnReloadRequested() {
+@@ -636,6 +675,11 @@ void ContentSubresourceFilterThrottleManager::OnReloadRequested() {
  void ContentSubresourceFilterThrottleManager::OnAdsViolationTriggered(
      content::RenderFrameHost* rfh,
      mojom::AdsViolation triggered_violation) {
 +  // Stedding (ADR 0030): no ads intervention, which records the site for a
-+  // week, while the embedder decides.
-+  if (HasPageActivationThrottleFactory()) {
++  // week, on a page the embedder decided or while it decides.
++  if (EmbedderOwnsPageUI()) {
 +    return;
 +  }
    profile_interaction_manager_->OnAdsViolationTriggered(rfh,
                                                          triggered_violation);
  }
-@@ -749,7 +788,8 @@ void ContentSubresourceFilterThrottleManager::MaybeShowNotification(
+@@ -749,11 +793,18 @@ void ContentSubresourceFilterThrottleManager::MaybeShowNotification(
    // Non-primary pages shouldn't affect UI. When the page becomes primary we'll
    // check |current_committed_load_has_notified_disallowed_load_| and try
    // again.
 -  if (page_->IsPrimary()) {
-+  // Stedding (ADR 0030): no notification while the embedder decides.
-+  if (page_->IsPrimary() && !HasPageActivationThrottleFactory()) {
++  // Stedding (ADR 0030): no notification on a page the embedder decided or
++  // while it decides.
++  if (page_->IsPrimary() && !EmbedderOwnsPageUI()) {
      profile_interaction_manager_->MaybeShowNotification();
    }
  }
+ 
++bool ContentSubresourceFilterThrottleManager::EmbedderOwnsPageUI() const {
++  return page_activation_decided_by_embedder_ ||
++         HasPageActivationThrottleFactory();
++}
++
+ VerifiedRuleset::Handle*
+ ContentSubresourceFilterThrottleManager::EnsureRulesetHandle() {
+   if (!ruleset_handle_) {
 diff --git a/components/subresource_filter/content/browser/content_subresource_filter_throttle_manager.h b/components/subresource_filter/content/browser/content_subresource_filter_throttle_manager.h
-index 2852732513090..09589a9951816 100644
+index 2852732513090..621ba6561f58b 100644
 --- a/components/subresource_filter/content/browser/content_subresource_filter_throttle_manager.h
 +++ b/components/subresource_filter/content/browser/content_subresource_filter_throttle_manager.h
 @@ -10,6 +10,7 @@
@@ -4824,7 +4924,7 @@ index 2852732513090..09589a9951816 100644
  #include "base/gtest_prod_util.h"
  #include "base/memory/raw_ptr.h"
  #include "base/memory/raw_ref.h"
-@@ -180,6 +181,20 @@ class ContentSubresourceFilterThrottleManager
+@@ -180,6 +181,22 @@ class ContentSubresourceFilterThrottleManager
    void MaybeCreateAndAddNavigationThrottles(
        content::NavigationThrottleRegistry& registry);
  
@@ -4834,8 +4934,10 @@ index 2852732513090..09589a9951816 100644
 +  // and ahead of the activation state computing throttle; and the embedder
 +  // owns what the user sees and what is kept: this class shows no "ads
 +  // blocked" notification and triggers no ads intervention, so nothing is
-+  // written for the site visited. Set and cleared on the UI thread; a null
-+  // callback clears it.
++  // written for the site visited. That holds for every page whose activation
++  // the factory decided, also once the factory is cleared (a page restored
++  // from the back-forward cache, or an open page that blocks a request
++  // later). Set and cleared on the UI thread; a null callback clears it.
 +  using PageActivationThrottleFactory =
 +      base::RepeatingCallback<void(content::NavigationThrottleRegistry&)>;
 +  static void SetPageActivationThrottleFactory(
@@ -4845,3 +4947,28 @@ index 2852732513090..09589a9951816 100644
    PageLoadStatistics* page_load_statistics() const { return statistics_.get(); }
  
    ProfileInteractionManager* profile_interaction_manager_for_testing() {
+@@ -292,6 +309,11 @@ class ContentSubresourceFilterThrottleManager
+   // specifies the frame that blocked the subresource.
+   void MaybeShowNotification(content::RenderFrameHost* frame_host);
+ 
++  // Stedding (ADR 0030): whether the embedder owns this page's notification
++  // and ads interventions: its factory decided the page's activation, or a
++  // factory is set now.
++  bool EmbedderOwnsPageUI() const;
++
+   VerifiedRuleset::Handle* EnsureRulesetHandle();
+   void DestroyRulesetHandleIfNoLongerUsed();
+ 
+@@ -402,6 +424,12 @@ class ContentSubresourceFilterThrottleManager
+   // should only be called at most once per main frame load.
+   bool current_committed_load_has_notified_disallowed_load_ = false;
+ 
++  // Stedding (ADR 0030): true once the embedder's factory has decided the
++  // activation of this page's root navigation. Each page has its own
++  // throttle manager, so this stays with the page for its whole life,
++  // including in the back-forward cache.
++  bool page_activation_decided_by_embedder_ = false;
++
+   // This member outlives this class.
+   raw_ptr<VerifiedRulesetDealer::Handle> dealer_handle_;
+ 

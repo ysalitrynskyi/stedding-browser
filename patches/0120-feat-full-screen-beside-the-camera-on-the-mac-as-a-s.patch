@@ -38,7 +38,7 @@ camera.
  .../browser/ui/color/stedding_color_mixer.cc  |  13 +
  .../ui/color/stedding_color_mixer_unittest.cc |  47 ++
  chrome/browser/ui/stedding/BUILD.gn           |   1 +
- chrome/browser/ui/stedding/address_row.cc     |  31 ++
+ chrome/browser/ui/stedding/address_row.cc     |  37 ++
  chrome/browser/ui/stedding/address_row.h      |  29 ++
  .../browser/ui/stedding/address_row_rules.cc  |   4 +
  .../browser/ui/stedding/address_row_rules.h   |   3 +
@@ -48,7 +48,7 @@ camera.
  .../ui/stedding/stedding_prefs_unittest.cc    |   9 +-
  .../stedding/theme/page_bar_color_supplier.cc |   4 +
  .../theme/page_theme_color_controller.cc      |  15 +-
- .../theme/page_theme_color_controller.h       |  17 +-
+ .../theme/page_theme_color_controller.h       |  44 +-
  .../ui/views/bookmarks/bookmark_bar_view.cc   |  22 +-
  .../ui/views/commandbar/command_bar_view.cc   |   5 +
  chrome/browser/ui/views/frame/BUILD.gn        |  15 +-
@@ -82,7 +82,7 @@ camera.
  .../app_shim/native_widget_mac_nswindow.h     |   6 +
  .../app_shim/native_widget_mac_nswindow.mm    |  12 +
  .../native_widget_ns_window_bridge.mm         |   9 +-
- 50 files changed, 2589 insertions(+), 75 deletions(-)
+ 50 files changed, 2618 insertions(+), 79 deletions(-)
  create mode 100644 chrome/browser/ui/views/frame/stedding_camera_row_mac.h
  create mode 100644 chrome/browser/ui/views/frame/stedding_camera_row_mac.mm
  create mode 100644 chrome/test/stedding/camera_row_browsertest.mm
@@ -248,7 +248,7 @@ index 35f03277b935c..fe3a8e3906ad8 100644
    ]
  }
 diff --git a/chrome/browser/ui/stedding/address_row.cc b/chrome/browser/ui/stedding/address_row.cc
-index 9451d0b6a6026..43e79f88d526c 100644
+index 9451d0b6a6026..0951fa7d9b9df 100644
 --- a/chrome/browser/ui/stedding/address_row.cc
 +++ b/chrome/browser/ui/stedding/address_row.cc
 @@ -11,6 +11,7 @@
@@ -259,7 +259,7 @@ index 9451d0b6a6026..43e79f88d526c 100644
  #include "chrome/browser/ui/tabs/tab_strip_model.h"
  #include "chrome/browser/ui/tabs/vertical_tab_strip_state_controller.h"
  #include "components/prefs/pref_service.h"
-@@ -86,6 +87,7 @@ bool AddressRow::IsVisible() {
+@@ -86,10 +87,17 @@ bool AddressRow::IsVisible() {
    }
    signals.override = override_;
    signals.caption_buttons_over_row = caption_buttons_over_row_;
@@ -267,7 +267,17 @@ index 9451d0b6a6026..43e79f88d526c 100644
    return ShouldShowAddressRow(signals);
  }
  
-@@ -103,6 +105,35 @@ void AddressRow::SetSteddingHeldContents(content::WebContents* contents) {
+ void AddressRow::Toggle() {
++  // T57: beside the camera the row always shows, so there is nothing to
++  // override. An answer stored there would hide the row once that full
++  // screen ends, with nothing on screen having changed.
++  if (camera_row_.has_value()) {
++    return;
++  }
+   override_ = !IsVisible();
+   Relayout();
+ }
+@@ -103,6 +111,35 @@ void AddressRow::SetSteddingHeldContents(content::WebContents* contents) {
    Relayout();
  }
  
@@ -524,7 +534,7 @@ index 9045e36e37887..342f8b191a577 100644
      base::RepeatingClosure callback) {
    return changed_callbacks_.Add(std::move(callback));
 diff --git a/chrome/browser/ui/stedding/theme/page_theme_color_controller.h b/chrome/browser/ui/stedding/theme/page_theme_color_controller.h
-index 67b296fa83d9c..51d43feee7d4b 100644
+index 67b296fa83d9c..8bdbb706f02bc 100644
 --- a/chrome/browser/ui/stedding/theme/page_theme_color_controller.h
 +++ b/chrome/browser/ui/stedding/theme/page_theme_color_controller.h
 @@ -57,12 +57,17 @@ class PageThemeColorController : public TabStripModelObserver,
@@ -561,7 +571,54 @@ index 67b296fa83d9c..51d43feee7d4b 100644
    // Runs whenever color() changes.
    base::CallbackListSubscription AddChangedCallback(
        base::RepeatingClosure callback);
-@@ -182,6 +194,7 @@ class PageThemeColorController : public TabStripModelObserver,
+@@ -97,6 +109,7 @@ class PageThemeColorController : public TabStripModelObserver,
+   void DidFirstVisuallyNonEmptyPaint() override;
+   void DidStopLoading() override;
+   void DidGetUserInteraction(const blink::WebInputEvent& event) override;
++  void OnVisibilityChanged(content::Visibility visibility) override;
+   void WebContentsDestroyed() override;
+ 
+   // The change path without a page, for tests.
+@@ -114,6 +127,13 @@ class PageThemeColorController : public TabStripModelObserver,
+   void FailSurfacesForTesting(int attempts) {
+     surface_failures_for_testing_ = attempts;
+   }
++  // The next `copies` copies of a page's top edge are taken as failed when
++  // they come back, as a copy of a surface the page never fills is (T31).
++  void FailCopiesForTesting(int copies) {
++    copy_failures_for_testing_ = copies;
++  }
++  // How many copies of a page's top edge have been asked for.
++  int top_copies_for_testing() const { return top_copies_for_testing_; }
+ 
+   // dark-pages Dk8: the colour the row takes from a page's declared theme
+   // colour. While dark pages darkens the page, a theme colour Blink would
+@@ -143,13 +163,21 @@ class PageThemeColorController : public TabStripModelObserver,
+   void UpdatePartner(content::WebContents* left = nullptr,
+                      std::optional<SkColor> left_color = std::nullopt);
+   void RefreshPartner();
+-  // T41: whether the row is in two parts, one over each pane of the active
+-  // tab's split side by side; stacked, it is the upper pane's alone.
+-  bool RowHasTwoParts() const;
++  // T41: whether the active tab is in a split. Side by side the row is in
++  // two parts, one over each pane; stacked, it is the upper pane's alone.
++  // Either way its icons and text read on both panes (bar_supplier).
++  bool ActiveTabIsSplit() const;
+ 
+   // T31: reads the page's top edge after each delay, from now; an earlier
+   // read already due stays due. Reads that fall due together are one read.
++  // A read asked for here has its own tries again (RetryTopSample).
+   void ScheduleTopSamples(std::initializer_list<base::TimeDelta> delays);
++  // T31: a read that found no surface, or whose copy failed, is made again
++  // kSampleRetry later, up to kSurfaceRetries times since a read was last
++  // asked for (ScheduleTopSamples).
++  void RetryTopSample();
++  // ScheduleTopSamples, leaving the count of tries as it is.
++  void QueueTopSamples(std::initializer_list<base::TimeDelta> delays);
+   void OnSampleTimer();
+   void SampleTop();
+   // Reads `contents`' top edge, or, while a copy of that pane is in
+@@ -182,6 +210,7 @@ class PageThemeColorController : public TabStripModelObserver,
    // (the T21 rule, per pane).
    std::unique_ptr<PartnerObserver> partner_observer_;
    std::optional<SkColor> partner_color_;
@@ -569,6 +626,20 @@ index 67b296fa83d9c..51d43feee7d4b 100644
    base::WeakPtr<content::WebContents> partner_shown_;
    bool partner_sample_in_flight_ = false;
    // T31: a read of the active page, or of the other pane, fell due while a
+@@ -191,9 +220,12 @@ class PageThemeColorController : public TabStripModelObserver,
+   // Dk8: one more at each dark-pages change that changes a page's decision;
+   // a read begun before it is dropped when it comes back.
+   int top_read_generation_ = 0;
+-  // T31: how many times in a row a read found no surface to copy.
++  // T31: how many times a read has been tried again, its surface missing or
++  // its copy failed, since a read was last asked for.
+   int surface_retries_ = 0;
+   int surface_failures_for_testing_ = 0;
++  int copy_failures_for_testing_ = 0;
++  int top_copies_for_testing_ = 0;
+   base::RepeatingCallback<void(base::OnceClosure)> hold_top_reads_for_testing_;
+   base::RepeatingClosureList changed_callbacks_;
+   // SetSteddingHeldContents().
 diff --git a/chrome/browser/ui/views/bookmarks/bookmark_bar_view.cc b/chrome/browser/ui/views/bookmarks/bookmark_bar_view.cc
 index 18a885d04da10..b04e2d460785d 100644
 --- a/chrome/browser/ui/views/bookmarks/bookmark_bar_view.cc
@@ -2143,10 +2214,10 @@ index 38f7ef1eec100..9a248ac87468a 100644
    base::CallbackListSubscription mode_changed_subscription_;
  
 diff --git a/chrome/browser/ui/views/toolbar/toolbar_view.cc b/chrome/browser/ui/views/toolbar/toolbar_view.cc
-index b7e72dd51d19b..7c651e9172c9a 100644
+index 0d97d6d25b30a..fd8fd3852a523 100644
 --- a/chrome/browser/ui/views/toolbar/toolbar_view.cc
 +++ b/chrome/browser/ui/views/toolbar/toolbar_view.cc
-@@ -1726,8 +1726,10 @@ void ToolbarView::Layout(PassKey) {
+@@ -1735,8 +1735,10 @@ void ToolbarView::Layout(PassKey) {
    // page's, so it is told where the page's middle is, in this view's
    // coordinates, before it lays out. A capped bar is centred below instead,
    // after its layout, and gathers its contents on its own middle.
@@ -2158,7 +2229,7 @@ index b7e72dd51d19b..7c651e9172c9a 100644
        base::FeatureList::IsEnabled(stedding::kArcStyleWindow)) {
      location_bar_view_->SetSteddingCentre(
          stedding_pane ? (stedding_pane->first + stedding_pane->second) / 2
-@@ -1767,8 +1769,40 @@ void ToolbarView::Layout(PassKey) {
+@@ -1776,8 +1778,40 @@ void ToolbarView::Layout(PassKey) {
        stedding_field_centred_ && stedding_left_spacer_ &&
        stedding_right_spacer_ && stedding_left_spacer_->GetVisible() &&
        stedding_right_spacer_->GetVisible();
@@ -2200,7 +2271,7 @@ index b7e72dd51d19b..7c651e9172c9a 100644
      const gfx::Rect bar = location_bar_view_->bounds();
      // The clusters bound the field: the spacers' far ends, or at full width
      // the bar's own ends, which the layout gave the whole row between them.
-@@ -2065,6 +2099,21 @@ void ToolbarView::SetSteddingTrailingReserve(int reserve) {
+@@ -2074,6 +2108,21 @@ void ToolbarView::SetSteddingTrailingReserve(int reserve) {
    InvalidateLayout();
  }
  

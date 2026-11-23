@@ -52,7 +52,7 @@ Removable when: never, unless Stedding stops having preferences.
  chrome/browser/ui/stedding/stedding_prefs.cc  | 17 ++++++
  chrome/browser/ui/stedding/stedding_prefs.h   | 30 ++++++++++
  .../ui/stedding/stedding_prefs_unittest.cc    | 26 ++++++++
- ...ertical_tab_strip_state_controller_impl.cc | 12 ++++
+ ...ertical_tab_strip_state_controller_impl.cc | 49 +++++++++++++--
  .../frame/vertical_tab_strip_region_view.cc   | 14 +++++
  chrome/browser/ui/views/peek/BUILD.gn         |  2 +
  .../ui/views/peek/peek_navigation_throttle.cc | 11 +++-
@@ -62,7 +62,7 @@ Removable when: never, unless Stedding stops having preferences.
  .../new_tab_page_third_party_ui.cc            | 13 ++++
  .../browser/ui/webui/settings/settings_ui.cc  | 29 +++++++++
  chrome/test/BUILD.gn                          |  1 +
- 28 files changed, 365 insertions(+), 5 deletions(-)
+ 28 files changed, 397 insertions(+), 10 deletions(-)
  create mode 100644 chrome/browser/resources/settings/stedding_page/stedding_page.css
  create mode 100644 chrome/browser/resources/settings/stedding_page/stedding_page.html.ts
  create mode 100644 chrome/browser/resources/settings/stedding_page/stedding_page.ts
@@ -560,20 +560,58 @@ index 0000000000000..9ecd18b4a1fa0
 +}  // namespace
 +}  // namespace stedding::prefs
 diff --git a/chrome/browser/ui/tabs/vertical_tab_strip_state_controller_impl.cc b/chrome/browser/ui/tabs/vertical_tab_strip_state_controller_impl.cc
-index 4eb92203f6933..97405191a42fc 100644
+index 4eb92203f6933..bf66ed6aebd75 100644
 --- a/chrome/browser/ui/tabs/vertical_tab_strip_state_controller_impl.cc
 +++ b/chrome/browser/ui/tabs/vertical_tab_strip_state_controller_impl.cc
-@@ -74,6 +74,18 @@ VerticalTabStripStateControllerImpl::VerticalTabStripStateControllerImpl(
+@@ -6,6 +6,7 @@
+ 
+ #include <optional>
+ 
++#include "base/auto_reset.h"
+ #include "base/i18n/rtl.h"
+ #include "base/metrics/user_metrics.h"
+ #include "base/metrics/user_metrics_action.h"
+@@ -41,6 +42,22 @@
+ 
+ namespace tabs {
+ 
++namespace {
++
++// Stedding (settings T7, BACKLOG S-152): set while a controller writes its
++// own window's state to the profile's preferences -- a drag's end, a width a
++// reopened window carries, the window becoming active. Every window listens
++// to the width preference for the settings row, and a write from here is no
++// other window's to take.
++bool g_writing_window_state = false;
++
++// The controller taking the width the settings row wrote. It writes nothing
++// back: the width is there already, and the collapsed state a new window
++// starts from stays the one the last window used left.
++const VerticalTabStripStateControllerImpl* g_taking_settings_width = nullptr;
++
++}  // namespace
++
+ VerticalTabStripStateControllerImpl::VerticalTabStripStateControllerImpl(
+     BrowserWindowInterface& browser_window,
+     PrefService* pref_service,
+@@ -74,6 +91,25 @@ VerticalTabStripStateControllerImpl::VerticalTabStripStateControllerImpl(
            &VerticalTabStripStateControllerImpl::OnExpandOnHoverEnabledChanged,
            base::Unretained(this)));
  
 +  // Stedding: the sidebar-width row in chrome://settings writes this
-+  // preference; apply it live. The controller's own writes come back through
-+  // here with the width already set, so they are no-ops.
++  // preference; every window applies it live. The controllers' own writes of
++  // their window's state come back through here too, and are left alone: one
++  // window's drag, or a reopened window's width, moves no other window, and
++  // does not have it write its collapsed state over the shared one.
 +  pref_change_registrar_.Add(
 +      prefs::kVerticalTabsUncollapsedWidth,
 +      base::BindRepeating(
 +          [](VerticalTabStripStateControllerImpl* self) {
++            if (g_writing_window_state) {
++              return;
++            }
++            base::AutoReset<const VerticalTabStripStateControllerImpl*> taking(
++                &g_taking_settings_width, self);
 +            self->SetUncollapsedWidth(self->pref_service_->GetInteger(
 +                prefs::kVerticalTabsUncollapsedWidth));
 +          },
@@ -582,6 +620,27 @@ index 4eb92203f6933..97405191a42fc 100644
    if (restored_state_collapsed.has_value()) {
      SetCollapsed(restored_state_collapsed.value());
    }
+@@ -334,12 +370,15 @@ void VerticalTabStripStateControllerImpl::UpdateSessionService() {
+ }
+ 
+ void VerticalTabStripStateControllerImpl::UpdatePrefService() {
+-  if (pref_service_) {
+-    pref_service_->SetBoolean(prefs::kVerticalTabsCollapsedState,
+-                              state_.collapsed);
+-    pref_service_->SetInteger(prefs::kVerticalTabsUncollapsedWidth,
+-                              state_.uncollapsed_width);
++  // Stedding: a width taken from the settings row is the preference's own.
++  if (!pref_service_ || g_taking_settings_width == this) {
++    return;
+   }
++  base::AutoReset<bool> writing(&g_writing_window_state, true);
++  pref_service_->SetBoolean(prefs::kVerticalTabsCollapsedState,
++                            state_.collapsed);
++  pref_service_->SetInteger(prefs::kVerticalTabsUncollapsedWidth,
++                            state_.uncollapsed_width);
+ }
+ 
+ void VerticalTabStripStateControllerImpl::UpdateCollapseActionItem() {
 diff --git a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
 index b9262939a8a3b..fa074ea17527f 100644
 --- a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc

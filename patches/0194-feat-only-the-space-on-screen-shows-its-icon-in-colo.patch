@@ -23,11 +23,11 @@ Why: GitHub issue 122 asked for the Space on screen to stand out from
 the others; the owner picked this look from four renders.
 Removable when: never as behaviour.
 ---
- chrome/browser/ui/views/spaces/BUILD.gn       |  2 +
- .../ui/views/spaces/space_switcher_view.cc    | 40 ++++++++++--
- .../stedding/isolation_mark_browsertest.cc    | 51 +++++++++++++++
- .../test/stedding/space_switch_browsertest.cc | 63 +++++++++++++++++++
- 4 files changed, 150 insertions(+), 6 deletions(-)
+ chrome/browser/ui/views/spaces/BUILD.gn       |   2 +
+ .../ui/views/spaces/space_switcher_view.cc    | 125 ++++++++--
+ .../stedding/isolation_mark_browsertest.cc    |  51 ++++
+ .../test/stedding/space_switch_browsertest.cc | 229 +++++++++++++++---
+ 4 files changed, 360 insertions(+), 47 deletions(-)
 
 diff --git a/chrome/browser/ui/views/spaces/BUILD.gn b/chrome/browser/ui/views/spaces/BUILD.gn
 index 99ed633bb4bef..47ebd949a5e91 100644
@@ -43,7 +43,7 @@ index 99ed633bb4bef..47ebd949a5e91 100644
    ]
  }
 diff --git a/chrome/browser/ui/views/spaces/space_switcher_view.cc b/chrome/browser/ui/views/spaces/space_switcher_view.cc
-index 3fb3e8426c7ea..18e32430d11db 100644
+index 3fb3e8426c7ea..e0faf4c030dce 100644
 --- a/chrome/browser/ui/views/spaces/space_switcher_view.cc
 +++ b/chrome/browser/ui/views/spaces/space_switcher_view.cc
 @@ -50,6 +50,7 @@
@@ -54,7 +54,7 @@ index 3fb3e8426c7ea..18e32430d11db 100644
  #include "ui/gfx/canvas.h"
  #include "ui/gfx/color_utils.h"
  #include "ui/gfx/geometry/rect_conversions.h"
-@@ -90,9 +91,14 @@ constexpr int kRowHeight = kIconSize + 2 * 8;
+@@ -90,9 +91,16 @@ constexpr int kRowHeight = kIconSize + 2 * 8;
  // a narrower one, the rail's or one on its way there, asks in a dialog.
  constexpr int kRoomToRename = 120;
  
@@ -64,14 +64,16 @@ index 3fb3e8426c7ea..18e32430d11db 100644
 +// contrast floor (ChordColor).
  constexpr SkAlpha kInactiveAlpha = 0x80;
 +// spaces B11 (GitHub issue 122, BACKLOG S-548; the owner's pick of four,
-+// 2026-11-20): the icon of a Space not on screen is grey, at 35%, so the
++// 2026-11-20): the icon of a Space not on screen is grey, at 50%, so the
 +// Space on screen is the only one in colour. At half strength in colour the
-+// other Spaces' icons stood out about as much as the active one.
-+constexpr SkAlpha kInactiveGlyphAlpha = 0x59;
++// other Spaces' icons stood out about as much as the active one; at 35% the
++// grey ones read too faint (the owner's pick of four softer looks,
++// 2026-11-21).
++constexpr SkAlpha kInactiveGlyphAlpha = 0x80;
  // sessions S32, spaces B38: an inactive chip's badge fades less than its
  // glyph. The mark tells something about the Space whether or not it is on
  // screen, and the badge, half the chip's size, would not read faded as far
-@@ -219,9 +225,20 @@ class SpaceChipButton : public views::LabelButton {
+@@ -219,13 +227,24 @@ class SpaceChipButton : public views::LabelButton {
      // must be painted onto an opaque region.
      label()->SetSkipSubpixelRenderingOpacityCheck(true);
      label()->SetSubpixelRenderingEnabled(false);
@@ -90,9 +92,38 @@ index 3fb3e8426c7ea..18e32430d11db 100644
 +  }
 +
    // spaces B27: the row hears the drag and the drop; the button keeps its
-   // click, which a drop elsewhere does not fire. A drag starts only past the
-   // system's drag threshold (PLAN.md SPC-6): a click with a little jitter in
-@@ -308,6 +325,11 @@ class SpaceChipButton : public views::LabelButton {
+-  // click, which a drop elsewhere does not fire. A drag starts only past the
+-  // system's drag threshold (PLAN.md SPC-6): a click with a little jitter in
+-  // it used to reorder the Spaces.
++  // click, which a drop never fires. A drag starts only past the system's
++  // drag threshold (PLAN.md SPC-6): a click with a little jitter in it used
++  // to reorder the Spaces.
+   bool OnMousePressed(const ui::MouseEvent& event) override {
+     press_point_ = event.location();
+     dragging_ = false;
+@@ -242,11 +261,18 @@ class SpaceChipButton : public views::LabelButton {
+     return views::LabelButton::OnMouseDragged(event);
+   }
+   void OnMouseReleased(const ui::MouseEvent& event) override {
+-    if (dragging_) {
+-      released_.Run(event);
++    if (!dragging_) {
++      views::LabelButton::OnMouseReleased(event);
++      return;
+     }
++    // A drop is not a click. The dragged chip follows the pointer, so the
++    // release lands on it, and the button took it as a click: the window
++    // switched to the dragged Space as the Space moved. The button lets go
++    // as it does for a release off it.
+     dragging_ = false;
+-    views::LabelButton::OnMouseReleased(event);
++    SetState(views::Button::STATE_NORMAL);
++    OnClickCanceled(event);
++    released_.Run(event);
+   }
+   // A capture taken away mid-drag (a menu, another window) cancels it:
+   // nothing moves.
+@@ -308,6 +334,11 @@ class SpaceChipButton : public views::LabelButton {
        // for that ground.
        badge_ = AddChildView(std::make_unique<stedding::IsolationMarkView>(
            stedding::IsolationMarkView::Form::kBadge, ui::kColorFrameActive));
@@ -104,7 +135,91 @@ index 3fb3e8426c7ea..18e32430d11db 100644
      }
      badge_->SetSessionSlot(slot);
    }
-@@ -692,13 +714,15 @@ void SpaceSwitcherView::Rebuild() {
+@@ -433,6 +464,30 @@ class SwitcherStackLayout : public views::LayoutManagerBase {
+   }
+ };
+ 
++// spaces B25: the row the chips stand in. The pointer on its own room, a gap
++// between two chips or the margin above or below one, is on the row, and at
++// overflow the chips stay full size. Moved there from a chip, the pointer
++// stays inside the switcher, which hears no enter for it: the chip's exit
++// turned the chips back to dots under it until it reached another chip.
++class SwitcherIconRow : public views::View {
++  METADATA_HEADER(SwitcherIconRow, views::View)
++
++ public:
++  explicit SwitcherIconRow(base::RepeatingClosure entered)
++      : entered_(std::move(entered)) {}
++  SwitcherIconRow(const SwitcherIconRow&) = delete;
++  SwitcherIconRow& operator=(const SwitcherIconRow&) = delete;
++  ~SwitcherIconRow() override = default;
++
++  void OnMouseEntered(const ui::MouseEvent& event) override { entered_.Run(); }
++
++ private:
++  base::RepeatingClosure entered_;
++};
++
++BEGIN_METADATA(SwitcherIconRow)
++END_METADATA
++
+ }  // namespace
+ 
+ SpaceSwitcherView::SpaceSwitcherView(SpaceModel& model, BrowserWindowInterface& browser)
+@@ -453,7 +508,16 @@ SpaceSwitcherView::SpaceSwitcherView(SpaceModel& model, BrowserWindowInterface&
+       base::BindRepeating(&SpaceSwitcherView::EndRename,
+                           base::Unretained(this), /*commit=*/true));
+ 
+-  auto row = std::make_unique<views::View>();
++  // spaces B25: the pointer on the row's own room, off every chip, is on the
++  // row (SwitcherIconRow).
++  auto row = std::make_unique<SwitcherIconRow>(base::BindRepeating(
++      [](SpaceSwitcherView* self) {
++        if (!self->row_hovered_) {
++          self->row_hovered_ = true;
++          self->ApplyOverflow();
++        }
++      },
++      base::Unretained(this)));
+   row->SetLayoutManager(std::make_unique<views::FlexLayout>())
+       ->SetOrientation(views::LayoutOrientation::kHorizontal)
+       .SetCrossAxisAlignment(views::LayoutAlignment::kCenter)
+@@ -512,6 +576,12 @@ void SpaceSwitcherView::SetCollapsed(bool collapsed) {
+     const SpaceId id = *renaming_;
+     const std::string typed = base::UTF16ToUTF8(rename_field_->GetText());
+     renaming_.reset();
++    // tabs R14: the keys go back to the page, as at every other end of a
++    // rename (EndRename). Hidden with the focus in it, the field handed the
++    // focus to the next view in the window's order.
++    if (rename_field_->HasFocus()) {
++      chrome::FocusWebContentsPane(&browser_.get());
++    }
+     rename_field_->SetVisible(false);
+     icon_row_->SetVisible(true);
+     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+@@ -660,6 +730,8 @@ void SpaceSwitcherView::Rebuild() {
+             [](SpaceSwitcherView* self, size_t chip_index, std::u16string name,
+                bool entered) {
+               // A chip under the pointer means the row is hovered (B25).
++              // Off a chip onto the row's own room, the row hears the
++              // pointer come in again (SwitcherIconRow).
+               if (self->row_hovered_ != entered) {
+                 self->row_hovered_ = entered;
+                 self->ApplyOverflow();
+@@ -669,7 +741,11 @@ void SpaceSwitcherView::Rebuild() {
+               }
+               gfx::Rect bounds;
+               if (entered && chip_index < self->chips_.size()) {
+-                gfx::RectF rect_f(self->chips_[chip_index].first->bounds());
++                // The chip where it is drawn in the icon row: right to
++                // left that is its mirrored bounds, not its logical ones,
++                // and a conversion takes the row's own coordinates.
++                gfx::RectF rect_f(
++                    self->chips_[chip_index].first->GetMirroredBounds());
+                 views::View::ConvertRectToTarget(self->icon_row_,
+                                                  self->parent(), &rect_f);
+                 bounds = gfx::ToEnclosingRect(rect_f);
+@@ -692,13 +768,15 @@ void SpaceSwitcherView::Rebuild() {
          mark, SessionSlotForSpace(model_->registry(), space.id()).value_or(0));
      button->set_context_menu_controller(this);
      // The reference shows the bare emoji, no disc: the active Space at full
@@ -122,7 +237,26 @@ index 3fb3e8426c7ea..18e32430d11db 100644
      views::View* const chip = icon_row_->AddChildView(std::move(button));
      for (const auto& [id, bounds] : old_bounds) {
        if (id == space.id()) {
-@@ -908,9 +932,13 @@ void SpaceSwitcherView::ApplyOverflow() {
+@@ -781,6 +859,8 @@ void SpaceSwitcherView::ApplyOverflow() {
+   }
+   const auto& spaces = model_->spaces();
+   std::vector<int> widths;
++  // sidebar Y56: in the grid, where in `widths` the lead's chip is.
++  std::optional<size_t> lead_width;
+   // The widest chip across the row's axis: the rail's column is as wide.
+   int widest = kIconSize;
+   for (size_t i = 0; i < chips_.size(); ++i) {
+@@ -824,6 +904,9 @@ void SpaceSwitcherView::ApplyOverflow() {
+         grid ? chips_[i].second != lead : chip_width == kSwitcherDot;
+     const bool lit_dot = grid && dot && drop;
+     const int dot_size = lit_dot ? kSwitcherGridCell : kSwitcherDot;
++    if (grid && !dot) {
++      lead_width = widths.size();
++    }
+     widths.push_back(dot ? dot_size : chip_size);
+     chip->SetGlyphSize(glyph_size);
+     std::u16string text = dot ? std::u16string() : GlyphFor(space, model_index);
+@@ -908,9 +991,13 @@ void SpaceSwitcherView::ApplyOverflow() {
                 : ground,
            active || drop));
      } else {
@@ -138,6 +272,23 @@ index 3fb3e8426c7ea..18e32430d11db 100644
      if (!collapsed_) {
        // A chip widened for its chord takes the room from its own gap, while
        // the gap has it: the chips stay where they were, give or take a
+@@ -951,6 +1038,16 @@ void SpaceSwitcherView::ApplyOverflow() {
+     // 2026-09-09). The parent hears about it through PreferredSizeChanged.
+     // As wide as its widest chip, a chord's while ⌘ is held: a column one
+     // emoji wide cut the chord's ends off.
++    // sidebar Y56: measured in the order the stack is drawn, the lead first
++    // and every dot in one run under it. Measured in the model's order, a
++    // lead in the middle split the dots into two runs, each with its own
++    // margins, and the stack's height changed with the Space on screen.
++    if (lead_width) {
++      const auto lead_at =
++          widths.begin() +
++          static_cast<std::vector<int>::difference_type>(*lead_width);
++      std::rotate(widths.begin(), lead_at, lead_at + 1);
++    }
+     SetPreferredSize(gfx::Size(widest, SwitcherStackHeight(widths)));
+   }
+   // sidebar Y56: in the grid the leading chip comes first among the row's
 diff --git a/chrome/test/stedding/isolation_mark_browsertest.cc b/chrome/test/stedding/isolation_mark_browsertest.cc
 index a08792f7050fd..f3a14937b64f5 100644
 --- a/chrome/test/stedding/isolation_mark_browsertest.cc
@@ -208,15 +359,234 @@ index a08792f7050fd..f3a14937b64f5 100644
  // sidebar no chip wears a badge: the line under the row ties a session's
  // Spaces together. Work's chip still says what its mark means.
 diff --git a/chrome/test/stedding/space_switch_browsertest.cc b/chrome/test/stedding/space_switch_browsertest.cc
-index f1bac8fb08147..ce0288c5f575b 100644
+index f1bac8fb08147..abe0d8e078ccf 100644
 --- a/chrome/test/stedding/space_switch_browsertest.cc
 +++ b/chrome/test/stedding/space_switch_browsertest.cc
-@@ -2334,6 +2334,69 @@ IN_PROC_BROWSER_TEST_F(SpaceSwitchTest, AChipShowsItsNameOnce) {
+@@ -50,6 +50,7 @@
+ #include "chrome/browser/ui/spaces/space_model.h"
+ #include "chrome/browser/ui/stedding/empty_space.h"
+ #include "chrome/browser/ui/stedding/motion.h"
++#include "chrome/browser/ui/stedding/sidebar_panels.h"
+ #include "chrome/browser/ui/stedding/sleep_tabs.h"
+ #include "chrome/browser/ui/stedding/stedding_prefs.h"
+ #include "chrome/browser/ui/stedding/tab_numbers.h"
+@@ -116,6 +117,7 @@
+ #include "ui/events/keycodes/keyboard_codes.h"
+ #include "ui/events/test/event_generator.h"
+ #include "ui/events/types/event_type.h"
++#include "ui/gfx/animation/animation.h"
+ #include "ui/gfx/color_utils.h"
+ #include "ui/gfx/geometry/point.h"
+ #include "ui/gfx/geometry/point_f.h"
+@@ -1955,15 +1957,22 @@ IN_PROC_BROWSER_TEST_F(SpaceSwitchTest,
+   }
+ }
+ 
+-// spaces B32 (BACKLOG S-146): a switch slides the Space being left out the
+-// other way as the new one comes in. Its rows, as they were drawn, are a
+-// layer of their own above the list, going kSpaceSlideOffsetDip out and
+-// fading, while the list, the new Space's rows in it, comes in from the
+-// other side; both move at once, and the outgoing layer goes when its slide
+-// ends. The rows that left used to vanish at the switch, and only the new
+-// list slid.
++// spaces B32 (BACKLOG S-146; the owner, 2026-11-21): a switch pushes the
++// Space being left out the other way as the new one comes in. Its rows, as
++// they were drawn, are a layer of their own above the list, going a whole
++// list's width out, unfaded, while the list, the new Space's rows in it,
++// comes in from a whole width out on the other side, joined to it; both move
++// at once, the region clips them while they cross its edge, and the outgoing
++// layer goes when its slide ends. The rows that left used to vanish at the
++// switch; later both faded over a short slide, which read as one Space taken
++// away and another popping up. The Space's title row goes with its list
++// (the owner, 2026-11-22): the new name had shown at once, over the old
++// Space's rows while they were still leaving.
+ IN_PROC_BROWSER_TEST_F(SpaceSwitchTest,
+                        TheSpaceLeftSlidesOutAsTheNewOneComesIn) {
++  // A remote session asks for reduced motion (the PC over Remote Desktop),
++  // which skipped this test there; the slide is what it reads.
++  gfx::Animation::SetPrefersReducedMotionForTesting(false);
+   if (!stedding::ShouldAnimate(browser()->GetProfile()->GetPrefs())) {
+     GTEST_SKIP() << "the machine asks for reduced motion";
+   }
+@@ -1972,32 +1981,59 @@ IN_PROC_BROWSER_TEST_F(SpaceSwitchTest,
+       browser_view()->vertical_tab_strip_region_view_for_testing());
+   ASSERT_TRUE(strip);
+   views::View* const list = strip->unpinned_tabs_scroll_view();
++  views::View* const title = strip->GetSpaceTitleRow();
+   ASSERT_TRUE(list);
++  ASSERT_TRUE(title);
+   views::test::RunScheduledLayout(browser_view()->GetWidget());
+-  const float offset = static_cast<float>(stedding::kSpaceSlideOffsetDip);
++  ASSERT_TRUE(title->GetVisible()) << "three Spaces, and no title row";
++  const float offset = static_cast<float>(list->width());
++  ASSERT_GT(offset, 0.0f);
++  ui::Layer* const region =
++      browser_view()->vertical_tab_strip_region_view_for_testing()->layer();
+ 
+   // +1: the Space entered is later in the switcher, so the new list comes in
+   // from the right and the old one goes out to the left; -1 the other way.
++  // The title row the same, the whole list's width, joined to it.
+   const auto expect_both_slide = [&](float side) {
+-    ui::Layer* const out = OutgoingLayerOver(list);
+-    ASSERT_TRUE(out) << "the Space left vanished at the switch: "
+-                     << LayersBeside(list);
+-    EXPECT_TRUE(out->GetAnimator()->is_animating());
+-    EXPECT_FLOAT_EQ(-side * offset,
+-                    out->GetTargetTransform().To2dTranslation().x())
+-        << "the Space left goes out the other way";
+-    EXPECT_FLOAT_EQ(0.0f, out->GetTargetOpacity());
+-    ASSERT_TRUE(list->layer());
+-    EXPECT_TRUE(list->layer()->GetAnimator()->is_animating())
+-        << "the new list does not move with it";
+-    EXPECT_FLOAT_EQ(side * offset,
+-                    list->layer()->transform().To2dTranslation().x())
+-        << "the new list comes in from the side of the Space entered";
+-    EXPECT_TRUE(list->layer()->GetTargetTransform().IsIdentity());
+-    EXPECT_FLOAT_EQ(1.0f, list->layer()->GetTargetOpacity());
+-    ASSERT_TRUE(
+-        base::test::RunUntil([&]() { return !OutgoingLayerOver(list); }))
+-        << "the outgoing layer stayed once its slide ended";
++    for (views::View* const view : {list, title}) {
++      SCOPED_TRACE(view == list ? "the list" : "the title row");
++      ui::Layer* const out = OutgoingLayerOver(view);
++      ASSERT_TRUE(out) << (view == list
++                               ? "the Space left vanished at the switch: "
++                               : "the new Space's name showed at once, over "
++                                 "the rows still leaving: ")
++                       << LayersBeside(view);
++      EXPECT_TRUE(out->GetAnimator()->is_animating());
++      EXPECT_FLOAT_EQ(-side * offset,
++                      out->GetTargetTransform().To2dTranslation().x())
++          << "the Space left goes out the other way";
++      EXPECT_FLOAT_EQ(1.0f, out->GetTargetOpacity()) << "the Space left fades";
++      ASSERT_TRUE(view->layer());
++      EXPECT_TRUE(view->layer()->GetAnimator()->is_animating())
++          << "the new Space does not move with it";
++      EXPECT_FLOAT_EQ(side * offset,
++                      view->layer()->transform().To2dTranslation().x())
++          << "the new Space comes in from the side of the Space entered";
++      EXPECT_TRUE(view->layer()->GetTargetTransform().IsIdentity());
++      EXPECT_FLOAT_EQ(1.0f, view->layer()->opacity())
++          << "the new Space fades in";
++      EXPECT_FLOAT_EQ(1.0f, view->layer()->GetTargetOpacity());
++    }
++    if (region) {
++      EXPECT_TRUE(region->GetMasksToBounds())
++          << "the lists draw past the sidebar's edge over the page";
++    }
++    ASSERT_TRUE(base::test::RunUntil([&]() {
++      return !OutgoingLayerOver(list) && !OutgoingLayerOver(title);
++    })) << "the outgoing layers stayed once their slide ended";
++    EXPECT_TRUE(base::test::RunUntil([&]() {
++      return title->layer()->transform().IsIdentity() &&
++             list->layer()->transform().IsIdentity();
++    })) << "the new Space's title row and list did not come to rest";
++    if (region) {
++      EXPECT_FALSE(region->GetMasksToBounds())
++          << "the open sidebar stays clipped after the slide";
++    }
+   };
+ 
+   {
+@@ -2039,10 +2075,71 @@ IN_PROC_BROWSER_TEST_F(SpaceSwitchTest,
+   }
+ }
+ 
++// spaces B32 (2026-11-22): a Space switch while a sidebar panel covers the
++// list (sidebar-panels Pn4) has nothing of the Space left drawn to push out.
++// The switch still slid the new list in from a whole width out and clipped
++// the region for it, and with no slide out to end, nothing undid the clip:
++// the open sidebar stayed clipped, its edge's shadow cut, until the next
++// switch. The new Space shows at once instead.
++IN_PROC_BROWSER_TEST_F(SpaceSwitchTest, ASwitchUnderAPanelShowsTheSpaceAtOnce) {
++  gfx::Animation::SetPrefersReducedMotionForTesting(false);
++  if (!stedding::ShouldAnimate(browser()->GetProfile()->GetPrefs())) {
++    GTEST_SKIP() << "the machine asks for reduced motion";
++  }
++  ASSERT_NO_FATAL_FAILURE(MakeThreeSpaces());
++  const TabStripView* const strip = FindTabStripView(
++      browser_view()->vertical_tab_strip_region_view_for_testing());
++  ASSERT_TRUE(strip);
++  views::View* const list = strip->unpinned_tabs_scroll_view();
++  ASSERT_TRUE(list);
++  ui::Layer* const region =
++      browser_view()->vertical_tab_strip_region_view_for_testing()->layer();
++  ASSERT_TRUE(region);
++
++  browser()->GetProfile()->GetPrefs()->SetBoolean(
++      stedding::prefs::kSidebarLibraryPanels, true);
++  stedding::SidebarPanels* const panels =
++      stedding::SidebarPanels::From(browser());
++  ASSERT_TRUE(panels);
++  ASSERT_TRUE(panels->Open(stedding::SidebarPanel::kHistory));
++  ASSERT_TRUE(base::test::RunUntil([&]() {
++    views::test::RunScheduledLayout(browser_view()->GetWidget());
++    return !list->IsDrawn();
++  })) << "the panel did not take the list's place";
++
++  ASSERT_TRUE(model()->SetActiveSpace(ids_[1]));
++  // The panel covers the list, so no row is drawn yet (ExpectShowing waits
++  // for the panel to close).
++  EXPECT_EQ(ids_[1], model()->active_id());
++  EXPECT_FALSE(OutgoingLayerOver(list))
++      << "a Space left that was not drawn has nothing to push out";
++  if (views::View* const title = strip->GetSpaceTitleRow()) {
++    EXPECT_FALSE(OutgoingLayerOver(title));
++    EXPECT_TRUE(!title->layer() || title->layer()->transform().IsIdentity())
++        << "the title row slid in with nothing to join";
++  }
++  ASSERT_TRUE(list->layer());
++  EXPECT_FALSE(list->layer()->GetAnimator()->is_animating())
++      << "the new list slid in with nothing to join";
++  EXPECT_TRUE(list->layer()->transform().IsIdentity());
++  EXPECT_FALSE(region->GetMasksToBounds())
++      << "the open sidebar is clipped, its edge's shadow cut";
++
++  panels->Close();
++  ASSERT_TRUE(base::test::RunUntil([&]() {
++    views::test::RunScheduledLayout(browser_view()->GetWidget());
++    return list->IsDrawn();
++  }));
++  ExpectShowing(ids_[1]);
++  EXPECT_FALSE(region->GetMasksToBounds())
++      << "the panel closed, the sidebar is still clipped";
++}
++
+ #if BUILDFLAG(IS_MAC)
+ // spaces B35 (BACKLOG S-146): a swipe that switches sends the Space's title
+ // and list on out of the side the fingers went, from where they left them
+-// and faded as they were, while the next Space's come in.
++// and faded as they were, a whole width, while the next Space's come in
++// joined to them (B32).
+ IN_PROC_BROWSER_TEST_F(SpaceSwitchTest, ASwipedSpaceGoesOnOutOfTheSide) {
+   if (!stedding::ShouldAnimate(browser()->GetProfile()->GetPrefs())) {
+     GTEST_SKIP() << "the machine asks for reduced motion";
+@@ -2090,11 +2187,14 @@ IN_PROC_BROWSER_TEST_F(SpaceSwitchTest, ASwipedSpaceGoesOnOutOfTheSide) {
+     EXPECT_FLOAT_EQ(left_at, out->transform().To2dTranslation().x())
+         << "it does not start from where the fingers left it";
+     EXPECT_FLOAT_EQ(faded_to, out->opacity());
+-    EXPECT_LE(out->GetTargetTransform().To2dTranslation().x(),
+-              std::min(left_at,
+-                       -stedding::kSpaceSwipeEntryShare * list->width()))
+-        << "it goes back towards its place";
+-    EXPECT_FLOAT_EQ(0.0f, out->GetTargetOpacity());
++    EXPECT_FLOAT_EQ(left_at - list->width(),
++                    out->GetTargetTransform().To2dTranslation().x())
++        << "it does not go a whole width on out of the side";
++    EXPECT_FLOAT_EQ(faded_to, out->GetTargetOpacity());
++    ASSERT_TRUE(view->layer());
++    EXPECT_FLOAT_EQ(left_at + list->width(),
++                    view->layer()->transform().To2dTranslation().x())
++        << "the next Space does not come in joined to it";
+   }
+   ASSERT_TRUE(base::test::RunUntil([&]() {
+     return !OutgoingLayerOver(list) && !OutgoingLayerOver(title);
+@@ -2334,6 +2434,69 @@ IN_PROC_BROWSER_TEST_F(SpaceSwitchTest, AChipShowsItsNameOnce) {
    EXPECT_EQ(name, chip->GetViewAccessibility().GetCachedName());
  }
  
 +// spaces B11 (GitHub issue 122, BACKLOG S-548): only the Space on screen is
-+// in colour. Every other chip's glyph is grey, at 35%, in the open row and in
++// in colour. Every other chip's glyph is grey, at 50%, in the open row and in
 +// the rail; the chip a drag would drop on (B12) is in colour at full strength
 +// while the drag is over it; a switch takes the colour along.
 +IN_PROC_BROWSER_TEST_F(SpaceSwitchTest, OnlyTheSpaceOnScreenIsInColour) {
@@ -238,7 +608,7 @@ index f1bac8fb08147..ce0288c5f575b 100644
 +    }
 +    return nullptr;
 +  };
-+  // In colour at full strength, or grey at 35%.
++  // In colour at full strength, or grey at 50%.
 +  const auto expect_look = [&](const spaces::SpaceId& id, bool in_colour) {
 +    SCOPED_TRACE(base::UTF16ToUTF8(model()->DisplayName(id)));
 +    views::Label* const label = glyph(id);
@@ -246,7 +616,7 @@ index f1bac8fb08147..ce0288c5f575b 100644
 +    ASSERT_TRUE(label->layer()) << "the glyph has no layer of its own";
 +    EXPECT_FALSE(label->layer()->fills_bounds_opaquely());
 +    EXPECT_EQ(in_colour ? 0.0f : 1.0f, label->layer()->layer_grayscale());
-+    EXPECT_EQ(in_colour ? 0xFFu : 0x59u, SkColorGetA(label->GetEnabledColor()));
++    EXPECT_EQ(in_colour ? 0xFFu : 0x80u, SkColorGetA(label->GetEnabledColor()));
 +  };
 +  const auto expect_on_screen = [&](const spaces::SpaceId& on_screen) {
 +    for (const spaces::SpaceId& id : ids_) {

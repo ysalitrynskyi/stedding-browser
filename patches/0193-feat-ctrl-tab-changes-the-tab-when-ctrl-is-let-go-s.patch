@@ -29,18 +29,99 @@ Why: Arc's Ctrl-Tab works this way, as Cmd-Tab does for apps; GitHub issue
 123 asked for it.
 Removable when: never as behaviour.
 ---
- chrome/browser/ui/spaces/space_model.cc       | 29 +++++++++++-----
- chrome/browser/ui/spaces/space_model.h        |  5 +--
- .../ui/spaces/space_model_window_unittest.cc  | 21 ++++++++----
- .../recent_tabs_switcher_view_unittest.cc     | 13 ++++----
- .../test/stedding/space_switch_browsertest.cc | 33 ++++++++++++++-----
- 5 files changed, 68 insertions(+), 33 deletions(-)
+ chrome/browser/ui/spaces/space_model.cc       | 183 +++++++++++++++---
+ chrome/browser/ui/spaces/space_model.h        |  29 ++-
+ .../ui/spaces/space_model_window_unittest.cc  |  60 +++++-
+ .../recent_tabs_switcher_view_unittest.cc     |  13 +-
+ .../test/stedding/space_switch_browsertest.cc |  33 +++-
+ 5 files changed, 257 insertions(+), 61 deletions(-)
 
 diff --git a/chrome/browser/ui/spaces/space_model.cc b/chrome/browser/ui/spaces/space_model.cc
-index 815ec87bf0909..1c24fef0d4498 100644
+index 815ec87bf0909..6a27eae67252a 100644
 --- a/chrome/browser/ui/spaces/space_model.cc
 +++ b/chrome/browser/ui/spaces/space_model.cc
-@@ -2183,13 +2183,9 @@ bool SpaceModel::CycleRecent(int delta) {
+@@ -341,11 +341,7 @@ SpaceModel::SpaceModel(BrowserWindowInterface& browser) : SpaceModel() {
+   address_row_ = std::make_unique<stedding::AddressRow>(browser);
+   // sidebar Y1: the process-wide metrics, filled before this window's first
+   // layout.
+-  if (g_browser_process) {
+-    stedding::EnsureSidebarDensityInstalled(g_browser_process->local_state());
+-    // settings T41-T43: the window's look, before its first colours.
+-    stedding::EnsureWindowLookInstalled(g_browser_process->local_state());
+-  }
++  EnsureWindowMetricsInstalled();
+   // import I4: the bar's "Import from Arc" row needs to know by the first
+   // opening whether the file exists.
+   PrimeArcSidebarPresence();
+@@ -642,6 +638,17 @@ void SpaceModel::ClearNextWindowBlank() {
+   NextWindowIsBlank() = false;
+ }
+ 
++// static
++void SpaceModel::EnsureWindowMetricsInstalled() {
++  if (!g_browser_process) {
++    return;
++  }
++  // Both install once per process, so every window may call this.
++  stedding::EnsureSidebarDensityInstalled(g_browser_process->local_state());
++  // settings T41-T43: the window's look, before its first colours.
++  stedding::EnsureWindowLookInstalled(g_browser_process->local_state());
++}
++
+ // static
+ void SpaceModel::SetNextWindowSpace(std::string space) {
+   NextWindowSpace() = std::move(space);
+@@ -1672,11 +1679,13 @@ void SpaceModel::OnTabStripModelChanged(
+         const bool own = IsOwnEssential(removed.tab);
+         const auto filed = tab_spaces_.find(removed.tab->GetHandle());
+         if (space_pinned || home || own) {
++          // pins H1: a home its first load is still to settle stays so there.
+           TabSpaceRestoreData::CreateForWebContents(
+               removed.tab->GetContents(),
+               own && filed != tab_spaces_.end() ? filed->second.ToString()
+                                                 : std::string(),
+-              space_pinned, home ? home->spec() : std::string(), own);
++              space_pinned, home ? home->spec() : std::string(), own,
++              homes_before_commit_.contains(removed.tab->GetHandle()));
+         }
+       }
+       tab_spaces_.erase(removed.tab->GetHandle());
+@@ -1723,10 +1732,15 @@ void SpaceModel::SettleReplacedContents(tabs::TabHandle handle,
+       tab_strip_model_->GetIndexOfTab(tab) == TabStripModel::kNoTab) {
+     return;
+   }
++  // The name came along with the contents (CarryTabName), and this writes it
++  // into the session under the new contents' id with the rest (tabs R16).
+   SaveTabToSession(tab, SpaceForTab(tab));
+-  if (const std::u16string name = stedding::TabName(tab->GetContents());
+-      !name.empty()) {
+-    stedding::SetTabName(tab->GetBrowserWindowInterface(), tab, name);
++  // The row is drawn again with it, and a pin's name reaches the profile's
++  // other windows. This tab's row only: SetTabName names every pane of a
++  // split, as a rename does (splits J1), and here it stamped this pane's
++  // name on the other pane each time a split slept or changed its jar.
++  if (!stedding::TabName(tab->GetContents()).empty()) {
++    tab_strip_model_->NotifyTabChanged(tab, TabChangeType::kAll);
+   }
+   if (rebind_jar) {
+     MaybeRebindTabJar(tab);
+@@ -1972,11 +1986,13 @@ std::vector<tabs::TabInterface*> SpaceModel::RecentTabs(const SpaceId& id,
+     }
+   }
+   // Then the tabs the user never activated, in sidebar order, skipping the
+-  // ones a collapsed folder hides.
++  // ones a collapsed folder hides and the ones asleep (GitHub issue 126,
++  // BACKLOG S-552): a step onto an essential or pin asleep, put away by
++  // Cmd-W (tabs R33) or never opened since the launch, would wake it.
+   for (int i = 0; i < tab_strip_model_->count() && out.size() < limit; ++i) {
+     tabs::TabInterface* const tab = tab_strip_model_->GetTabAtIndex(i);
+     if (std::ranges::find(out, tab) != out.end() ||
+-        tab_strip_model_->IsTabHidden(i)) {
++        tab_strip_model_->IsTabHidden(i) || !IsAwake(tab)) {
+       continue;
+     }
+     take(tab);
+@@ -2183,13 +2199,9 @@ bool SpaceModel::CycleRecent(int delta) {
      position += n;
    }
    cycle_->position = static_cast<size_t>(position);
@@ -57,7 +138,7 @@ index 815ec87bf0909..1c24fef0d4498 100644
    return true;
  }
  
-@@ -2197,10 +2193,25 @@ void SpaceModel::EndCycle() {
+@@ -2197,10 +2209,25 @@ void SpaceModel::EndCycle() {
    if (!cycle_) {
      return;
    }
@@ -85,11 +166,266 @@ index 815ec87bf0909..1c24fef0d4498 100644
  }
  
  void SpaceModel::CancelCycle() {
+@@ -2293,7 +2320,31 @@ void SpaceModel::ClearUnpinnedTabs() {
+       static_cast<int>(doomed.size()) == tab_strip_model_->count()) {
+     stedding::OpenEmptySpace(tab_strip_model_);
+   }
++  // The row on screen goes last, once the others are gone (tabs R5, R37,
++  // GitHub issue 72). Closed first, its close showed the next row Clear
++  // takes, which loaded its page, asleep or never opened, only for the next
++  // close to take it. Last, its close shows what the Space keeps, as any
++  // close does (tabs R33-R37), and Undo still shows it again (tabs R27). A
++  // split is one row (R33): its panes go together, in their order.
++  const tabs::TabInterface* const active = tab_strip_model_->GetActiveTab();
++  const auto on_screen = [active](const tabs::TabInterface* tab) {
++    return active && tab &&
++           (tab == active ||
++            (active->IsSplit() && tab->GetSplit() == active->GetSplit()));
++  };
++  std::vector<tabs::TabHandle> in_order;
++  in_order.reserve(doomed.size());
++  for (const tabs::TabHandle& handle : doomed) {
++    if (!on_screen(handle.Get())) {
++      in_order.push_back(handle);
++    }
++  }
+   for (const tabs::TabHandle& handle : doomed) {
++    if (on_screen(handle.Get())) {
++      in_order.push_back(handle);
++    }
++  }
++  for (const tabs::TabHandle& handle : in_order) {
+     tabs::TabInterface* const tab = handle.Get();
+     const int index =
+         tab ? tab_strip_model_->GetIndexOfTab(tab) : TabStripModel::kNoTab;
+@@ -2588,20 +2639,29 @@ bool SpaceModel::WipeIsolatedSession(const SpaceId& id,
+   return WipeIsolatedSpacePartition(
+       BrowserContextForWipe(), entry->profile_id,
+       base::BindOnce(
+-          [](base::WeakPtr<SpaceModel> self, SpaceId id, std::string jar,
+-             base::OnceClosure done) {
++          [](base::WeakPtr<SpaceModel> self, base::WeakPtr<Profile> profile,
++             SpaceId id, std::string jar, base::OnceClosure done) {
+             // Every window's tabs of the Space are signed out now (SPC-13),
+             // and those of every Space that has this session on (sessions
+             // S46). A Space keeping it with its session off has no tab in it.
+-            if (self && self->registry_) {
++            // The profile's registry tells every window, also when the one
++            // the clear was asked in has closed before it finished; not in a
++            // profile shutting down, whose windows are going.
++            SpaceRegistry* registry = nullptr;
++            if (self) {
++              registry = self->registry_.get();
++            } else if (profile && !profile->ShutdownStarted()) {
++              registry = SpaceRegistryFactory::GetForProfile(profile.get());
++            }
++            if (registry) {
+               std::vector<SpaceId> users;
+-              for (const RegistryEntry& each : self->registry_->entries()) {
++              for (const RegistryEntry& each : registry->entries()) {
+                 if (each.isolated && each.profile_id == jar) {
+                   users.push_back(each.id);
+                 }
+               }
+               for (const SpaceId& user : users) {
+-                self->registry_->NotifySpaceJarWiped(user);
++                registry->NotifySpaceJarWiped(user);
+               }
+             } else if (self) {
+               self->ReloadTabsInSpace(id);
+@@ -2610,7 +2670,9 @@ bool SpaceModel::WipeIsolatedSession(const SpaceId& id,
+               std::move(done).Run();
+             }
+           },
+-          weak_factory_.GetWeakPtr(), id, entry->profile_id, std::move(done)));
++          weak_factory_.GetWeakPtr(),
++          profile_ ? profile_->GetWeakPtr() : base::WeakPtr<Profile>(), id,
++          entry->profile_id, std::move(done)));
+ }
+ 
+ content::BrowserContext* SpaceModel::BrowserContextForWipe() const {
+@@ -2636,7 +2698,13 @@ void SpaceModel::ReloadTabsInSpace(const SpaceId& id) {
+       continue;
+     }
+     content::WebContents* const contents = tab->GetContents();
+-    if (!contents) {
++    // sessions S13: only the pages in the jar that was cleared, and awake. A
++    // shared essential filed under the Space and the browser's own pages are
++    // in the profile's jar, which kept its data. A tab asleep, or not loaded
++    // since it came back, loads in the cleared jar when it is next shown;
++    // reloaded here, every such tab of the Space loaded at once.
++    if (!contents || IsSharedEssential(tab) || !IsAwake(tab) ||
++        !PageBelongsInSpaceJar(contents->GetVisibleURL())) {
+       continue;
+     }
+     content::NavigationController& controller = contents->GetController();
+@@ -2778,8 +2846,15 @@ void SpaceModel::PostRetryWaitingWipes() {
+ }
+ 
+ bool SpaceModel::JarIsNamed(std::string_view jar) const {
+-  return registry_ &&
+-         (registry_->NamesJar(jar) || registry_->HasSessionRow(jar));
++  // A Blank Window follows no registry, but a wipe it took over from a window
++  // that closed (~SpaceModel) is of a jar of the profile's: the profile's
++  // list says whether a Space or a session names it.
++  const SpaceRegistry* registry = registry_;
++  if (!registry && profile_ && !profile_->IsOffTheRecord()) {
++    registry = SpaceRegistryFactory::GetForProfile(profile_);
++  }
++  return registry &&
++         (registry->NamesJar(jar) || registry->HasSessionRow(jar));
+ }
+ 
+ bool SpaceModel::IsJarInUse(content::BrowserContext* context,
+@@ -2897,6 +2972,7 @@ SpaceId SpaceModel::SpaceIdForNewTab(tabs::TabInterface* tab) {
+       const std::string space_id = tagged->space_id();
+       const bool space_pinned = tagged->space_pinned();
+       const bool tagged_own_essential = tagged->own_essential();
++      const bool home_unsettled = tagged->home_unsettled();
+       // A stored home that is no web page (an old session, TAB-17) comes
+       // back as none.
+       const GURL home(tagged->home());
+@@ -2907,6 +2983,15 @@ SpaceId SpaceModel::SpaceIdForNewTab(tabs::TabInterface* tab) {
+       } else if (tab->IsPinned() && web.is_valid()) {
+         essential_homes_[tab->GetHandle()] = web;
+       }
++      // pins H1: a home taken before the page first loaded -- in the run
++      // that took it, or in the window the tab came from -- is still settled
++      // by that first load here. Only such a home: a pin restored on a page
++      // it drifted to keeps its home. A tab dragged here mid-load has already
++      // committed but not settled (OnTabChangedAt waits for the load's end),
++      // so the mark is kept whatever has committed.
++      if (home_unsettled && HomeUrl(tab)) {
++        homes_before_commit_.insert(tab->GetHandle());
++      }
+       if (const std::optional<base::Token> token =
+               base::Token::FromString(space_id);
+           token) {
+@@ -3011,6 +3096,12 @@ SpaceModel::SessionExtraDataForTab(const tabs::TabInterface* tab,
+   // Either tier's home (pins H2).
+   if (const std::optional<GURL> home = HomeUrl(tab)) {
+     data.emplace_back(kSessionTabHomeKey, home->spec());
++    // pins H1: whether the first load is still to settle it, so a pin
++    // restored before it ever loaded still settles (SpaceIdForNewTab). "0"
++    // writes over an earlier "1".
++    data.emplace_back(kSessionTabHomeUnsettledKey,
++                      homes_before_commit_.contains(tab->GetHandle()) ? "1"
++                                                                      : "0");
+   }
+   // The user's name for the tab (tabs R16). A restored tab gets its name
+   // back from the previous log, but the new log starts empty, so without
+@@ -3274,7 +3365,10 @@ std::optional<SpaceId> SpaceModel::RouteTab(tabs::TabInterface* tab,
+   if (from == *target) {
+     return std::nullopt;
+   }
+-  SetSpaceForTab(tab, *target);
++  // folders F37: a folder never spans two Spaces. A folder's tab, a split
++  // whole, leaves its folders first, as Move to Space takes it; filed in the
++  // other Space alone, it stayed in the folder, which then showed in both.
++  MoveTabsToSpace({tab}, *target);
+   last_route_.emplace(tab->GetHandle(), from, *target);
+   // The switch and the toast wait a turn: this may run inside a strip
+   // notification, which must not re-enter the strip (B4).
+@@ -3394,7 +3488,17 @@ void SpaceModel::RouteFreshTab(tabs::TabInterface* tab,
+   // (BACKLOG S-201).
+   const std::optional<SpaceId> target =
+       RouteTargetFor(url, /*external=*/false, search);
+-  if (!target || *target == SpaceForTab(tab)) {
++  // routing D16: a tab in a folder or a split was put where it is -- New Tab
++  // in Folder, a New Tab page split beside a page -- and a route does not
++  // take it from there. Routed, a folder's tab stayed in the other Space's
++  // folder, and a split took its other pane, a page the user is on, along.
++  bool in_a_folder = false;
++  for (const tabs::TabCollection* each = tab->GetParentCollection(); each;
++       each = each->GetParentCollection()) {
++    in_a_folder |= each->type() == tabs::TabCollection::Type::FOLDER;
++  }
++  if (!target || *target == SpaceForTab(tab) || tab->IsSplit() ||
++      in_a_folder) {
+     // No route: the address still loads in the tab's own Space's jar, which
+     // a new tab page is not in (PLAN.md CMD-8).
+     MoveFreshTabToSpaceJar(tab_strip_model_, tab, registry_, SpaceForTab(tab),
+@@ -3837,7 +3941,11 @@ void SpaceModel::OnTabChangedAt(tabs::TabInterface* tab,
+   if (const std::optional<GURL> landed = stedding::HomeAfterFirstCommit(
+           *home, entry->GetRedirectChain(), contents->GetLastCommittedURL())) {
+     SetHomeUrl(tab, *landed);
++    return;
+   }
++  // Settled where it was: the session's line says so too, or the next start
++  // would take it for unsettled (SessionExtraDataForTab).
++  SaveTabToSession(tab, SpaceForTab(tab));
+ }
+ 
+ void SpaceModel::MaybeRebindTabJar(tabs::TabInterface* tab) {
+@@ -3991,7 +4099,12 @@ int SpaceModel::CountTabsOf(const SpaceId& id, bool every_window) const {
+     }
+     for (int i = 0; i < strip->count(); ++i) {
+       tabs::TabInterface* const tab = strip->GetTabAtIndex(i);
+-      if (!model.IsSharedEssential(tab) && model.FindSpaceForTab(tab) == id) {
++      // A shared essential is in every Space, and the Space's page is no tab
++      // of it: the sidebar does not list it, and it closes once another row
++      // shows (tabs R66).
++      if (!model.IsSharedEssential(tab) &&
++          !stedding::IsEmptySpaceStandIn(tab) &&
++          model.FindSpaceForTab(tab) == id) {
+         ++count;
+       }
+     }
+@@ -4410,6 +4523,12 @@ void SpaceModel::SetSpacePinnedOnOneTab(tabs::TabInterface* tab,
+         session_service->AddTabExtraData(session_id_, tab_id,
+                                          kSessionTabHomeKey,
+                                          home ? home->spec() : std::string());
++        // pins H1: and whether the first load is still to settle it, as
++        // SessionExtraDataForTab writes it: a pin an import makes unloaded
++        // still settles after a restart.
++        session_service->AddTabExtraData(
++            session_id_, tab_id, kSessionTabHomeUnsettledKey,
++            homes_before_commit_.contains(tab->GetHandle()) ? "1" : "0");
+       }
+     }
+   }
 diff --git a/chrome/browser/ui/spaces/space_model.h b/chrome/browser/ui/spaces/space_model.h
-index 1ecc923d64dfe..95f256df5c902 100644
+index 1ecc923d64dfe..35ac88314efeb 100644
 --- a/chrome/browser/ui/spaces/space_model.h
 +++ b/chrome/browser/ui/spaces/space_model.h
-@@ -355,8 +355,9 @@ class SpaceModel : public TabStripModelObserver,
+@@ -64,6 +64,12 @@ inline constexpr char kSessionTabSpacePinKey[] = "stedding.spacepin";
+ // The key a pinned tab's home URL is written under (pins H2).
+ inline constexpr char kSessionTabHomeKey[] = "stedding.home";
+ 
++// "1" beside the home of a pin whose home was taken before its page first
++// loaded, which that first load is still to settle (pins H1); "0" once it
++// has.
++inline constexpr char kSessionTabHomeUnsettledKey[] =
++    "stedding.home_unsettled";
++
+ // commandbar K26: the page `url` shows, as Close Duplicate Tabs compares
+ // pages. Two addresses show the same page when they agree on the host less a
+ // leading "www.", the port, the path less one trailing slash, the query and
+@@ -181,6 +187,12 @@ class SpaceModel : public TabStripModelObserver,
+   static void ClearNextWindowBlank();
+   bool follows_registry() const { return registry_ != nullptr; }
+ 
++  // sidebar Y1, Y2, settings T41-T43: the process-wide sidebar density, text
++  // size and window look, read from local state once and followed from then
++  // on. Every tabbed window's construction calls it: a normal window's model,
++  // and a private or Guest window, which has none.
++  static void EnsureWindowMetricsInstalled();
++
+   // windows G6 (PLAN.md SPC-22): the Space a window opened from `source` shows
+   // first -- the one `source` shows -- as BrowserWindowCreateParams'
+   // `stedding_initial_space` carries it. A tab dragged out and Move Tab to New
+@@ -303,8 +315,8 @@ class SpaceModel : public TabStripModelObserver,
+ 
+   // switcher X1: the tabs of `id` in most-recently-active order, the active
+   // tab first when it is in `id`, then the Space's tabs the user never
+-  // activated in sidebar order (a fresh window has no history yet), at most
+-  // `limit` of them. An essentials tab counts in the Space it was used in; a
++  // activated that are awake, in sidebar order (a fresh window has no history
++  // yet; GitHub issue 126), at most `limit` of them. An essentials tab counts in the Space it was used in; a
+   // closed tab drops out; a split's panes are one entry (splits J2); tabs
+   // hidden in a collapsed folder are reached only through the history.
+   // Empty without a window.
+@@ -355,8 +367,9 @@ class SpaceModel : public TabStripModelObserver,
    // switcher X1, X2: Ctrl-Tab. The first call of a run starts it: the recent
    // list of the active Space freezes so a held Ctrl walks it -- one step is
    // the previous tab, the next the one before that, wrapping -- and `delta`
@@ -101,11 +437,79 @@ index 1ecc923d64dfe..95f256df5c902 100644
    // started on. False without a window or with fewer than two tabs to walk.
    bool CycleRecent(int delta);
    void EndCycle();
+@@ -530,8 +543,9 @@ class SpaceModel : public TabStripModelObserver,
+ 
+   // routing D2: moves `tab` to the Space its address is routed to, if any;
+   // an `external` open with no route lands in the default Space for links
+-  // from other apps. `foreground` switches to that Space. Returns where the
+-  // tab went, or nothing when it stayed.
++  // from other apps. `foreground` switches to that Space. A tab in a folder
++  // leaves it first, as Move to Space takes it (folders F37). Returns where
++  // the tab went, or nothing when it stayed.
+   std::optional<SpaceId> RouteTab(tabs::TabInterface* tab,
+                                   const GURL& url,
+                                   bool foreground,
+@@ -548,7 +562,8 @@ class SpaceModel : public TabStripModelObserver,
+   // route names, or its own -- when its contents are in another (a new tab
+   // page lives in the profile's jar), so the first request carries the right
+   // cookies (PLAN.md CMD-8): the caller navigates `tab->GetContents()`. A `search` is routed by site and host rules only:
+-  // a "contains" rule would match the words searched for.
++  // a "contains" rule would match the words searched for. A tab in a folder
++  // or a split stays in its Space, as D16 leaves it.
+   void RouteFreshTab(tabs::TabInterface* tab, const GURL& url, bool search);
+   // routing D1-D3: the Space a new tab for `url` belongs in by the routes,
+   // or for an `external` open (a link from another app) the default Space
 diff --git a/chrome/browser/ui/spaces/space_model_window_unittest.cc b/chrome/browser/ui/spaces/space_model_window_unittest.cc
-index 6dae04a2326c3..e9778ece5a3c3 100644
+index 6dae04a2326c3..ee692396e3cb0 100644
 --- a/chrome/browser/ui/spaces/space_model_window_unittest.cc
 +++ b/chrome/browser/ui/spaces/space_model_window_unittest.cc
-@@ -1447,16 +1447,22 @@ TEST_F(SpaceWindowTest, CtrlTabWalksRecentTabsOfTheActiveSpace) {
+@@ -1435,6 +1435,45 @@ TEST_F(SpaceWindowTest, RecentTabsFallBackToSidebarOrder) {
+   EXPECT_EQ(a, tabs().GetActiveTab());
+ }
+ 
++// switcher X1 (GitHub issue 126, BACKLOG S-552): the rows that fill the run
++// after the history are rows that are awake. An essential put away by Cmd-W
++// leaves the history (tabs R33) and sleeps at its home; it, an essential
++// never opened since the launch and a pin asleep stay out of the run, so no
++// step lands on one and wakes it. Used again, a row is back at the front.
++TEST_F(SpaceWindowTest, TheRunFillsOnlyWithRowsAwake) {
++  const SpaceId home = model().active_id();
++  tabs::TabInterface* const put_away = AppendRow(tabs(), profile());
++  tabs().SetTabPinned(tabs().GetIndexOfTab(put_away), true);
++  tabs::TabInterface* const unopened = AppendRow(tabs(), profile());
++  tabs().SetTabPinned(tabs().GetIndexOfTab(unopened), true);
++  tabs::TabInterface* const pin = AppendRow(tabs(), profile());
++  model().SetSpacePinned(pin, true);
++  tabs::TabInterface* const a = AppendRow(tabs(), profile(), true);
++  tabs::TabInterface* const b = AppendRow(tabs(), profile());
++  ASSERT_TRUE(put_away->IsPinned() && unopened->IsPinned());
++  unopened->GetContents()->GetController().SetNeedsReload();
++  pin->GetContents()->SetWasDiscarded(true);
++  Use(tabs(), put_away);
++  Use(tabs(), a);
++  model().ForgetUses({put_away});
++  put_away->GetContents()->SetWasDiscarded(true);
++  task_environment()->RunUntilIdle();
++  ASSERT_EQ(home, model().SpaceForTab(pin));
++
++  EXPECT_EQ((std::vector<tabs::TabInterface*>{a, b}), model().RecentTabs(home))
++      << "a row asleep fills the run";
++  EXPECT_TRUE(model().CycleRecent(1));
++  model().EndCycle();
++  EXPECT_EQ(b, tabs().GetActiveTab());
++  EXPECT_TRUE(put_away->GetContents()->WasDiscarded());
++  EXPECT_TRUE(unopened->GetContents()->GetController().NeedsReload());
++  EXPECT_TRUE(pin->GetContents()->WasDiscarded());
++
++  Use(tabs(), put_away);
++  EXPECT_EQ(put_away, model().RecentTabs(home).front())
++      << "used again, the essential is back in the history";
++}
++
+ // switcher X1: through the command, as the key arrives.
+ TEST_F(SpaceWindowTest, CtrlTabWalksRecentTabsOfTheActiveSpace) {
+   const SpaceId home = model().active_id();
+@@ -1447,16 +1486,22 @@ TEST_F(SpaceWindowTest, CtrlTabWalksRecentTabsOfTheActiveSpace) {
    model().SetActiveSpace(home);
    ASSERT_EQ(c, tabs().GetActiveTab());
  
@@ -132,7 +536,7 @@ index 6dae04a2326c3..e9778ece5a3c3 100644
    EXPECT_EQ((std::vector<tabs::TabInterface*>{c, b, a}), model().cycle_tabs());
  
    model().EndCycle();
-@@ -1479,9 +1485,10 @@ TEST_F(SpaceWindowTest, CtrlTabTapGoesToPreviousTab) {
+@@ -1479,9 +1524,10 @@ TEST_F(SpaceWindowTest, CtrlTabTapGoesToPreviousTab) {
    model().EndCycle();
    EXPECT_EQ(c, tabs().GetActiveTab());
  
@@ -145,7 +549,7 @@ index 6dae04a2326c3..e9778ece5a3c3 100644
    model().CancelCycle();
    EXPECT_FALSE(model().in_cycle());
    EXPECT_EQ(c, tabs().GetActiveTab());
-@@ -1509,8 +1516,8 @@ TEST_F(SpaceWindowTest, CtrlTabSettingOffUsesStripOrder) {
+@@ -1509,8 +1555,8 @@ TEST_F(SpaceWindowTest, CtrlTabSettingOffUsesStripOrder) {
                         TabStripUserGestureDetails(
                             TabStripUserGestureDetails::GestureType::kOther));
    chrome::ExecuteCommand(browser(), IDC_CYCLE_TO_NEXT_TAB);

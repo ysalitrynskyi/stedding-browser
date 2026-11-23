@@ -18,13 +18,13 @@ improvements on 2026-11-04.
 Removable when: never as a feature.
 ---
  chrome/browser/renderer_context_menu/BUILD.gn |   2 +
- .../render_view_context_menu.cc               | 105 +++++++++++++++++-
- .../render_view_context_menu.h                |   2 +
+ .../render_view_context_menu.cc               | 121 +++++++++++++++++-
+ .../render_view_context_menu.h                |   6 +
  chrome/browser/ui/spaces/new_tab_space.cc     |  23 ++++
- chrome/browser/ui/spaces/new_tab_space.h      |  20 ++++
+ chrome/browser/ui/spaces/new_tab_space.h      |  34 +++++
  .../ui/stedding/stedding_command_ids.h        |   8 +-
- chrome/test/stedding/space_jar_browsertest.cc |  58 ++++++++++
- 7 files changed, 216 insertions(+), 2 deletions(-)
+ chrome/test/stedding/space_jar_browsertest.cc |  58 +++++++++
+ 7 files changed, 250 insertions(+), 2 deletions(-)
 
 diff --git a/chrome/browser/renderer_context_menu/BUILD.gn b/chrome/browser/renderer_context_menu/BUILD.gn
 index c31c0e50b5299..3cd8bbbcf5c66 100644
@@ -40,7 +40,7 @@ index c31c0e50b5299..3cd8bbbcf5c66 100644
        "//chrome/browser/ui/stedding:dark_pages",
        "//chrome/browser/ui/stedding:little_window",
 diff --git a/chrome/browser/renderer_context_menu/render_view_context_menu.cc b/chrome/browser/renderer_context_menu/render_view_context_menu.cc
-index 9e4cd4c473e88..5a501b7f9e1e7 100644
+index 9e4cd4c473e88..a1a3639b40e67 100644
 --- a/chrome/browser/renderer_context_menu/render_view_context_menu.cc
 +++ b/chrome/browser/renderer_context_menu/render_view_context_menu.cc
 @@ -141,6 +141,11 @@
@@ -93,7 +93,7 @@ index 9e4cd4c473e88..5a501b7f9e1e7 100644
  // Returns the preference of the profile represented by the |context|.
  PrefService* GetPrefs(content::BrowserContext* context) {
    return user_prefs::UserPrefs::Get(context);
-@@ -2090,6 +2117,51 @@ void RenderViewContextMenu::AppendLinkItems() {
+@@ -2090,6 +2117,58 @@ void RenderViewContextMenu::AppendLinkItems() {
                                             kOpenLinkInSplitMenuItem);
        }
      }
@@ -109,6 +109,7 @@ index 9e4cd4c473e88..5a501b7f9e1e7 100644
 +      if (model) {
 +        open_link_in_space_submenu_ =
 +            std::make_unique<ui::SimpleMenuModel>(this);
++        open_link_in_space_ids_.clear();
 +        const size_t slots = IDC_STEDDING_OPEN_LINK_IN_SPACE_LAST -
 +                             IDC_STEDDING_OPEN_LINK_IN_SPACE_FIRST + 1;
 +        for (size_t i = 0; i < others.size() && i < slots; ++i) {
@@ -116,6 +117,12 @@ index 9e4cd4c473e88..5a501b7f9e1e7 100644
 +          open_link_in_space_submenu_->AddItem(
 +              IDC_STEDDING_OPEN_LINK_IN_SPACE_FIRST + static_cast<int>(i),
 +              name);
++          // The name is the user's own text, shown as written: an "&" in
++          // "R&D" is no mnemonic marker, on the Mac or on Windows.
++          open_link_in_space_submenu_->SetMayHaveMnemonicsAt(i, false);
++          // The row opens in this Space, whatever moves in the list while
++          // the menu is open.
++          open_link_in_space_ids_.push_back(others[i].token());
 +          // sessions S32: a Space with an independent session is marked, as
 +          // the tab menu's Move to Space marks it.
 +          if (!spaces::IsolationMarkForSpace(model->registry(), others[i])
@@ -145,7 +152,7 @@ index 9e4cd4c473e88..5a501b7f9e1e7 100644
  #endif
  
      if (params_.link_url.is_valid()) {
-@@ -3646,6 +3718,13 @@ bool RenderViewContextMenu::IsCommandIdEnabled(int id) const {
+@@ -3646,6 +3725,13 @@ bool RenderViewContextMenu::IsCommandIdEnabled(int id) const {
      return params_.link_url.is_valid();
    }
  
@@ -159,22 +166,31 @@ index 9e4cd4c473e88..5a501b7f9e1e7 100644
    // On ChromeOS a dedicated OTR profile is used for captive portal signin to
    // protect user privacy. Since some policies prevent Incognito browsing,
    // disable options that trigger navigation in the context menu.
-@@ -4037,6 +4116,30 @@ void RenderViewContextMenu::ExecuteCommand(int id, int event_flags) {
+@@ -4037,6 +4123,39 @@ void RenderViewContextMenu::ExecuteCommand(int id, int event_flags) {
      return;
    }
  
 +  // Stedding menus M14, spaces B46 (GitHub issue 75): a tab of the window in
 +  // the Space named, in its jar from the first request, and the window goes
-+  // to that Space with it, as Move to Space's does. The list is read again:
-+  // a Space deleted while the menu was open is not one to open in.
++  // to that Space with it, as Move to Space's does. A row names the Space it
++  // was built for, not a place in the list: Spaces moved, added or shown
++  // while the menu was open do not send the link to another. A Space deleted
++  // since is not one to open in.
 +  if (id >= IDC_STEDDING_OPEN_LINK_IN_SPACE_FIRST &&
 +      id <= IDC_STEDDING_OPEN_LINK_IN_SPACE_LAST) {
-+    const std::vector<spaces::SpaceId> others =
-+        SpacesToOpenLinkIn(GetBrowser());
 +    const size_t index =
 +        static_cast<size_t>(id - IDC_STEDDING_OPEN_LINK_IN_SPACE_FIRST);
-+    if (index < others.size() && params_.link_url.is_valid()) {
-+      const spaces::ScopedNewTabSpace in_space(others[index]);
++    BrowserWindowInterface* const window = GetBrowser();
++    spaces::SpaceModel* const model =
++        window ? spaces::SpaceModel::From(window) : nullptr;
++    const std::optional<spaces::SpaceId> space =
++        index < open_link_in_space_ids_.size()
++            ? std::optional<spaces::SpaceId>(spaces::SpaceId::FromRawToken(
++                  open_link_in_space_ids_[index]))
++            : std::nullopt;
++    if (model && space && model->GetSpace(*space) &&
++        params_.link_url.is_valid()) {
++      const spaces::ScopedNewTabSpace in_space(*space);
 +      source_web_contents_->OpenURL(
 +          GetOpenURLParamsWithExtraHeaders(
 +              params_.link_url, params_.frame_url, params_.frame_origin,
@@ -191,15 +207,26 @@ index 9e4cd4c473e88..5a501b7f9e1e7 100644
      case IDC_CONTENT_CONTEXT_OPENLINKNEWTAB: {
        WindowOpenDisposition new_tab_disposition =
 diff --git a/chrome/browser/renderer_context_menu/render_view_context_menu.h b/chrome/browser/renderer_context_menu/render_view_context_menu.h
-index 545bcad55239a..ab857520ab239 100644
+index 545bcad55239a..3f7d0b1d4dd66 100644
 --- a/chrome/browser/renderer_context_menu/render_view_context_menu.h
 +++ b/chrome/browser/renderer_context_menu/render_view_context_menu.h
-@@ -653,6 +653,8 @@ class RenderViewContextMenu
+@@ -15,6 +15,7 @@
+ #include "base/functional/callback.h"
+ #include "base/memory/raw_ptr.h"
+ #include "base/scoped_observation.h"
++#include "base/token.h"
+ #include "build/build_config.h"
+ #include "chrome/app/chrome_command_ids.h"
+ #include "chrome/browser/ui/autofill/autofill_context_menu_manager.h"
+@@ -653,6 +654,11 @@ class RenderViewContextMenu
  
    std::unique_ptr<ui::SimpleMenuModel> send_tab_to_self_submenu_;
    std::unique_ptr<ui::SimpleMenuModel> split_layout_submenu_;
 +  // Stedding menus M14: Open Link in Space's rows.
 +  std::unique_ptr<ui::SimpleMenuModel> open_link_in_space_submenu_;
++  // The Space each of those rows names, in row order, as the menu was built:
++  // the token of its spaces::SpaceId.
++  std::vector<base::Token> open_link_in_space_ids_;
  
    //  Used for CTR metrics of menu item for opening Glic.
    bool glic_item_shown_ = false;
@@ -245,13 +272,41 @@ index dd703ba593074..f42d0ae986dca 100644
      const content::StoragePartitionConfig& worker_partition)
      : worker_partition_(worker_partition), previous_(g_service_worker_window) {
 diff --git a/chrome/browser/ui/spaces/new_tab_space.h b/chrome/browser/ui/spaces/new_tab_space.h
-index cbaefcc02fac4..ba2c5e8de3f1a 100644
+index cbaefcc02fac4..35a21288a8e39 100644
 --- a/chrome/browser/ui/spaces/new_tab_space.h
 +++ b/chrome/browser/ui/spaces/new_tab_space.h
-@@ -106,6 +106,26 @@ std::unique_ptr<content::WebContents> PlaceOpenedContents(
+@@ -9,6 +9,7 @@
+ #include <optional>
+ 
+ #include "base/memory/raw_ptr.h"
++#include "base/memory/scoped_refptr.h"
+ #include "chrome/browser/ui/spaces/space_id.h"
+ #include "content/public/browser/storage_partition_config.h"
+ #include "content/public/browser/web_contents_user_data.h"
+@@ -18,6 +19,7 @@ class BrowserWindowInterface;
+ class GURL;
+ 
+ namespace content {
++class SiteInstance;
+ class WebContents;
+ }  // namespace content
+ 
+@@ -106,6 +108,38 @@ std::unique_ptr<content::WebContents> PlaceOpenedContents(
      const GURL& url,
      WindowOpenDisposition disposition);
  
++// sessions S11: contents made in `site` to take the place of `made`, which
++// content made for a page opened without an opener and has loaded nothing
++// into. They keep what content gave `made` from the frame that opened it,
++// which only contents content makes itself get: the sandbox a sandboxed
++// frame passes on to the pages it opens, and the mark of a page another
++// window opened, which may close itself once it has gone on to another.
++// Hidden when `hidden`.
++std::unique_ptr<content::WebContents> RemakeOpenedContents(
++    content::WebContents* made,
++    scoped_refptr<content::SiteInstance> site,
++    bool hidden);
++
 +// menus M14 (GitHub issue 75): while one is alive, the tab Navigate() makes
 +// is filed in `space` and made in its jar, whatever a route says: the page
 +// menu's Open Link in Space holds one around its OpenURL, which makes the

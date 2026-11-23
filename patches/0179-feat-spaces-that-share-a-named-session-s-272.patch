@@ -53,16 +53,16 @@ Removable when: never; this is the feature.
  .../settings/stedding_page/stedding_page.ts   |  64 +-
  .../stedding_page/stedding_sync_section.ts    |  14 +-
  .../resources/stedding_welcome/from_arc.ts    |   8 +-
- chrome/browser/ui/spaces/app_jar.cc           |   9 +-
+ chrome/browser/ui/spaces/app_jar.cc           |  56 +-
  .../browser/ui/spaces/arc_sidebar_importer.cc | 121 +++-
  .../browser/ui/spaces/arc_sidebar_importer.h  |  21 +-
  .../spaces/arc_sidebar_importer_unittest.cc   |   4 +-
  chrome/browser/ui/spaces/isolation_mark.cc    |  26 +
  chrome/browser/ui/spaces/isolation_mark.h     |  19 +
- chrome/browser/ui/spaces/new_tab_space.cc     |   6 +
+ chrome/browser/ui/spaces/new_tab_space.cc     |  42 +-
  chrome/browser/ui/spaces/sidebar_backup.cc    |  31 +-
  .../ui/spaces/sidebar_backup_unittest.cc      | 236 ++++++-
- .../browser/ui/spaces/sidebar_sync_apply.cc   |  28 +-
+ .../browser/ui/spaces/sidebar_sync_apply.cc   | 245 ++++++-
  chrome/browser/ui/spaces/sidebar_sync_file.cc |   3 +
  .../browser/ui/spaces/sidebar_sync_service.cc |  35 +-
  .../browser/ui/spaces/sidebar_sync_state.cc   |  23 +-
@@ -75,7 +75,7 @@ Removable when: never; this is the feature.
  chrome/browser/ui/spaces/space_registry.cc    |  19 +-
  chrome/browser/ui/spaces/space_registry.h     |   4 +
  .../ui/spaces/space_storage_partition.cc      |  21 +-
- chrome/browser/ui/stedding/little_window.cc   |   6 +-
+ chrome/browser/ui/stedding/little_window.cc   |  65 +-
  chrome/browser/ui/stedding/site_controls.cc   |   9 +
  .../ui/stedding/site_controls_unittest.cc     |  12 +
  .../page_info/stedding_site_controls_view.cc  |   8 +-
@@ -95,7 +95,7 @@ Removable when: never; this is the feature.
  .../stedding/settings_spaces_browsertest.cc   | 177 ++++-
  .../stedding/shared_session_browsertest.cc    | 667 ++++++++++++++++++
  .../test/stedding/sidebar_sync_browsertest.cc | 435 ++++++++++++
- 48 files changed, 2733 insertions(+), 129 deletions(-)
+ 48 files changed, 3054 insertions(+), 167 deletions(-)
  create mode 100644 chrome/test/stedding/shared_session_browsertest.cc
 
 diff --git a/chrome/app/stedding_strings.grdp b/chrome/app/stedding_strings.grdp
@@ -348,10 +348,100 @@ index f57aa5f39df91..732149f0dfe70 100644
      {
        text: 'A split of more than two. A split holds two pages here: the ' +
 diff --git a/chrome/browser/ui/spaces/app_jar.cc b/chrome/browser/ui/spaces/app_jar.cc
-index 71738fa404851..d6e695e6476ec 100644
+index 71738fa404851..83ab48ac21c83 100644
 --- a/chrome/browser/ui/spaces/app_jar.cc
 +++ b/chrome/browser/ui/spaces/app_jar.cc
-@@ -223,14 +223,7 @@ std::u16string AppsKeepingSessionLine(const std::vector<std::u16string>& names,
+@@ -6,6 +6,7 @@
+ 
+ #include <algorithm>
+ #include <memory>
++#include <optional>
+ #include <vector>
+ 
+ #include "base/strings/strcat.h"
+@@ -45,11 +46,16 @@ bool SameJar(const content::StoragePartitionConfig& a,
+ // web apps Wa5, Wa18: the name of the Space that keeps the jar `jar_name`
+ // with its own session on, as SpaceModel::DisplayName gives it ("Space 2"
+ // for one never named; every window's Spaces follow the registry's order);
+-// empty when no Space keeps it. The name goes inside a sentence of a
+-// warning, as NameInSentence gives it: a direction override in a synced
+-// name reordered the uninstall and install warnings.
++// empty when no Space keeps it. When several Spaces keep it, it is the
++// session's own name, as site controls give it (sessions S48), and
++// `*of_session` says so: the first of them alone was named, though the tabs
++// of each are in the jar. The name goes inside a sentence of a warning, as
++// NameInSentence gives it: a direction override in a synced name reordered
++// the uninstall and install warnings.
+ std::u16string NameOfSpaceKeeping(content::BrowserContext* browser_context,
+-                                  const std::string& jar_name) {
++                                  const std::string& jar_name,
++                                  bool* of_session) {
++  *of_session = false;
+   const SpaceRegistry* const registry =
+       browser_context ? SpaceRegistryFactory::GetForProfile(
+                             Profile::FromBrowserContext(browser_context))
+@@ -58,6 +64,21 @@ std::u16string NameOfSpaceKeeping(content::BrowserContext* browser_context,
+     return std::u16string();
+   }
+   const std::vector<RegistryEntry>& entries = registry->entries();
++  const auto keeping =
++      std::ranges::count_if(entries, [&](const RegistryEntry& entry) {
++        return entry.isolated && entry.profile_id == jar_name;
++      });
++  if (keeping > 1) {
++    if (const std::optional<SessionEntry> session =
++            registry->FindSession(jar_name)) {
++      if (std::u16string name =
++              NameInSentence(base::UTF8ToUTF16(session->name));
++          !name.empty()) {
++        *of_session = true;
++        return name;
++      }
++    }
++  }
+   for (size_t i = 0; i < entries.size(); ++i) {
+     if (!entries[i].isolated || entries[i].profile_id != jar_name) {
+       continue;
+@@ -186,11 +207,16 @@ std::u16string AppSessionLine(content::WebContents* contents) {
+   // in a jar no Space keeps any more -- one that held unsaved changes across
+   // a deletion or an isolation change (spaces SPC-9) -- makes an app on the
+   // shared session, of which the dialog says nothing.
+-  const std::u16string name = NameOfSpaceKeeping(contents->GetBrowserContext(),
+-                                                 partition.partition_name());
++  bool of_session = false;
++  const std::u16string name = NameOfSpaceKeeping(
++      contents->GetBrowserContext(), partition.partition_name(), &of_session);
+   if (name.empty()) {
+     return std::u16string();
+   }
++  // sessions S48: a session other Spaces share goes by its own name.
++  if (of_session) {
++    return base::StrCat({u"Opens with the session “", name, u"”."});
++  }
+   return base::StrCat({u"Opens with the session of “", name, u"”."});
+ }
+ 
+@@ -201,11 +227,18 @@ std::u16string AppClearDataSpaceNote(content::BrowserContext* browser_context,
+   if (!jar) {
+     return std::u16string();
+   }
++  bool of_session = false;
+   const std::u16string name =
+-      NameOfSpaceKeeping(browser_context, jar->partition_name());
++      NameOfSpaceKeeping(browser_context, jar->partition_name(), &of_session);
+   if (name.empty()) {
+     return std::u16string();
+   }
++  // sessions S48: the tabs of every Space of a shared session are signed
++  // out, and the session is named for them all.
++  if (of_session) {
++    return base::StrCat({u"This also signs the tabs of the session “", name,
++                         u"” out of the site."});
++  }
+   return base::StrCat(
+       {u"This also signs the tabs of “", name, u"” out of the site."});
+ }
+@@ -223,14 +256,7 @@ std::u16string AppsKeepingSessionLine(const std::vector<std::u16string>& names,
    if (names.empty()) {
      return std::u16string();
    }
@@ -794,10 +884,18 @@ index 0761d3aeb89ce..093a2a4cd1f3d 100644
  
  #endif  // CHROME_BROWSER_UI_SPACES_ISOLATION_MARK_H_
 diff --git a/chrome/browser/ui/spaces/new_tab_space.cc b/chrome/browser/ui/spaces/new_tab_space.cc
-index f42d0ae986dca..4c6141585c813 100644
+index f42d0ae986dca..e1681f1055e8d 100644
 --- a/chrome/browser/ui/spaces/new_tab_space.cc
 +++ b/chrome/browser/ui/spaces/new_tab_space.cc
-@@ -66,6 +66,12 @@ std::optional<SpaceId> SourceSpace(SpaceModel& model,
+@@ -15,6 +15,7 @@
+ #include "chrome/common/webui_url_constants.h"
+ #include "components/tabs/public/tab_interface.h"
+ #include "content/public/browser/navigation_controller.h"
++#include "content/public/browser/render_frame_host.h"
+ #include "content/public/browser/site_instance.h"
+ #include "content/public/browser/storage_partition_config.h"
+ #include "content/public/browser/web_contents.h"
+@@ -66,6 +67,12 @@ std::optional<SpaceId> SourceSpace(SpaceModel& model,
    if (!id || !model.GetSpace(*id)) {
      return std::nullopt;
    }
@@ -810,6 +908,55 @@ index f42d0ae986dca..4c6141585c813 100644
    return id;
  }
  
+@@ -176,10 +183,9 @@ std::unique_ptr<content::WebContents> PlaceOpenedContents(
+       base::FeatureList::IsEnabled(features::kPwaNavigationCapturing);
+   content::BrowserContext* const context = contents->GetBrowserContext();
+   const auto remake = [&](scoped_refptr<content::SiteInstance> site) {
+-    content::WebContents::CreateParams params(context, std::move(site));
+-    params.initially_hidden =
+-        disposition == WindowOpenDisposition::kNewBackgroundTab;
+-    contents = content::WebContents::Create(params);
++    contents = RemakeOpenedContents(
++        contents.get(), std::move(site),
++        /*hidden=*/disposition == WindowOpenDisposition::kNewBackgroundTab);
+   };
+   std::optional<NewTabSpaceChoice> choice = ChooseSpaceForNewTab(
+       window, source, url, /*essential=*/false,
+@@ -211,6 +217,34 @@ std::unique_ptr<content::WebContents> PlaceOpenedContents(
+   return contents;
+ }
+ 
++std::unique_ptr<content::WebContents> RemakeOpenedContents(
++    content::WebContents* made,
++    scoped_refptr<content::SiteInstance> site,
++    bool hidden) {
++  content::WebContents::CreateParams params(made->GetBrowserContext(),
++                                            std::move(site));
++  params.initially_hidden = hidden;
++  // Content made `made` for the frame that opened it: marked as opened by
++  // another window, and, when that frame is sandboxed and passes its sandbox
++  // on (no allow-popups-to-escape-sandbox), sandboxed as the frame is. Its
++  // empty document has those flags and no others of its own. Made without
++  // them, a link in a sandboxed frame of a Space with its own session opened
++  // a page with no sandbox at all.
++  params.opened_by_another_window = made->HasLiveOriginalOpenerChain();
++  content::RenderFrameHost* const frame = made->GetPrimaryMainFrame();
++  int sandbox = 0;
++  for (int bit = 0; frame && bit < 31; ++bit) {
++    const int flag = 1 << bit;
++    if (frame->IsSandboxed(
++            static_cast<network::mojom::WebSandboxFlags>(flag))) {
++      sandbox |= flag;
++    }
++  }
++  params.starting_sandbox_flags =
++      static_cast<network::mojom::WebSandboxFlags>(sandbox);
++  return content::WebContents::Create(params);
++}
++
+ namespace {
+ const ScopedNewTabSpace* g_new_tab_space = nullptr;
+ }  // namespace
 diff --git a/chrome/browser/ui/spaces/sidebar_backup.cc b/chrome/browser/ui/spaces/sidebar_backup.cc
 index b339fcf13f082..63db46bd39eeb 100644
 --- a/chrome/browser/ui/spaces/sidebar_backup.cc
@@ -1144,7 +1291,7 @@ index 019b440f1981f..a78bca6328eb2 100644
  // is not written over. Each is whole: it reads back as a sidebar.
  TEST_F(SidebarBackupTest, ASecondExportIsAFileOfItsOwn) {
 diff --git a/chrome/browser/ui/spaces/sidebar_sync_apply.cc b/chrome/browser/ui/spaces/sidebar_sync_apply.cc
-index 545982133dc48..b625323257047 100644
+index 545982133dc48..ecd1310a4e801 100644
 --- a/chrome/browser/ui/spaces/sidebar_sync_apply.cc
 +++ b/chrome/browser/ui/spaces/sidebar_sync_apply.cc
 @@ -13,9 +13,11 @@
@@ -1196,7 +1343,23 @@ index 545982133dc48..b625323257047 100644
          }
          ledger_->pending_adds.erase(id);
          ++out_->applied;
-@@ -259,11 +272,14 @@ class Applier {
+@@ -243,11 +256,13 @@ class Applier {
+       const SkColor color =
+           ColorFromHex(record.Get(kFieldColor)).value_or(entry.color);
+       bool changed = false;
+-      if (entry.name != name) {
++      // Sf33: compared as the file holds them, so a name longer than a file
++      // takes is not cut here by its own copy.
++      if (FitSyncedText(entry.name) != name) {
+         registry_->SetName(*space, name);
+         changed = true;
+       }
+-      if (entry.icon != icon) {
++      if (FitSyncedText(entry.icon) != icon) {
+         registry_->SetIcon(*space, icon);
+         changed = true;
+       }
+@@ -259,11 +274,14 @@ class Applier {
        if (changed) {
          ++out_->applied;
        }
@@ -1214,7 +1377,287 @@ index 545982133dc48..b625323257047 100644
            out_->isolation_questions.push_back(id);
          }
        }
-@@ -765,6 +781,8 @@ ApplyOutcome ApplyToWindows(Profile* profile,
+@@ -312,7 +330,7 @@ class Applier {
+         continue;
+       }
+       if (item.kind == Kind::kFolder) {
+-        ApplyFolder(id, record->second);
++        ApplyFolder(id, item, record->second);
+         continue;
+       }
+       if (item.kind != Kind::kTab) {
+@@ -331,7 +349,9 @@ class Applier {
+     }
+   }
+ 
+-  void ApplyFolder(const std::string& id, const Record& record) {
++  void ApplyFolder(const std::string& id,
++                   const LocalItem& item,
++                   const Record& record) {
+     for (BrowserWindowInterface* const window : windows_) {
+       TabStripModel* const strip = window->GetTabStripModel();
+       tabs::FolderTabCollection* const folder =
+@@ -345,14 +365,31 @@ class Applier {
+         ++out_->applied;
+         return;
+       }
++      // Sf15, Sf17: a folder moved elsewhere -- to another Space, into
++      // another folder, or out of one -- moves here too. Where it sits here
++      // is read as the ledger reads a place: a folder inside one removed
++      // elsewhere is in that one's place, where the removal puts it; one
++      // inside a folder the ledger does not have yet stays.
++      const std::string parent =
++          EffectiveParent(*desired_, record.Get(kFieldParent));
++      const auto here = item.fields.find(kFieldParent);
++      const std::string at = here == item.fields.end()
++                                 ? std::string()
++                                 : EffectiveParent(*desired_, here->second);
++      if (!parent.empty() && !at.empty() && parent != at &&
++          MoveFolderHere(id, window, folder, parent)) {
++        ++out_->applied;
++      }
++      // Sf33: compared as the file holds them, so a title longer than a
++      // file takes is not cut here by its own copy.
+       const std::string& title = record.Get(kFieldTitle);
+-      if (folder->title() != title) {
++      if (FitSyncedText(folder->title()) != title) {
+         folder->SetTitle(title);
+         ++out_->applied;
+       }
+       // folders F42 (BACKLOG S-393): the icon as the title.
+       const std::string& icon = record.Get(kFieldIcon);
+-      if (folder->icon() != icon) {
++      if (FitSyncedText(folder->icon()) != icon) {
+         folder->SetIcon(icon);
+         ++out_->applied;
+       }
+@@ -360,6 +397,112 @@ class Applier {
+     }
+   }
+ 
++  // Sf15, Sf17, Sf25: moves the folder `folder` here to `parent`, whole, as
++  // the person moves one: to another Space's pinned run as Move to Space on
++  // its header does, its tabs taking that Space (folders F47); into another
++  // folder at its end, or out of the folders around it to just after them,
++  // as a header's drag does (F39). False when it waits: the folder or the
++  // Space it goes to is not here yet, the tab the user is on is in it, or the
++  // move would reload a loaded page into another session (held until its
++  // tabs sleep, or Move now).
++  bool MoveFolderHere(const std::string& id,
++                      BrowserWindowInterface* window,
++                      tabs::FolderTabCollection* folder,
++                      const std::string& parent) {
++    TabStripModel* const strip = window->GetTabStripModel();
++    SpaceModel* const model = SpaceModel::From(window);
++    const std::vector<tabs::TabInterface*> moving = folder->GetTabsRecursive();
++    if (moving.empty()) {
++      return false;
++    }
++    tabs::FolderTabCollection* into = nullptr;
++    if (IsFolder(parent)) {
++      into = FindLocalFolder(strip, parent, *resolved_);
++      if (!into || !strip->CanMoveFolderInto(folder, into)) {
++        return false;
++      }
++    }
++    const std::string space_text = SpaceOfContainer(*desired_, parent);
++    const std::optional<SpaceId> space =
++        space_text.empty() ? std::nullopt : LocalSpace(space_text);
++    if (!space || !model->GetSpace(*space)) {
++      return false;
++    }
++    // The folder it goes into must be in that Space here first: until that
++    // folder's own record moves it, this one waits. Moved to the Space before
++    // it, this folder could leave `into` (a folder around it here) empty and
++    // gone, or end up inside a folder of another Space (folders F37). An
++    // empty `into` holds nothing of this folder, so it is no folder around it.
++    if (into) {
++      const std::vector<tabs::TabInterface*> in_into =
++          into->GetTabsRecursive();
++      if (!in_into.empty() &&
++          model->FindSpaceForTab(in_into.front()) != space) {
++        return false;
++      }
++    }
++    // Sf21, Sf25: the tab the user is on is left alone until they leave it.
++    if (std::ranges::contains(moving, strip->GetActiveTab())) {
++      ++out_->deferred;
++      return false;
++    }
++    const std::optional<SpaceId> current =
++        model->FindSpaceForTab(moving.front());
++    if (current != space) {
++      if (current &&
++          JarOf(*registry_, *current) != JarOf(*registry_, *space) &&
++          std::ranges::any_of(moving,
++                              [](const tabs::TabInterface* tab) {
++                                return !tab->GetContents()->WasDiscarded();
++                              }) &&
++          !move_now_->contains(id)) {
++        out_->held_moves.push_back(id);
++        return false;
++      }
++      model->MoveFolderToSpace(folder, *space);
++      if (model->FindSpaceForTab(moving.front()) != space) {
++        return false;
++      }
++    }
++    if (into) {
++      const bool was_pinned = model->IsFolderSpacePinned(TopFolderOf(into));
++      if (!strip->MoveFolderInto(folder, into, into->ChildCount())) {
++        return false;
++      }
++      model->KeepFolderPinned(into, was_pinned);
++      return true;
++    }
++    // Its Space's run: out of the folders around it, to just after them.
++    tabs::TabCollection* row = folder;
++    while (row->GetParentCollection() &&
++           row->GetParentCollection()->type() !=
++               tabs::TabCollection::Type::UNPINNED) {
++      row = row->GetParentCollection();
++    }
++    tabs::TabCollection* const block = row->GetParentCollection();
++    if (row == folder || !block) {
++      return row == folder;
++    }
++    const std::optional<size_t> index = block->GetIndexOfCollection(row);
++    return index && strip->MoveFolderInto(folder, block, *index + 1);
++  }
++
++  // Sf17, spaces B6: where a tab placed at `parent` sits here, as the sidebar
++  // reads it back. A Space's own essentials row, for a Space here with no
++  // session of its own, is the shared row: MoveHere pins such a tab as a
++  // shared essential. Compared with that Space's own row, the tab was moved
++  // again at every apply, and waited for the person to leave it while it was
++  // on screen.
++  std::string PlacedHere(SpaceModel* model, const std::string& parent) {
++    if (parent == kEssentialsList || !IsEssentialsContainer(parent)) {
++      return parent;
++    }
++    const std::optional<SpaceId> space = LocalSpace(SpaceOfList(parent));
++    return space && model->GetSpace(*space) && !model->SpaceIsIsolated(*space)
++               ? std::string(kEssentialsList)
++               : parent;
++  }
++
+   void ApplyTab(const std::string& id,
+                 const LocalItem& item,
+                 const Record& record,
+@@ -376,7 +519,8 @@ class Applier {
+     const std::string& home = record.Get(kFieldHome);
+     const std::string& name = record.Get(kFieldName);
+     const bool remove = !record.Alive();
+-    const bool move = !remove && !parent.empty() && parent != field(kFieldParent);
++    const bool move = !remove && !parent.empty() &&
++                      PlacedHere(model, parent) != field(kFieldParent);
+     const bool rehome = !remove && !home.empty() &&
+                         item.fields.contains(kFieldHome) &&
+                         field(kFieldHome) != home;
+@@ -558,16 +702,22 @@ class Applier {
+       }
+       up = it->second.Get(kFieldParent);
+     }
++    // The deepest folder of the chain that this window has; only those inside
++    // it are made. An outer one missing here is not made again around one
++    // that is here, under an id the strip already has: that one stays where
++    // it is until its own record moves it (Sf15).
+     tabs::FolderTabCollection* deepest = nullptr;
+     size_t made_from = 0;
+-    for (size_t i = 0; i < chain.size(); ++i) {
+-      tabs::FolderTabCollection* const found =
+-          FindLocalFolder(strip, chain[i], *resolved_);
+-      if (!found) {
+-        break;
++    for (size_t i = chain.size(); i > 0 && !deepest; --i) {
++      deepest = FindLocalFolder(strip, chain[i - 1], *resolved_);
++      if (deepest) {
++        made_from = i;
+       }
+-      deepest = found;
+-      made_from = i + 1;
++    }
++    // None of the chain is here: it is made in the run, not inside a folder
++    // the tab sits in now, which is no folder of its new place.
++    if (!deepest) {
++      strip->MoveTabOutOfFolders(strip->GetIndexOfTab(tab));
+     }
+     const bool top_was_pinned =
+         deepest && model->IsFolderSpacePinned(TopFolderOf(deepest));
+@@ -627,18 +777,71 @@ class Applier {
+     return IsRegistryWindow(last, profile_) ? last : windows_.front();
+   }
+ 
++  // Sf21, Sf26, Sf35: a pin another computer removed that stayed open here
++  // as an ordinary tab, opened by the user, is pinned again where it is when
++  // it comes back -- Undo on that batch, or an edit made after the removal
++  // -- rather than left loose while every other computer has it again. True
++  // when nothing more waits for `id`: done, or it is here in its role, or
++  // open where it is no pin (a little window, a peek). False while it waits:
++  // the tab the user is on, a place not here yet, or a move into another
++  // session (Sf25).
++  bool PinOpenTabAgain(const std::string& id,
++                       const Record& record,
++                       const std::map<std::string, Located>& located) {
++    const auto here = located.find(id);
++    if (record.kind != Kind::kTab || here == located.end()) {
++      return true;
++    }
++    BrowserWindowInterface* const window = here->second.window;
++    tabs::TabInterface* const tab = here->second.tab;
++    SpaceModel* const model = SpaceModel::From(window);
++    if (tab->IsPinned() || model->IsSpacePinned(tab)) {
++      return true;
++    }
++    const std::string parent =
++        EffectiveParent(*desired_, record.Get(kFieldParent));
++    if (parent.empty()) {
++      return false;
++    }
++    if (window->GetTabStripModel()->GetActiveTab() == tab) {
++      ++out_->deferred;
++      return false;
++    }
++    if (!MoveHere(id, window, tab, parent)) {
++      return false;
++    }
++    if (const std::string& home = record.Get(kFieldHome); !home.empty()) {
++      model->SetHomeUrl(tab, GURL(home));
++    }
++    const std::u16string name = base::UTF8ToUTF16(record.Get(kFieldName));
++    if (stedding::TabName(tab->GetContents()) != name) {
++      stedding::SetTabName(window, tab, name);
++    }
++    ++out_->applied;
++    return true;
++  }
++
+   void InsertPending() {
+     std::set<std::string> present;
+     for (const std::string& id : CollectPresentIds(profile_)) {
+       present.insert(Canonical(*resolved_, id));
+     }
++    // No tab is closed below, so the index outlives none it points at.
++    const std::map<std::string, Located> located =
++        IndexTabs(windows_, *resolved_);
+     const std::set<std::string> pending = ledger_->pending_adds;
+     for (const std::string& id : pending) {
+       const Record* const record = desired_->FindAlive(id);
+-      if (!record || present.contains(id) || record->kind == Kind::kSpace) {
++      if (!record || record->kind == Kind::kSpace) {
+         ledger_->pending_adds.erase(id);
+         continue;
+       }
++      if (present.contains(id)) {
++        if (PinOpenTabAgain(id, *record, located)) {
++          ledger_->pending_adds.erase(id);
++        }
++        continue;
++      }
+       // A folder is made around its first tab (Sf17): an empty one waits.
+       if (record->kind != Kind::kTab) {
+         continue;
+@@ -765,6 +968,8 @@ ApplyOutcome ApplyToWindows(Profile* profile,
                              Ledger& ledger,
                              const Resolved& resolved,
                              const std::set<std::string>& move_now) {
@@ -1730,10 +2173,67 @@ index 06b88421e230e..a25472aed4785 100644
  
  namespace {
 diff --git a/chrome/browser/ui/stedding/little_window.cc b/chrome/browser/ui/stedding/little_window.cc
-index 0f3cc5a28fe56..4aafcdb40c8c2 100644
+index 0f3cc5a28fe56..996e9d6b96ee0 100644
 --- a/chrome/browser/ui/stedding/little_window.cc
 +++ b/chrome/browser/ui/stedding/little_window.cc
-@@ -433,7 +433,11 @@ bool PlacePromotedPage(
+@@ -20,7 +20,6 @@
+ #include "chrome/browser/sessions/session_service.h"
+ #include "chrome/browser/sessions/session_service_factory.h"
+ #include "chrome/browser/sessions/stedding_session_rebuild.h"
+-#include "chrome/browser/ui/browser_tabstrip.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+@@ -41,7 +40,6 @@
+ #include "components/sessions/core/session_service_commands.h"
+ #include "components/tabs/public/tab_interface.h"
+ #include "content/public/browser/web_contents.h"
+-#include "third_party/blink/public/mojom/window_features/window_features.mojom.h"
+ #include "ui/base/base_window.h"
+ #include "ui/base/l10n/l10n_util.h"
+ #include "ui/display/display.h"
+@@ -239,8 +237,25 @@ void GiveLittleWindowBounds(BrowserWindowInterface* window,
+   if (!window || bounds.IsEmpty()) {
+     return;
+   }
+-  GivenLittleBounds()[window->GetSessionID()] = bounds;
+-  window->GetWindow()->SetBounds(bounds);
++  // E12: bounds saved on a display that has gone since -- a monitor
++  // unplugged, a laptop undocked -- are moved onto a display that is there,
++  // as the window sizer fits a new window's; set as they were, they put the
++  // window off screen. So are bounds that leave less than a strip of the
++  // window on the display, or its title bar above the display's top, where it
++  // cannot be taken. Bounds well on a display are kept exactly.
++  constexpr int kMinimumVisible = 30;
++  gfx::Rect given = bounds;
++  const gfx::Rect work_area =
++      display::Screen::Get()->GetDisplayMatching(bounds).work_area();
++  gfx::Rect visible = work_area;
++  visible.Intersect(bounds);
++  if (!work_area.IsEmpty() &&
++      (visible.width() < kMinimumVisible ||
++       visible.height() < kMinimumVisible || bounds.y() < work_area.y())) {
++    given.AdjustToFit(work_area);
++  }
++  GivenLittleBounds()[window->GetSessionID()] = given;
++  window->GetWindow()->SetBounds(given);
+ }
+ 
+ gfx::Rect LittleWindowBoundsToSave(BrowserWindowInterface* window,
+@@ -294,6 +309,12 @@ BrowserWindowInterface* OpenLittleWindow(Profile* profile,
+         link.initiator_origin = url::Origin();
+       }
+       bool link_waits = false;
++      // peek P12: a minimised window comes back first, so the peek is placed
++      // over the window as it is on screen. Maximised or snapped before it
++      // was minimised, its restored bounds are the ones it had before that.
++      if (anchor->GetWindow()->IsMinimized()) {
++        anchor->GetWindow()->Activate();
++      }
+       if (BrowserWindowInterface* const peek =
+               OpenPeek(tab, link, &link_waits)) {
+         anchor->GetWindow()->Activate();
+@@ -433,7 +454,11 @@ bool PlacePromotedPage(
        }
      } else if (std::optional<spaces::SpaceId> source_space =
                     model->FindSpaceForTab(source)) {
@@ -1746,6 +2246,43 @@ index 0f3cc5a28fe56..4aafcdb40c8c2 100644
      }
      // The window shows the Space the page goes to, with the pinned tab in
      // front, before the page arrives: the window's Space may have changed
+@@ -483,14 +508,28 @@ bool PlacePromotedPage(
+   if (model) {
+     no_routing.emplace(model);
+   }
+-  content::WebContents* const raw = contents.get();
+-  chrome::AddWebContents(target, nullptr, std::move(contents), url,
+-                         pair ? WindowOpenDisposition::kNewSplitView
+-                              : WindowOpenDisposition::kNewForegroundTab,
+-                         blink::mojom::WindowFeatures());
+-  if (tabs::TabInterface* const tab =
+-          tabs::TabInterface::MaybeGetFromContents(raw);
+-      tab && model && destination) {
++  // The page goes to `target` and nowhere else, as a tab AddTabAt opens
++  // does: an app the user let open its links (web apps Wa15) took it into a
++  // window of its own, or into the tab it already had, and the page was
++  // thrown away.
++  NavigateParams params(target, std::move(contents));
++  params.url = url;
++  params.disposition = pair ? WindowOpenDisposition::kNewSplitView
++                            : WindowOpenDisposition::kNewForegroundTab;
++  params.window_action = NavigateParams::WindowAction::kShowWindow;
++  params.user_gesture = true;
++  params.web_app_navigation_data.emplace();
++  params.web_app_navigation_data->SetNavigationCapturingForceOff(true);
++  Navigate(&params);
++  // The page's tab as the navigation reports it: a page it did not take is
++  // gone by now.
++  tabs::TabInterface* const tab =
++      params.navigated_or_inserted_contents
++          ? tabs::TabInterface::MaybeGetFromContents(
++                params.navigated_or_inserted_contents)
++          : nullptr;
++  if (tab && tab->GetBrowserWindowInterface() == target && model &&
++      destination) {
+     model->SetSpaceForTab(tab, *destination);
+   }
+   target->GetWindow()->Activate();
 diff --git a/chrome/browser/ui/stedding/site_controls.cc b/chrome/browser/ui/stedding/site_controls.cc
 index 848f96f75a69f..f642bf3d4c9fa 100644
 --- a/chrome/browser/ui/stedding/site_controls.cc
@@ -1809,7 +2346,7 @@ index 8bf023fffadd1..202127ac267bd 100644
                             : base::UTF8ToUTF16(entry.name),
                         entry.profile_id, entry.isolated});
 diff --git a/chrome/browser/ui/views/spaces/edit_space_view.cc b/chrome/browser/ui/views/spaces/edit_space_view.cc
-index 2c95676c03915..25dd724b33f72 100644
+index 8a864480aa47b..a9ed43265381f 100644
 --- a/chrome/browser/ui/views/spaces/edit_space_view.cc
 +++ b/chrome/browser/ui/views/spaces/edit_space_view.cc
 @@ -23,12 +23,15 @@
@@ -1842,7 +2379,7 @@ index 2c95676c03915..25dd724b33f72 100644
  #include "ui/views/style/typography.h"
  #include "ui/views/view_class_properties.h"
  
-@@ -509,8 +515,10 @@ std::vector<SkColor> EditSpaceView::PaletteColors() {
+@@ -511,8 +517,10 @@ std::vector<SkColor> EditSpaceView::PaletteColors() {
    return colors;
  }
  
@@ -1855,7 +2392,7 @@ index 2c95676c03915..25dd724b33f72 100644
    const Space* const space = model.GetSpace(id);
    CHECK(space);
    icon_ = space->icon();
-@@ -539,6 +547,11 @@ EditSpaceView::EditSpaceView(SpaceModel& model, SpaceId id)
+@@ -541,6 +549,11 @@ EditSpaceView::EditSpaceView(SpaceModel& model, SpaceId id)
    static_cast<views::BoxLayout*>(head->GetLayoutManager())
        ->SetFlexForView(name_field_, 1);
  
@@ -1867,7 +2404,7 @@ index 2c95676c03915..25dd724b33f72 100644
    // The icon and the colour, a page each, so the window fits a small screen.
    auto* const tabs = AddChildView(std::make_unique<views::TabbedPane>());
    BuildIconSection(tabs->AddTab(u"Icon", Column(kRowGap)));
-@@ -548,6 +561,59 @@ EditSpaceView::EditSpaceView(SpaceModel& model, SpaceId id)
+@@ -550,6 +563,59 @@ EditSpaceView::EditSpaceView(SpaceModel& model, SpaceId id)
  
  EditSpaceView::~EditSpaceView() = default;
  
@@ -1927,7 +2464,7 @@ index 2c95676c03915..25dd724b33f72 100644
  void EditSpaceView::BuildIconSection(views::View* section) {
    section->SetBorder(views::CreateEmptyBorder(gfx::Insets::TLBR(12, 0, 4, 0)));
    views::View* const side = section->AddChildView(Column(6));
-@@ -847,6 +913,22 @@ void EditSpaceView::Apply() {
+@@ -849,6 +915,22 @@ void EditSpaceView::Apply() {
         !space->color_chosen())) {
      model->SetSpaceColors(id_, light_, dark);
    }
@@ -1950,7 +2487,7 @@ index 2c95676c03915..25dd724b33f72 100644
  }
  
  BEGIN_METADATA(EditSpaceView)
-@@ -859,7 +941,7 @@ EditSpaceView* ShowEditSpaceDialog(BrowserWindowInterface* window,
+@@ -861,7 +943,7 @@ EditSpaceView* ShowEditSpaceDialog(BrowserWindowInterface* window,
    if (!model || !model->GetSpace(id) || !base_window) {
      return nullptr;
    }

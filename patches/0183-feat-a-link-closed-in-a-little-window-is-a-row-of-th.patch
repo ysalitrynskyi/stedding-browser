@@ -20,16 +20,16 @@ Why: Arc keeps links closed from Little Arc in its archive, with a
 filter for them (Arc's 2023 release notes).
 Removable when: never; Stedding's own archive.
 ---
- .../browser/resources/stedding_archive/app.ts | 43 ++++++++++---
- chrome/browser/ui/archive/BUILD.gn            |  2 +
- chrome/browser/ui/archive/archived_tabs.cc    | 17 ++++-
- .../ui/archive/archived_tabs_unittest.cc      | 37 +++++++++++
- .../ui/views/commandbar/command_bar_view.cc   |  4 +-
- .../stedding/little_window_browsertest.cc     | 63 ++++++++++++++++++-
- 6 files changed, 154 insertions(+), 12 deletions(-)
+ .../browser/resources/stedding_archive/app.ts | 115 ++++++++++++--
+ chrome/browser/ui/archive/BUILD.gn            |   2 +
+ chrome/browser/ui/archive/archived_tabs.cc    | 147 +++++++++++++++++-
+ .../ui/archive/archived_tabs_unittest.cc      |  37 +++++
+ .../ui/views/commandbar/command_bar_view.cc   |   4 +-
+ .../stedding/little_window_browsertest.cc     |  63 +++++++-
+ 6 files changed, 347 insertions(+), 21 deletions(-)
 
 diff --git a/chrome/browser/resources/stedding_archive/app.ts b/chrome/browser/resources/stedding_archive/app.ts
-index f94eb176a7d8d..5aeae958186c0 100644
+index f94eb176a7d8d..0daec5d8a1907 100644
 --- a/chrome/browser/resources/stedding_archive/app.ts
 +++ b/chrome/browser/resources/stedding_archive/app.ts
 @@ -115,11 +115,20 @@ function hostOf(url: string): string {
@@ -86,10 +86,11 @@ index f94eb176a7d8d..5aeae958186c0 100644
  // The page's own parts, made once: an update redraws the Space menu's
  // choices and the list, and leaves the search field, the focus and the
  // scroll where the reader has them. Every update rebuilt the page and put
-@@ -209,6 +231,13 @@ function renderSpaceMenu(select: HTMLSelectElement) {
+@@ -209,7 +231,23 @@ function renderSpaceMenu(select: HTMLSelectElement) {
    const all = el('option', undefined, 'All Spaces');
    all.value = '';
    const options = [all];
+-  for (const space of spaceChoices()) {
 +  if (state.space === LITTLE_WINDOWS ||
 +      state.tabs.some(tab => tab.closedWith === 'little')) {
 +    const little = el('option', undefined, 'Little windows');
@@ -97,10 +98,88 @@ index f94eb176a7d8d..5aeae958186c0 100644
 +    little.selected = state.space === LITTLE_WINDOWS;
 +    options.push(little);
 +  }
-   for (const space of spaceChoices()) {
++  const choices = spaceChoices();
++  // A deleted Space is a choice only while a row names it. Once the last one
++  // has gone, so has the filter on it: the menu reads "All Spaces", and the
++  // list shows what that says, not "Nothing matches." to every tab closed
++  // from then on (A9).
++  if (state.space && state.space !== LITTLE_WINDOWS &&
++      !choices.some(space => space.id === state.space)) {
++    state.space = '';
++  }
++  for (const space of choices) {
      const option = el('option', undefined, space.markedName || space.name);
      option.value = space.id;
-@@ -263,10 +292,10 @@ function renderList(list: HTMLElement) {
+     option.selected = space.id === state.space;
+@@ -226,9 +264,66 @@ function render() {
+   renderList(list!);
+ }
+ 
++// The local calendar day of `ms` as a number that grows from one day to the
++// next: the day dayOf() names.
++function dayNumber(ms: number): number {
++  const when = new Date(ms);
++  return when.getFullYear() * 10000 + when.getMonth() * 100 + when.getDate();
++}
++
++// A row as the list drew it: the tab it is for, and its buttons, Restore and
++// Forget.
++interface DrawnRow {
++  id: string;
++  buttons: HTMLButtonElement[];
++}
++
++// The list's rows, top to bottom, as it last drew them.
++let drawn: DrawnRow[] = [];
++
++// Which of the rows' buttons has the focus: its row's tab, that row's place
++// and the button's place in it.
++interface RowFocus {
++  id: string;
++  index: number;
++  button: number;
++}
++
++function rowFocus(): RowFocus|null {
++  const active = document.activeElement;
++  for (const [index, row] of drawn.entries()) {
++    const button = row.buttons.findIndex(candidate => candidate === active);
++    if (button >= 0) {
++      return {id: row.id, index, button};
++    }
++  }
++  return null;
++}
++
++// A9: a redraw makes new buttons, and the focus on the old one fell to the
++// page, so the next Tab started again at the top of the list. It goes back
++// to the same button of the same tab's row, or, when that tab has gone
++// (Forget, Restore), of the row now in its place, the last row when it was
++// the last.
++function restoreRowFocus(was: RowFocus|null) {
++  if (!was || drawn.length === 0) {
++    return;
++  }
++  const row = drawn.find(entry => entry.id === was.id) ??
++      drawn[Math.min(was.index, drawn.length - 1)];
++  row?.buttons[was.button]?.focus({preventScroll: true});
++}
++
+ function renderList(list: HTMLElement) {
++  const focused = rowFocus();
+   list.replaceChildren();
+-  const shown = state.tabs.filter(matches);
++  drawn = [];
++  // A9: one heading for each day, newest first. The rows come in the order
++  // of the recently-closed list, where an import puts Arc's rows, with Arc's
++  // dates, behind the person's own closes (import I7); within a day they keep
++  // that order.
++  const shown = state.tabs.filter(matches).sort(
++      (a, b) => dayNumber(b.time) - dayNumber(a.time));
+   if (shown.length === 0) {
+     list.append(el('p', 'empty',
+         state.tabs.length === 0 ? 'Nothing archived yet. Tabs that auto-archive, that Clear closes and that you close land here.' :
+@@ -263,14 +358,16 @@ function renderList(list: HTMLElement) {
      restore.addEventListener('click', () => chrome.send('restoreArchivedTab', [tab.id]));
      row.append(restore);
      // Chromium's list forgets a close made whole as one: the button says so.
@@ -115,6 +194,12 @@ index f94eb176a7d8d..5aeae958186c0 100644
      remove.addEventListener('click', () => chrome.send('removeArchivedTab', [tab.id]));
      row.append(remove);
      list.append(row);
++    drawn.push({id: tab.id, buttons: [restore, remove]});
+   }
++  restoreRowFocus(focused);
+ }
+ 
+ function apply(snapshot: Snapshot) {
 diff --git a/chrome/browser/ui/archive/BUILD.gn b/chrome/browser/ui/archive/BUILD.gn
 index 132176cdc1ab4..790c96dd48598 100644
 --- a/chrome/browser/ui/archive/BUILD.gn
@@ -136,18 +221,137 @@ index 132176cdc1ab4..790c96dd48598 100644
      "//chrome/browser/ui/stedding:prefs",
      "//chrome/browser/ui/stedding:tab_names",
 diff --git a/chrome/browser/ui/archive/archived_tabs.cc b/chrome/browser/ui/archive/archived_tabs.cc
-index ba0753d0ca45e..2a9187c2dbdcb 100644
+index ba0753d0ca45e..9363ee2d27ee4 100644
 --- a/chrome/browser/ui/archive/archived_tabs.cc
 +++ b/chrome/browser/ui/archive/archived_tabs.cc
-@@ -35,6 +35,7 @@
+@@ -28,13 +28,18 @@
+ #include "chrome/browser/sessions/tab_restore_service_factory.h"
+ #include "chrome/browser/ui/archive/archive_mark.h"
+ #include "chrome/browser/ui/browser_init_state.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
++#include "chrome/browser/ui/spaces/pin_store_factory.h"
+ #include "chrome/browser/ui/spaces/space.h"
+ #include "chrome/browser/ui/spaces/space_colors.h"
  #include "chrome/browser/ui/spaces/space_model.h"
++#include "chrome/browser/ui/spaces/space_registry.h"
++#include "chrome/browser/ui/spaces/space_registry_factory.h"
  #include "chrome/browser/ui/spaces/space_storage_partition.h"
  #include "chrome/browser/ui/spaces/tab_space_restore_data.h"
 +#include "chrome/browser/ui/stedding/little_mark.h"
  #include "chrome/browser/ui/stedding/stedding_prefs.h"
  #include "chrome/browser/ui/stedding/tab_names.h"
  #include "chrome/browser/ui/tabs/stedding_folder_session.h"
-@@ -183,6 +184,16 @@ void RefileInFolder(TabStripModel& strip,
+@@ -80,6 +85,34 @@ const spaces::Space* FindSpace(const spaces::SpaceModel& model,
+   return nullptr;
+ }
+ 
++// A9, windows G4: whether the Space `space_id` names is still one of
++// `profile`'s, though the window a restore lands in has no such Space: in
++// the profile's list, or in an open window's list of its own, a Blank
++// Window's. A Blank Window has none of the profile's Spaces, and no other
++// window has a Blank Window's, so such a Space is not a deleted one.
++bool SpaceStillExists(Profile* profile, const std::string& space_id) {
++  const std::optional<base::Token> token = base::Token::FromString(space_id);
++  if (!profile || !token) {
++    return false;
++  }
++  const spaces::SpaceId id = spaces::SpaceId::FromRawToken(*token);
++  if (const spaces::SpaceRegistry* const registry =
++          spaces::SpaceRegistryFactory::GetForProfile(profile);
++      registry && registry->Find(id)) {
++    return true;
++  }
++  bool found = false;
++  ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
++      [&](BrowserWindowInterface* window) {
++        const spaces::SpaceModel* const model =
++            window->GetProfile() == profile ? spaces::SpaceModel::From(window)
++                                            : nullptr;
++        found = model && FindSpace(*model, id);
++        return !found;
++      });
++  return found;
++}
++
+ // The Space `tab` is filed in. Not SpaceForTab(): that files a tab it has not
+ // seen, writes the session and moves a jar, and this runs inside Chromium's
+ // close (PLAN.md WEB-L77). An essential every Space shares counts in the
+@@ -160,29 +193,85 @@ tabs::FolderTabCollection* FindFolder(const tabs::TabCollection& collection,
+   return nullptr;
+ }
+ 
+-// Back into the innermost of the tab's folders that is still in the strip.
+-// A folder that is gone is not made again.
++// Back into the innermost of the tab's folders that is still in the strip
++// and still in `space`, the Space the tab is filed in. A folder that is gone
++// is not made again. One whose tabs are now another Space's -- moved there
++// whole (folders F47), or taken by the Space next to its own when that was
++// deleted (spaces B5) -- is passed over: a folder holds one Space's tabs
++// (F37). A folder pinned before the move stays pinned, and the tab is one of
++// its pins, as for a tab dropped into it (pins H14, folders F38).
+ void RefileInFolder(TabStripModel& strip,
++                    spaces::SpaceModel& model,
++                    const spaces::SpaceId& space,
+                     tabs::TabInterface* tab,
+                     const std::string& path) {
+   if (tab->IsPinned() || tab->IsSplit()) {
+     return;
+   }
+   const std::vector<FolderStep> steps = ParseFolderPath(path);
++  // A folder of the path that has gone to another Space since takes the tab
++  // back no more (folders F37: a move never makes a folder of two Spaces).
++  // The path the restore left on the tab would have the window's folder
++  // rebuild put it there a turn later (FolderSessionService), so it goes, and
++  // a tab the restore dropped between that folder's rows comes out of it.
++  const auto in_another_space = [&](tabs::FolderTabCollection* folder) {
++    return std::ranges::any_of(
++        spaces::SpaceModel::TopLevelFolder(folder)->GetTabsRecursive(),
++        [&](const tabs::TabInterface* other) {
++          const std::optional<spaces::SpaceId> theirs =
++              model.FindSpaceForTab(other);
++          return other != tab && theirs && *theirs != space;
++        });
++  };
++  bool passed_over = false;
++  bool inside_one = false;
++  for (const FolderStep& step : steps) {
++    tabs::FolderTabCollection* const folder =
++        FindFolder(*strip.Root(), step.id);
++    if (folder && in_another_space(folder)) {
++      passed_over = true;
++      inside_one = inside_one ||
++                   std::ranges::contains(folder->GetTabsRecursive(), tab);
++    }
++  }
++  if (passed_over) {
++    tab->GetContents()->RemoveUserData(
++        spaces::FolderRestorePath::UserDataKey());
++    if (inside_one) {
++      strip.MoveTabOutOfFolders(strip.GetIndexOfTab(tab));
++    }
++  }
+   for (auto step = steps.rbegin(); step != steps.rend(); ++step) {
+     tabs::FolderTabCollection* const folder =
+         FindFolder(*strip.Root(), step->id);
+     if (!folder) {
+       continue;
+     }
++    tabs::FolderTabCollection* const top =
++        spaces::SpaceModel::TopLevelFolder(folder);
++    if (in_another_space(top)) {
++      continue;
++    }
++    const bool was_pinned = model.IsFolderSpacePinned(top);
+     if (const int index = strip.GetIndexOfTab(tab);
+-        index != TabStripModel::kNoTab) {
+-      strip.MoveTabsToFolder({index}, folder);
++        index != TabStripModel::kNoTab &&
++        strip.MoveTabsToFolder({index}, folder)) {
++      model.KeepFolderPinned(folder, was_pinned);
+     }
+     return;
    }
  }
  
@@ -164,7 +368,49 @@ index ba0753d0ca45e..2a9187c2dbdcb 100644
  // A14 (web apps Wa12): an installed app's window, or a little window an app
  // opened. Its tabs are the app's, in the app's jar: ⇧⌘T brings the window
  // back as the app's, while the archive's Restore would put a page of it in
-@@ -794,9 +805,13 @@ std::vector<ArchivedTab> ListArchivedTabs(
+@@ -498,6 +587,11 @@ void PopulateArchiveExtraData(tabs::TabInterface* tab,
+   if (std::string folders = FolderPathForTab(tab); !folders.empty()) {
+     (*extra_data)[kArchiveFolderPathKey] = std::move(folders);
+   }
++  // windows G2, G16: a tab of one of the profile's pins or essentials, which
++  // the profile keeps whatever this window does.
++  if (spaces::IsTabOfPinRecord(tab)) {
++    (*extra_data)[kArchiveProfilePinKey] = "1";
++  }
+   const spaces::SpaceModel* const model =
+       spaces::SpaceModel::From(tab->GetBrowserWindowInterface());
+   const std::optional<spaces::SpaceId> space =
+@@ -524,6 +618,29 @@ void PopulateArchiveExtraData(tabs::TabInterface* tab,
+ }
+ 
+ NextLaunch NextLaunchReopens(BrowserWindowInterface* closing) {
++  // little E8, E13: a little window the session keeps. Every close of one is
++  // recorded, a quit's too, and the launch after a quit brings it back when
++  // that launch continues where this one left off, or after a restart. With
++  // the New Tab page or specific pages it stays closed (windows G10), and any
++  // other close of one leaves it closed.
++  if (closing &&
++      closing->GetType() == BrowserWindowInterface::Type::TYPE_POPUP &&
++      closing->GetFeatures().little_window()) {
++    Profile* const profile = closing->GetProfile();
++    if (!profile || profile->IsOffTheRecord() ||
++        BrowserInitState::From(closing)->omit_from_session_restore() ||
++        !browser_shutdown::IsTryingToQuit()) {
++      return NextLaunch::kLeavesItClosed;
++    }
++    const PrefService* const local_state =
++        g_browser_process ? g_browser_process->local_state() : nullptr;
++    return SessionStartupPref::GetStartupPref(profile)
++                       .ShouldRestoreLastSession() ||
++                   (local_state && local_state->GetBoolean(
++                                       ::prefs::kRestartLastSessionOnShutdown))
++               ? NextLaunch::kReopensIt
++               : NextLaunch::kLeavesItClosed;
++  }
+   if (!closing ||
+       closing->GetType() != BrowserWindowInterface::Type::TYPE_NORMAL ||
+       BrowserInitState::From(closing)->omit_from_session_restore()) {
+@@ -794,9 +911,19 @@ std::vector<ArchivedTab> ListArchivedTabs(
          const base::Time closed = window.timestamp.is_null()
                                        ? newest_page(window)
                                        : window.timestamp;
@@ -175,10 +421,40 @@ index ba0753d0ca45e..2a9187c2dbdcb 100644
          for (const std::unique_ptr<sessions::tab_restore::Tab>& tab :
               window.tabs) {
 -          add(*tab, time_of(*tab, closed), "window", window.tabs.size());
++          // windows G16: the window's tab of one of the profile's pins or
++          // essentials. Every other window still has that pin, and a new
++          // window gets it, so the close closed none of it.
++          if (tab->extra_data.contains(kArchiveProfilePinKey)) {
++            continue;
++          }
 +          add(*tab, time_of(*tab, closed), closed_with, window.tabs.size());
          }
          break;
        }
+@@ -977,8 +1104,12 @@ bool RestoreArchivedTab(BrowserWindowInterface* browser,
+   const bool essential = tab->IsPinned();
+   if (model && !essential) {
+     // A deleted Space comes back by its own name, now that its tab has (A9).
+-    // An unnamed one does not: a new "Space N" would be another Space.
+-    if (!target && !own_name.empty()) {
++    // An unnamed one does not: a new "Space N" would be another Space. Nor
++    // does one this window lacks but the profile still has: a Space of the
++    // profile's restored in a Blank Window, or a Blank Window's in another
++    // window (windows G4). The tab stays in the Space on screen.
++    if (!target && !own_name.empty() &&
++        !SpaceStillExists(browser->GetProfile(), space_id)) {
+       const SkColor color =
+           spaces::kSpaceColors.at(model->size() % spaces::kSpaceColors.size())
+               .color;
+@@ -996,7 +1127,7 @@ bool RestoreArchivedTab(BrowserWindowInterface* browser,
+     // after the tab is shown (PLAN.md WEB-F19). A tab restored into the Space
+     // it was closed in is already there, and this does nothing.
+     spaces::RebindTabToSpaceJar(&strip, tab, model->registry(), *target);
+-    RefileInFolder(strip, tab, folders);
++    RefileInFolder(strip, *model, *target, tab, folders);
+   }
+   // Shown once: the tab, then its Space, which then has nothing to settle
+   // (PLAN.md WEB-L81). An essential is in every Space and changes none.
 diff --git a/chrome/browser/ui/archive/archived_tabs_unittest.cc b/chrome/browser/ui/archive/archived_tabs_unittest.cc
 index b20e92d1af7e7..a9eaaa5783d0e 100644
 --- a/chrome/browser/ui/archive/archived_tabs_unittest.cc

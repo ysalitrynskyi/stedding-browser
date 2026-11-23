@@ -42,8 +42,8 @@ Removable when: never.
  chrome/browser/ui/views/peek/BUILD.gn         |  11 +-
  .../ui/views/peek/peek_navigation_throttle.cc |  32 ++-
  .../ui/views/peek/peek_navigation_throttle.h  |   9 +
- chrome/browser/ui/views/peek/peek_press.cc    | 138 +++++++++++++
- chrome/browser/ui/views/peek/peek_press.h     |  74 +++++++
+ chrome/browser/ui/views/peek/peek_press.cc    | 137 +++++++++++++
+ chrome/browser/ui/views/peek/peek_press.h     |  85 ++++++++
  chrome/browser/ui/views/peek/peek_unittest.cc |  28 ++-
  .../common/stedding_tab_row_rules_unittest.cc |  10 +-
  .../browser/ui/webui/settings/settings_ui.cc  |  11 +-
@@ -51,7 +51,7 @@ Removable when: never.
  .../stedding_welcome_handler_unittest.cc      |  65 +++++++
  chrome/test/stedding/peek_browsertest.cc      |  53 +++++
  chrome/test/stedding/welcome_browsertest.cc   | 183 ++++++++++++++++--
- 24 files changed, 769 insertions(+), 55 deletions(-)
+ 24 files changed, 779 insertions(+), 55 deletions(-)
  create mode 100644 chrome/browser/ui/views/peek/peek_press.cc
  create mode 100644 chrome/browser/ui/views/peek/peek_press.h
 
@@ -543,10 +543,10 @@ index c3e12fd10a1b8..b8dd18c68a3f1 100644
  // True when a navigation with `signals` from `from` to `to` should open in a
 diff --git a/chrome/browser/ui/views/peek/peek_press.cc b/chrome/browser/ui/views/peek/peek_press.cc
 new file mode 100644
-index 0000000000000..4eaf7cf4fa8af
+index 0000000000000..02bb70cfaf25a
 --- /dev/null
 +++ b/chrome/browser/ui/views/peek/peek_press.cc
-@@ -0,0 +1,138 @@
+@@ -0,0 +1,137 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -598,12 +598,12 @@ index 0000000000000..4eaf7cf4fa8af
 +PeekPress::PeekPress(content::WebContents* contents)
 +    : content::WebContentsObserver(contents),
 +      content::WebContentsUserData<PeekPress>(*contents) {
-+  Watch(contents->GetPrimaryMainFrame());
++  // The page may hold its frames already: contents made before the tab.
++  contents->ForEachRenderFrameHost(
++      [this](content::RenderFrameHost* host) { Watch(host); });
 +}
 +
-+PeekPress::~PeekPress() {
-+  Unwatch();
-+}
++PeekPress::~PeekPress() = default;
 +
 +std::optional<base::TimeDelta> PeekPress::LastPressBefore(
 +    base::TimeTicks now) const {
@@ -643,42 +643,41 @@ index 0000000000000..4eaf7cf4fa8af
 +  }
 +}
 +
++// peek P18: a frame from another site gets a widget of its own, and a press
++// on it reaches that widget alone; the press is the last one anywhere on the
++// page.
++void PeekPress::RenderFrameCreated(content::RenderFrameHost* host) {
++  Watch(host);
++}
++
 +void PeekPress::RenderFrameHostChanged(content::RenderFrameHost* old_host,
 +                                       content::RenderFrameHost* new_host) {
-+  if (new_host && new_host->IsInPrimaryMainFrame()) {
-+    Watch(new_host);
-+  }
++  Watch(new_host);
 +}
 +
 +void PeekPress::RenderWidgetHostDestroyed(content::RenderWidgetHost* widget) {
-+  if (widget == watched_) {
-+    Unwatch();
-+  }
++  Unwatch(widget);
 +}
 +
 +void PeekPress::WebContentsDestroyed() {
-+  Unwatch();
++  input_observations_.RemoveAllObservations();
++  widget_observations_.RemoveAllObservations();
 +}
 +
 +void PeekPress::Watch(content::RenderFrameHost* host) {
 +  content::RenderWidgetHost* const widget =
 +      host ? host->GetRenderWidgetHost() : nullptr;
-+  if (widget == watched_) {
++  if (!widget || widget_observations_.IsObservingSource(widget)) {
 +    return;
 +  }
-+  Unwatch();
-+  if (widget) {
-+    widget->AddInputEventObserver(this);
-+    widget->AddObserver(this);
-+    watched_ = widget;
-+  }
++  input_observations_.AddObservation(widget);
++  widget_observations_.AddObservation(widget);
 +}
 +
-+void PeekPress::Unwatch() {
-+  if (watched_) {
-+    watched_->RemoveInputEventObserver(this);
-+    watched_->RemoveObserver(this);
-+    watched_ = nullptr;
++void PeekPress::Unwatch(content::RenderWidgetHost* widget) {
++  if (widget && widget_observations_.IsObservingSource(widget)) {
++    input_observations_.RemoveObservation(widget);
++    widget_observations_.RemoveObservation(widget);
 +  }
 +}
 +
@@ -687,10 +686,10 @@ index 0000000000000..4eaf7cf4fa8af
 +}  // namespace stedding
 diff --git a/chrome/browser/ui/views/peek/peek_press.h b/chrome/browser/ui/views/peek/peek_press.h
 new file mode 100644
-index 0000000000000..fda78d3c15663
+index 0000000000000..084c40259484c
 --- /dev/null
 +++ b/chrome/browser/ui/views/peek/peek_press.h
-@@ -0,0 +1,74 @@
+@@ -0,0 +1,85 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -700,7 +699,7 @@ index 0000000000000..fda78d3c15663
 +
 +#include <optional>
 +
-+#include "base/memory/raw_ptr.h"
++#include "base/scoped_multi_source_observation.h"
 +#include "base/time/time.h"
 +#include "content/public/browser/render_widget_host.h"
 +#include "content/public/browser/render_widget_host_observer.h"
@@ -716,8 +715,9 @@ index 0000000000000..fda78d3c15663
 +// docs/features/peek.md P18: how long the user held the mouse button down on
 +// a page for the click it navigates with. Settings › Stedding's "Open a peek
 +// with" can ask for a held press; a plain click then follows the link in the
-+// pinned tab as before. Kept from the input the page's main frame receives:
-+// the left button's down and its up.
++// pinned tab as before. Kept from the input the page's frames receive, the
++// main frame's and a frame's from another site, each at a widget of its own:
++// the left button's down and its up, wherever on the page the last press was.
 +class PeekPress : public content::WebContentsObserver,
 +                  public content::WebContentsUserData<PeekPress>,
 +                  public content::RenderWidgetHost::InputEventObserver,
@@ -741,6 +741,7 @@ index 0000000000000..fda78d3c15663
 +  void RenderWidgetHostDestroyed(content::RenderWidgetHost* widget) override;
 +
 +  // content::WebContentsObserver:
++  void RenderFrameCreated(content::RenderFrameHost* host) override;
 +  void RenderFrameHostChanged(content::RenderFrameHost* old_host,
 +                              content::RenderFrameHost* new_host) override;
 +  void WebContentsDestroyed() override;
@@ -750,12 +751,21 @@ index 0000000000000..fda78d3c15663
 +
 +  explicit PeekPress(content::WebContents* contents);
 +
-+  // The main frame's widget is the one watched; a new document may bring a
-+  // new one, and the old one may go before the page does.
++  // Every frame's widget is watched: the main frame's, and the own widget of
++  // each frame in another process (a frame from another site), which alone
++  // receives the input over that frame. A frame in its parent's process
++  // shares its parent's widget. A new document may bring a new one, and an
++  // old one may go before the page does.
 +  void Watch(content::RenderFrameHost* host);
-+  void Unwatch();
++  void Unwatch(content::RenderWidgetHost* widget);
 +
-+  raw_ptr<content::RenderWidgetHost> watched_ = nullptr;
++  base::ScopedMultiSourceObservation<
++      content::RenderWidgetHost,
++      content::RenderWidgetHost::InputEventObserver>
++      input_observations_{this};
++  base::ScopedMultiSourceObservation<content::RenderWidgetHost,
++                                     content::RenderWidgetHostObserver>
++      widget_observations_{this};
 +  base::TimeTicks down_;
 +  base::TimeTicks up_;
 +

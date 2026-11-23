@@ -112,10 +112,10 @@ if ($version -notmatch '^(\d+)\.(\d+)\.(\d+)(-beta\.(\d+))?$') { throw "VERSION 
 $productMajor = [int]$Matches[1]; $productMinor = [int]$Matches[2]; $productPatch = [int]$Matches[3]
 $beta = if ($Matches[5]) { [int]$Matches[5] } else { 999 }
 # The Mac's CFBundleVersion has less room (_SteddingBundleVersion in
-# build/apple/tweak_info_plist.py: patch up to 9, beta 1 to 998), so a VERSION the Mac cannot
-# build is refused here too, not first found at the Mac's release.
-if ($productMinor -gt 99 -or $productPatch -gt 9 -or ($Matches[5] -and ($beta -lt 1 -or $beta -ge 999)) -or (100 * $productMajor + $productMinor) -gt 65535) {
-  throw "VERSION '$version' does not fit the Windows version's fields and the Mac's CFBundleVersion (minor up to 99, patch up to 9, beta 1 to 998)"
+# build/apple/tweak_info_plist.py: minor and patch up to 99, beta 1 to 998), so a VERSION the
+# Mac cannot build is refused here too, not first found at the Mac's release.
+if ($productMinor -gt 99 -or $productPatch -gt 99 -or ($Matches[5] -and ($beta -lt 1 -or $beta -ge 999)) -or (100 * $productMajor + $productMinor) -gt 65535) {
+  throw "VERSION '$version' does not fit the Windows version's fields and the Mac's CFBundleVersion (minor up to 99, patch up to 99, beta 1 to 998)"
 }
 $windowsVersion = "$milestone.$(100 * $productMajor + $productMinor).$productPatch.$beta"
 $versionText = "MAJOR=$milestone`nMINOR=$(100 * $productMajor + $productMinor)`nBUILD=$productPatch`nPATCH=$beta`nCHROMIUM_VERSION=$chromiumVersion`n"

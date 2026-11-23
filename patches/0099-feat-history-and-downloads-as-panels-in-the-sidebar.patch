@@ -34,10 +34,10 @@ sidebar's column.
  .../stedding_page/stedding_page.html.ts       |   7 +
  .../resources/stedding_library/BUILD.gn       |  41 +
  .../resources/stedding_library/app.css        | 293 ++++++
- .../browser/resources/stedding_library/app.ts |  71 ++
+ .../browser/resources/stedding_library/app.ts |  76 ++
  .../resources/stedding_library/common.ts      | 173 ++++
- .../stedding_library/downloads_panel.ts       | 334 ++++++
- .../stedding_library/history_panel.ts         | 241 +++++
+ .../stedding_library/downloads_panel.ts       | 425 ++++++++
+ .../stedding_library/history_panel.ts         | 314 ++++++
  .../stedding_library/stedding_library.html    |  26 +
  chrome/browser/ui/BUILD.gn                    |   2 +
  .../browser/ui/browser_command_controller.cc  |  16 +
@@ -54,13 +54,13 @@ sidebar's column.
  chrome/browser/ui/stedding/sidebar_panels.cc  | 151 +++
  chrome/browser/ui/stedding/sidebar_panels.h   | 134 +++
  .../ui/stedding/sidebar_panels_unittest.cc    | 158 +++
- .../ui/stedding/sidebar_panels_view.cc        | 192 ++++
+ .../ui/stedding/sidebar_panels_view.cc        | 195 ++++
  .../browser/ui/stedding/sidebar_panels_view.h |  67 ++
  chrome/browser/ui/stedding/stedding_prefs.cc  |   2 +
  chrome/browser/ui/stedding/stedding_prefs.h   |   5 +
  .../ui/stedding/stedding_prefs_unittest.cc    |   4 +
  chrome/browser/ui/views/download/BUILD.gn     |   2 +
- .../bubble/download_toolbar_ui_controller.cc  |  51 +-
+ .../bubble/download_toolbar_ui_controller.cc  |  57 +-
  .../bubble/download_toolbar_ui_controller.h   |   8 +
  chrome/browser/ui/views/frame/BUILD.gn        |   7 +-
  .../views/frame/browser_native_widget_mac.mm  |   5 +-
@@ -88,7 +88,7 @@ sidebar's column.
  .../stedding/sidebar_panels_browsertest.cc    | 956 ++++++++++++++++++
  .../test/stedding/sidebar_rail_browsertest.cc |   3 +
  tools/gritsettings/resource_ids.spec          |   5 +
- 63 files changed, 5610 insertions(+), 31 deletions(-)
+ 63 files changed, 5787 insertions(+), 32 deletions(-)
  create mode 100644 chrome/app/vector_icons/stedding_archive_box.icon
  create mode 100644 chrome/browser/resources/stedding_library/BUILD.gn
  create mode 100644 chrome/browser/resources/stedding_library/app.css
@@ -613,10 +613,10 @@ index 0000000000000..9545cdc59933d
 +}
 diff --git a/chrome/browser/resources/stedding_library/app.ts b/chrome/browser/resources/stedding_library/app.ts
 new file mode 100644
-index 0000000000000..6136519753950
+index 0000000000000..b0cd5c20107ac
 --- /dev/null
 +++ b/chrome/browser/resources/stedding_library/app.ts
-@@ -0,0 +1,71 @@
+@@ -0,0 +1,76 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -665,9 +665,14 @@ index 0000000000000..6136519753950
 +  close.addEventListener('click', () => closePanel());
 +
 +  // Pn5: Escape closes an open row menu first, then the panel; the focus
-+  // goes back to the page.
++  // goes back to the page. An Escape that ends an input method's composition
++  // in the search field is the input method's: the Mac hands it on as a key
++  // the input method took (key code 229), its key still "Escape". Escape
++  // with a modifier is a chord, and the window's (Pn1): Shift+Esc opens the
++  // task manager on Windows.
 +  document.addEventListener('keydown', e => {
-+    if (e.key !== 'Escape') {
++    if (e.key !== 'Escape' || e.isComposing || e.keyCode === 229 ||
++        e.shiftKey || e.ctrlKey || e.altKey || e.metaKey) {
 +      return;
 +    }
 +    e.preventDefault();
@@ -869,10 +874,10 @@ index 0000000000000..d57d5f57d4985
 +}
 diff --git a/chrome/browser/resources/stedding_library/downloads_panel.ts b/chrome/browser/resources/stedding_library/downloads_panel.ts
 new file mode 100644
-index 0000000000000..87f7cca72fb0d
+index 0000000000000..f00233e7050f4
 --- /dev/null
 +++ b/chrome/browser/resources/stedding_library/downloads_panel.ts
-@@ -0,0 +1,334 @@
+@@ -0,0 +1,425 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -919,6 +924,8 @@ index 0000000000000..87f7cca72fb0d
 +  // Ids whose Move to Trash failed: the row says so (Pn11).
 +  private trashFailed_ = new Set<string>();
 +  private renderPending_ = false;
++  // The rows drawn, by download id, each with the shape it was drawn for.
++  private rows_ = new Map<string, {shape: string, row: HTMLElement}>();
 +  // Pn9: the list comes twenty rows at a time, the next twenty when asked
 +  // again with the same terms, as the Downloads page asks while it scrolls.
 +  private terms_: string[] = [];
@@ -1010,13 +1017,29 @@ index 0000000000000..87f7cca72fb0d
 +    });
 +  }
 +
++  // Pn9: a download in progress is updated about twice a second. A row whose
++  // shape is as it was stays on the page, its text and progress changed in
++  // place, and the list's children are replaced only when they change:
++  // Blink sends no click when the pressed button left the page before the
++  // release, so a row drawn anew under a press lost the click.
 +  private render_() {
-+    // Keep the focus on the row it was on, across the redraw.
++    // Keep the focus on the row and the control it was on, across a redraw
++    // that replaces the list: by every class of the control, as Pause and
++    // Cancel share their first.
++    const focused = document.activeElement;
 +    const focusedId =
-+        (document.activeElement?.closest('.row') as HTMLElement | null)
-+            ?.dataset['id'];
-+    const focusedClass = document.activeElement?.className || '';
++        (focused?.closest('.row') as HTMLElement | null)?.dataset['id'];
++    const focusedSelector = focused ?
++        Array.from(focused.classList).map(c => `.${CSS.escape(c)}`).join('') :
++        '';
 +
++    const drawn = this.rows_;
++    this.rows_ = new Map();
++    const headings = new Map<string, HTMLElement>();
++    for (const heading of this.list_.querySelectorAll<HTMLElement>(
++             ':scope > h2.day')) {
++      headings.set(heading.textContent || '', heading);
++    }
 +    const nodes: HTMLElement[] = [];
 +    let day = '';
 +    // Newest first, as the list comes.
@@ -1024,23 +1047,93 @@ index 0000000000000..87f7cca72fb0d
 +      const label = dayLabel(new Date(data.started * 1000));
 +      if (label !== day) {
 +        day = label;
-+        nodes.push(el('h2', 'day', day));
++        nodes.push(headings.get(day) || el('h2', 'day', day));
++        headings.delete(day);
 +      }
-+      nodes.push(this.row_(data));
++      const shape = this.shape_(data);
++      const kept = drawn.get(data.id);
++      let row: HTMLElement;
++      if (kept && kept.shape === shape && !this.rows_.has(data.id)) {
++        row = kept.row;
++        this.update_(row, data);
++      } else {
++        row = this.row_(data);
++      }
++      this.rows_.set(data.id, {shape, row});
++      nodes.push(row);
 +    }
-+    this.list_.replaceChildren(...nodes);
++    const children = this.list_.children;
++    const changed = children.length !== nodes.length ||
++        nodes.some((node, i) => node !== children[i]);
++    if (changed) {
++      this.list_.replaceChildren(...nodes);
++    }
 +    this.empty_.hidden = this.items_.length > 0;
 +    this.empty_.textContent =
 +        str(this.search_.value.trim() ? 'noDownloadsFound' : 'noDownloads');
 +
-+    if (focusedId) {
++    if (changed && focusedId) {
 +      const row = this.list_.querySelector<HTMLElement>(
 +          `.row[data-id="${CSS.escape(focusedId)}"]`);
-+      const target = focusedClass ?
-+          row?.querySelector<HTMLElement>(
-+              `.${CSS.escape(focusedClass.split(' ')[0] || '')}`) :
++      const target = focusedSelector ?
++          row?.querySelector<HTMLElement>(focusedSelector) :
 +          null;
 +      (target || row?.querySelector<HTMLElement>('.row-main'))?.focus();
++    }
++  }
++
++  // What a row is drawn from beyond the line under the name and the
++  // progress: a change to any of these draws the row anew. Its buttons and
++  // its menu read nothing else of the download but its id.
++  private shape_(data: Data): string {
++    return JSON.stringify([
++      data.state,
++      isDangerous(data),
++      data.fileExternallyRemoved,
++      this.trashFailed_.has(data.id),
++      data.resume,
++      data.retry,
++      data.fileName,
++      data.filePath,
++    ]);
++  }
++
++  // The line under the file's name.
++  private subtitle_(data: Data): string {
++    const finished = data.state === State.kComplete;
++    if (isDangerous(data)) {
++      return str('dangerous');
++    }
++    if (isActive(data)) {
++      return data.progressStatusText;
++    }
++    if (finished && data.fileExternallyRemoved) {
++      return str('fileRemoved');
++    }
++    if (finished && this.trashFailed_.has(data.id)) {
++      return str('trashFailed');
++    }
++    if (finished) {
++      return data.sinceString || data.dateString;
++    }
++    // Cancelled or interrupted: the reason, as the Downloads page says it.
++    return data.lastReasonText;
++  }
++
++  // What a download's updates change in a row kept across a redraw.
++  private update_(row: HTMLElement, data: Data) {
++    const subtitle = row.querySelector<HTMLElement>('.subtitle');
++    const text = this.subtitle_(data);
++    if (subtitle && subtitle.textContent !== text) {
++      subtitle.textContent = text;
++    }
++    const progress = row.querySelector<HTMLProgressElement>('.progress');
++    if (progress) {
++      if (data.percent >= 0) {
++        progress.value = data.percent;
++      } else {
++        progress.removeAttribute('value');
++      }
 +    }
 +  }
 +
@@ -1066,25 +1159,18 @@ index 0000000000000..87f7cca72fb0d
 +    const text = el('span', 'text');
 +    const title = el('span', 'title', data.fileName);
 +    text.append(title);
-+    if (dangerous) {
-+      text.append(el('span', 'subtitle warning', str('dangerous')));
-+    } else if (active) {
-+      text.append(el('span', 'subtitle', data.progressStatusText));
++    const warning = dangerous ||
++        (finished && !removed && this.trashFailed_.has(data.id));
++    text.append(el(
++        'span', warning ? 'subtitle warning' : 'subtitle',
++        this.subtitle_(data)));
++    if (active && !dangerous) {
 +      const progress = el('progress', 'progress');
 +      progress.max = 100;
 +      if (data.percent >= 0) {
 +        progress.value = data.percent;
 +      }
 +      text.append(progress);
-+    } else if (finished && removed) {
-+      text.append(el('span', 'subtitle', str('fileRemoved')));
-+    } else if (finished && this.trashFailed_.has(data.id)) {
-+      text.append(el('span', 'subtitle warning', str('trashFailed')));
-+    } else if (finished) {
-+      text.append(el('span', 'subtitle', data.sinceString || data.dateString));
-+    } else {
-+      // Cancelled or interrupted: the reason, as the Downloads page says it.
-+      text.append(el('span', 'subtitle', data.lastReasonText));
 +    }
 +    main.append(icon, text);
 +    row.append(main);
@@ -1176,6 +1262,16 @@ index 0000000000000..87f7cca72fb0d
 +        });
 +      }
 +    }
++    // Pn9: a download interrupted by the network, the server or a crash
++    // that Chromium can go on with at the user's word, as the Downloads page
++    // offers it. Retry is for one that cannot go on.
++    if (data.state === State.kInterrupted && data.resume) {
++      items.push({
++        action: 'resume',
++        label: str('resume'),
++        run: () => handler.resume(data.id),
++      });
++    }
 +    if (data.retry) {
 +      items.push({
 +        action: 'retry',
@@ -1209,10 +1305,10 @@ index 0000000000000..87f7cca72fb0d
 +}
 diff --git a/chrome/browser/resources/stedding_library/history_panel.ts b/chrome/browser/resources/stedding_library/history_panel.ts
 new file mode 100644
-index 0000000000000..94fdd664e8baa
+index 0000000000000..169b8b9f51c4e
 --- /dev/null
 +++ b/chrome/browser/resources/stedding_library/history_panel.ts
-@@ -0,0 +1,241 @@
+@@ -0,0 +1,314 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -1230,7 +1326,17 @@ index 0000000000000..94fdd664e8baa
 +import {getFaviconForPageURL} from 'chrome://resources/js/icon.js';
 +
 +import type {MenuItem} from './common.js';
-+import {debounce, el, flag, menuButton, openingFor, openUrl, SEARCH_PAUSE_MS, showMenu, str} from './common.js';
++import {dayLabel, debounce, el, flag, menuButton, openingFor, openUrl, SEARCH_PAUSE_MS, showMenu, str} from './common.js';
++
++// A search reaches back over years: a day of another year says its year, as
++// the browse list's headings (dateRelativeDay) do.
++function searchDay(when: Date): string {
++  return when.getFullYear() === new Date().getFullYear() ?
++      dayLabel(when) :
++      when.toLocaleDateString(
++          undefined,
++          {weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'});
++}
 +
 +// Pn6: rows per page of the query.
 +const PAGE_SIZE = 50;
@@ -1248,6 +1354,8 @@ index 0000000000000..94fdd664e8baa
 +  private entries_: HistoryEntry[] = [];
 +  private finished_ = false;
 +  private loading_ = false;
++  // The day of the last heading drawn: the next rows of that day join it.
++  private day_ = '';
 +  // Counts the queries, so the answer to an older one is dropped.
 +  private generation_ = 0;
 +  private range_ = 'all';
@@ -1307,9 +1415,14 @@ index 0000000000000..94fdd664e8baa
 +
 +  // A new search or range starts at the top of its list; history deleted
 +  // elsewhere, which asks again for the same list, keeps the reader's place.
++  // It loads page after page until the list is as long as it was, so the
++  // place kept is on the rows that were being read, past the first fifty too.
++  // Every page is fifty rows: the history service keeps a query's count for
++  // each page after it (Pn6).
 +  private async query_(keepPlace = false) {
 +    const generation = ++this.generation_;
 +    this.loading_ = true;
++    const wanted = keepPlace ? this.entries_.length : 0;
 +    const beginTime =
 +        await sendWithPromise<number|null>('rangeStart', this.range_);
 +    if (generation !== this.generation_) {
@@ -1322,8 +1435,21 @@ index 0000000000000..94fdd664e8baa
 +    if (generation !== this.generation_) {
 +      return;
 +    }
-+    this.entries_ = results.value;
-+    this.finished_ = !results.info || results.info.finished;
++    let entries = results.value;
++    let finished = !results.info || results.info.finished;
++    while (!finished && entries.length < wanted) {
++      const {results: next} = await this.handler_.queryHistoryContinuation();
++      if (generation !== this.generation_) {
++        return;
++      }
++      if (next.value.length === 0) {
++        break;
++      }
++      entries = entries.concat(next.value);
++      finished = !next.info || next.info.finished;
++    }
++    this.entries_ = entries;
++    this.finished_ = finished;
 +    this.loading_ = false;
 +    this.render_();
 +    if (!keepPlace) {
@@ -1346,10 +1472,14 @@ index 0000000000000..94fdd664e8baa
 +    if (generation !== this.generation_) {
 +      return;
 +    }
-+    this.entries_ = this.entries_.concat(results.value);
++    const added = results.value;
++    this.entries_ = this.entries_.concat(added);
 +    this.finished_ = !results.info || results.info.finished;
 +    this.loading_ = false;
-+    this.render_();
++    // The next rows join the end of the list and the rows drawn stay as they
++    // are: the row the keyboard is on keeps the focus, and the next Tab goes
++    // on from it.
++    this.draw_(added);
 +    // Still at the end, as after a scroll made while this page loaded: the
 +    // next one comes too.
 +    if (this.nearEnd_()) {
@@ -1363,21 +1493,57 @@ index 0000000000000..94fdd664e8baa
 +    return list.scrollTop + list.clientHeight >= list.scrollHeight - 200;
 +  }
 +
++  // Draws the whole list anew.
 +  private render_() {
-+    const groups: HTMLElement[] = [];
-+    let day = '';
-+    for (const entry of this.entries_) {
-+      if (entry.dateRelativeDay !== day) {
-+        day = entry.dateRelativeDay;
-+        const heading = el('h2', 'day', day);
-+        groups.push(heading);
-+      }
-+      groups.push(this.row_(entry));
-+    }
-+    this.list_.replaceChildren(...groups, this.sentinel_);
++    // Keep the focus on the row and the control it was on, across the
++    // redraw, as the Downloads panel does: by the row's page and day, and by
++    // every class of the control. The list stays where it is.
++    const focused = document.activeElement;
++    const focusedRow = focused?.closest('#list .row') as HTMLElement | null;
++    const focusedUrl = focusedRow?.dataset['url'];
++    const focusedDay = focusedRow?.dataset['day'];
++    const focusedSelector = focused ?
++        Array.from(focused.classList).map(c => `.${CSS.escape(c)}`).join('') :
++        '';
++
++    this.day_ = '';
++    this.list_.replaceChildren(this.sentinel_);
++    this.draw_(this.entries_);
 +    this.empty_.hidden = this.entries_.length > 0;
 +    this.empty_.textContent =
 +        str(this.search_.value.trim() ? 'noHistoryFound' : 'noHistory');
++
++    if (focusedUrl !== undefined) {
++      const row =
++          Array.from(this.list_.querySelectorAll<HTMLElement>('.row'))
++              .find(
++                  candidate => candidate.dataset['url'] === focusedUrl &&
++                      candidate.dataset['day'] === focusedDay);
++      const target = focusedSelector ?
++          row?.querySelector<HTMLElement>(focusedSelector) :
++          null;
++      (target || row?.querySelector<HTMLElement>('.row-main'))
++          ?.focus({preventScroll: true});
++    }
++  }
++
++  // Draws `entries` at the end of the list, each under its day's heading.
++  private draw_(entries: HistoryEntry[]) {
++    const nodes: HTMLElement[] = [];
++    for (const entry of entries) {
++      // Pn6: Chromium leaves a search result's day and time empty, as its
++      // History page lists a search ungrouped; the panel names them from the
++      // visit's time, as it names the Downloads panel's days.
++      const label = entry.dateRelativeDay || searchDay(new Date(entry.time));
++      if (label !== this.day_) {
++        this.day_ = label;
++        nodes.push(el('h2', 'day', label));
++      }
++      const row = this.row_(entry);
++      row.dataset['day'] = label;
++      nodes.push(row);
++    }
++    this.sentinel_.before(...nodes);
 +  }
 +
 +  private row_(entry: HistoryEntry): HTMLElement {
@@ -1394,7 +1560,10 @@ index 0000000000000..94fdd664e8baa
 +    text.append(
 +        el('span', 'title', entry.title || entry.url),
 +        el('span', 'subtitle', entry.domain));
-+    main.append(icon, text, el('span', 'time', entry.dateTimeOfDay));
++    const time = entry.dateTimeOfDay ||
++        new Date(entry.time).toLocaleTimeString(
++            undefined, {hour: 'numeric', minute: '2-digit'});
++    main.append(icon, text, el('span', 'time', time));
 +    main.addEventListener('click', e => {
 +      openUrl(entry.url, openingFor(e));
 +    });
@@ -2801,10 +2970,10 @@ index 0000000000000..d21aebbf93965
 +}  // namespace stedding
 diff --git a/chrome/browser/ui/stedding/sidebar_panels_view.cc b/chrome/browser/ui/stedding/sidebar_panels_view.cc
 new file mode 100644
-index 0000000000000..9b12e8ccce631
+index 0000000000000..b2c5b53410e6a
 --- /dev/null
 +++ b/chrome/browser/ui/stedding/sidebar_panels_view.cc
-@@ -0,0 +1,192 @@
+@@ -0,0 +1,195 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -2870,9 +3039,12 @@ index 0000000000000..9b12e8ccce631
 +      content::WebContents* source,
 +      const input::NativeWebKeyboardEvent& event) override {
 +    // Pn5: Escape the page did not take closes the panel. The sidebar drops
-+    // this view later, never under this call.
++    // this view later, never under this call. Escape with a modifier is a
++    // chord, and goes on to the window below (Pn1): Shift+Esc opens the task
++    // manager on Windows.
 +    if (event.GetType() == input::NativeWebKeyboardEvent::Type::kRawKeyDown &&
-+        event.windows_key_code == ui::VKEY_ESCAPE) {
++        event.windows_key_code == ui::VKEY_ESCAPE &&
++        (event.GetModifiers() & blink::WebInputEvent::kInputModifiers) == 0) {
 +      if (close_) {
 +        close_.Run();
 +      }
@@ -3128,7 +3300,7 @@ index eba3af23a2748..ec0c6c6719ab0 100644
        "//components/constrained_window",
        "//components/feature_engagement/public:feature_constants",
 diff --git a/chrome/browser/ui/views/download/bubble/download_toolbar_ui_controller.cc b/chrome/browser/ui/views/download/bubble/download_toolbar_ui_controller.cc
-index 9d4655b26941e..49ed7a871e3ec 100644
+index 9d4655b26941e..3b3c9d1bb31c7 100644
 --- a/chrome/browser/ui/views/download/bubble/download_toolbar_ui_controller.cc
 +++ b/chrome/browser/ui/views/download/bubble/download_toolbar_ui_controller.cc
 @@ -33,6 +33,7 @@ DEFINE_USER_DATA(DownloadToolbarUIController);
@@ -3147,7 +3319,20 @@ index 9d4655b26941e..49ed7a871e3ec 100644
    stedding_anchor_view_ = nullptr;
    browser_view_ = nullptr;
  }
-@@ -326,6 +328,14 @@ void DownloadToolbarUIController::ShowDetails() {
+@@ -269,7 +271,11 @@ void DownloadToolbarUIController::UpdateDownloadIcon(
+ 
+ void DownloadToolbarUIController::AnnounceAccessibleAlertNow(
+     const std::u16string& alert_text) {
+-  if (auto* button = GetDownloadsButton(browser_view_)) {
++  // Stedding (toolbar T27): the button that carries the downloads speaks
++  // their alerts, the sidebar's while it is on screen (UpdateIcon's). The
++  // toolbar's button is not made then, and an alert already taken from the
++  // queue was lost.
++  if (auto* button = ButtonForIcon()) {
+     button->AnnounceAccessibleAlert(alert_text);
+   }
+ }
+@@ -326,6 +332,14 @@ void DownloadToolbarUIController::ShowDetails() {
    if (bubble_delegate_ || pending_bubble_) {
      return;
    }
@@ -3162,7 +3347,7 @@ index 9d4655b26941e..49ed7a871e3ec 100644
    base::TimeDelta delay = GetAutoCloseDelay();
    if (use_auto_close_bubble_timer_ && !delay.is_max()) {
      auto_close_bubble_timer_.Start(
-@@ -362,13 +372,17 @@ void DownloadToolbarUIController::OnOfflineItemsInitialized() {
+@@ -362,13 +376,17 @@ void DownloadToolbarUIController::OnOfflineItemsInitialized() {
  void DownloadToolbarUIController::UpdateIcon() {
    // Stedding (S-41): the sidebar's downloads button carries the ring and the
    // badge when the window has one; the toolbar's button otherwise.
@@ -3185,7 +3370,7 @@ index 9d4655b26941e..49ed7a871e3ec 100644
  
    // Determine how the progress ring should be drawn.
    ActionItemProgressRingStatus ring_status;
-@@ -565,19 +579,19 @@ void DownloadToolbarUIController::ShowPendingDownloadStartedAnimation() {
+@@ -565,19 +583,19 @@ void DownloadToolbarUIController::ShowPendingDownloadStartedAnimation() {
  }
  
  bool DownloadToolbarUIController::IsProgressRingInDownloadingStateForTesting() {
@@ -3208,7 +3393,7 @@ index 9d4655b26941e..49ed7a871e3ec 100644
    return button ? button->GetImageBadgeForTesting() : nullptr;
  }
  
-@@ -640,9 +654,15 @@ void DownloadToolbarUIController::SetSteddingAnchorView(views::View* view) {
+@@ -640,9 +658,15 @@ void DownloadToolbarUIController::SetSteddingAnchorView(views::View* view) {
      return;
    }
    stedding_anchor_observation_.Reset();
@@ -3224,7 +3409,7 @@ index 9d4655b26941e..49ed7a871e3ec 100644
    }
    ScheduleSteddingHandOver();
  }
-@@ -678,9 +698,24 @@ void DownloadToolbarUIController::OnViewVisibilityChanged(
+@@ -678,9 +702,24 @@ void DownloadToolbarUIController::OnViewVisibilityChanged(
  
  void DownloadToolbarUIController::OnViewIsDeleting(views::View* observed_view) {
    stedding_anchor_observation_.Reset();

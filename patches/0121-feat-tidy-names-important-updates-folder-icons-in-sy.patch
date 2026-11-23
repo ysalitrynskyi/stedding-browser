@@ -42,7 +42,7 @@ Removable when: never as features; the device picker test goes once
 Chromium's own tests cover the chooser in Stedding's window layouts.
 ---
  chrome/browser/download/BUILD.gn              |   3 +
- .../download/download_target_determiner.cc    |  25 ++
+ .../download/download_target_determiner.cc    |  34 ++
  .../api/settings_private/prefs_util.cc        |   5 +
  .../stedding_page/stedding_page.html.ts       |  14 +
  .../browser/ui/spaces/arc_sidebar_importer.cc |  11 +
@@ -67,7 +67,7 @@ Chromium's own tests cover the chooser in Stedding's window layouts.
  chrome/browser/ui/stedding/stedding_prefs.cc  |   3 +
  chrome/browser/ui/stedding/stedding_prefs.h   |  11 +
  .../ui/stedding/stedding_prefs_unittest.cc    |   6 +-
- chrome/browser/ui/stedding/tidy_names.cc      | 317 ++++++++++++++++++
+ chrome/browser/ui/stedding/tidy_names.cc      | 323 ++++++++++++++++++
  chrome/browser/ui/stedding/tidy_names.h       |  48 +++
  .../ui/stedding/tidy_names_unittest.cc        | 127 +++++++
  chrome/browser/ui/stedding/update_feed.cc     |  13 +
@@ -91,7 +91,7 @@ Chromium's own tests cover the chooser in Stedding's window layouts.
  .../test/stedding/tidy_names_browsertest.cc   | 222 ++++++++++++
  chrome/test/stedding/updates_browsertest.cc   |  91 +++++
  components/infobars/core/infobar_delegate.h   |   2 +
- 50 files changed, 1652 insertions(+), 17 deletions(-)
+ 50 files changed, 1667 insertions(+), 17 deletions(-)
  create mode 100644 chrome/browser/ui/stedding/important_update_bar.cc
  create mode 100644 chrome/browser/ui/stedding/important_update_bar.h
  create mode 100644 chrome/browser/ui/stedding/tidy_names.cc
@@ -115,7 +115,7 @@ index 6f9c54ba8b703..cd3b58bcd6bba 100644
      "//chrome/browser:browser_process",
      "//chrome/browser:primitives",
 diff --git a/chrome/browser/download/download_target_determiner.cc b/chrome/browser/download/download_target_determiner.cc
-index 3fc1b3d2c036c..5a2b884d9f0c0 100644
+index 3fc1b3d2c036c..2951a1623e076 100644
 --- a/chrome/browser/download/download_target_determiner.cc
 +++ b/chrome/browser/download/download_target_determiner.cc
 @@ -31,6 +31,8 @@
@@ -127,15 +127,17 @@ index 3fc1b3d2c036c..5a2b884d9f0c0 100644
  #include "components/download/public/common/download_interrupt_reasons.h"
  #include "components/download/public/common/download_item.h"
  #include "components/download/public/common/download_target_info.h"
-@@ -45,6 +47,7 @@
+@@ -45,6 +47,9 @@
  #include "content/public/browser/browser_task_traits.h"
  #include "content/public/browser/browser_thread.h"
  #include "content/public/browser/download_item_utils.h"
++#include "content/public/browser/navigation_controller.h"
++#include "content/public/browser/navigation_entry.h"
 +#include "content/public/browser/web_contents.h"
  #include "content/public/common/buildflags.h"
  #include "extensions/buildflags/buildflags.h"
  #include "extensions/common/constants.h"
-@@ -385,6 +388,28 @@ DownloadTargetDeterminer::Result
+@@ -385,6 +390,35 @@ DownloadTargetDeterminer::Result
      // eventually determine whether this is a local path and if not, figure out
      // a local path.
      base::FilePath generated_filename = GenerateFileName();
@@ -154,8 +156,15 @@ index 3fc1b3d2c036c..5a2b884d9f0c0 100644
 +          page && !download_->GetTabUrl().is_empty() &&
 +          download_->GetTabUrl().GetWithoutRef() ==
 +              page->GetLastCommittedURL().GetWithoutRef()) {
++        // The page's own title, empty when it has none: the tab's title is
++        // then the page's address, query and all, which no file is named
++        // after. With no title the name stays (Pn17).
++        const content::NavigationEntry* const entry =
++            page->GetController().GetLastCommittedEntry();
++        const std::u16string title =
++            entry ? entry->GetTitle() : std::u16string();
 +        const base::FilePath tidy = stedding::TidyDownloadName(
-+            generated_filename, page->GetTitle(), page->GetLastCommittedURL());
++            generated_filename, title, page->GetLastCommittedURL());
 +        if (!tidy.empty()) {
 +          generated_filename = tidy;
 +        }
@@ -1018,10 +1027,10 @@ index ca361ceb3517f..657a0f1c69102 100644
    }
 diff --git a/chrome/browser/ui/stedding/tidy_names.cc b/chrome/browser/ui/stedding/tidy_names.cc
 new file mode 100644
-index 0000000000000..ba66a3e11e900
+index 0000000000000..911268cea6772
 --- /dev/null
 +++ b/chrome/browser/ui/stedding/tidy_names.cc
-@@ -0,0 +1,317 @@
+@@ -0,0 +1,323 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -1036,8 +1045,10 @@ index 0000000000000..ba66a3e11e900
 +#include "base/i18n/file_util_icu.h"
 +#include "base/strings/string_split.h"
 +#include "base/strings/string_util.h"
++#include "base/strings/utf_string_conversion_utils.h"
 +#include "base/strings/utf_string_conversions.h"
 +#include "net/base/registry_controlled_domains/registry_controlled_domain.h"
++#include "third_party/icu/source/common/unicode/uchar.h"
 +#include "url/gurl.h"
 +
 +namespace stedding {
@@ -1123,12 +1134,16 @@ index 0000000000000..ba66a3e11e900
 +         text.find(u'.', at) != std::u16string_view::npos;
 +}
 +
-+// The part's letters and digits, lower-cased: "GitHub" is "github".
++// The part's letters and digits, lower-cased, in UTF-8: "GitHub" is
++// "github". Those of every script count, so a part of Cyrillic words beside
++// the site's Latin name is not that name; host labels are ASCII, so a match of
++// Latin letters alone is as it was.
 +std::string Letters(std::u16string_view text) {
 +  std::string letters;
-+  for (char16_t c : text) {
-+    if (base::IsAsciiAlphaNumeric(c)) {
-+      letters.push_back(base::ToLowerASCII(static_cast<char>(c)));
++  for (size_t i = 0; i < text.size(); ++i) {
++    base_icu::UChar32 c = 0;
++    if (base::ReadUnicodeCharacter(text, &i, &c) && u_isalnum(c)) {
++      base::WriteUnicodeCharacter(u_tolower(c), &letters);
 +    }
 +  }
 +  return letters;

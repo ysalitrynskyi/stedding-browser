@@ -28,7 +28,7 @@ S-429, GitHub issue 82, tabs R67).
 Removable when: upstream's NativeWidgetMac::Show and Widget::Show allow for a
 widget that goes during the show.
 ---
- chrome/browser/ui/stedding/peek.cc            |   6 +-
+ chrome/browser/ui/stedding/peek.cc            |  96 ++++++++------
  chrome/browser/ui/tabs/tab_dialog_manager.cc  |   4 +-
  .../ui/views/peek/peek_navigation_throttle.cc |  14 +-
  chrome/browser/ui/views/peek/peek_overlay.cc  |   6 +
@@ -37,13 +37,128 @@ widget that goes during the show.
  ui/views/widget/native_widget_mac.mm          |   7 +
  ui/views/widget/native_widget_mac_unittest.mm |  26 ++++
  ui/views/widget/widget.cc                     |  16 ++-
- 9 files changed, 295 insertions(+), 8 deletions(-)
+ 9 files changed, 350 insertions(+), 43 deletions(-)
 
 diff --git a/chrome/browser/ui/stedding/peek.cc b/chrome/browser/ui/stedding/peek.cc
-index fc59faa6101dc..9ba27f65f331f 100644
+index fc59faa6101dc..a2d5dd3292b23 100644
 --- a/chrome/browser/ui/stedding/peek.cc
 +++ b/chrome/browser/ui/stedding/peek.cc
-@@ -373,10 +373,12 @@ BrowserWindowInterface* OpenPeek(tabs::TabInterface* source,
+@@ -18,6 +18,7 @@
+ #include "chrome/browser/ui/browser_tabstrip.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
++#include "chrome/browser/ui/spaces/new_tab_space.h"
+ #include "chrome/browser/ui/spaces/space_storage_partition.h"
+ #include "chrome/browser/ui/stedding/little_window.h"
+ #include "chrome/browser/ui/stedding/peek_notice.h"
+@@ -187,9 +188,15 @@ PeekPage* PageOf(const BrowserWindowInterface* window) {
+   return contents ? PeekPage::FromWebContents(contents) : nullptr;
+ }
+ 
+-// P12: the peek's bounds over the window it came from, nearly all of it.
++// P12: the peek's bounds over the window it came from, nearly all of it. A
++// minimised window, which a link from another app peeks over (little E11),
++// is measured where it comes back: Windows gives a minimised window's bounds
++// as -32000, -32000, and a peek placed from them opened at its smallest in a
++// corner of the screen, not over the window.
+ gfx::Rect BoundsOver(BrowserWindowInterface* window) {
+-  const gfx::Rect over = window->GetWindow()->GetBounds();
++  const ui::BaseWindow* const frame = window->GetWindow();
++  const gfx::Rect over =
++      frame->IsMinimized() ? frame->GetRestoredBounds() : frame->GetBounds();
+   gfx::Rect bounds = over;
+   bounds.Inset(gfx::Insets::VH(kTopMargin, kSideMargin));
+   bounds.set_width(std::max(400, bounds.width()));
+@@ -242,6 +249,22 @@ PeekPage* CloseThePeekOver(tabs::TabInterface* source) {
+   return IsClosing(open) ? nullptr : PageOf(open);
+ }
+ 
++// P13, P20: the same for the peek over `source`'s page. Its close waits for
++// the page's answer whenever the page has a handler that runs as it is left
++// (beforeunload, unload, pagehide), as most sites' pages do, and the answer
++// may be the user's "Leave site?": the next peek waits for it too. The link
++// had been dropped, and one from another app opened in a little window
++// (little E11).
++PeekPage* CloseThePeekOverPage(tabs::TabInterface* source) {
++  PeekOverPageHost* const host = OverPageHost();
++  if (!host || !host->PageOver(source)) {
++    return nullptr;
++  }
++  host->Close(source);
++  content::WebContents* const still = host->PageOver(source);
++  return still ? PeekPage::FromWebContents(still) : nullptr;
++}
++
+ // Whether a link from `source` may still open the peek it waited for: the
+ // pinned tab is there, and its window is not closing (a quit).
+ bool CanStillPeekFrom(tabs::TabInterface* source) {
+@@ -286,23 +309,15 @@ void ShowPeek(BrowserWindowInterface* window, content::WebContents* page) {
+ 
+ // P20: shows `contents`, a page made for a link from `source`, over
+ // `source`'s page; the window it is in, or null when it could not be shown
+-// and `contents` is gone. A peek already over that page closes first.
++// and `contents` is gone. The caller has closed the peek that was over that
++// page (CloseThePeekOverPage); one still there is not covered by a second.
+ BrowserWindowInterface* ShowPeekOverPage(
+     tabs::TabInterface* source,
+     std::unique_ptr<content::WebContents> contents) {
+   PeekOverPageHost* const host = OverPageHost();
+-  if (!host) {
++  if (!host || host->PageOver(source)) {
+     return nullptr;
+   }
+-  if (host->PageOver(source)) {
+-    host->Close(source);
+-    // Still there: its page asked "Leave site?". The pinned page under it
+-    // takes no click until it closes, so no link of the pin's comes here
+-    // then; a page's own script may, and is not shown.
+-    if (host->PageOver(source)) {
+-      return nullptr;
+-    }
+-  }
+   // The page is a peek's page as the little window's is: it knows the pinned
+   // tab it came from, and Open as Tab forgets it (ForgetPeek).
+   PeekPage::CreateForWebContents(contents.get(), source);
+@@ -346,22 +361,23 @@ BrowserWindowInterface* OpenPeek(tabs::TabInterface* source,
+     return nullptr;
+   }
+   const bool over_page = PeeksShowOverThePage(source);
+-  if (!over_page) {
+-    if (PeekPage* const asking = CloseThePeekOver(source)) {
+-      asking->OpenNextOnceGone(base::BindOnce(
+-          [](base::WeakPtr<tabs::TabInterface> pin, const PeekLink& waiting) {
+-            if (CanStillPeekFrom(pin.get())) {
+-              OpenPeek(pin.get(), waiting);
+-            }
+-          },
+-          source->GetWeakPtr(), link));
+-      // Not a peek that could not show: a caller that opens the link some
+-      // other way then would open it twice (little E11).
+-      if (link_waits) {
+-        *link_waits = true;
+-      }
+-      return nullptr;
++  // P13, P20: the peek there closes first, over the window or over the
++  // page; one still waiting for its page's answer holds the link.
++  if (PeekPage* const asking = over_page ? CloseThePeekOverPage(source)
++                                         : CloseThePeekOver(source)) {
++    asking->OpenNextOnceGone(base::BindOnce(
++        [](base::WeakPtr<tabs::TabInterface> pin, const PeekLink& waiting) {
++          if (CanStillPeekFrom(pin.get())) {
++            OpenPeek(pin.get(), waiting);
++          }
++        },
++        source->GetWeakPtr(), link));
++    // Not a peek that could not show: a caller that opens the link some
++    // other way then would open it twice (little E11).
++    if (link_waits) {
++      *link_waits = true;
+     }
++    return nullptr;
+   }
+   // P11 (PLAN.md CMD-9): the page is made in the pinned tab's own jar, so a
+   // pin in a Space with its own session peeks with that session's cookies.
+@@ -373,10 +389,12 @@ BrowserWindowInterface* OpenPeek(tabs::TabInterface* source,
        content::WebContents::Create(create);
    content::WebContents* const page = contents.get();
    if (over_page) {
@@ -58,6 +173,45 @@ index fc59faa6101dc..9ba27f65f331f 100644
        LoadPeekLink(page, link);
      }
      return window;
+@@ -416,9 +434,11 @@ std::unique_ptr<content::WebContents> PeekContentsInPinsJar(
+     return contents;
+   }
+   // A page made for a new tab carried that tab's Space and route; a peek is
+-  // the pin's (P11), and goes where its Open as Tab puts it (P7).
+-  return content::WebContents::Create(content::WebContents::CreateParams(
+-      from->GetBrowserContext(), PeekSiteInstance(from, url)));
++  // the pin's (P11), and goes where its Open as Tab puts it (P7). It keeps
++  // the sandbox of a sandboxed frame that opened it.
++  return spaces::RemakeOpenedContents(contents.get(),
++                                      PeekSiteInstance(from, url),
++                                      /*hidden=*/false);
+ }
+ 
+ BrowserWindowInterface* OpenPeekWithContents(
+@@ -428,10 +448,9 @@ BrowserWindowInterface* OpenPeekWithContents(
+   if (!source || !contents) {
+     return nullptr;
+   }
+-  if (PeeksShowOverThePage(source)) {
+-    return ShowPeekOverPage(source, std::move(contents));
+-  }
+-  if (PeekPage* const asking = CloseThePeekOver(source)) {
++  const bool over_page = PeeksShowOverThePage(source);
++  if (PeekPage* const asking = over_page ? CloseThePeekOverPage(source)
++                                         : CloseThePeekOver(source)) {
+     // The page made for the link waits with it, as AddNewContents holds a
+     // popup back while a full screen changes; dropped when the user keeps
+     // the peek, it closes.
+@@ -445,6 +464,9 @@ BrowserWindowInterface* OpenPeekWithContents(
+         source->GetWeakPtr(), std::move(contents), url));
+     return nullptr;
+   }
++  if (over_page) {
++    return ShowPeekOverPage(source, std::move(contents));
++  }
+   content::WebContents* const page = contents.get();
+   BrowserWindowInterface* const window =
+       MakePeek(source, std::move(contents), url);
 diff --git a/chrome/browser/ui/tabs/tab_dialog_manager.cc b/chrome/browser/ui/tabs/tab_dialog_manager.cc
 index b7713312abcef..5f093a8b73467 100644
 --- a/chrome/browser/ui/tabs/tab_dialog_manager.cc

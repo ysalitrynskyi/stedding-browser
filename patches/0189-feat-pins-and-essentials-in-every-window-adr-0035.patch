@@ -49,16 +49,16 @@ Removable when: never; Stedding's own model of pins.
  ...hrome_browser_main_extra_parts_profiles.cc |    4 +
  .../ui/archive/tab_archiver_unittest.cc       |   17 +
  .../ui/browser_window/internal/BUILD.gn       |    1 +
- .../internal/browser_window_features.cc       |    4 +
+ .../internal/browser_window_features.cc       |    8 +
  .../public/browser_window_features.h          |    4 +
  .../browser/ui/navigator/browser_navigator.cc |   19 +-
  chrome/browser/ui/spaces/BUILD.gn             |   36 +
- chrome/browser/ui/spaces/pin_mirror.cc        | 1292 ++++++++++++++++
- chrome/browser/ui/spaces/pin_mirror.h         |  196 +++
- chrome/browser/ui/spaces/pin_store.cc         |  611 ++++++++
- chrome/browser/ui/spaces/pin_store.h          |  183 +++
- chrome/browser/ui/spaces/pin_store_factory.cc |   75 +
- chrome/browser/ui/spaces/pin_store_factory.h  |   47 +
+ chrome/browser/ui/spaces/pin_mirror.cc        | 1366 +++++++++++++++++
+ chrome/browser/ui/spaces/pin_mirror.h         |  200 +++
+ chrome/browser/ui/spaces/pin_store.cc         |  699 +++++++++
+ chrome/browser/ui/spaces/pin_store.h          |  205 +++
+ chrome/browser/ui/spaces/pin_store_factory.cc |   93 ++
+ chrome/browser/ui/spaces/pin_store_factory.h  |   53 +
  .../browser/ui/spaces/pin_store_unittest.cc   |  649 ++++++++
  .../ui/spaces/sidebar_backup_unittest.cc      |   13 +
  .../browser/ui/spaces/sidebar_sync_tracker.cc |    9 +-
@@ -81,8 +81,8 @@ Removable when: never; Stedding's own model of pins.
  chrome/test/stedding/BUILD.gn                 |    2 +
  .../test/stedding/command_bar_browsertest.cc  |   38 +-
  chrome/test/stedding/import_browsertest.cc    |   36 +-
- .../stedding/pins_every_window_browsertest.cc | 1322 +++++++++++++++++
- 36 files changed, 4975 insertions(+), 25 deletions(-)
+ .../stedding/pins_every_window_browsertest.cc | 1322 ++++++++++++++++
+ 36 files changed, 5191 insertions(+), 25 deletions(-)
  create mode 100644 chrome/browser/ui/spaces/pin_mirror.cc
  create mode 100644 chrome/browser/ui/spaces/pin_mirror.h
  create mode 100644 chrome/browser/ui/spaces/pin_store.cc
@@ -176,7 +176,7 @@ index 73fcc06602075..3faaa05bf1833 100644
        "//chrome/browser/ui/bookmarks",
        "//chrome/browser/ui/browser_active_state_manager",
 diff --git a/chrome/browser/ui/browser_window/internal/browser_window_features.cc b/chrome/browser/ui/browser_window/internal/browser_window_features.cc
-index 99aa9d65adc00..8d8d1a8e1a7c8 100644
+index 99aa9d65adc00..497bb8dd21e20 100644
 --- a/chrome/browser/ui/browser_window/internal/browser_window_features.cc
 +++ b/chrome/browser/ui/browser_window/internal/browser_window_features.cc
 @@ -94,6 +94,7 @@
@@ -187,7 +187,7 @@ index 99aa9d65adc00..8d8d1a8e1a7c8 100644
  #include "chrome/browser/ui/spaces/space_model.h"
  #include "chrome/browser/ui/stedding/little_mark.h"
  #include "chrome/browser/ui/stedding/private_window.h"
-@@ -298,6 +299,9 @@ void BrowserWindowFeatures::Init(BrowserWindowInterface* browser) {
+@@ -298,7 +299,14 @@ void BrowserWindowFeatures::Init(BrowserWindowInterface* browser) {
      closed_tabs_undo_ = std::make_unique<stedding::ClosedTabsUndo>(*browser);
      folder_session_ = std::make_unique<stedding::FolderSessionService>(
          *browser);
@@ -195,8 +195,13 @@ index 99aa9d65adc00..8d8d1a8e1a7c8 100644
 +    // it waits for.
 +    pin_mirror_ = std::make_unique<spaces::PinMirror>(*browser, *space_model_);
    } else if (browser->GetType() == BrowserWindowInterface::Type::TYPE_NORMAL) {
++    // sidebar Y1, Y2, settings T41-T43: the sidebar's density and text size
++    // and the window's look, which a normal window's Space model reads. A
++    // process whose windows were all private or Guest never read them.
++    spaces::SpaceModel::EnsureWindowMetricsInstalled();
      // docs/features/private.md V9 (PLAN.md WIN-6): the Space model owns the
      // page's colour for the address row; a private or a Guest window has
+     // none, and its row sat on the bare ground, Back, Forward and Reload with
 diff --git a/chrome/browser/ui/browser_window/public/browser_window_features.h b/chrome/browser/ui/browser_window/public/browser_window_features.h
 index 9223992490707..840422efba167 100644
 --- a/chrome/browser/ui/browser_window/public/browser_window_features.h
@@ -333,10 +338,10 @@ index be2198237e7c2..6f0feaa7236ef 100644
      "sidebar_sync_place_unittest.cc",
 diff --git a/chrome/browser/ui/spaces/pin_mirror.cc b/chrome/browser/ui/spaces/pin_mirror.cc
 new file mode 100644
-index 0000000000000..c3bdf45acf8bb
+index 0000000000000..e883eebeb2337
 --- /dev/null
 +++ b/chrome/browser/ui/spaces/pin_mirror.cc
-@@ -0,0 +1,1292 @@
+@@ -0,0 +1,1366 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -509,6 +514,13 @@ index 0000000000000..c3bdf45acf8bb
 +         (contents->WasDiscarded() || contents->GetController().NeedsReload());
 +}
 +
++// windows G16: the pages in a tab's history. A tab a window makes for a
++// record (Make) holds one, the record's home.
++int PagesOf(tabs::TabInterface* tab) {
++  content::WebContents* const contents = tab->GetContents();
++  return contents ? contents->GetController().GetEntryCount() : 0;
++}
++
 +// Whether every turn of a fill is suspended: the tokens are given out first,
 +// then every window settles.
 +bool g_filling = false;
@@ -523,6 +535,18 @@ index 0000000000000..c3bdf45acf8bb
 +// windows G16 (BACKLOG S-546): a window with more records than this to make
 +// makes them a Space at a time (ReconcileNow).
 +constexpr size_t kMakeAtOnceUpTo = 40;
++
++// windows G19: each window's backup, one after another. A backup takes the
++// first free name for its second, then writes; written at once, two found
++// the same name free and the later replaced the earlier. In turn, a later one
++// in the same second is "<time> (N).json", which the backups list orders.
++// The rotation keeps every one of them: past five windows, the five kept
++// had deleted the first windows' backups as the later ones were written.
++void WriteBackupsInTurn(const base::FilePath& profile_dir,
++                        const std::vector<std::string>& backups,
++                        base::Time now) {
++  sidebar_sync::WriteBackups(profile_dir, backups, now);
++}
 +
 +}  // namespace
 +
@@ -1000,7 +1024,52 @@ index 0000000000000..c3bdf45acf8bb
 +    FillStoreFromWindows(profile);
 +    return;
 +  }
++  // windows G19: a window the session brings back after this launch filled
++  // the store -- the second and later windows of the crash bubble's Restore,
++  // a window reopened from History -- was not read by the fill. Its pins and
++  // essentials join the store as a later window's join the fill: none is a
++  // record removed while it was closed (G18), which it would let go of as a
++  // loose tab out of its folders.
++  JoinStore();
 +  Reconcile();
++}
++
++void PinMirror::JoinStore() {
++  if (g_filling || !Active()) {
++    return;
++  }
++  const std::vector<PinRecord> rows = BuildRecords();
++  if (std::ranges::none_of(rows, [&](const PinRecord& row) {
++        return !store_->Find(row.id) && store_->NeverHeldSinceFill(row.id);
++      })) {
++    return;
++  }
++  {
++    // As in a fill: no window follows the store until this window's tabs
++    // have the ids the join gave them.
++    base::AutoReset<bool> filling(&g_filling, true);
++    const std::map<std::string, std::string> ids = store_->Join(rows);
++    TabStripModel* const strip = window_->GetTabStripModel();
++    for (int i = 0; i < strip->count(); ++i) {
++      tabs::TabInterface* const tab = strip->GetTabAtIndex(i);
++      if (!IsMirrored(tab)) {
++        continue;
++      }
++      const auto it = ids.find(stedding::TabToken(tab->GetContents()));
++      if (it != ids.end() && it->second != it->first) {
++        stedding::SetTabToken(tab, it->second);
++      }
++    }
++  }
++  // Every other window gets a tab of each record that joined; this one is
++  // brought in line next (Settle).
++  for (BrowserWindowInterface* const window :
++       sidebar_sync::RegistryWindows(window_->GetProfile())) {
++    PinMirror* const mirror = PinMirror::From(window);
++    if (mirror && mirror != this) {
++      mirror->Reconcile();
++    }
++  }
 +}
 +
 +// static
@@ -1023,17 +1092,20 @@ index 0000000000000..c3bdf45acf8bb
 +    return a->GetSessionID().id() < b->GetSessionID().id();
 +  });
 +  // windows G19: every window's sidebar is kept as it was, as sync's join
-+  // keeps one (sidebar-file Sf9), before anything is merged.
++  // keeps one (sidebar-file Sf9), before anything is merged: a file for each
++  // window, written in turn.
++  std::vector<std::string> backups;
 +  for (BrowserWindowInterface* window : windows) {
 +    const ArcImportPlan plan = SnapshotWindow(window);
-+    if (plan.spaces.empty()) {
-+      continue;
++    if (!plan.spaces.empty()) {
++      backups.push_back(PlanToJson(plan));
 +    }
++  }
++  if (!backups.empty()) {
 +    base::ThreadPool::PostTask(
 +        FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
-+        base::BindOnce(base::IgnoreResult(&sidebar_sync::WriteBackup),
-+                       profile->GetPath(), PlanToJson(plan),
-+                       base::Time::Now()));
++        base::BindOnce(&WriteBackupsInTurn, profile->GetPath(),
++                       std::move(backups), base::Time::Now()));
 +  }
 +  std::vector<std::vector<PinRecord>> rows;
 +  rows.reserve(windows.size());
@@ -1160,10 +1232,17 @@ index 0000000000000..c3bdf45acf8bb
 +    auto [it, fresh] = have.emplace(id, tab);
 +    if (!fresh) {
 +      // windows G16: two tabs of one record, one moved in from another
-+      // window. The one awake, or on screen, stays the record's.
++      // window. The one awake, or on screen, stays the record's. Both asleep
++      // and neither on screen -- the crash bubble's Restore bringing a pin's
++      // tab into a window that made its own a moment before -- the one with
++      // more pages in its history stays: the tab made here holds its home
++      // alone, and the restored one the page it was on and its way back.
 +      tabs::TabInterface* const other = it->second;
-+      const bool keep_new = strip->GetActiveTab() == tab ||
-+                            (Asleep(other) && !Asleep(tab));
++      tabs::TabInterface* const active = strip->GetActiveTab();
++      const bool keep_new =
++          active == tab || (Asleep(other) && !Asleep(tab)) ||
++          (active != other && Asleep(other) && Asleep(tab) &&
++           PagesOf(tab) > PagesOf(other));
 +      it->second = keep_new ? tab : other;
 +      let_go.push_back(keep_new ? other : tab);
 +    }
@@ -1631,10 +1710,10 @@ index 0000000000000..c3bdf45acf8bb
 +}  // namespace spaces
 diff --git a/chrome/browser/ui/spaces/pin_mirror.h b/chrome/browser/ui/spaces/pin_mirror.h
 new file mode 100644
-index 0000000000000..56ca02e35314b
+index 0000000000000..7162535702cb9
 --- /dev/null
 +++ b/chrome/browser/ui/spaces/pin_mirror.h
-@@ -0,0 +1,196 @@
+@@ -0,0 +1,200 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -1762,6 +1841,10 @@ index 0000000000000..56ca02e35314b
 +  // The first turn after this window's restore: the store filled if it is
 +  // not yet, then this window in line.
 +  void Settle();
++  // windows G19: this window's pins and essentials that the store, filled in
++  // this launch from other windows, never had join it (PinStore::Join), and
++  // every other window follows. Nothing when the store holds them all.
++  void JoinStore();
 +
 +  // Reconcile, once nothing holds it back. Returns whether a tab was given
 +  // an id the store does not know, to be published.
@@ -1833,10 +1916,10 @@ index 0000000000000..56ca02e35314b
 +#endif  // CHROME_BROWSER_UI_SPACES_PIN_MIRROR_H_
 diff --git a/chrome/browser/ui/spaces/pin_store.cc b/chrome/browser/ui/spaces/pin_store.cc
 new file mode 100644
-index 0000000000000..dbd994b645033
+index 0000000000000..0fca38780c772
 --- /dev/null
 +++ b/chrome/browser/ui/spaces/pin_store.cc
-@@ -0,0 +1,611 @@
+@@ -0,0 +1,699 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -2258,7 +2341,92 @@ index 0000000000000..dbd994b645033
 +  }
 +  records_ = std::move(records);
 +  ready_ = true;
++  filled_here_ = true;
 +  Changed();
++  return ids;
++}
++
++bool PinStore::NeverHeldSinceFill(const std::string& id) const {
++  return filled_here_ && !id.empty() && !held_ids_.contains(id);
++}
++
++std::map<std::string, std::string> PinStore::Join(
++    const std::vector<PinRecord>& rows) {
++  std::map<std::string, std::string> ids;
++  if (!ready_) {
++    return ids;
++  }
++  // The records the window has a tab of already: none of its other rows is
++  // one of them, so two pins of one home in one window stay two, as in Fill.
++  std::set<std::string> matched;
++  for (const PinRecord& row : rows) {
++    if (Find(row.id)) {
++      matched.insert(row.id);
++    }
++  }
++  // Each row's record id, and the record a new row makes.
++  std::vector<std::string> order;
++  std::vector<std::optional<PinRecord>> fresh;
++  std::set<std::string> used;
++  for (const PinRecord& row : rows) {
++    if (Find(row.id)) {
++      order.push_back(row.id);
++      fresh.push_back(std::nullopt);
++      continue;
++    }
++    // A record removed since (G18): the window lets its tab go.
++    if (!NeverHeldSinceFill(row.id) || !used.insert(row.id).second) {
++      continue;
++    }
++    const std::optional<MergeKey> key = KeyOf(row);
++    const PinRecord* same = nullptr;
++    for (const PinRecord& record : records_) {
++      if (key && !matched.contains(record.id) && KeyOf(record) == key) {
++        same = &record;
++        break;
++      }
++    }
++    if (same) {
++      matched.insert(same->id);
++      ids[row.id] = same->id;
++      order.push_back(same->id);
++      fresh.push_back(std::nullopt);
++      continue;
++    }
++    ids[row.id] = row.id;
++    order.push_back(row.id);
++    fresh.push_back(row);
++  }
++  // A new record goes after the row it followed in its window; the window's
++  // first row, if new, before the next row the store already has.
++  const auto position = [&](const std::string& id) {
++    return static_cast<size_t>(
++        std::ranges::find_if(records_,
++                             [&](const PinRecord& r) { return r.id == id; }) -
++        records_.begin());
++  };
++  bool added = false;
++  for (size_t k = 0; k < order.size(); ++k) {
++    if (!fresh[k]) {
++      continue;
++    }
++    size_t at = records_.size();
++    if (k > 0) {
++      at = std::min(position(order[k - 1]) + 1, records_.size());
++    } else {
++      for (size_t j = k + 1; j < order.size(); ++j) {
++        if (!fresh[j]) {
++          at = position(order[j]);
++          break;
++        }
++      }
++    }
++    records_.insert(records_.begin() + at, std::move(*fresh[k]));
++    added = true;
++  }
++  if (added) {
++    Changed();
++  }
 +  return ids;
 +}
 +
@@ -2307,6 +2475,9 @@ index 0000000000000..dbd994b645033
 +}
 +
 +void PinStore::Changed() {
++  for (const PinRecord& record : records_) {
++    held_ids_.insert(record.id);
++  }
 +  if (prefs_) {
 +    prefs_->SetList(stedding::prefs::kPinStore, ToValue(records_));
 +    prefs_->SetBoolean(stedding::prefs::kPinStoreReady, ready_);
@@ -2450,10 +2621,10 @@ index 0000000000000..dbd994b645033
 +}  // namespace spaces
 diff --git a/chrome/browser/ui/spaces/pin_store.h b/chrome/browser/ui/spaces/pin_store.h
 new file mode 100644
-index 0000000000000..63feeffeee367
+index 0000000000000..2a86d64ceb4c0
 --- /dev/null
 +++ b/chrome/browser/ui/spaces/pin_store.h
-@@ -0,0 +1,183 @@
+@@ -0,0 +1,205 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -2601,6 +2772,24 @@ index 0000000000000..63feeffeee367
 +  std::vector<std::map<std::string, std::string>> Fill(
 +      const std::vector<std::vector<PinRecord>>& windows);
 +
++  // windows G19: whether `id` is no record this store has had since Fill
++  // filled it, in this launch. A pin a window brings back with such an id is
++  // one the fill did not read, never a record removed while that window was
++  // closed (G18). False for every id when the store came back from its
++  // preference: an id it lacks then may be one removed.
++  bool NeverHeldSinceFill(const std::string& id) const;
++
++  // windows G19: as Fill takes a later window's rows, the rows of one window
++  // the fill did not read -- one the session brought back after this launch
++  // filled the store (the crash bubble's Restore, a window reopened from
++  // History) -- every record of that window, in its order. A row the store
++  // has, or once had (NeverHeldSinceFill), is left as it is. Of the others,
++  // one with the home and Space of a record that window has no tab of, or an
++  // essential with that home and Space, is that record; any other is a new
++  // record, after the row it follows there. Returns the ids that window's
++  // tabs must take, and tells the observers when a record was added.
++  std::map<std::string, std::string> Join(const std::vector<PinRecord>& rows);
++
 +  // windows G21: the records of a deleted Space move once, to `to`, after its
 +  // last record. Its own essentials stay own essentials when `to` has a
 +  // session of its own, and become `to`'s Space pins otherwise (ADR 0028).
@@ -2628,6 +2817,10 @@ index 0000000000000..63feeffeee367
 +  const raw_ptr<PrefService> prefs_;
 +  std::vector<PinRecord> records_;
 +  bool ready_ = false;
++  // windows G19: Fill filled the store in this launch, and every id its
++  // records have had since.
++  bool filled_here_ = false;
++  std::set<std::string> held_ids_;
 +  base::ObserverList<Observer> observers_;
 +  // Changed() is telling the observers; a change meanwhile is told after.
 +  bool notifying_ = false;
@@ -2639,10 +2832,10 @@ index 0000000000000..63feeffeee367
 +#endif  // CHROME_BROWSER_UI_SPACES_PIN_STORE_H_
 diff --git a/chrome/browser/ui/spaces/pin_store_factory.cc b/chrome/browser/ui/spaces/pin_store_factory.cc
 new file mode 100644
-index 0000000000000..15865880a2191
+index 0000000000000..66948eb94bc9a
 --- /dev/null
 +++ b/chrome/browser/ui/spaces/pin_store_factory.cc
-@@ -0,0 +1,75 @@
+@@ -0,0 +1,93 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -2717,13 +2910,31 @@ index 0000000000000..15865880a2191
 +  return nullptr;
 +}
 +
++bool IsTabOfPinRecord(tabs::TabInterface* tab) {
++  BrowserWindowInterface* const window =
++      tab ? tab->GetBrowserWindowInterface() : nullptr;
++  if (!window || !tab->GetContents()) {
++    return false;
++  }
++  const SpaceModel* const model = SpaceModel::From(window);
++  if (!model || !model->follows_registry() ||
++      (!tab->IsPinned() && !model->IsSpacePinned(tab))) {
++    return false;
++  }
++  const PinStore* const store =
++      PinStoreFactory::GetForProfile(window->GetProfile());
++  const std::string id = stedding::TabToken(tab->GetContents());
++  return store && store->ready() && !id.empty() &&
++         store->Find(id) != nullptr;
++}
++
 +}  // namespace spaces
 diff --git a/chrome/browser/ui/spaces/pin_store_factory.h b/chrome/browser/ui/spaces/pin_store_factory.h
 new file mode 100644
-index 0000000000000..01a52609a7866
+index 0000000000000..a50f1c40b9bab
 --- /dev/null
 +++ b/chrome/browser/ui/spaces/pin_store_factory.h
-@@ -0,0 +1,47 @@
+@@ -0,0 +1,53 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -2767,6 +2978,12 @@ index 0000000000000..01a52609a7866
 +// or `window` has no tab of it.
 +tabs::TabInterface* OwnTabOfRecord(BrowserWindowInterface* window,
 +                                   const tabs::TabInterface* tab);
++
++// windows G2, G16 (ADR 0035): whether `tab` is its window's tab of a record
++// of the profile's store: an essential or a Space pin, in a window that shows
++// the store's records. Every other such window of the profile has a tab of
++// that record, and a new window gets one.
++bool IsTabOfPinRecord(tabs::TabInterface* tab);
 +
 +}  // namespace spaces
 +
@@ -3866,7 +4083,7 @@ index bfeaad6a703d3..1008f0373146f 100644
  
  void CarryTabName(content::WebContents* from, content::WebContents* to) {
 diff --git a/chrome/browser/ui/tabs/stedding_folder_session.cc b/chrome/browser/ui/tabs/stedding_folder_session.cc
-index 5983f50aa0f54..49a237bed95dd 100644
+index fc3203106f67e..87281654d32e6 100644
 --- a/chrome/browser/ui/tabs/stedding_folder_session.cc
 +++ b/chrome/browser/ui/tabs/stedding_folder_session.cc
 @@ -31,6 +31,7 @@
@@ -4023,7 +4240,7 @@ index e268cb6e636f7..14e3a3d06552f 100644
              if (title.empty()) {
                title = tab->GetTitle();
 diff --git a/chrome/browser/ui/views/spaces/space_tab_visibility_controller.cc b/chrome/browser/ui/views/spaces/space_tab_visibility_controller.cc
-index fe33528f8ca88..cb3d43b3c04a4 100644
+index 77e0ae6dd7653..4a01315efdf3f 100644
 --- a/chrome/browser/ui/views/spaces/space_tab_visibility_controller.cc
 +++ b/chrome/browser/ui/views/spaces/space_tab_visibility_controller.cc
 @@ -8,6 +8,7 @@
@@ -4034,7 +4251,7 @@ index fe33528f8ca88..cb3d43b3c04a4 100644
  #include <variant>
  #include <vector>
  
-@@ -586,12 +587,35 @@ void SpaceTabVisibilityController::OnSpaceModelDestroying() {
+@@ -588,12 +589,35 @@ void SpaceTabVisibilityController::OnSpaceModelDestroying() {
  }
  
  void SpaceTabVisibilityController::OnTabSpaceChanged(tabs::TabInterface* tab) {
@@ -4070,7 +4287,7 @@ index fe33528f8ca88..cb3d43b3c04a4 100644
  void SpaceTabVisibilityController::OnSpacePinsCollapsedChanged(
      const SpaceId& id) {
    // pins H17: the pin rows of the Space hide or come back at once, and the
-@@ -645,6 +669,11 @@ void SpaceTabVisibilityController::OnTabStripModelChanged(
+@@ -647,6 +671,11 @@ void SpaceTabVisibilityController::OnTabStripModelChanged(
      UpdateTabVisibility();
    }
    if (change.type() == TabStripModelChange::Type::kInserted) {
@@ -4082,7 +4299,7 @@ index fe33528f8ca88..cb3d43b3c04a4 100644
      AdoptChildren(change);
    } else if (change.type() == TabStripModelChange::Type::kRemoved) {
      ReparentClosedParents(change);
-@@ -679,9 +708,16 @@ void SpaceTabVisibilityController::OnChildMoved(
+@@ -681,9 +710,16 @@ void SpaceTabVisibilityController::OnChildMoved(
  
  void SpaceTabVisibilityController::OnCollectionDataChanged(
      const tabs::TabCollection::Handle& changed) {

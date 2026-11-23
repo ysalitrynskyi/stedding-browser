@@ -54,20 +54,20 @@ ships its own desktop shortcut remapping that Stedding adopts.
  chrome/browser/ui/stedding/shortcut_chord.cc  | 378 +++++++++
  chrome/browser/ui/stedding/shortcut_chord.h   |  68 ++
  .../ui/stedding/shortcut_chord_unittest.cc    | 144 ++++
- chrome/browser/ui/stedding/shortcut_editor.cc | 579 +++++++++++++
- chrome/browser/ui/stedding/shortcut_editor.h  | 186 +++++
+ chrome/browser/ui/stedding/shortcut_editor.cc | 585 +++++++++++++
+ chrome/browser/ui/stedding/shortcut_editor.h  | 190 +++++
  .../ui/stedding/shortcut_hotkeys_mac.h        |  23 +
  .../ui/stedding/shortcut_hotkeys_mac.mm       |  74 ++
- .../browser/ui/stedding/shortcut_menu_mac.h   |  29 +
- .../browser/ui/stedding/shortcut_menu_mac.mm  | 226 +++++
+ .../browser/ui/stedding/shortcut_menu_mac.h   |  34 +
+ .../browser/ui/stedding/shortcut_menu_mac.mm  | 248 ++++++
  .../browser/ui/stedding/shortcut_overrides.cc | 213 +++++
  .../browser/ui/stedding/shortcut_overrides.h  | 155 ++++
  .../stedding/shortcut_overrides_unittest.cc   | 525 ++++++++++++
  .../browser/ui/stedding/shortcut_recording.cc |  54 ++
  .../browser/ui/stedding/shortcut_recording.h  |  52 ++
- .../browser/ui/stedding/shortcut_service.cc   | 159 ++++
+ .../browser/ui/stedding/shortcut_service.cc   | 165 ++++
  chrome/browser/ui/stedding/shortcut_service.h |  60 ++
- .../ui/stedding/shortcut_service_unittest.cc  | 101 +++
+ .../ui/stedding/shortcut_service_unittest.cc  | 104 +++
  .../ui/stedding/shortcut_test_util_mac.h      |  38 +
  .../ui/stedding/shortcut_test_util_mac.mm     | 103 +++
  chrome/browser/ui/stedding/stedding_prefs.cc  |   1 +
@@ -99,7 +99,7 @@ ships its own desktop shortcut remapping that Stedding adopts.
  .../stedding_shortcuts_handler_unittest.cc    | 259 ++++++
  chrome/test/stedding/BUILD.gn                 |   7 +
  .../stedding/shortcut_rebind_browsertest.cc   | 774 ++++++++++++++++++
- 69 files changed, 6574 insertions(+), 104 deletions(-)
+ 69 files changed, 6620 insertions(+), 104 deletions(-)
  create mode 100644 chrome/browser/resources/settings/stedding_page/stedding_shortcuts_editor.html.ts
  create mode 100644 chrome/browser/resources/settings/stedding_page/stedding_shortcuts_editor.ts
  create mode 100644 chrome/browser/ui/stedding/shortcut_catalog.cc
@@ -532,7 +532,7 @@ index 59a6d7003aba9..949da42270154 100644
      });
 diff --git a/chrome/browser/resources/settings/stedding_page/stedding_shortcuts_editor.html.ts b/chrome/browser/resources/settings/stedding_page/stedding_shortcuts_editor.html.ts
 new file mode 100644
-index 0000000000000..1913ae5128bb3
+index 0000000000000..03a14e03edf73
 --- /dev/null
 +++ b/chrome/browser/resources/settings/stedding_page/stedding_shortcuts_editor.html.ts
 @@ -0,0 +1,152 @@
@@ -631,7 +631,7 @@ index 0000000000000..1913ae5128bb3
 +          <select id="numberKeys" aria-label="$i18n{steddingShortcutsNumberKeys}"
 +              @change="${this.onNumberKeysChange_}">
 +            ${row.layouts.map(layout => html`
-+              <option value="${layout.value}" ?selected="${layout.selected}">
++              <option value="${layout.value}" .selected="${layout.selected}">
 +                ${layout.text}
 +              </option>`)}
 +          </select>
@@ -3023,10 +3023,10 @@ index 0000000000000..d564dee8022dd
 +}  // namespace stedding::shortcuts
 diff --git a/chrome/browser/ui/stedding/shortcut_editor.cc b/chrome/browser/ui/stedding/shortcut_editor.cc
 new file mode 100644
-index 0000000000000..1495feeab3773
+index 0000000000000..c2ae800d918bf
 --- /dev/null
 +++ b/chrome/browser/ui/stedding/shortcut_editor.cc
-@@ -0,0 +1,579 @@
+@@ -0,0 +1,585 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -3204,31 +3204,34 @@ index 0000000000000..1495feeab3773
 +  return chords;
 +}
 +
-+UserShortcuts Resolve(const base::DictValue& stored) {
++UserShortcuts Resolve(const base::DictValue& stored,
++                      const std::vector<Binding>& defaults) {
 +  UserShortcuts user;
 +  const base::DictValue* const commands = stored.FindDict(kCommandsKey);
 +  std::set<Chord> claimed;
-+  // Z23: another layout gives each family that is on its nine chords first;
-+  // while on, no other row may hold them (Z17). The defaults are not needed
-+  // here: the shipped layout changes nothing.
-+  if (const NumberKeys layout = NumberKeysOf(stored);
-+      layout != NumberKeys::kRowsFirst) {
-+    for (const Entry& entry : Catalog()) {
-+      if (!(entry.flags & kFamily)) {
-+        continue;
++  // Z17, Z23: each family that is on has its nine chords first; while on, no
++  // other row may hold them, so a chord given to a row while the family was
++  // off goes back to the family and stays in that row's list for when it is
++  // off again. The shipped layout's chords are the shipped tables' own: they
++  // are claimed, and only another layout writes them.
++  const NumberKeys layout = NumberKeysOf(stored);
++  for (const Entry& entry : Catalog()) {
++    if (!(entry.flags & kFamily)) {
++      continue;
++    }
++    const base::DictValue* const raw =
++        commands ? commands->FindDict(entry.name) : nullptr;
++    if (raw && raw->FindBool(kOffKey).value_or(false)) {
++      continue;
++    }
++    const std::vector<int> members = MembersOf(entry);
++    std::vector<std::vector<Chord>> chords =
++        NumberKeysChords(entry, layout, defaults);
++    for (size_t i = 0; i < members.size(); ++i) {
++      for (const Chord& chord : chords[i]) {
++        claimed.insert(chord);
 +      }
-+      const base::DictValue* const raw =
-+          commands ? commands->FindDict(entry.name) : nullptr;
-+      if (raw && raw->FindBool(kOffKey).value_or(false)) {
-+        continue;
-+      }
-+      const std::vector<int> members = MembersOf(entry);
-+      std::vector<std::vector<Chord>> chords =
-+          NumberKeysChords(entry, layout, /*defaults=*/{});
-+      for (size_t i = 0; i < members.size(); ++i) {
-+        for (const Chord& chord : chords[i]) {
-+          claimed.insert(chord);
-+        }
++      if (layout != NumberKeys::kRowsFirst) {
 +        user.chords[members[i]] = std::move(chords[i]);
 +      }
 +    }
@@ -3313,7 +3316,7 @@ index 0000000000000..1495feeab3773
 +      }
 +    }
 +  }
-+  const UserShortcuts user = Resolve(*stored_);
++  const UserShortcuts user = Resolve(*stored_, defaults_);
 +  if (entry.flags & kFollows) {
 +    // Read-only: what Resolve gave it, or its defaults.
 +    state.off = user.IsOff(entry.command);
@@ -3425,7 +3428,30 @@ index 0000000000000..1495feeab3773
 +    result.kind = CheckKind::kSame;
 +    return result;
 +  }
-+  const std::vector<Binding> effective = Apply(defaults_, Resolve(*stored_));
++  const std::vector<Binding> effective =
++      Apply(defaults_, Resolve(*stored_, defaults_));
++  if (entry.flags & kNoShift) {
++    // Z18: with Shift it is the way back, which must be free too. Asked
++    // before the chord's own holder: Replace takes only the chord, and the
++    // row that follows would take its Shift twin from whoever has it.
++    const Entry* const follower = EntryForCommand(IDC_CYCLE_TO_PREV_TAB);
++    for (const Binding& binding : effective) {
++      if (binding.chord != WithShift(chord)) {
++        continue;
++      }
++      const Entry* const other = RowOf(binding.command);
++      if (other == &entry || other == follower) {
++        continue;
++      }
++      result.other = other;
++      result.message = base::StrCat(
++          {u"With Shift it goes the other way round, and ",
++           ChordText(WithShift(chord)), u" is ",
++           other ? Quoted(*other) : std::u16string(u"another command"),
++           u"’s."});
++      return result;
++    }
++  }
 +  if (const Binding* const holder = OtherHolder(effective, entry, chord)) {
 +    const Entry* const other = RowOf(holder->command);
 +    result.other = other;
@@ -3448,26 +3474,6 @@ index 0000000000000..1495feeab3773
 +    result.message =
 +        base::StrCat({ChordText(chord), u" is ", Quoted(*other), u"’s."});
 +    return result;
-+  }
-+  if (entry.flags & kNoShift) {
-+    // Z18: with Shift it is the way back, which must be free too.
-+    const Entry* const follower = EntryForCommand(IDC_CYCLE_TO_PREV_TAB);
-+    for (const Binding& binding : effective) {
-+      if (binding.chord != WithShift(chord)) {
-+        continue;
-+      }
-+      const Entry* const other = RowOf(binding.command);
-+      if (other == &entry || other == follower) {
-+        continue;
-+      }
-+      result.other = other;
-+      result.message = base::StrCat(
-+          {u"With Shift it goes the other way round, and ",
-+           ChordText(WithShift(chord)), u" is ",
-+           other ? Quoted(*other) : std::u16string(u"another command"),
-+           u"’s."});
-+      return result;
-+    }
 +  }
 +  result.kind = CheckKind::kOk;
 +  return result;
@@ -3570,7 +3576,7 @@ index 0000000000000..1495feeab3773
 +  // stays that row's (Z20). One the number keys hold comes back with another
 +  // layout (Z23), so it is kept.
 +  std::vector<Chord> chords = StateOf(entry).defaults;
-+  const UserShortcuts user = Resolve(*stored_);
++  const UserShortcuts user = Resolve(*stored_, defaults_);
 +  std::erase_if(chords, [&](const Chord& chord) {
 +    const int holder = user.CommandFor(chord);
 +    if (holder == 0 || holder == entry.command) {
@@ -3608,10 +3614,10 @@ index 0000000000000..1495feeab3773
 +}  // namespace stedding::shortcuts
 diff --git a/chrome/browser/ui/stedding/shortcut_editor.h b/chrome/browser/ui/stedding/shortcut_editor.h
 new file mode 100644
-index 0000000000000..2ae6d0758b3e9
+index 0000000000000..f31b0e7af09ef
 --- /dev/null
 +++ b/chrome/browser/ui/stedding/shortcut_editor.h
-@@ -0,0 +1,186 @@
+@@ -0,0 +1,190 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -3688,9 +3694,13 @@ index 0000000000000..2ae6d0758b3e9
 +// read are ignored and left where they are (Z10). When two rows claim one
 +// chord, the first in the catalog's order keeps it (Z20). The follower of a
 +// held row (Previous of the recent tabs) takes its leader's chords with
-+// Shift (Z18). A layout of the number keys other than the shipped one gives
-+// each family that is on its chords before any other row (Z17, Z23).
-+UserShortcuts Resolve(const base::DictValue& stored);
++// Shift (Z18). Each family that is on has its chords before any other row,
++// in every layout of the number keys (Z17, Z23): a chord given to a row
++// while the family was off is the family's again once it is on. `defaults`
++// is this platform's shipped table (DefaultBindings()), which holds the
++// shipped layout's chords.
++UserShortcuts Resolve(const base::DictValue& stored,
++                      const std::vector<Binding>& defaults);
 +
 +// One row as the block shows it.
 +struct RowState {
@@ -3909,10 +3919,10 @@ index 0000000000000..bc0804033a1f9
 +}  // namespace stedding::shortcuts
 diff --git a/chrome/browser/ui/stedding/shortcut_menu_mac.h b/chrome/browser/ui/stedding/shortcut_menu_mac.h
 new file mode 100644
-index 0000000000000..855e017cc10ae
+index 0000000000000..942fbee662a90
 --- /dev/null
 +++ b/chrome/browser/ui/stedding/shortcut_menu_mac.h
-@@ -0,0 +1,29 @@
+@@ -0,0 +1,34 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -3921,6 +3931,8 @@ index 0000000000000..855e017cc10ae
 +#define CHROME_BROWSER_UI_STEDDING_SHORTCUT_MENU_MAC_H_
 +
 +namespace stedding::shortcuts {
++
++struct UserShortcuts;
 +
 +// docs/features/shortcuts.md Z11 on the Mac: the menu bar's rows take the
 +// user's chords at once. Walks the main menu: every row of a Chromium command
@@ -3932,7 +3944,10 @@ index 0000000000000..855e017cc10ae
 +// stays folded under it while the two chords still differ by that key alone,
 +// and shows as a row of its own once they do not. The main menu is built with
 +// the user's chords already (AcceleratorsCocoa), so this runs on a change.
-+void ApplyShortcutsToMainMenu();
++// `shown` is the set in force before the change, the one the rows show: at
++// the first change, the one the menu was built with, so a row changed or
++// turned off before launch gets its shipped key back too.
++void ApplyShortcutsToMainMenu(const UserShortcuts& shown);
 +
 +// Whether the menu row of `command` has an App Shortcut the user set in
 +// System Settings (NSUserKeyEquivalents): macOS sets that row's key, and the
@@ -3944,10 +3959,10 @@ index 0000000000000..855e017cc10ae
 +#endif  // CHROME_BROWSER_UI_STEDDING_SHORTCUT_MENU_MAC_H_
 diff --git a/chrome/browser/ui/stedding/shortcut_menu_mac.mm b/chrome/browser/ui/stedding/shortcut_menu_mac.mm
 new file mode 100644
-index 0000000000000..a5a397fcdaa59
+index 0000000000000..8c9641c96b1d6
 --- /dev/null
 +++ b/chrome/browser/ui/stedding/shortcut_menu_mac.mm
-@@ -0,0 +1,226 @@
+@@ -0,0 +1,248 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -3973,8 +3988,9 @@ index 0000000000000..a5a397fcdaa59
 +
 +namespace {
 +
-+// A row as it was before the first change: its key, its modifiers and
-+// whether it showed folded under the row above.
++// A row as it was before the first change (one built with a change, as it
++// shipped): its key, its modifiers and whether it showed folded under the
++// row above.
 +struct Original {
 +  NSMenuItem* __strong item;
 +  NSString* __strong key;
@@ -4004,6 +4020,20 @@ index 0000000000000..a5a397fcdaa59
 +  Originals().push_back({item, item.keyEquivalent ? item.keyEquivalent : @"",
 +                         item.keyEquivalentModifierMask, item.isAlternate});
 +  return Originals().size() - 1;
++}
++
++// Remembers a row the menu was built with a change of the user's on: the
++// builder takes the chords in force (AcceleratorsCocoa), so the row never
++// had its shipped key, `shipped`, here, and that is the key to put back.
++void RememberAsShipped(NSMenuItem* item, const Chord& shipped) {
++  if (OriginalIndex(item)) {
++    return;
++  }
++  KeyEquivalentAndModifierMask* const equivalent =
++      ui::GetKeyEquivalentAndModifierMaskFromAccelerator(
++          ui::Accelerator(shipped.key, shipped.modifiers));
++  Originals().push_back({item, equivalent.keyEquivalent,
++                         equivalent.modifierMask, item.isAlternate});
 +}
 +
 +bool IsCommandRow(NSMenuItem* item) {
@@ -4081,12 +4111,19 @@ index 0000000000000..a5a397fcdaa59
 +         folded_by;
 +}
 +
-+void ApplyToRow(NSMenuItem* item) {
++void ApplyToRow(NSMenuItem* item, const UserShortcuts& shown) {
 +  if (!IsCommandRow(item) || HasUserKeyEquivalent(item)) {
 +    return;
 +  }
 +  const int command = static_cast<int>(item.tag);
 +  const std::optional<Chord> shipped = ShippedMenuChord(command);
++  // A row the chords shown so far change and no walk has seen yet was built
++  // with them: a change stored before launch, or a row built since the last
++  // change. A row without a shipped chord was built with its builder's key.
++  if (shipped && (shown.IsChanged(command) || shown.IsOff(command) ||
++                  shown.CommandFor(*shipped) != 0)) {
++    RememberAsShipped(item, *shipped);
++  }
 +  const std::optional<size_t> known = OriginalIndex(item);
 +  const UserShortcuts& user = Current();
 +  // A row without a shipped chord in the tables keeps the key its builder
@@ -4104,16 +4141,16 @@ index 0000000000000..a5a397fcdaa59
 +  Show(item, MenuChordFor(command, shipped));
 +}
 +
-+void ApplyToMenu(NSMenu* menu) {
++void ApplyToMenu(NSMenu* menu, const UserShortcuts& shown) {
 +  NSArray<NSMenuItem*>* const items = menu.itemArray;
 +  for (NSMenuItem* item in items) {
 +    if (item.hasSubmenu) {
 +      if (item.submenu != NSApp.servicesMenu) {
-+        ApplyToMenu(item.submenu);
++        ApplyToMenu(item.submenu, shown);
 +      }
 +      continue;
 +    }
-+    ApplyToRow(item);
++    ApplyToRow(item, shown);
 +  }
 +  // The folded rows, once both rows of a pair are as they now are.
 +  for (NSUInteger i = 1; i < items.count; ++i) {
@@ -4158,12 +4195,12 @@ index 0000000000000..a5a397fcdaa59
 +
 +}  // namespace
 +
-+void ApplyShortcutsToMainMenu() {
++void ApplyShortcutsToMainMenu(const UserShortcuts& shown) {
 +  NSMenu* const main_menu = NSApp.mainMenu;
 +  if (!main_menu) {
 +    return;
 +  }
-+  ApplyToMenu(main_menu);
++  ApplyToMenu(main_menu, shown);
 +}
 +
 +bool MenuRowHasAppShortcut(int command) {
@@ -4556,7 +4593,7 @@ index 0000000000000..6f94383eff8b2
 +#endif  // CHROME_BROWSER_UI_STEDDING_SHORTCUT_OVERRIDES_H_
 diff --git a/chrome/browser/ui/stedding/shortcut_overrides_unittest.cc b/chrome/browser/ui/stedding/shortcut_overrides_unittest.cc
 new file mode 100644
-index 0000000000000..c3c74979fb4e2
+index 0000000000000..adc1a5e1f5107
 --- /dev/null
 +++ b/chrome/browser/ui/stedding/shortcut_overrides_unittest.cc
 @@ -0,0 +1,525 @@
@@ -4642,7 +4679,7 @@ index 0000000000000..c3c74979fb4e2
 +
 +  // The table in force for what `stored_` says.
 +  std::vector<Binding> Effective() const {
-+    return Apply(defaults_, Resolve(stored_));
++    return Apply(defaults_, Resolve(stored_, defaults_));
 +  }
 +
 +  base::DictValue stored_;
@@ -4679,7 +4716,7 @@ index 0000000000000..c3c74979fb4e2
 +TEST_F(ShortcutOverridesTest, OffRemovesEveryChordAndKeepsTheList) {
 +  ASSERT_TRUE(editor_.SetOff(Row("next-space"), true));
 +  EXPECT_TRUE(ChordsOf(Effective(), IDC_STEDDING_SPACE_NEXT).empty());
-+  EXPECT_TRUE(Resolve(stored_).IsOff(IDC_STEDDING_SPACE_NEXT));
++  EXPECT_TRUE(Resolve(stored_, defaults_).IsOff(IDC_STEDDING_SPACE_NEXT));
 +  const RowState off = editor_.StateOf(Row("next-space"));
 +  EXPECT_TRUE(off.off);
 +  EXPECT_EQ((std::vector<Chord>{CtrlAlt(ui::VKEY_N), CtrlAlt(ui::VKEY_RIGHT)}),
@@ -4768,7 +4805,7 @@ index 0000000000000..c3c74979fb4e2
 +  std::vector<Binding> later = TestDefaults();
 +  later.push_back({IDC_STEDDING_CLEAR_SPACE, CtrlAlt(ui::VKEY_J)});
 +  ShortcutEditor next_release(stored_, later);
-+  const std::vector<Binding> table = Apply(later, Resolve(stored_));
++  const std::vector<Binding> table = Apply(later, Resolve(stored_, later));
 +  EXPECT_EQ((std::vector<Chord>{CtrlAlt(ui::VKEY_T), CtrlAlt(ui::VKEY_J)}),
 +            ChordsOf(table, IDC_NEW_TAB));
 +  EXPECT_EQ(std::vector<Chord>{CtrlAlt(ui::VKEY_K)},
@@ -4801,7 +4838,7 @@ index 0000000000000..c3c74979fb4e2
 +  stored_.Set("v", 1);
 +  stored_.Set("commands", std::move(commands));
 +
-+  const UserShortcuts user = Resolve(stored_);
++  const UserShortcuts user = Resolve(stored_, defaults_);
 +  EXPECT_EQ(std::vector<Chord>{CtrlAlt(ui::VKEY_J)}, user.chords.at(IDC_NEW_TAB))
 +      << "the unreadable keys dropped, Ctrl+Alt+L kept by the first row";
 +  EXPECT_EQ(std::vector<Chord>{CtrlAlt(ui::VKEY_L)},
@@ -4864,7 +4901,7 @@ index 0000000000000..c3c74979fb4e2
 +            editor_.Check(Row("tab-by-number"), CtrlAlt(ui::VKEY_J)).kind);
 +
 +  ASSERT_TRUE(editor_.SetOff(Row("tab-by-number"), true));
-+  const UserShortcuts user = Resolve(stored_);
++  const UserShortcuts user = Resolve(stored_, defaults_);
 +  for (int command :
 +       {IDC_SELECT_TAB_0, IDC_SELECT_TAB_1, IDC_SELECT_TAB_2,
 +        IDC_SELECT_TAB_3, IDC_SELECT_TAB_4, IDC_SELECT_TAB_5,
@@ -4961,12 +4998,12 @@ index 0000000000000..c3c74979fb4e2
 +      << "the row still names the keys it has when turned on";
 +
 +  // Holding the platform's key numbers the rows only while they keep it.
-+  SetCurrent(Resolve(stored_));
++  SetCurrent(Resolve(stored_, defaults_));
 +  EXPECT_FALSE(IsOnPlatformKey(IDC_SELECT_TAB_0, /*ships_on_it=*/true));
 +  EXPECT_FALSE(IsOnPlatformKey(IDC_STEDDING_SPACE_1, /*ships_on_it=*/false))
 +      << "the Spaces are off";
 +  ASSERT_TRUE(editor_.SetOff(Row("space-by-number"), false));
-+  SetCurrent(Resolve(stored_));
++  SetCurrent(Resolve(stored_, defaults_));
 +  EXPECT_TRUE(IsOnPlatformKey(IDC_STEDDING_SPACE_1, /*ships_on_it=*/false));
 +
 +  stored_.Set(kNumberKeysKey, "sideways");
@@ -4979,7 +5016,7 @@ index 0000000000000..c3c74979fb4e2
 +  EXPECT_FALSE(stored_.FindString(kNumberKeysKey));
 +  EXPECT_EQ(std::vector<Chord>{CtrlAlt(ui::VKEY_1)},
 +            ChordsOf(Effective(), IDC_SELECT_TAB_0));
-+  SetCurrent(Resolve(stored_));
++  SetCurrent(Resolve(stored_, defaults_));
 +  EXPECT_TRUE(IsOnPlatformKey(IDC_SELECT_TAB_0, /*ships_on_it=*/true));
 +}
 +
@@ -5025,7 +5062,7 @@ index 0000000000000..c3c74979fb4e2
 +  ASSERT_TRUE(editor.SetOff(Row("clear-space"), false));
 +  ASSERT_TRUE(editor.SetNumberKeys(NumberKeys::kRowsFirst));
 +  EXPECT_EQ((std::vector<Chord>{CtrlAlt(ui::VKEY_K), lent_default}),
-+            ChordsOf(Apply(defaults, Resolve(stored)),
++            ChordsOf(Apply(defaults, Resolve(stored, defaults)),
 +                     IDC_STEDDING_CLEAR_SPACE));
 +  EXPECT_FALSE(stored.FindDictByDottedPath("commands.clear-space"))
 +      << "back to its defaults, so no entry";
@@ -5205,10 +5242,10 @@ index 0000000000000..0fe21239740ef
 +#endif  // CHROME_BROWSER_UI_STEDDING_SHORTCUT_RECORDING_H_
 diff --git a/chrome/browser/ui/stedding/shortcut_service.cc b/chrome/browser/ui/stedding/shortcut_service.cc
 new file mode 100644
-index 0000000000000..e9e9e29ac5114
+index 0000000000000..79a736a40eac5
 --- /dev/null
 +++ b/chrome/browser/ui/stedding/shortcut_service.cc
-@@ -0,0 +1,159 @@
+@@ -0,0 +1,165 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -5239,14 +5276,20 @@ index 0000000000000..e9e9e29ac5114
 +namespace {
 +
 +void Load(PrefService* local_state) {
-+  SetCurrent(Resolve(local_state->GetDict(prefs::kShortcutsUser)));
++  SetCurrent(
++      Resolve(local_state->GetDict(prefs::kShortcutsUser), DefaultBindings()));
 +}
 +
 +void OnPrefChanged(PrefService* local_state) {
++#if BUILDFLAG(IS_MAC)
++  // What the menu bar shows until it takes the change: the chords in force
++  // before it, which at the first change are those it was built with.
++  const UserShortcuts shown = Current();
++#endif
 +  Load(local_state);
 +#if BUILDFLAG(IS_MAC)
 +  // Z11: the menu bar's rows; the windows reloaded through the callbacks.
-+  ApplyShortcutsToMainMenu();
++  ApplyShortcutsToMainMenu(shown);
 +#endif
 +}
 +
@@ -5436,10 +5479,10 @@ index 0000000000000..33303f229b6c5
 +#endif  // CHROME_BROWSER_UI_STEDDING_SHORTCUT_SERVICE_H_
 diff --git a/chrome/browser/ui/stedding/shortcut_service_unittest.cc b/chrome/browser/ui/stedding/shortcut_service_unittest.cc
 new file mode 100644
-index 0000000000000..d42f5135d558d
+index 0000000000000..2a888e4f1914c
 --- /dev/null
 +++ b/chrome/browser/ui/stedding/shortcut_service_unittest.cc
-@@ -0,0 +1,101 @@
+@@ -0,0 +1,104 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -5475,7 +5518,9 @@ index 0000000000000..d42f5135d558d
 +// rows have their defaults.
 +TEST_F(ShortcutServiceTest, NothingIsStoredUntilARowChanges) {
 +  EXPECT_TRUE(local_state_.GetDict(prefs::kShortcutsUser).empty());
-+  EXPECT_TRUE(Resolve(local_state_.GetDict(prefs::kShortcutsUser)).empty());
++  EXPECT_TRUE(
++      Resolve(local_state_.GetDict(prefs::kShortcutsUser), DefaultBindings())
++          .empty());
 +  const RowState state = RowStateOf(&local_state_, *EntryForName("new-tab"));
 +  EXPECT_FALSE(state.changed);
 +  EXPECT_EQ(state.defaults, state.chords);
@@ -5528,8 +5573,9 @@ index 0000000000000..d42f5135d558d
 +                .kind);
 +  EXPECT_TRUE(local_state_.GetDict(prefs::kShortcutsUser)
 +                  .FindDictByDottedPath("commands.clear-space"));
-+  EXPECT_TRUE(Resolve(local_state_.GetDict(prefs::kShortcutsUser))
-+                  .IsChanged(clear.command));
++  EXPECT_TRUE(
++      Resolve(local_state_.GetDict(prefs::kShortcutsUser), DefaultBindings())
++          .IsChanged(clear.command));
 +  ASSERT_TRUE(SetShortcutOff(&local_state_, clear, true));
 +  EXPECT_TRUE(RowStateOf(&local_state_, clear).off);
 +  ASSERT_TRUE(ResetShortcut(&local_state_, clear));
@@ -6176,18 +6222,19 @@ index 9e855fb33ef21..8362c071ffae1 100644
      "//chrome/browser/ui/spaces",
      "//chrome/browser/ui/tabs:tab_strip",
 diff --git a/chrome/browser/ui/views/switcher/recent_tabs_switcher_view.cc b/chrome/browser/ui/views/switcher/recent_tabs_switcher_view.cc
-index 381b7531c4951..4e6c494baf3eb 100644
+index 03381a233160e..9148bec7e93d1 100644
 --- a/chrome/browser/ui/views/switcher/recent_tabs_switcher_view.cc
 +++ b/chrome/browser/ui/views/switcher/recent_tabs_switcher_view.cc
-@@ -12,16 +12,20 @@
- 
+@@ -13,17 +13,21 @@
  #include "base/functional/bind.h"
+ #include "base/scoped_observation.h"
  #include "base/task/single_thread_task_runner.h"
 +#include "chrome/app/chrome_command_ids.h"
  #include "chrome/browser/profiles/profile.h"
 +#include "chrome/browser/ui/accelerator_table.h"
  #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
  #include "chrome/browser/ui/spaces/space.h"
+ #include "chrome/browser/ui/spaces/space_id.h"
  #include "chrome/browser/ui/spaces/space_model.h"
  #include "chrome/browser/ui/stedding/motion.h"
 +#include "chrome/browser/ui/stedding/shortcut_overrides.h"
@@ -6200,7 +6247,7 @@ index 381b7531c4951..4e6c494baf3eb 100644
  #include "ui/base/metadata/metadata_impl_macros.h"
  #include "ui/color/color_id.h"
  #include "ui/color/color_provider.h"
-@@ -69,12 +73,6 @@ RecentTabsSwitcherView* GetOpen(BrowserView* browser_view) {
+@@ -71,12 +75,6 @@ RecentTabsSwitcherView* GetOpen(BrowserView* browser_view) {
    return nullptr;
  }
  
@@ -6213,7 +6260,7 @@ index 381b7531c4951..4e6c494baf3eb 100644
  }  // namespace
  
  class RecentTabsSwitcherView::Watcher : public ui::EventObserver {
-@@ -134,6 +132,18 @@ RecentTabsSwitcherView* RecentTabsSwitcherView::GetOpenForTesting(
+@@ -166,6 +164,18 @@ RecentTabsSwitcherView* RecentTabsSwitcherView::GetOpenForTesting(
  
  RecentTabsSwitcherView::RecentTabsSwitcherView(BrowserWindowInterface* browser)
      : browser_(browser) {
@@ -6232,7 +6279,7 @@ index 381b7531c4951..4e6c494baf3eb 100644
    SetBackground(views::CreateRoundedRectBackground(ui::kColorDialogBackground,
                                                     kPanelRadius));
    SetBorder(views::CreateEmptyBorder(gfx::Insets(kPanelInset)));
-@@ -233,7 +243,7 @@ void RecentTabsSwitcherView::OnWatchedEvent(const ui::Event& event) {
+@@ -268,7 +278,7 @@ void RecentTabsSwitcherView::OnWatchedEvent(const ui::Event& event) {
    }
    const ui::KeyEvent& key = *event.AsKeyEvent();
    if (key.type() == ui::EventType::kKeyReleased) {
@@ -6241,7 +6288,7 @@ index 381b7531c4951..4e6c494baf3eb 100644
        Commit();
      }
      return;
-@@ -245,12 +255,15 @@ void RecentTabsSwitcherView::OnWatchedEvent(const ui::Event& event) {
+@@ -280,12 +290,15 @@ void RecentTabsSwitcherView::OnWatchedEvent(const ui::Event& event) {
      Cancel();
      return;
    }
@@ -6262,7 +6309,7 @@ index 381b7531c4951..4e6c494baf3eb 100644
    }
  }
 diff --git a/chrome/browser/ui/views/switcher/recent_tabs_switcher_view.h b/chrome/browser/ui/views/switcher/recent_tabs_switcher_view.h
-index fbd3c236efe8b..4ea71e34cd311 100644
+index 794d699016077..6f5d784d0dbf4 100644
 --- a/chrome/browser/ui/views/switcher/recent_tabs_switcher_view.h
 +++ b/chrome/browser/ui/views/switcher/recent_tabs_switcher_view.h
 @@ -13,6 +13,7 @@
@@ -6296,7 +6343,7 @@ index fbd3c236efe8b..4ea71e34cd311 100644
    // views::View:
    void AddedToWidget() override;
    void RemovedFromWidget() override;
-@@ -89,6 +97,9 @@ class RecentTabsSwitcherView : public views::View {
+@@ -94,6 +102,9 @@ class RecentTabsSwitcherView : public views::View {
    bool revealed_ = false;
    std::vector<raw_ptr<views::View>> cells_;
    size_t highlighted_ = 0;

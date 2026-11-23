@@ -40,9 +40,9 @@ Removable when: never as behaviour.
  .../settings/stedding_page/stedding_page.ts   |  69 +--
  .../stedding_page/stedding_routes_card.css    |  69 +++
  .../stedding_routes_card.html.ts              |  98 +++++
- .../stedding_page/stedding_routes_card.ts     | 265 ++++++++++++
- chrome/browser/ui/spaces/space_router.cc      |  82 +++-
- chrome/browser/ui/spaces/space_router.h       |  21 +-
+ .../stedding_page/stedding_routes_card.ts     | 279 ++++++++++++
+ chrome/browser/ui/spaces/space_router.cc      | 111 ++++-
+ chrome/browser/ui/spaces/space_router.h       |  27 +-
  .../ui/spaces/space_router_unittest.cc        | 136 ++++++
  .../browser/ui/webui/settings/settings_ui.cc  |  35 +-
  .../webui/settings/stedding_spaces_handler.cc | 231 +++++++---
@@ -50,7 +50,7 @@ Removable when: never as behaviour.
  chrome/test/stedding/BUILD.gn                 |   1 +
  .../test/stedding/routes_card_browsertest.cc  | 401 ++++++++++++++++++
  .../stedding/settings_spaces_browsertest.cc   |  92 +---
- 16 files changed, 1298 insertions(+), 288 deletions(-)
+ 16 files changed, 1347 insertions(+), 288 deletions(-)
  create mode 100644 chrome/browser/resources/settings/stedding_page/stedding_routes_card.css
  create mode 100644 chrome/browser/resources/settings/stedding_page/stedding_routes_card.html.ts
  create mode 100644 chrome/browser/resources/settings/stedding_page/stedding_routes_card.ts
@@ -495,10 +495,10 @@ index 0000000000000..943058a46c461
 +}
 diff --git a/chrome/browser/resources/settings/stedding_page/stedding_routes_card.ts b/chrome/browser/resources/settings/stedding_page/stedding_routes_card.ts
 new file mode 100644
-index 0000000000000..ce56abb9e5a9a
+index 0000000000000..079e990ed719a
 --- /dev/null
 +++ b/chrome/browser/resources/settings/stedding_page/stedding_routes_card.ts
-@@ -0,0 +1,265 @@
+@@ -0,0 +1,279 @@
 +// Copyright 2026 The Stedding Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -700,10 +700,10 @@ index 0000000000000..ce56abb9e5a9a
 +
 +  // routing D13: the whole rule goes to the browser with what it was, which
 +  // names it wherever the list has moved since. A refused edit puts the field
-+  // back and says why.
++  // back and says why. Answers whether the browser took the edit.
 +  private async edit_(
 +      index: number, match: string, typed: string, space: string,
-+      putBack: () => void) {
++      putBack: () => void): Promise<boolean> {
 +    const rule = this.routes_.rules[index];
 +    const edited = await sendWithPromise(
 +        'steddingUpdateRouteRule', rule.match, rule.pattern, rule.space, match,
@@ -711,11 +711,12 @@ index 0000000000000..ce56abb9e5a9a
 +    if (edited) {
 +      this.ruleErrorIndex_ = -1;
 +      this.ruleError_ = '';
-+      return;
++      return true;
 +    }
 +    putBack();
 +    this.ruleErrorIndex_ = index;
 +    this.ruleError_ = this.refusal_(match);
++    return false;
 +  }
 +
 +  protected onKindChange_(e: Event) {
@@ -727,16 +728,29 @@ index 0000000000000..ce56abb9e5a9a
 +        () => select.value = rule.match);
 +  }
 +
-+  protected onTextChange_(e: Event) {
++  protected async onTextChange_(e: Event) {
 +    const index = this.indexOf_(e);
 +    const rule = this.routes_.rules[index];
 +    const input = e.target as CrInputElement;
 +    if (input.value.trim() === rule.pattern) {
 +      return;
 +    }
-+    this.edit_(
++    const edited = await this.edit_(
 +        index, rule.match, input.value, rule.space,
 +        () => input.value = rule.pattern);
++    if (!edited) {
++      return;
++    }
++    // routing D13: what was typed can come to the rule as it was (a
++    // subdomain of its site, the site as an address). Then no preference
++    // changes, no list comes, and the field, bound to the same text as
++    // before, keeps what was typed. Once any new list is drawn, the field
++    // shows the rule that is stored.
++    await this.updateComplete;
++    const stored = this.routes_.rules[index];
++    if (stored && input.value !== stored.pattern) {
++      input.value = stored.pattern;
++    }
 +  }
 +
 +  protected onSpaceChange_(e: Event) {
@@ -765,7 +779,7 @@ index 0000000000000..ce56abb9e5a9a
 +customElements.define(
 +    SettingsSteddingRoutesCardElement.is, SettingsSteddingRoutesCardElement);
 diff --git a/chrome/browser/ui/spaces/space_router.cc b/chrome/browser/ui/spaces/space_router.cc
-index 18e291bbf3a0c..99d26b5f1f1c6 100644
+index 18e291bbf3a0c..5f11f2a8d126e 100644
 --- a/chrome/browser/ui/spaces/space_router.cc
 +++ b/chrome/browser/ui/spaces/space_router.cc
 @@ -141,7 +141,7 @@ bool RouteMatches(const Route& route, const GURL& url) {
@@ -789,7 +803,43 @@ index 18e291bbf3a0c..99d26b5f1f1c6 100644
        continue;
      }
      const std::optional<Route::Match> kind = MatchFromName(*match);
-@@ -265,6 +268,81 @@ void RemoveRoute(PrefService* prefs, size_t index) {
+@@ -256,6 +259,35 @@ void AddRoute(PrefService* prefs, Route route) {
+   WriteRoutes(prefs, routes);
+ }
+ 
++void AddRouteDecidingFor(PrefService* prefs, Route route, const GURL& url) {
++  if (!prefs || route.pattern.empty() || route.space.empty()) {
++    return;
++  }
++  const auto same = [&route](const Route& existing) {
++    return existing.match == route.match &&
++           base::ToLowerASCII(existing.pattern) ==
++               base::ToLowerASCII(route.pattern);
++  };
++  std::vector<Route> routes;
++  bool placed = false;
++  for (Route& existing : ReadRoutes(prefs)) {
++    // The first rule that would decide for `url`, or the one this replaces:
++    // the new rule goes before it. Written again for a second tab of the
++    // site, it never falls back behind a rule it was put ahead of.
++    if (!placed && (same(existing) || RouteMatches(existing, url))) {
++      routes.push_back(route);
++      placed = true;
++    }
++    if (!same(existing)) {
++      routes.push_back(std::move(existing));
++    }
++  }
++  if (!placed) {
++    routes.push_back(std::move(route));
++  }
++  WriteRoutes(prefs, routes);
++}
++
+ void RemoveRoute(PrefService* prefs, size_t index) {
+   std::vector<Route> routes = ReadRoutes(prefs);
+   if (index >= routes.size()) {
+@@ -265,6 +297,81 @@ void RemoveRoute(PrefService* prefs, size_t index) {
    WriteRoutes(prefs, routes);
  }
  
@@ -872,7 +922,7 @@ index 18e291bbf3a0c..99d26b5f1f1c6 100644
    if (!prefs || space.empty()) {
      return;
 diff --git a/chrome/browser/ui/spaces/space_router.h b/chrome/browser/ui/spaces/space_router.h
-index 09168418d725e..4f2d1fc95c2f8 100644
+index 09168418d725e..c29990b384531 100644
 --- a/chrome/browser/ui/spaces/space_router.h
 +++ b/chrome/browser/ui/spaces/space_router.h
 @@ -36,8 +36,8 @@ std::string HostOf(const GURL& url);
@@ -886,8 +936,16 @@ index 09168418d725e..4f2d1fc95c2f8 100644
  std::optional<std::string> RouteFor(const std::vector<Route>& routes,
                                      const GURL& url);
  
-@@ -57,6 +57,23 @@ void WriteRoutes(PrefService* prefs, const std::vector<Route>& routes);
+@@ -55,8 +55,31 @@ std::vector<Route> ReadRoutes(const PrefService* prefs);
+ void WriteRoutes(PrefService* prefs, const std::vector<Route>& routes);
+ // Adds `route`, replacing a rule with the same match and pattern.
  void AddRoute(PrefService* prefs, Route route);
++// routing D5: the tab menu's "Always Open <site> in" for a tab showing `url`.
++// Adds `route` as AddRoute does, but ahead of the first rule that matches
++// `url`, or in the place of the rule it replaces when that comes first, so
++// the Space just picked decides for `url` (D1: the first match wins). The
++// rules behind it keep their order.
++void AddRouteDecidingFor(PrefService* prefs, Route route, const GURL& url);
  void RemoveRoute(PrefService* prefs, size_t index);
  
 +// routing D12, D13: the rule of kind `match` that `typed` means, for `space`,

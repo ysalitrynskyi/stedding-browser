@@ -56,7 +56,7 @@ Removable when: never as behaviour.
  .../ui/views/frame/stedding_top_row_reveal.h  | 146 +++++
  .../views/frame/stedding_window_background.cc |  34 +-
  .../ui/views/frame/top_container_view.cc      |  16 +
- .../frame/vertical_tab_strip_region_view.cc   | 258 ++++++--
+ .../frame/vertical_tab_strip_region_view.cc   | 320 ++++++++--
  .../frame/vertical_tab_strip_region_view.h    |  37 +-
  .../ui/views/tabs/vertical/sidebar_address.cc |  13 +-
  .../ui/views/tabs/vertical/sidebar_address.h  |   6 +
@@ -64,8 +64,12 @@ Removable when: never as behaviour.
  .../browser/ui/webui/settings/settings_ui.cc  |  31 +-
  chrome/test/stedding/BUILD.gn                 |   2 +
  .../test/stedding/compact_row_browsertest.cc  | 575 ++++++++++++++++++
+ .../stedding/motion_frames_browsertest.cc     |  31 +-
  .../stedding/settings_spaces_browsertest.cc   |   3 +
- 30 files changed, 1917 insertions(+), 138 deletions(-)
+ .../stedding/sidebar_click_browsertest.cc     |   3 +
+ chrome/test/stedding/sidebar_test_util.cc     |  14 +
+ .../test/stedding/space_wheel_browsertest.cc  |   6 +-
+ 34 files changed, 2019 insertions(+), 152 deletions(-)
  create mode 100644 chrome/browser/ui/views/frame/stedding_top_row_reveal.cc
  create mode 100644 chrome/browser/ui/views/frame/stedding_top_row_reveal.h
  create mode 100644 chrome/test/stedding/compact_row_browsertest.cc
@@ -1746,10 +1750,57 @@ index 2e332fc9a53ef..a324c1996bc74 100644
  #endif
    View::PaintChildren(paint_info);
 diff --git a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
-index d9f6fe8f3a08d..3256dd65f0041 100644
+index d9f6fe8f3a08d..8305ff0675cb5 100644
 --- a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
 +++ b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
-@@ -372,6 +372,12 @@ class VerticalTabStripRegionView::LeadingEdgeObserver
+@@ -135,6 +135,7 @@
+ #include "ui/base/models/image_model.h"
+ #include "ui/color/color_provider.h"
+ #include "ui/compositor/compositor.h"
++#include "ui/compositor/compositor_observer.h"
+ #include "ui/compositor/layer.h"
+ #include "ui/compositor/layer_animation_observer.h"
+ #include "ui/compositor/layer_animator.h"
+@@ -187,6 +188,38 @@
+ 
+ namespace {
+ 
++// spaces B48: runs `done` once `compositor` has committed its next frame, or
++// never if the compositor goes first. A list's scroll offset is set on the
++// compositor's side, which clamps it to the list's size at its last commit
++// (ui::Layer::SetScrollOffset); a list grown since -- the rows of the Space
++// just shown -- takes its offset again after that commit.
++class AfterNextCommit : public ui::CompositorObserver {
++ public:
++  static void Run(ui::Compositor* compositor, base::OnceClosure done) {
++    new AfterNextCommit(compositor, std::move(done));
++  }
++
++  void OnCompositingDidCommit(ui::Compositor* compositor) override {
++    base::OnceClosure done = std::move(done_);
++    delete this;
++    std::move(done).Run();
++  }
++  void OnCompositingShuttingDown(ui::Compositor* compositor) override {
++    delete this;
++  }
++
++ private:
++  AfterNextCommit(ui::Compositor* compositor, base::OnceClosure done)
++      : compositor_(compositor), done_(std::move(done)) {
++    compositor_->AddObserver(this);
++    compositor_->ScheduleFullRedraw();
++  }
++  ~AfterNextCommit() override { compositor_->RemoveObserver(this); }
++
++  const raw_ptr<ui::Compositor> compositor_;
++  base::OnceClosure done_;
++};
++
+ // sidebar Y2: a row button whose label the view can reach, for the text
+ // size (LabelButton keeps label() protected).
+ class SidebarRowButton : public views::LabelButton {
+@@ -372,6 +405,12 @@ class VerticalTabStripRegionView::LeadingEdgeObserver
        view_->OnWindowPointerPressed();
        return;
      }
@@ -1762,7 +1813,7 @@ index d9f6fe8f3a08d..3256dd65f0041 100644
      view_->OnWindowPointerMoved();
    }
  
-@@ -566,19 +572,20 @@ class VerticalTabStripRegionView::SpaceSlideSnapshot
+@@ -566,19 +605,20 @@ class VerticalTabStripRegionView::SpaceSlideSnapshot
  
    ui::Layer* layer() { return layer_.get(); }
  
@@ -1787,7 +1838,7 @@ index d9f6fe8f3a08d..3256dd65f0041 100644
    }
  
    // ui::LayerDelegate:
-@@ -1204,6 +1211,14 @@ void VerticalTabStripRegionView::OnAnimationProgressed(
+@@ -1204,6 +1244,14 @@ void VerticalTabStripRegionView::OnAnimationProgressed(
        if (motion == TabStripAnimations::kExpandOnHover &&
            is_expanded_on_hover_) {
          ShowTheCardOfTheRowUnderThePointer();
@@ -1802,7 +1853,7 @@ index d9f6fe8f3a08d..3256dd65f0041 100644
        }
        // sidebar Y19: the slide is over. A layout run from inside this
        // notice, while the controller still counted the slide, clipped the
-@@ -1318,6 +1333,10 @@ void VerticalTabStripRegionView::SetToolbarHeightForLayout(int toolbar_height) {
+@@ -1318,6 +1366,10 @@ void VerticalTabStripRegionView::SetToolbarHeightForLayout(int toolbar_height) {
    top_button_container_->SetToolbarHeightForLayout(toolbar_height);
  }
  
@@ -1813,7 +1864,7 @@ index d9f6fe8f3a08d..3256dd65f0041 100644
  void VerticalTabStripRegionView::SetTopRowInOverlayForLayout(bool in_overlay) {
    if (top_button_container_->GetVisible() != in_overlay) {
      return;
-@@ -1585,7 +1604,8 @@ void VerticalTabStripRegionView::AddedToWidget() {
+@@ -1585,7 +1637,8 @@ void VerticalTabStripRegionView::AddedToWidget() {
        leading_edge_observer_ = std::make_unique<LeadingEdgeObserver>(this);
        leading_edge_monitor_ = views::EventMonitor::CreateWindowMonitor(
            leading_edge_observer_.get(), widget->GetNativeWindow(),
@@ -1823,7 +1874,7 @@ index d9f6fe8f3a08d..3256dd65f0041 100644
  #if BUILDFLAG(IS_MAC)
        if (browser_view() && browser_view()->contents_container()) {
          page_bounds_observer_ = std::make_unique<PageBoundsObserver>(
-@@ -1767,10 +1787,11 @@ void VerticalTabStripRegionView::Layout(PassKey) {
+@@ -1767,10 +1820,11 @@ void VerticalTabStripRegionView::Layout(PassKey) {
    if (applied_rail_form_ != rail) {
  #if BUILDFLAG(IS_WIN)
      // sidebar Y42: Windows' caption buttons take the sidebar ground's
@@ -1837,7 +1888,7 @@ index d9f6fe8f3a08d..3256dd65f0041 100644
          GetWidget()->non_client_view()->frame_view()) {
        GetWidget()->non_client_view()->frame_view()->SchedulePaint();
      }
-@@ -1835,7 +1856,15 @@ void VerticalTabStripRegionView::Layout(PassKey) {
+@@ -1835,7 +1889,15 @@ void VerticalTabStripRegionView::Layout(PassKey) {
            ? ResizeHandleReach()
            : 0;
    resize_area_->SetReach(handle_reach);
@@ -1854,7 +1905,7 @@ index d9f6fe8f3a08d..3256dd65f0041 100644
    shadow_frame_->SetBoundsRect(GetLocalBounds());
  
    // Ensure that we update the drop arrow position so that it does not render in
-@@ -2260,9 +2289,20 @@ void VerticalTabStripRegionView::RequestCollapse(bool collapse) {
+@@ -2260,9 +2322,20 @@ void VerticalTabStripRegionView::RequestCollapse(bool collapse) {
    if (sidebar_panels_ &&
        sidebar_panels_->open() != stedding::SidebarPanel::kNone) {
      sidebar_panels_->Close();
@@ -1877,7 +1928,7 @@ index d9f6fe8f3a08d..3256dd65f0041 100644
      return;
    }
    target_collapse_state_.collapsed = collapse;
-@@ -2585,6 +2625,21 @@ void VerticalTabStripRegionView::SlideInSpaceList(const spaces::SpaceId& from,
+@@ -2585,6 +2658,50 @@ void VerticalTabStripRegionView::SlideInSpaceList(const spaces::SpaceId& from,
        tab_strip_view() ? tab_strip_view()->unpinned_tabs_scroll_view() : nullptr;
    spaces::SpaceModel* const model =
        spaces::SpaceModel::From(browser_view()->browser());
@@ -1894,12 +1945,41 @@ index d9f6fe8f3a08d..3256dd65f0041 100644
 +    const int offset = saved == space_scroll_offsets_.end() ? 0 : saved->second;
 +    const int end = std::max(
 +        0, list->contents()->height() - list->GetVisibleRect().height());
-+    list->ScrollToOffset(gfx::PointF(0, std::clamp(offset, 0, end)));
++    const int wanted = std::clamp(offset, 0, end);
++    list->ScrollToOffset(gfx::PointF(0, wanted));
++    // Clamped to the size the list had at the compositor's last commit, as
++    // after a switch from a shorter Space (the Mac, 2026-11-23): the offset
++    // goes again once the new size is committed, unless the list was
++    // scrolled or the Space left in between.
++    const int got = list->GetVisibleRect().y();
++    ui::Compositor* const compositor =
++        GetWidget() ? GetWidget()->GetCompositor() : nullptr;
++    if (got != wanted && compositor && model) {
++      AfterNextCommit::Run(
++          compositor,
++          base::BindOnce(
++              [](base::WeakPtr<VerticalTabStripRegionView> region,
++                 spaces::SpaceId space, int wanted, int got) {
++                if (!region || !region->tab_strip_view()) {
++                  return;
++                }
++                views::ScrollView* const list =
++                    region->tab_strip_view()->unpinned_tabs_scroll_view();
++                spaces::SpaceModel* const model = spaces::SpaceModel::From(
++                    region->browser_view()->browser());
++                if (!list || !model || model->active_id() != space ||
++                    list->GetVisibleRect().y() != got) {
++                  return;
++                }
++                list->ScrollToOffset(gfx::PointF(0, wanted));
++              },
++              weak_factory_.GetWeakPtr(), to, wanted, got));
++    }
 +  }
    // motion O9: Instant shows the new Space at once, as no motion does.
    if (!list || !model ||
        !stedding::ShouldAnimateSidebar(
-@@ -2621,8 +2676,47 @@ void VerticalTabStripRegionView::SlideInSpaceList(const spaces::SpaceId& from,
+@@ -2621,8 +2738,47 @@ void VerticalTabStripRegionView::SlideInSpaceList(const spaces::SpaceId& from,
      DropOutgoingSpace();
      return;
    }
@@ -1949,7 +2029,7 @@ index d9f6fe8f3a08d..3256dd65f0041 100644
    for (views::View* const view : moving) {
      if (!view->layer()) {
        view->SetPaintToLayer();
-@@ -2631,39 +2725,23 @@ void VerticalTabStripRegionView::SlideInSpaceList(const spaces::SpaceId& from,
+@@ -2631,39 +2787,23 @@ void VerticalTabStripRegionView::SlideInSpaceList(const spaces::SpaceId& from,
      ui::Layer* const layer = view->layer();
      layer->GetAnimator()->StopAnimating();
      gfx::Transform start;
@@ -1998,7 +2078,7 @@ index d9f6fe8f3a08d..3256dd65f0041 100644
          base::BindOnce(&VerticalTabStripRegionView::DropOutgoingSpaceAfterSlide,
                         weak_factory_.GetWeakPtr(),
                         outgoing_space_generation_));
-@@ -2680,16 +2758,18 @@ void VerticalTabStripRegionView::SnapshotOutgoingSpace(
+@@ -2680,16 +2820,18 @@ void VerticalTabStripRegionView::SnapshotOutgoingSpace(
    views::ScrollView* const list =
        tab_strip_view() ? tab_strip_view()->unpinned_tabs_scroll_view()
                         : nullptr;
@@ -2022,7 +2102,7 @@ index d9f6fe8f3a08d..3256dd65f0041 100644
    for (views::View* const view : leaving) {
      if (!view->layer()) {
        view->SetPaintToLayer();
-@@ -2706,6 +2786,10 @@ void VerticalTabStripRegionView::DropOutgoingSpace() {
+@@ -2706,6 +2848,10 @@ void VerticalTabStripRegionView::DropOutgoingSpace() {
    std::vector<std::unique_ptr<SpaceSlideSnapshot>> dropped;
    dropped.swap(outgoing_space_);
    ++outgoing_space_generation_;
@@ -2033,7 +2113,7 @@ index d9f6fe8f3a08d..3256dd65f0041 100644
  }
  
  void VerticalTabStripRegionView::DropOutgoingSpaceAfterSlide(int generation) {
-@@ -2999,10 +3083,14 @@ void VerticalTabStripRegionView::UpdateExpandOnHoverState(
+@@ -2999,10 +3145,14 @@ void VerticalTabStripRegionView::UpdateExpandOnHoverState(
      suppress_expand_on_hover_ = false;
    }
  
@@ -2049,7 +2129,7 @@ index d9f6fe8f3a08d..3256dd65f0041 100644
      }
      return;
    }
-@@ -3030,8 +3118,12 @@ void VerticalTabStripRegionView::UpdateExpandOnHoverState(
+@@ -3030,8 +3180,12 @@ void VerticalTabStripRegionView::UpdateExpandOnHoverState(
    // a wait slid the reveal the test had played away.
    if (!hovered_for_testing_.has_value() && GetWidget() &&
        !GetWidget()->ShouldPaintAsActive()) {
@@ -2062,7 +2142,7 @@ index d9f6fe8f3a08d..3256dd65f0041 100644
      }
      return;
    }
-@@ -3628,6 +3720,12 @@ void VerticalTabStripRegionView::PlayWindowPointerForTesting(
+@@ -3628,6 +3782,12 @@ void VerticalTabStripRegionView::PlayWindowPointerForTesting(
    reveal_without_pointer_for_testing_ = false;
  }
  
@@ -2075,7 +2155,7 @@ index d9f6fe8f3a08d..3256dd65f0041 100644
  bool VerticalTabStripRegionView::CanRevealFromLeadingEdge() const {
    // Only a hidden sidebar the window shows: in F11 or a page's own full
    // screen the strip is not drawn at all, and a reveal there left it open
-@@ -3652,11 +3750,14 @@ bool VerticalTabStripRegionView::IsAtLeadingEdge(gfx::Point point) const {
+@@ -3652,11 +3812,14 @@ bool VerticalTabStripRegionView::IsAtLeadingEdge(gfx::Point point) const {
    const bool across = IsOnRight()
                            ? point.x() >= width - edge && point.x() < width
                            : point.x() >= 0 && point.x() < edge;
@@ -2094,7 +2174,7 @@ index d9f6fe8f3a08d..3256dd65f0041 100644
      if (const BrowserFrameView* const frame =
              browser_view()->browser_widget()->GetFrameView()) {
        top = base::ClampCeil(
-@@ -3676,6 +3777,7 @@ void VerticalTabStripRegionView::OnWindowPointerMoved() {
+@@ -3676,6 +3839,7 @@ void VerticalTabStripRegionView::OnWindowPointerMoved() {
  #if BUILDFLAG(IS_MAC)
    UpdateWindowLights();
  #endif
@@ -2102,7 +2182,7 @@ index d9f6fe8f3a08d..3256dd65f0041 100644
    if (!CanRevealFromLeadingEdge() || !IsPointerAtLeadingEdge()) {
      leading_edge_timer_.Stop();
      return;
-@@ -3692,6 +3794,32 @@ void VerticalTabStripRegionView::OnWindowPointerPressed() {
+@@ -3692,6 +3856,32 @@ void VerticalTabStripRegionView::OnWindowPointerPressed() {
    leading_edge_timer_.Stop();
  }
  
@@ -2135,7 +2215,7 @@ index d9f6fe8f3a08d..3256dd65f0041 100644
  void VerticalTabStripRegionView::UpdateHiddenClip(bool animating) {
    // sidebar Y19: closed to nothing, the strip's rows and buttons -- several
    // on layers of their own, which its bounds do not clip -- painted past its
-@@ -3700,9 +3828,10 @@ void VerticalTabStripRegionView::UpdateHiddenClip(bool animating) {
+@@ -3700,9 +3890,10 @@ void VerticalTabStripRegionView::UpdateHiddenClip(bool animating) {
    // edge shows.
    if (layer()) {
      layer()->SetMasksToBounds(
@@ -2149,7 +2229,7 @@ index d9f6fe8f3a08d..3256dd65f0041 100644
    }
  }
  
-@@ -3713,6 +3842,11 @@ bool VerticalTabStripRegionView::LightsOverThePage() const {
+@@ -3713,6 +3904,11 @@ bool VerticalTabStripRegionView::LightsOverThePage() const {
        !base::FeatureList::IsEnabled(stedding::kArcStyleWindow)) {
      return false;
    }
@@ -2161,7 +2241,7 @@ index d9f6fe8f3a08d..3256dd65f0041 100644
    const gfx::Rect lights = stedding::WindowLightsBoundsInScreen(widget);
    views::View* const page = browser_view()->contents_container();
    if (lights.IsEmpty() || !page || !page->GetVisible()) {
-@@ -3757,9 +3891,16 @@ void VerticalTabStripRegionView::UpdateWindowLights() {
+@@ -3757,9 +3953,16 @@ void VerticalTabStripRegionView::UpdateWindowLights() {
      const int band_x = from_left ? window.x() : lights.x() - kMargin;
      const int band_right =
          from_left ? lights.right() + kMargin : window.right();
@@ -2179,7 +2259,7 @@ index d9f6fe8f3a08d..3256dd65f0041 100644
      const bool in_band = band.Contains(pointer);
      if (!in_band) {
        lights_reveal_timer_.Stop();
-@@ -4233,7 +4374,10 @@ void VerticalTabStripRegionView::OnSpaceChipHovered(
+@@ -4233,7 +4436,10 @@ void VerticalTabStripRegionView::OnSpaceChipHovered(
    const int width = std::min(text.width(), std::max(0, this->width() - 8));
    const int height = text.height();
    // The switcher reports the chip in its parent's coordinates; that parent is
@@ -2191,7 +2271,7 @@ index d9f6fe8f3a08d..3256dd65f0041 100644
    gfx::RectF chip(chip_bounds);
    if (space_switcher_ && space_switcher_->parent() &&
        space_switcher_->parent() != this) {
-@@ -4245,7 +4389,8 @@ void VerticalTabStripRegionView::OnSpaceChipHovered(
+@@ -4245,7 +4451,8 @@ void VerticalTabStripRegionView::OnSpaceChipHovered(
    int x = chip_in_view.CenterPoint().x() - width / 2;
    x = std::clamp(x, 4, std::max(4, this->width() - width - 4));
    const int y = chip_in_view.y() - height - 4;
@@ -2201,7 +2281,7 @@ index d9f6fe8f3a08d..3256dd65f0041 100644
    space_hover_pill_->SetVisible(true);
    // Above the chips in paint order. A turn later: the hover can come in this
    // view's own layout, from the move Chromium synthesizes when a closed row
-@@ -4273,7 +4418,12 @@ void VerticalTabStripRegionView::ClearCurrentSpaceTabs() {
+@@ -4273,7 +4480,12 @@ void VerticalTabStripRegionView::ClearCurrentSpaceTabs() {
  void VerticalTabStripRegionView::VisibilityChanged(views::View* starting_from,
                                                     bool is_visible) {
    BaseTabStripRegionView::VisibilityChanged(starting_from, is_visible);
@@ -3026,6 +3106,72 @@ index 0000000000000..8d91806a22f77
 +#endif  // BUILDFLAG(IS_WIN)
 +
 +}  // namespace
+diff --git a/chrome/test/stedding/motion_frames_browsertest.cc b/chrome/test/stedding/motion_frames_browsertest.cc
+index f49f129c2ba95..3eea9026b3bda 100644
+--- a/chrome/test/stedding/motion_frames_browsertest.cc
++++ b/chrome/test/stedding/motion_frames_browsertest.cc
+@@ -1114,13 +1114,15 @@ IN_PROC_BROWSER_TEST_F(MotionFramesTest, SpaceSlide) {
+   }
+ }
+ 
+-// The layer named `name` at or under `layer`, or null.
+-ui::Layer* FindLayerNamed(ui::Layer* layer, std::string_view name) {
+-  if (layer->name() == name) {
++// The Space left's snapshot at `origin`, at or under `layer`: a switch draws
++// the Space left in two layers, its title row's and its list's (spaces B32).
++ui::Layer* FindSnapshotAt(ui::Layer* layer, const gfx::Point& origin) {
++  if (layer->name() == "SpaceSlideSnapshot" &&
++      layer->bounds().origin() == origin) {
+     return layer;
+   }
+   for (ui::Layer* const child : layer->children()) {
+-    if (ui::Layer* const found = FindLayerNamed(child, name)) {
++    if (ui::Layer* const found = FindSnapshotAt(child, origin)) {
+       return found;
+     }
+   }
+@@ -1162,7 +1164,7 @@ int LargeImages(const cc::PaintOpBuffer& buffer, const gfx::Size& size) {
+ // changed at once, the old rows stood still for about 430 ms, then the new
+ // list was there in one frame. Here the same motions, then switches, at once,
+ // a while after, and to a Space whose page is asleep and loads as it is
+-// shown: each draws the Space left at the list's size, starts the list's
++// shown: each draws the Space left at its list's size, starts the list's
+ // slide, and has the compositor present frames all through it, none more than
+ // 100 ms after the one before.
+ IN_PROC_BROWSER_TEST_F(MotionFramesTest,
+@@ -1224,11 +1226,14 @@ IN_PROC_BROWSER_TEST_F(MotionFramesTest,
+     model->SetActiveSpace(to);
+     const base::TimeDelta switch_time = base::TimeTicks::Now() - start;
+     ASSERT_TRUE(list->layer() && list->layer()->parent());
+-    ui::Layer* const snapshot =
+-        FindLayerNamed(list->layer()->parent(), "SpaceSlideSnapshot");
+-    ASSERT_TRUE(snapshot) << "no layer for the Space left";
+-    EXPECT_EQ(list->layer()->bounds(), snapshot->bounds())
+-        << "the Space left was drawn at another size than the list's";
++    ui::Layer* const snapshot = FindSnapshotAt(
++        list->layer()->parent(), list->layer()->bounds().origin());
++    ASSERT_TRUE(snapshot) << "no layer for the Space left's list";
++    // At the size its list had when it was left: the whole of it is pushed
++    // out (B32), however many rows the Space coming in has.
++    EXPECT_EQ(gfx::Rect(list->layer()->bounds().origin(), size),
++              snapshot->bounds())
++        << "the Space left was drawn at another size than its list's";
+     EXPECT_TRUE(list->layer()->GetAnimator()->is_animating())
+         << "the new list does not slide in";
+     base::TimeTicks slid_at;
+@@ -1332,9 +1337,9 @@ IN_PROC_BROWSER_TEST_F(MotionFramesTest, TheSpaceLeftIsARecordingOfItsRows) {
+ 
+   model->SetActiveSpace(second);
+   ASSERT_TRUE(list->layer() && list->layer()->parent());
+-  ui::Layer* const snapshot =
+-      FindLayerNamed(list->layer()->parent(), "SpaceSlideSnapshot");
+-  ASSERT_TRUE(snapshot) << "no layer for the Space left";
++  ui::Layer* const snapshot = FindSnapshotAt(
++      list->layer()->parent(), list->layer()->bounds().origin());
++  ASSERT_TRUE(snapshot) << "no layer for the Space left's list";
+   ASSERT_TRUE(snapshot->delegate());
+   const float scale = snapshot->device_scale_factor();
+   const bool pixel_canvas = compositor()->is_pixel_canvas();
 diff --git a/chrome/test/stedding/settings_spaces_browsertest.cc b/chrome/test/stedding/settings_spaces_browsertest.cc
 index 7148d6311c484..6feb1f544c703 100644
 --- a/chrome/test/stedding/settings_spaces_browsertest.cc
@@ -3040,3 +3186,75 @@ index 7148d6311c484..6feb1f544c703 100644
      // settings T17, T23, T24: the hints' switches. T25's warning went with
      // sessions S33 (2026-10-22).
      for (const char* key :
+diff --git a/chrome/test/stedding/sidebar_click_browsertest.cc b/chrome/test/stedding/sidebar_click_browsertest.cc
+index c88c6c255c7b8..a54894074422d 100644
+--- a/chrome/test/stedding/sidebar_click_browsertest.cc
++++ b/chrome/test/stedding/sidebar_click_browsertest.cc
+@@ -3430,6 +3430,9 @@ class SidebarSelectionTest : public SidebarClickTest {
+   void SelectAcrossThenCollapse(tabs::FolderTabCollection* folder,
+                                 tabs::TabInterface* inside,
+                                 tabs::TabInterface* outside) {
++    // After a Space switch the list slides in (spaces B32): its rows take
++    // presses where they are drawn once it is in place.
++    WaitForRowsToSettle();
+     if (folder->collapsed()) {
+       ClickAt(HeaderCentre(folder));
+       ASSERT_TRUE(
+diff --git a/chrome/test/stedding/sidebar_test_util.cc b/chrome/test/stedding/sidebar_test_util.cc
+index 2481d7a1f04ed..b80ba4a7980f8 100644
+--- a/chrome/test/stedding/sidebar_test_util.cc
++++ b/chrome/test/stedding/sidebar_test_util.cc
+@@ -39,6 +39,8 @@
+ #include "ui/base/ui_base_types.h"
+ #include "ui/color/color_provider.h"
+ #include "ui/compositor/layer.h"
++#include "ui/compositor/layer_animation_element.h"
++#include "ui/compositor/layer_animator.h"
+ #include "ui/display/display_switches.h"
+ #include "ui/events/event.h"
+ #include "ui/events/event_constants.h"
+@@ -48,6 +50,7 @@
+ #include "ui/gfx/geometry/rect.h"
+ #include "ui/views/background.h"
+ #include "ui/views/controls/label.h"
++#include "ui/views/controls/scroll_view.h"
+ #include "ui/views/controls/textfield/textfield.h"
+ #include "ui/views/test/views_test_utils.h"
+ #include "ui/views/view.h"
+@@ -65,6 +68,17 @@ namespace stedding::test {
+ namespace {
+ 
+ bool AnyRowMoves(views::View* view) {
++  // spaces B32: a Space switch slides the list in from a whole width away,
++  // and its rows take presses where they are drawn: a row is not under its
++  // place until the slide ends.
++  if (auto* const scroll = views::AsViewClass<views::ScrollView>(view);
++      scroll && scroll->contents() &&
++      views::IsViewClass<UnpinnedTabContainerView>(scroll->contents()) &&
++      scroll->layer() &&
++      scroll->layer()->GetAnimator()->IsAnimatingProperty(
++          ui::LayerAnimationElement::TRANSFORM)) {
++    return true;
++  }
+   if (views::IsViewClass<UnpinnedTabContainerView>(view) ||
+       views::IsViewClass<PinnedTabContainerView>(view) ||
+       views::IsViewClass<TabGroupView>(view)) {
+diff --git a/chrome/test/stedding/space_wheel_browsertest.cc b/chrome/test/stedding/space_wheel_browsertest.cc
+index f5fe33e494b14..741444e8b81d8 100644
+--- a/chrome/test/stedding/space_wheel_browsertest.cc
++++ b/chrome/test/stedding/space_wheel_browsertest.cc
+@@ -150,9 +150,13 @@ class SpaceWheelTest
+         region ? FindTabStripView(region) : nullptr;
+     return strip ? strip->unpinned_tabs_scroll_view() : nullptr;
+   }
++  // Where the list rests, not where a Space switch's slide (B32) has it
++  // drawn: the pointer stays put while the list slides under it.
+   gfx::Point ListCentre() {
+     views::test::RunScheduledLayout(widget());
+-    return list()->GetBoundsInScreen().CenterPoint();
++    gfx::Rect bounds = list()->bounds();
++    views::View::ConvertRectToScreen(list()->parent(), &bounds);
++    return bounds.CenterPoint();
+   }
+   gfx::Point SwitcherCentre() {
+     views::test::RunScheduledLayout(widget());

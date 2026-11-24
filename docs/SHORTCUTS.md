@@ -35,7 +35,7 @@ Over the sidebar, or over its icons, scroll sideways. With a wheel, and with a s
 
 | How | macOS | Windows |
 |---|---|---|
-| Two fingers on the touchpad, sideways | the list follows your fingers; it changes Space when you let go past a short distance, and springs back when you do not | one Space for each sideways swipe |
+| Two fingers on the touchpad, sideways | the list follows your fingers, with the next Space beside it; it changes Space when you let go past a short distance, and springs back when you do not | one Space for each sideways swipe |
 | A mouse that tilts its wheel, or has a second wheel for sideways | one Space for each notch | one Space for each notch |
 | Shift with the wheel (down is to the right) | one Space for each notch | one Space for each notch |
 | Ctrl with the wheel (down for the next Space) | — | one Space for each notch. Over the page, Ctrl with the wheel still zooms |

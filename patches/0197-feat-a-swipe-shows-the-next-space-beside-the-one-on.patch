@@ -1,0 +1,671 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yevhen Salitrynskyi <ysalitrynskyi@gmail.com>
+Date: Tue, 24 Nov 2026 17:22:40 -0500
+Subject: feat: a swipe shows the next Space beside the one on screen
+
+While the fingers move, the two-finger Space swipe on the Mac now draws the
+Space it would bring in beside the one on screen, its title and list joined
+a list's width away on the side it comes in from, and moves the two
+together, both at full strength. Swiped back past where it began, the Space
+the other way is drawn instead. Lifted far enough, the Space comes in from
+where it was drawn; lifted short, the drawing goes back out with the list.
+Before, only the Space on screen went with the fingers, fading to 40%, and
+the next one showed only once they lifted (spaces B35).
+
+The drawing is made inside one task: SpaceModel::ScopedDrawnSpace has the
+model answer for the next Space while the visibility controller lays out its
+rows and title, the list is scrolled where that Space was left (B48), both
+are recorded as the switch's outgoing Space is, and the Space on screen is
+put back before anything is painted. Nothing is activated, selected, woken,
+saved or told. With the keyboard's focus on a sidebar row nothing is drawn,
+since hiding the row for the drawing would move the focus.
+
+Why: the owner, 2026-11-24, on 0.7.1: the next Space did not show while
+swiping, as it does in Arc.
+Removable when: never; this is Stedding's own behaviour.
+---
+ chrome/browser/ui/spaces/space_model.cc       |  14 ++
+ chrome/browser/ui/spaces/space_model.h        |  18 ++
+ chrome/browser/ui/stedding/motion.cc          |   7 -
+ chrome/browser/ui/stedding/motion.h           |   3 -
+ chrome/browser/ui/stedding/motion_unittest.cc |   8 +-
+ .../frame/vertical_tab_strip_region_view.cc   | 178 ++++++++++++++++-
+ .../frame/vertical_tab_strip_region_view.h    |  14 ++
+ .../spaces/space_tab_visibility_controller.cc |   5 +
+ .../spaces/space_tab_visibility_controller.h  |   5 +
+ .../test/stedding/space_switch_browsertest.cc | 188 +++++++++++++++++-
+ 10 files changed, 413 insertions(+), 27 deletions(-)
+
+diff --git a/chrome/browser/ui/spaces/space_model.cc b/chrome/browser/ui/spaces/space_model.cc
+index 6a27eae67252a..0a356999cf975 100644
+--- a/chrome/browser/ui/spaces/space_model.cc
++++ b/chrome/browser/ui/spaces/space_model.cc
+@@ -3308,6 +3308,20 @@ SpaceModel::ScopedRoutingPause::~ScopedRoutingPause() {
+   }
+ }
+ 
++SpaceModel::ScopedDrawnSpace::ScopedDrawnSpace(SpaceModel& model,
++                                               const SpaceId& id)
++    : model_(&model), on_screen_(model.active_id_) {
++  // A Space that is gone leaves the one on screen: active_space() must
++  // always find a live Space.
++  if (model_->GetSpace(id)) {
++    model_->active_id_ = id;
++  }
++}
++
++SpaceModel::ScopedDrawnSpace::~ScopedDrawnSpace() {
++  model_->active_id_ = on_screen_;
++}
++
+ std::optional<SpaceId> SpaceModel::RouteTargetFor(const GURL& url,
+                                                   bool external,
+                                                   bool search) {
+diff --git a/chrome/browser/ui/spaces/space_model.h b/chrome/browser/ui/spaces/space_model.h
+index 35ac88314efeb..a85beab85a7a2 100644
+--- a/chrome/browser/ui/spaces/space_model.h
++++ b/chrome/browser/ui/spaces/space_model.h
+@@ -176,6 +176,24 @@ class SpaceModel : public TabStripModelObserver,
+     const raw_ptr<SpaceModel> model_;
+   };
+ 
++  // spaces B35: while one of these lives, the model answers for `id` as the
++  // Space on screen -- active_id(), active_space(), IsTabInActiveSpace(),
++  // HidesTab() and through it TabStripModel::IsTabHidden() -- so the
++  // sidebar can draw the Space a swipe would bring in before it is entered.
++  // Nothing is told, activated, woken, slept or saved, and the Space on
++  // screen is back when it goes: it is for a drawing made inside one task.
++  class ScopedDrawnSpace {
++   public:
++    ScopedDrawnSpace(SpaceModel& model, const SpaceId& id);
++    ~ScopedDrawnSpace();
++    ScopedDrawnSpace(const ScopedDrawnSpace&) = delete;
++    ScopedDrawnSpace& operator=(const ScopedDrawnSpace&) = delete;
++
++   private:
++    const raw_ptr<SpaceModel> model_;
++    const SpaceId on_screen_;
++  };
++
+   // windows G4: the next window made opts out of the registry (a Blank
+   // Window); consumed by that window's model. A Blank Window stays one across
+   // a restart: Serialize() says so, and RestoreFrom() reads it back before
+diff --git a/chrome/browser/ui/stedding/motion.cc b/chrome/browser/ui/stedding/motion.cc
+index 13565d5398187..cbe0624a7cb2e 100644
+--- a/chrome/browser/ui/stedding/motion.cc
++++ b/chrome/browser/ui/stedding/motion.cc
+@@ -51,13 +51,6 @@ float SpaceSwipeShift(float offset, float width, bool has_neighbour) {
+   return std::copysign(give, offset);
+ }
+ 
+-float SpaceSwipeOpacity(float offset, float width, bool has_neighbour) {
+-  if (!has_neighbour || width <= 0.0f) {
+-    return 1.0f;
+-  }
+-  return 1.0f - 0.6f * std::min(1.0f, std::abs(offset) / (width * 0.5f));
+-}
+-
+ bool SpaceSwipeCommits(float offset, float width, bool flick) {
+   const float distance = std::abs(offset);
+   const float needed = width > 0.0f
+diff --git a/chrome/browser/ui/stedding/motion.h b/chrome/browser/ui/stedding/motion.h
+index 91918b49ad9cf..342e9a58b65d1 100644
+--- a/chrome/browser/ui/stedding/motion.h
++++ b/chrome/browser/ui/stedding/motion.h
+@@ -49,9 +49,6 @@ inline constexpr int kSpaceSlideDurationMs = 260;
+ // way, never further than the list's width; at the end of the switcher they
+ // give a little, up to kSpaceSwipeEndGive, and no more.
+ float SpaceSwipeShift(float offset, float width, bool has_neighbour);
+-// Their opacity there: they fade as they leave, to 0.4 at half the list's
+-// width; at the end of the switcher they do not fade.
+-float SpaceSwipeOpacity(float offset, float width, bool has_neighbour);
+ // Whether a swipe the fingers lift from `offset` DIPs across switches Space:
+ // past kSpaceSwipeCommitDip or three tenths of the list, whichever is less,
+ // or a flick (VerticalTabStripFocusSwipeController::kFlickSpeed) past
+diff --git a/chrome/browser/ui/stedding/motion_unittest.cc b/chrome/browser/ui/stedding/motion_unittest.cc
+index 7460e432745ae..7ca11670caced 100644
+--- a/chrome/browser/ui/stedding/motion_unittest.cc
++++ b/chrome/browser/ui/stedding/motion_unittest.cc
+@@ -88,21 +88,17 @@ TEST(SpaceSlideTest, ComesInFromTheSideOfTheSpaceBeingEntered) {
+ }
+ 
+ // Spaces B35: the list goes with the fingers while there is a Space that
+-// way, never past its own width, and fades as it leaves; at the end of the
+-// switcher it gives a little and does not fade.
++// way, never past its own width; at the end of the switcher it gives a
++// little.
+ TEST(SpaceSwipeTest, TheListFollowsTheFingers) {
+   EXPECT_FLOAT_EQ(-60.0f, SpaceSwipeShift(-60.0f, 260.0f, true));
+   EXPECT_FLOAT_EQ(260.0f, SpaceSwipeShift(400.0f, 260.0f, true));
+-  EXPECT_FLOAT_EQ(1.0f, SpaceSwipeOpacity(0.0f, 260.0f, true));
+-  EXPECT_FLOAT_EQ(0.4f, SpaceSwipeOpacity(-130.0f, 260.0f, true));
+-  EXPECT_FLOAT_EQ(0.4f, SpaceSwipeOpacity(-200.0f, 260.0f, true));
+ 
+   const float give = SpaceSwipeShift(-60.0f, 260.0f, false);
+   EXPECT_LT(give, 0.0f);
+   EXPECT_GT(give, -kSpaceSwipeEndGive);
+   EXPECT_GE(SpaceSwipeShift(-1000.0f, 260.0f, false), -kSpaceSwipeEndGive);
+   EXPECT_LT(std::abs(give), 60.0f) << "less than the fingers moved";
+-  EXPECT_FLOAT_EQ(1.0f, SpaceSwipeOpacity(-60.0f, 260.0f, false));
+ }
+ 
+ // Spaces B35: the lift switches past 75 DIPs or three tenths of the list,
+diff --git a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+index 8305ff0675cb5..f41b6e553efa7 100644
+--- a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
++++ b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+@@ -2815,8 +2815,9 @@ void VerticalTabStripRegionView::SnapshotOutgoingSpace(
+     const spaces::SpaceId& to) {
+   TRACE_EVENT0("views", "Stedding::SnapshotOutgoingSpace");
+   // A slide still running ends here, as the incoming list's does in
+-  // SlideInSpaceList.
++  // SlideInSpaceList, and so does a swipe's drawing of the Space beside.
+   DropOutgoingSpace();
++  DropSwipePreview();
+   views::ScrollView* const list =
+       tab_strip_view() ? tab_strip_view()->unpinned_tabs_scroll_view()
+                        : nullptr;
+@@ -2860,6 +2861,143 @@ void VerticalTabStripRegionView::DropOutgoingSpaceAfterSlide(int generation) {
+   }
+ }
+ 
++void VerticalTabStripRegionView::ShowSwipePreview(bool forward,
++                                                  float shift,
++                                                  float width) {
++  const int way = forward ? 1 : -1;
++  if (swipe_preview_way_ != way) {
++    // Swiped back past where it began: the Space the other way instead.
++    DropSwipePreview();
++    swipe_preview_way_ = way;
++    DrawSwipePreview(forward);
++  }
++  if (swipe_preview_.empty()) {
++    return;
++  }
++  // Joined to the Space on screen a whole width away, on the side the switch
++  // brings it in from (SlideInSpaceList), so the lift goes on from here.
++  const int direction =
++      stedding::SpaceSlideDirection(1, 1 + way, base::i18n::IsRTL());
++  gfx::Transform at;
++  at.Translate(shift + direction * width, 0);
++  for (const std::unique_ptr<SpaceSlideSnapshot>& drawn : swipe_preview_) {
++    drawn->layer()->GetAnimator()->StopAnimating();
++    drawn->layer()->SetTransform(at);
++  }
++}
++
++void VerticalTabStripRegionView::DrawSwipePreview(bool forward) {
++  TRACE_EVENT0("views", "Stedding::DrawSwipePreview");
++  spaces::SpaceModel* const model =
++      spaces::SpaceModel::From(browser_view()->browser());
++  auto* const strip = static_cast<TabStripView*>(tab_strip_view());
++  views::ScrollView* const list =
++      strip ? strip->unpinned_tabs_scroll_view() : nullptr;
++  const spaces::Space* const next =
++      model ? model->NeighbourSpace(forward) : nullptr;
++  if (!next || !list || !list->contents() || !space_tab_visibility_ ||
++      !list->IsDrawn() || list->bounds().IsEmpty()) {
++    return;
++  }
++  // A row with the keyboard's focus would lose it while the rows are swapped
++  // for the drawing; the Space then comes in at the lift, as it did before.
++  if (views::FocusManager* const focus = GetFocusManager()) {
++    if (const views::View* const focused = focus->GetFocusedView();
++        focused && strip->Contains(focused)) {
++      return;
++    }
++  }
++  const spaces::SpaceId shown = next->id();
++  const int scrolled = list->GetVisibleRect().y();
++  // The rows and the title of the Space the model answers for, in their
++  // places at once, with no row easing into its place (B37), and the list as
++  // tall as they are: the rows come to their places in the first pass, and
++  // the list takes their height in the second. One pass left the list the
++  // height of the Space on screen, which cut a longer Space's rows off.
++  const auto lay_out = [&]() {
++    space_tab_visibility_->DrawRowsOfShownSpace();
++    UpdateSpaceTitle();
++    for (int pass = 0; pass < 2; ++pass) {
++      if (UnpinnedTabContainerView* const rows =
++              strip->GetUnpinnedTabsContainer()) {
++        rows->SnapRowsToTargetLayout();
++      }
++      list->contents()->InvalidateLayout();
++      list->InvalidateLayout();
++      if (views::Widget* const widget = GetWidget()) {
++        widget->LayoutRootViewIfNecessary();
++      }
++    }
++  };
++  {
++    spaces::SpaceModel::ScopedDrawnSpace drawn(*model, shown);
++    lay_out();
++    // Scrolled where the Space was left in this window (B48), as the switch
++    // brings it.
++    const auto saved = space_scroll_offsets_.find(shown.ToString());
++    const int end = std::max(
++        0, list->contents()->height() - list->GetVisibleRect().height());
++    list->ScrollToOffset(gfx::PointF(
++        0, std::clamp(saved == space_scroll_offsets_.end() ? 0 : saved->second,
++                      0, end)));
++    for (views::View* const view : SpaceSwipeViews()) {
++      if (view->layer()->parent() && !view->bounds().IsEmpty()) {
++        swipe_preview_.push_back(std::make_unique<SpaceSlideSnapshot>(*view));
++        swipe_preview_.back()->layer()->SetName("SpaceSwipePreview");
++        swipe_preview_.back()->layer()->SetOpacity(1.0f);
++      }
++    }
++  }
++  // The strip clips what it holds to its own height, which is the Space on
++  // screen's: a longer Space's last rows were cut off. The drawing hangs from
++  // the layer above the strip instead, at the same place; the region clips it
++  // at the sidebar's edge (below).
++  if (ui::Layer* const strip_layer = strip->layer();
++      strip_layer && strip_layer->parent()) {
++    ui::Layer* const host = strip_layer->parent();
++    for (const std::unique_ptr<SpaceSlideSnapshot>& drawn : swipe_preview_) {
++      ui::Layer* const layer = drawn->layer();
++      if (layer->parent() != strip_layer) {
++        continue;
++      }
++      const gfx::Rect bounds =
++          layer->bounds() + strip_layer->bounds().OffsetFromOrigin();
++      strip_layer->Remove(layer);
++      host->Add(layer);
++      host->StackAbove(layer, strip_layer);
++      layer->SetBounds(bounds);
++    }
++  }
++  // The Space on screen, as it was.
++  lay_out();
++  list->ScrollToOffset(gfx::PointF(0, scrolled));
++  // The drawing crosses the sidebar's edge as the fingers bring it in: the
++  // region clips it, as it clips a switch's slide (B32, sidebar Y19).
++  if (!swipe_preview_.empty() && !space_slide_clipped_) {
++    space_slide_clipped_ = true;
++    UpdateHiddenClip(/*animating=*/false);
++  }
++}
++
++void VerticalTabStripRegionView::DropSwipePreview() {
++  // Moved out first, so nothing that runs while the layers go finds them.
++  std::vector<std::unique_ptr<SpaceSlideSnapshot>> dropped;
++  dropped.swap(swipe_preview_);
++  swipe_preview_way_ = 0;
++  ++swipe_preview_generation_;
++  // A switch's slide, while one runs, keeps the clip until it ends.
++  if (!dropped.empty() && outgoing_space_.empty() && space_slide_clipped_) {
++    space_slide_clipped_ = false;
++    UpdateHiddenClip(/*animating=*/false);
++  }
++}
++
++void VerticalTabStripRegionView::DropSwipePreviewAfterSlide(int generation) {
++  if (generation == swipe_preview_generation_) {
++    DropSwipePreview();
++  }
++}
++
+ bool VerticalTabStripRegionView::SpaceSwipeHasNeighbour(bool forward) const {
+   const spaces::SpaceModel* const model =
+       spaces::SpaceModel::From(browser_view()->browser());
+@@ -2905,15 +3043,25 @@ void VerticalTabStripRegionView::OnSpaceSwipeProgress(float offset) {
+   const bool forward = (offset < 0) != base::i18n::IsRTL();
+   const bool has_neighbour = SpaceSwipeHasNeighbour(forward);
+   const float width = static_cast<float>(moving.back()->width());
++  const float x = stedding::SpaceSwipeShift(offset, width, has_neighbour);
+   gfx::Transform shift;
+-  shift.Translate(stedding::SpaceSwipeShift(offset, width, has_neighbour), 0);
+-  const float opacity =
+-      stedding::SpaceSwipeOpacity(offset, width, has_neighbour);
++  shift.Translate(x, 0);
++  // At full strength, as on a key's switch (B32): the Space beside them is
++  // the one coming in. They had faded to 40% by half the list's width, with
++  // nothing beside them.
+   for (views::View* const view : moving) {
+     ui::Layer* const layer = view->layer();
+     layer->GetAnimator()->StopAnimating();
+     layer->SetTransform(shift);
+-    layer->SetOpacity(opacity);
++    layer->SetOpacity(1.0f);
++  }
++  // spaces B35 (the owner, 2026-11-24: the next Space did not show while
++  // the fingers moved): the Space they bring in goes with them, beside the
++  // one on screen.
++  if (has_neighbour && offset != 0.0f) {
++    ShowSwipePreview(forward, x, width);
++  } else {
++    DropSwipePreview();
+   }
+ }
+ 
+@@ -2926,6 +3074,9 @@ void VerticalTabStripRegionView::OnSpaceSwipeEnd(float offset, bool flick) {
+       moving.empty() ? 0.0f : static_cast<float>(moving.back()->width());
+   if (model && SpaceSwipeHasNeighbour(forward) &&
+       stedding::SpaceSwipeCommits(offset, width, flick)) {
++    // The drawing goes: the Space it drew comes in where it was, in the
++    // same frame (SlideInSpaceList).
++    DropSwipePreview();
+     // SlideInSpaceList runs inside the switch and brings the new Space in
+     // from the side the fingers left.
+     space_swipe_switching_ = stedding::ShouldAnimateSidebar(
+@@ -2954,6 +3105,23 @@ void VerticalTabStripRegionView::OnSpaceSwipeEnd(float offset, bool flick) {
+     layer->SetTransform(gfx::Transform());
+     layer->SetOpacity(1.0f);
+   }
++  // The Space drawn beside them goes back out with them, and goes. A swipe
++  // begun meanwhile draws it afresh.
++  if (!swipe_preview_.empty()) {
++    const int direction = stedding::SpaceSlideDirection(
++        1, 1 + swipe_preview_way_, base::i18n::IsRTL());
++    gfx::Transform away;
++    away.Translate(direction * width, 0);
++    swipe_preview_way_ = 0;
++    for (const std::unique_ptr<SpaceSlideSnapshot>& drawn : swipe_preview_) {
++      drawn->SlideOut(
++          away, SidebarMotionTime(stedding::kSpaceSwipeSettleMs),
++          gfx::Tween::EASE_OUT,
++          base::BindOnce(
++              &VerticalTabStripRegionView::DropSwipePreviewAfterSlide,
++              weak_factory_.GetWeakPtr(), swipe_preview_generation_));
++    }
++  }
+ }
+ 
+ TabDragTarget* VerticalTabStripRegionView::GetTabDragTargetInsideTabStrip(
+diff --git a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
+index 88409b316705b..ebf71b86fdb91 100644
+--- a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
++++ b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
+@@ -796,6 +796,20 @@ class VerticalTabStripRegionView final
+   // Set while a swipe switches Space, for SlideInSpaceList: the list comes in
+   // from further out than a click's switch brings it.
+   bool space_swipe_switching_ = false;
++  // spaces B35 (the owner, 2026-11-24): the Space a swipe would bring in,
++  // drawn beside the one on screen while the fingers move. `forward` is the
++  // next Space; `shift` is where the fingers have the Space on screen, and
++  // `width` its list's width. It is drawn once a way, and again the other
++  // way when the fingers go back past where they began.
++  void ShowSwipePreview(bool forward, float shift, float width);
++  void DrawSwipePreview(bool forward);
++  void DropSwipePreview();
++  void DropSwipePreviewAfterSlide(int generation);
++  std::vector<std::unique_ptr<SpaceSlideSnapshot>> swipe_preview_;
++  // Which way the drawing is: 1 the next Space, -1 the one before, 0 none.
++  int swipe_preview_way_ = 0;
++  // Counts DropSwipePreview, as outgoing_space_generation_ does.
++  int swipe_preview_generation_ = 0;
+ 
+   // Puts the Space's floating name last in paint order.
+   void RaiseSpaceHoverPill();
+diff --git a/chrome/browser/ui/views/spaces/space_tab_visibility_controller.cc b/chrome/browser/ui/views/spaces/space_tab_visibility_controller.cc
+index 4a01315efdf3f..f3b8d11c775f8 100644
+--- a/chrome/browser/ui/views/spaces/space_tab_visibility_controller.cc
++++ b/chrome/browser/ui/views/spaces/space_tab_visibility_controller.cc
+@@ -224,6 +224,11 @@ void SpaceTabVisibilityController::UpdateTabVisibility() {
+   PostDropHiddenRowsFromSelection();
+ }
+ 
++void SpaceTabVisibilityController::DrawRowsOfShownSpace() {
++  UpdateNestIndents();
++  UpdateSubtree(*tab_strip_root_);
++}
++
+ bool SpaceTabVisibilityController::SelectionHoldsAHiddenRow() const {
+   const TabStripModel& strip = *tab_strip_model_;
+   const int active = strip.active_index();
+diff --git a/chrome/browser/ui/views/spaces/space_tab_visibility_controller.h b/chrome/browser/ui/views/spaces/space_tab_visibility_controller.h
+index 8f702679318b4..69f7aa0ccb097 100644
+--- a/chrome/browser/ui/views/spaces/space_tab_visibility_controller.h
++++ b/chrome/browser/ui/views/spaces/space_tab_visibility_controller.h
+@@ -74,6 +74,11 @@ class SpaceTabVisibilityController : public SpaceModel::Observer,
+   // it hides out of the selection (tabs R20). Safe to call at any time; call
+   // it after tabs are added or moved.
+   void UpdateTabVisibility();
++  // spaces B35: the same rule for the Space the model answers for now
++  // (SpaceModel::ScopedDrawnSpace), with the selection and the stand-in's
++  // state left as they are: for the swipe's drawing of the Space it would
++  // bring in, and to put the rows back after it.
++  void DrawRowsOfShownSpace();
+ 
+   // SpaceModel::Observer:
+   void OnActiveSpaceWillChange(const SpaceId& from,
+diff --git a/chrome/test/stedding/space_switch_browsertest.cc b/chrome/test/stedding/space_switch_browsertest.cc
+index abe0d8e078ccf..5771d8500829d 100644
+--- a/chrome/test/stedding/space_switch_browsertest.cc
++++ b/chrome/test/stedding/space_switch_browsertest.cc
+@@ -235,6 +235,32 @@ ui::Layer* OutgoingLayerOver(const views::View* view) {
+   return nullptr;
+ }
+ 
++#if BUILDFLAG(IS_MAC)
++// spaces B35: the Space a swipe would bring in, as it is drawn beside `view`
++// while the fingers move: an unowned layer at the view's place, as wide. It
++// hangs above the strip, which clips to the Space on screen, so it is looked
++// for among the children of each layer above the view's own.
++ui::Layer* SwipePreviewBeside(const views::View* view) {
++  const ui::Layer* const own = view->layer();
++  if (!own) {
++    return nullptr;
++  }
++  gfx::Point origin = own->bounds().origin();
++  for (const ui::Layer* parent = own->parent(); parent;
++       parent = parent->parent()) {
++    for (const auto& layer : parent->children()) {
++      if (!layer->owner() && layer->name() == "SpaceSwipePreview" &&
++          layer->bounds().origin() == origin &&
++          layer->bounds().width() == own->bounds().width()) {
++        return layer.get();
++      }
++    }
++    origin += parent->bounds().OffsetFromOrigin();
++  }
++  return nullptr;
++}
++#endif  // BUILDFLAG(IS_MAC)
++
+ // Every moment on the way through a change at which the active tab is one
+ // the sidebar hides: a tab of another Space than the active one. Checked at
+ // each notification of the strip and of the Spaces, not once it settled.
+@@ -1513,13 +1539,13 @@ IN_PROC_BROWSER_TEST_F(SpaceSwitchTest, ASwipeFollowsTheFingers) {
+   };
+ 
+   // 50 DIPs to the left, the fingers still down: the list is 50 DIPs to the
+-  // left and fading, and the Space has not changed.
++  // left at full strength, and the Space has not changed.
+   send(0, ui::ScrollEventPhase::kBegan);
+   send(-25, ui::ScrollEventPhase::kUpdate);
+   send(-25, ui::ScrollEventPhase::kUpdate);
+   ASSERT_TRUE(list->layer());
+   EXPECT_FLOAT_EQ(-50.0f, shift());
+-  EXPECT_LT(list->layer()->opacity(), 1.0f);
++  EXPECT_FLOAT_EQ(1.0f, list->layer()->opacity()) << "the list fades";
+   EXPECT_EQ(ids_[0], model()->active_id());
+ 
+   // Lifted there: too short to switch; it goes back where it was.
+@@ -1554,7 +1580,7 @@ IN_PROC_BROWSER_TEST_F(SpaceSwitchTest, ASwipeFollowsTheFingers) {
+   }
+   EXPECT_GT(shift(), stedding::kSpaceSwipeEndGive)
+       << "past the first Space it follows the fingers";
+-  EXPECT_LT(list->layer()->opacity(), 1.0f);
++  EXPECT_FLOAT_EQ(1.0f, list->layer()->opacity()) << "the list fades";
+   send(0, ui::ScrollEventPhase::kEnd);
+   ExpectShowing(ids_[2]);
+   EXPECT_TRUE(list->layer()->GetTargetTransform().IsIdentity());
+@@ -2137,9 +2163,9 @@ IN_PROC_BROWSER_TEST_F(SpaceSwitchTest, ASwitchUnderAPanelShowsTheSpaceAtOnce) {
+ 
+ #if BUILDFLAG(IS_MAC)
+ // spaces B35 (BACKLOG S-146): a swipe that switches sends the Space's title
+-// and list on out of the side the fingers went, from where they left them
+-// and faded as they were, a whole width, while the next Space's come in
+-// joined to them (B32).
++// and list on out of the side the fingers went, from where they left them,
++// at full strength, a whole width, while the next Space's come in joined to
++// them (B32).
+ IN_PROC_BROWSER_TEST_F(SpaceSwitchTest, ASwipedSpaceGoesOnOutOfTheSide) {
+   if (!stedding::ShouldAnimate(browser()->GetProfile()->GetPrefs())) {
+     GTEST_SKIP() << "the machine asks for reduced motion";
+@@ -2177,6 +2203,7 @@ IN_PROC_BROWSER_TEST_F(SpaceSwitchTest, ASwipedSpaceGoesOnOutOfTheSide) {
+   const float left_at = list->layer()->transform().To2dTranslation().x();
+   const float faded_to = list->layer()->opacity();
+   ASSERT_LT(left_at, 0.0f);
++  EXPECT_FLOAT_EQ(1.0f, faded_to) << "the swiped Space faded";
+   send(0, ui::ScrollEventPhase::kEnd);
+   ExpectShowing(ids_[1]);
+ 
+@@ -2200,6 +2227,155 @@ IN_PROC_BROWSER_TEST_F(SpaceSwitchTest, ASwipedSpaceGoesOnOutOfTheSide) {
+     return !OutgoingLayerOver(list) && !OutgoingLayerOver(title);
+   }));
+ }
++
++// spaces B35 (the owner, 2026-11-24: the next Space did not show while the
++// fingers moved): the Space a swipe would bring in is drawn beside the one
++// on screen, its title and list joined a list's width away on the side it
++// comes in from, and moves with it, both at full strength. Drawing it
++// enters, shows, selects and scrolls nothing. Swiped back past where it
++// began, the Space the other way is drawn instead. Lifted short, the drawing
++// goes back out with the list and goes; lifted far enough, the Space comes in
++// from where it was drawn.
++IN_PROC_BROWSER_TEST_F(SpaceSwitchTest, ASwipeShowsTheNextSpaceBesideIt) {
++  if (!stedding::ShouldAnimate(browser()->GetProfile()->GetPrefs())) {
++    GTEST_SKIP() << "the machine asks for reduced motion";
++  }
++  ASSERT_NO_FATAL_FAILURE(MakeThreeSpaces());
++  views::Widget* const window = browser_view()->GetWidget();
++  // Two has a row more than One: its drawing is as tall as its own list,
++  // not as the list on screen (the first drawing cut Two's last row off).
++  model()->SetActiveSpace(ids_[1]);
++  AppendTab();
++  model()->SetActiveSpace(ids_[0]);
++  ASSERT_TRUE(stedding::test::WaitForRowsToSettle(window));
++  VerticalTabStripRegionView* const region =
++      browser_view()->vertical_tab_strip_region_view_for_testing();
++  ASSERT_TRUE(region);
++  const TabStripView* const strip = FindTabStripView(region);
++  ASSERT_TRUE(strip);
++  views::ScrollView* const list = strip->unpinned_tabs_scroll_view();
++  views::LabelButton* const title = strip->GetSpaceTitleRow();
++  ASSERT_TRUE(list);
++  ASSERT_TRUE(title);
++  views::test::RunScheduledLayout(window);
++  ASSERT_TRUE(title->GetVisible());
++  gfx::Point at = region->GetBoundsInScreen().CenterPoint();
++  views::View::ConvertPointFromScreen(window->GetRootView(), &at);
++  const gfx::PointF point(at);
++  const auto send = [&](float dx, ui::ScrollEventPhase phase) {
++    ui::ScrollEvent scroll(ui::EventType::kScroll, point, point,
++                           ui::EventTimeForNow(), ui::EF_NONE, dx, 0, dx, 0,
++                           /*finger_count=*/2, ui::EventMomentumPhase::NONE,
++                           phase);
++    window->OnScrollEvent(&scroll);
++  };
++  // The rows the sidebar shows, in tree order.
++  const auto shown_rows = [&]() {
++    std::vector<const views::View*> rows;
++    std::vector<const views::View*> pending = {strip};
++    while (!pending.empty()) {
++      const views::View* const view = pending.back();
++      pending.pop_back();
++      if (views::IsViewClass<TabView>(view)) {
++        if (view->GetVisible()) {
++          rows.push_back(view);
++        }
++        continue;
++      }
++      for (const views::View* const child : view->children()) {
++        pending.push_back(child);
++      }
++    }
++    return rows;
++  };
++  const float width = list->width();
++  tabs::TabInterface* const active = tab_strip_model()->GetActiveTab();
++  const ui::ListSelectionModel selection =
++      tab_strip_model()->selection_model().GetListSelectionModel();
++  const std::vector<const views::View*> rows = shown_rows();
++  const std::u16string name(title->GetText());
++  const int scrolled = list->GetVisibleRect().y();
++
++  // 60 DIPs to the left: the next Space is drawn on the right, joined.
++  send(0, ui::ScrollEventPhase::kBegan);
++  send(-30, ui::ScrollEventPhase::kUpdate);
++  send(-30, ui::ScrollEventPhase::kUpdate);
++  for (const views::View* const view :
++       std::vector<const views::View*>{list, title}) {
++    SCOPED_TRACE(view == list ? "the list" : "the title");
++    ui::Layer* const drawn = SwipePreviewBeside(view);
++    ASSERT_TRUE(drawn) << "the next Space is not drawn beside this one";
++    EXPECT_FLOAT_EQ(-60.0f + width, drawn->transform().To2dTranslation().x())
++        << "it is not joined to the Space on screen";
++    EXPECT_FLOAT_EQ(1.0f, drawn->opacity());
++    EXPECT_FLOAT_EQ(1.0f, view->layer()->opacity())
++        << "the Space on screen fades";
++  }
++  EXPECT_EQ(ids_[0], model()->active_id()) << "the drawing entered the Space";
++  EXPECT_EQ(active, tab_strip_model()->GetActiveTab());
++  const ui::ListSelectionModel& now =
++      tab_strip_model()->selection_model().GetListSelectionModel();
++  EXPECT_EQ(selection.active(), now.active());
++  EXPECT_EQ(selection.selected_indices(), now.selected_indices())
++      << "the drawing changed the selection";
++  EXPECT_EQ(rows, shown_rows()) << "the drawing left other rows shown";
++  EXPECT_EQ(name, title->GetText()) << "the drawing left its name in the title";
++  EXPECT_EQ(scrolled, list->GetVisibleRect().y()) << "the drawing scrolled";
++  EXPECT_TRUE(region->layer() && region->layer()->GetMasksToBounds())
++      << "the drawing is not clipped at the sidebar's edge";
++
++  // Back past where it began, 60 DIPs to the right: the Space before is
++  // drawn on the left instead.
++  for (int i = 0; i < 6; ++i) {
++    send(20, ui::ScrollEventPhase::kUpdate);
++  }
++  for (const views::View* const view :
++       std::vector<const views::View*>{list, title}) {
++    SCOPED_TRACE(view == list ? "the list" : "the title");
++    ui::Layer* const drawn = SwipePreviewBeside(view);
++    ASSERT_TRUE(drawn) << "the Space before is not drawn";
++    EXPECT_FLOAT_EQ(60.0f - width, drawn->transform().To2dTranslation().x());
++  }
++  // Back to 50 DIPs to the left, and lifted: too short to switch. The list
++  // springs back, and the drawing goes back out to the right with it.
++  for (int i = 0; i < 11; ++i) {
++    send(-10, ui::ScrollEventPhase::kUpdate);
++  }
++  send(0, ui::ScrollEventPhase::kEnd);
++  EXPECT_EQ(ids_[0], model()->active_id());
++  if (ui::Layer* const drawn = SwipePreviewBeside(list)) {
++    EXPECT_FLOAT_EQ(width, drawn->GetTargetTransform().To2dTranslation().x())
++        << "the drawing does not go back out with the list";
++  }
++  ASSERT_TRUE(base::test::RunUntil([&]() {
++    return !SwipePreviewBeside(list) && !SwipePreviewBeside(title);
++  })) << "the drawing stayed after the swipe sprang back";
++  EXPECT_EQ(rows, shown_rows());
++
++  // Far enough: the next Space comes in from where it was drawn.
++  send(0, ui::ScrollEventPhase::kBegan);
++  for (int i = 0; i < 5; ++i) {
++    send(-20, ui::ScrollEventPhase::kUpdate);
++  }
++  ui::Layer* const drawn = SwipePreviewBeside(list);
++  ASSERT_TRUE(drawn);
++  const float drawn_at = drawn->transform().To2dTranslation().x();
++  const gfx::Size drawn_size = drawn->bounds().size();
++  EXPECT_GT(drawn_size.height(), list->height())
++      << "the drawing of Two is cut to One's shorter list";
++  EXPECT_NE(strip->layer(), drawn->parent())
++      << "the drawing hangs in the strip, which cuts it to One's height";
++  send(0, ui::ScrollEventPhase::kEnd);
++  ExpectShowing(ids_[1]);
++  EXPECT_EQ(drawn_size, list->size())
++      << "the list that came in is not the size it was drawn";
++  EXPECT_FALSE(SwipePreviewBeside(list))
++      << "the drawing stayed after the switch";
++  ASSERT_TRUE(list->layer());
++  EXPECT_FLOAT_EQ(drawn_at, list->layer()->transform().To2dTranslation().x())
++      << "the Space does not come in from where it was drawn";
++  EXPECT_EQ(model()->DisplayName(ids_[1]), title->GetText());
++}
+ #endif  // BUILDFLAG(IS_MAC)
+ 
+ // PLAN.md SPC-6, spaces B27: a chip drag moves that Space in the row and in

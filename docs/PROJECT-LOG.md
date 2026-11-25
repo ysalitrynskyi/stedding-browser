@@ -2,6 +2,48 @@
 
 What was built, newest first. Nothing here is needed to do a task: `AGENTS.md` carries what is true now, `BACKLOG.md` the order of work, `PLAN.md` the owner's decisions. This file was the "State of the project" section of `AGENTS.md` until 2026-09-30. The log starts at 2026-10-15; closed work from before that is the table in [docs/history/archive.md](history/archive.md). Entries before 2026-11-10 are short summaries; their full text is in the repository's history.
 
+## 2026-11-24 -- 0.7.2: Chromium 158.0.8127.89, and the next Space under a swipe
+
+A security update the owner asked for on 2026-11-24 ("Yes, take it"), with the swipe the owner
+reported the same day.
+
+- The pin moved from 158.0.8127.37 to 158.0.8127.89, Chrome's stable update of 23 November with
+  one fix, rated critical (CVE-2026-134401, in Variations). The series applied without a change;
+  `tooling/apply-patches` now passes over gclient's nested checkouts.
+- Patch 0197 (spaces B35): the owner saw no next Space while swiping two fingers across the
+  sidebar on the Mac. The Space the swipe brings in is now drawn beside the one on screen, with
+  its name and rows, and the two move together; the swipe no longer fades the list.
+- Patch 0198 (S-550): the New Tab page's most-visited tiles ask for their icons at the screen's
+  scale, Chrome's own change, launched to all its users.
+- The Mac release build: 1,735 unit, 64 components, 1 content and 1,310 browser tests (235 of
+  them one at a time) pass. The DCHECK build: the unit, components and content suites pass; its
+  browser sweep had 14 failures among the others, each passing alone twice, with no DCHECK from
+  Stedding's code and no dangling pointer. Twelve were S-257's shutdown overruns in one
+  stretch, and one S-372's motion check (both rows have the evidence). Acceptance on a test copy
+  of the signed app: every part exits 0, and 85 of the 87 captures are pixel for pixel 0.7.1's.
+  Of the other two, one hover card had its picture this time; TST-7's rail capture differed
+  once, and TST-7 alone on 0.7.1 once and on 0.7.2 twice gave the same 16 captures pixel for
+  pixel. Sparkle from a local signed feed: the released 0.7.1 updated itself to 0.7.2 with its
+  tabs, and 0.7.2's own Sparkle installed an update.
+- Windows (`tooling/win/release-gate.sh 0.7.2 0.7.1`, on the tree the images were built from): 1,725 unit and 1,252
+  browser tests (252 one at a time) pass on the release build and the DCHECK build; the
+  installer; 0.7.1 updated itself to 0.7.2 with pins in two windows, then the installer's cycle;
+  TST-7 5/5, TST-9 20/20, TST-6 14/14. The ASan build: the unit suite passes, and of the browser
+  sweep's three failures two pass alone. A stretch of that sweep ran out of the PC's committed
+  memory (Windows error 1455), and ASan said so in a few processes; no ASan report, DCHECK or
+  dangling pointer.
+- The third, `ScreenshotCaptureTest.AFailedCaptureSaysSo` (S-466, last seen in 0.7.1 on a first
+  run after idle), failed alone in 3 of 8 runs on the ASan build. Its wait now names every
+  toast it saw: the capture after the crashed tab's reload failed within 15 ms ("Couldn't take
+  the screenshot") with nothing on the clipboard, because the new renderer had not drawn its
+  first frame when the load ended. The product says the right thing; the test now waits for a
+  frame it can copy: 12 of 12 alone on the ASan build, and on the folded series every
+  `ScreenshotCaptureTest` passes on the Mac's release build and on Windows' release and ASan
+  builds. The fold changes only that test file, so the signed images, built from the tree before
+  it, are the released ones.
+- The site's page after an update has the 0.7.2 entry, with a frame of the swipe from a
+  temporary test in the release build.
+
 ## 2026-11-23 -- 0.7.1: the Space switch that pushes, and the fixes of a review of every patch
 
 0.7.1's items (2026-11-21 entry below) and the fixes of a review of Stedding's own code, folded

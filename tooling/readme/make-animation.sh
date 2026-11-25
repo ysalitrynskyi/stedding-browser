@@ -10,7 +10,7 @@
 # demo-dark.webp from the dark one, the README's <picture> in each look.
 #
 # Animated WebP, not GIF (the owner, 2026-11-03): the cut's camera moves change nearly every
-# pixel of every frame, and the 51 s tour was 23 MB as a GIF at 1200 px and still 11 MB at
+# pixel of every frame, and the 51 s tour of 2026-11-03 was 23 MB as a GIF at 1200 px and still 11 MB at
 # 900 px and 8 fps; as WebP it is under 8 MB at 1200 px and 15 fps. GitHub shows it as it
 # shows a GIF. Each file is at most 8 MB, which promote-readme.py checks: too big, it is
 # made again at a lower quality, then smaller. Copy them into docs/images/readme/ once they
@@ -26,7 +26,8 @@
 # shots are made with img2webp and the file is assembled again with webpmux, the card added
 # with blending off. The still is taken from the cut's CRF 16 master
 # (tour-ReelWide-master.mp4, tour-ReelWideLight-master.mp4) when it is there. The times are
-# the 2026-11-03 cut's: the night shot is clean to NIGHT_END, the card still at END_FRAME.
+# the 2026-11-25 cut's (59 s; the 2026-11-03 cut's were 47.73 and 50.0): the night shot is
+# clean to NIGHT_END, the card whole and still at END_FRAME.
 #
 # Needs ffmpeg, img2webp, cwebp and webpmux (brew install ffmpeg webp). Both run at the lowest priority, so
 # the Mac stays usable meanwhile.
@@ -38,8 +39,8 @@ FFPROBE="${FFPROBE:-ffprobe}"
 IMG2WEBP="${IMG2WEBP:-img2webp}"
 CWEBP="${CWEBP:-cwebp}"
 WEBPMUX="${WEBPMUX:-webpmux}"
-NIGHT_END="${NIGHT_END:-47.73}"
-END_FRAME="${END_FRAME:-50.0}"
+NIGHT_END="${NIGHT_END:-55.2}"
+END_FRAME="${END_FRAME:-57.5}"
 END_HOLD_MS="${END_HOLD_MS:-3000}"
 [ $# -eq 2 ] || { echo "usage: $0 <tour-video> <out>" >&2; exit 2; }
 VIDEO="$1"

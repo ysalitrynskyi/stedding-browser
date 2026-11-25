@@ -19,7 +19,7 @@ account, no telemetry, BSD-3-Clause.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/readme/demo-dark.webp">
-  <img src="docs/images/readme/demo.webp" alt="A 51-second tour of Stedding 0.4.0 beta 7, each shot named beside the window: every page brings its colour to the address row; two accounts in two Spaces; the command bar (Cmd-T) jumps to anything in any Space; a tab dragged onto the page makes a split view; the address in the sidebar; the site panel; peek; Sync; Privacy; the sidebar folded to a rail and hidden (Cmd-S); row heights; a Space's colours for light and dark; importing from Arc and other browsers; the night look and dark pages; then stedding.dev">
+  <img src="docs/images/readme/demo.webp" alt="A 59-second tour of Stedding 0.7.2, each shot named beside the window: every page brings its colour to the address row; Spaces slide across under two fingers; two accounts in two Spaces; the command bar (Cmd-T) jumps to anything in any Space; Ctrl-Tab steps through the recent tabs; a tab dragged onto the page makes a split view; the address in the sidebar; the address row coming back on hover; a Shift-click peek; what is playing, paused from the foot of the sidebar; pins in every window; a folder sent to another Space; sync through your own folder, WebDAV or S3; privacy; importing from Arc and other browsers; the night look and dark pages; then stedding.dev">
 </picture>
 
 **[Download for macOS](https://github.com/ysalitrynskyi/stedding-browser/releases/latest)** ·

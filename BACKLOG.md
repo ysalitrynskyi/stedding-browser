@@ -32,11 +32,27 @@ built to the quality bar, and each visual choice is shown to the owner as render
 
 Still to choose from the small rows: S-158's open items, S-125, S-337.
 
-After 0.7.2, in this order unless the owner says otherwise: the player inside the window (S-95's
-Mp1, option A, `PLAN.md` decision 24). GitHub issue 111's reporter said on 2026-11-19 that a new
-window should list the same unpinned tabs as the first, as Arc's does: a design for the owner to
-choose, extending ADR 0035 from pins to every tab. Discussion 125 (Option-click opens a link in
-split view, as a setting) and GitHub issues 131 and 132 wait for the owner's yes.
+0.7.3 is the owner's choice of 2026-11-28 from the open issues and discussions (`PLAN.md`
+decision 29), built in this order: S-559 to S-571, then S-95's Mp1 (the player inside the
+window, off by default), then S-572 (issue 111) from rendered options. S-450 now has a second
+report (GitHub issue 144, a video on Windows); it is fixed in 0.7.3 if it can be reproduced.
+
+| Id | Item | Feature / spec | Notes |
+|---|---|---|---|
+| S-559 | A pin's drift mark counts the query and the fragment (GitHub issue 147) | `docs/features/pins.md` H4 | Built 2026-11-28 in patch 0161 (`PinLifecycleTest.DriftIsOriginPathQueryOrFragment`): another sheet of a spreadsheet is another page. Owed: the suites and a look on a real build. |
+| S-560 | The mouse's back and forward buttons over the sidebar switch Spaces (GitHub issue 139) | `docs/features/spaces.md` | `PLAN.md` decision 29. Over the page they stay Back and Forward. |
+| S-561 | The wheel over the Space chips switches Spaces (discussion 128) | `docs/features/spaces.md` B39 | `PLAN.md` decisions 15 and 29: only over the chips; one gesture moves one Space. |
+| S-562 | Collapse and Expand All Folders in a folder's own menu (discussion 128) | `docs/features/folders.md` | The command and ⇧⌘E (Ctrl+Shift+E) exist; the folder's menu gains the rows. |
+| S-563 | Option-click (Alt-click) a link opens it in split view, a setting off by default (discussion 125) | `docs/features/splits.md` | Option-click is Chromium's "download this link" while the setting is off. |
+| S-564 | Right arrow at the end of the command bar's text edits the selected row's address (GitHub issue 135) | `docs/features/commandbar.md` | The owner chose Right arrow, not Tab. |
+| S-565 | Hold Esc to close a peek, a setting off by default (GitHub issue 132) | `docs/features/peek.md` | Arc's way: a tap flashes the close button. |
+| S-566 | A tab dropped on the middle of another tab makes a split (GitHub issue 131) | `docs/features/splits.md` | |
+| S-567 | A drag to the hidden sidebar's edge reveals it; links, text and files drop on its rows (GitHub issue 138) | `docs/features/sidebar.md` | A quick drop opens in that tab, a held one shows the tab. |
+| S-568 | A setting to allow new extensions in private windows (GitHub issue 143) | `docs/features/settings.md` | Off by default; updates and policy extensions untouched. |
+| S-569 | Translate's dead settings are hidden while the build has no key (GitHub issue 133) | `docs/PRIVACY.md`; S-238 | `PLAN.md` decision 29: nothing translates a page. |
+| S-570 | Shortcuts on function keys are missing from Settings › Shortcuts on Windows (GitHub issue 140) | `docs/features/shortcuts.md` | A bug. |
+| S-571 | The empty-Space page shows to extensions as a tab (discussion 136) | `docs/features/spaces.md` | The small part of the discussion; the rest (Spaces in the tabs API) is not planned. |
+| S-572 | A new window lists the same unpinned tabs as the others, as Arc's do (GitHub issue 111) | ADR 0035; `docs/features/pins.md` | `PLAN.md` decision 29. Options for the owner, rendered: one list per Space with one live page (Arc since August 2023), copies when a window opens, or a section listing other windows' tabs. Arc's own behaviour to check before it shuts down on 2026-12-22. |
 
 What 0.6.0's own items still owe is in their rows: S-94, S-478 and S-479.
 

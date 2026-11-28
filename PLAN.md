@@ -52,7 +52,8 @@ still open is a BACKLOG row that names its id.
 15. Spaces switch with a sideways scroll over the sidebar, as in Arc (2026-10-21, GitHub
     issue 10): a tilt wheel and Shift with the wheel, on Windows also a touchpad's sideways
     scroll and Ctrl with the wheel. No Control with the wheel on the Mac, and a vertical
-    scroll never switches (`docs/features/spaces.md` B39).
+    scroll never switches (`docs/features/spaces.md` B39), but over the Space chips
+    (decision 29).
 16. An issue a user files on GitHub is a suggestion unless it reports a bug (2026-10-21).
     Bugs are fixed; a requested feature is built only once the owner has said yes. Nothing
     is said or closed on GitHub (`AGENTS.md`, red lines). Labels only when the owner asks
@@ -124,6 +125,22 @@ still open is a BACKLOG row that names its id.
     owner names it in chat for that release; an agent never proposes one in notes, docs, the
     backlog or a tag. `tooling/publish-release` refuses any other version unless
     `STEDDING_OWNER_VERSION` names it.
+29. The owner, 2026-11-28, choosing 0.7.3's contents from a form of the open GitHub issues
+    and discussions: the release carries the mouse's back and forward buttons over the sidebar
+    switching Spaces (issue 139); the wheel over the Space chips switching Spaces (discussion
+    128), a narrow exception to decision 15 that holds only over the chips; Collapse and
+    Expand All Folders in a folder's own menu (discussion 128); Option-click (Alt-click) a link
+    to open it in split view, a setting off by default (discussion 125); Right arrow at the
+    end of the command bar's text to edit the selected row's address (issue 135; not Tab); hold
+    Esc to close a peek, a setting off by default (issue 132); a tab dropped on another tab to
+    make a split (issue 131); a drag to the hidden sidebar's edge revealing it, and drops on
+    its rows (issue 138); a setting to allow new extensions in private windows (issue 143);
+    the player inside the window, off by default (S-95's Mp1, discussion 104). A pin's drift
+    mark counts the query and the fragment too (issue 147). Translate, which has no key, keeps
+    no dead settings (issue 133); nothing translates a page. Reading List stays hidden (issue
+    142). A new window lists the same unpinned tabs as the others, as Arc's do (issue 111), from
+    rendered design options. Chromium stays on 158 (decision 26; issue 141). The Windows build
+    for ARM (issue 69) is not in it.
 
 The operator's own request in chat comes before any of this and before BACKLOG's order.
 

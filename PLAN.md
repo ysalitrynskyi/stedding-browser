@@ -135,11 +135,13 @@ still open is a BACKLOG row that names its id.
     Esc to close a peek, a setting off by default (issue 132); a tab dropped on another tab to
     make a split (issue 131); a drag to the hidden sidebar's edge revealing it, and drops on
     its rows (issue 138); a setting to allow new extensions in private windows (issue 143);
-    the player inside the window, off by default (S-95's Mp1, discussion 104). A pin's drift
+    the player inside the window, off by default (S-95's Mp1, discussion 104), which the
+    owner then moved to 0.7.4 (about 11 to 13 days; plan in S-95's row). A pin's drift
     mark counts the query and the fragment too (issue 147). Translate, which has no key, keeps
     no dead settings (issue 133); nothing translates a page. Reading List stays hidden (issue
-    142). A new window lists the same unpinned tabs as the others, as Arc's do (issue 111), from
-    rendered design options. Chromium stays on 158 (decision 26; issue 141). The Windows build
+    142). A new window lists the same unpinned tabs as the others, as Arc's do (issue 111):
+    the owner chose option A, one list per Space in every window with each page live in one
+    window at a time, for 0.7.4 rather than holding 0.7.3 for it. Chromium stays on 158 (decision 26; issue 141). The Windows build
     for ARM (issue 69) is not in it.
 
 The operator's own request in chat comes before any of this and before BACKLOG's order.
